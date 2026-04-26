@@ -35,6 +35,9 @@ class {{ record.class_name() }}:
 {% for field in record.fields.iter() %}
     {{ field.python_name }}: {{ field.annotation() }}
 {% endfor %}
+{% if record.has_empty_body() %}
+    pass
+{% endif %}
 {% for constructor in record.constructors %}
 
     @classmethod

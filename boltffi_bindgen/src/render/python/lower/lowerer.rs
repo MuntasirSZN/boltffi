@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
+
+use crate::ir::ids::RecordId;
 use crate::ir::{AbiContract, FfiContract};
 use crate::render::python::{PythonLowerError, PythonModule};
 
@@ -8,6 +12,7 @@ pub struct PythonLowerer<'a> {
     pub(super) package_name: &'a str,
     pub(super) package_version: Option<String>,
     pub(super) library_name: &'a str,
+    pub(super) record_stack: RefCell<HashSet<RecordId>>,
 }
 
 impl<'a> PythonLowerer<'a> {
@@ -26,6 +31,7 @@ impl<'a> PythonLowerer<'a> {
             package_name,
             package_version,
             library_name,
+            record_stack: RefCell::new(HashSet::new()),
         }
     }
 

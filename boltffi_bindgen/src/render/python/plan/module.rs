@@ -87,7 +87,12 @@ impl PythonModule {
     pub fn used_primitive_types(&self) -> Vec<PrimitiveType> {
         self.records
             .iter()
-            .flat_map(|record| record.fields.iter().map(|field| field.primitive))
+            .flat_map(|record| {
+                record
+                    .fields
+                    .iter()
+                    .flat_map(|field| field.type_ref.native_primitive_types())
+            })
             .chain(
                 self.enums
                     .iter()
@@ -161,6 +166,10 @@ impl PythonModule {
             .any(PythonCallable::returns_c_style_enum_vector)
     }
 
+    pub fn uses_string_vector_returns(&self) -> bool {
+        self.callables().any(PythonCallable::returns_string_vector)
+    }
+
     pub fn uses_owned_buffer_returns(&self) -> bool {
         self.callables()
             .any(|callable| callable.return_type.is_owned_buffer())
@@ -171,8 +180,22 @@ impl PythonModule {
             callable.parameters.iter().any(|parameter| {
                 parameter.type_ref.is_primitive_vector()
                     || parameter.type_ref.is_c_style_enum_vector()
+                    || parameter.type_ref.is_string_vector()
+                    || parameter.type_ref.is_record_vector()
             })
         })
+    }
+
+    pub fn uses_wire_codec(&self) -> bool {
+        self.records.iter().any(PythonRecord::is_encoded)
+            || self.callables().any(|callable| {
+                callable.return_type.is_encoded_buffer()
+                    || callable.return_type.is_record_vector()
+                    || callable.parameters.iter().any(|parameter| {
+                        parameter.type_ref.is_encoded_buffer()
+                            || parameter.type_ref.is_record_vector()
+                    })
+            })
     }
 
     pub fn used_primitive_vector_parameter_types(&self) -> Vec<PrimitiveType> {
@@ -234,5 +257,14 @@ impl PythonModule {
                 }
                 enum_types
             })
+    }
+
+    pub fn used_string_vector_parameter_types(&self) -> bool {
+        self.callables().any(|callable| {
+            callable
+                .parameters
+                .iter()
+                .any(|parameter| parameter.type_ref.is_string_vector())
+        })
     }
 }

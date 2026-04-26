@@ -56,6 +56,14 @@ impl PythonEnumType {
         format!("boltffi_python_decode_owned_vec_{}", self.native_name_stem)
     }
 
+    pub fn wire_vector_encoder_name(&self) -> String {
+        format!("boltffi_python_wire_encode_vec_{}", self.native_name_stem)
+    }
+
+    pub fn wire_vector_decoder_name(&self) -> String {
+        format!("boltffi_python_wire_decode_vec_{}", self.native_name_stem)
+    }
+
     pub fn native_to_wire_tag_name(&self) -> String {
         format!(
             "boltffi_python_{}_native_to_wire_tag",

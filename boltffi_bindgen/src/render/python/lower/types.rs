@@ -1,9 +1,10 @@
-use crate::ir::definitions::{EnumRepr, ParamDef, ParamPassing, ReturnDef};
+use crate::ir::definitions::{EnumRepr, ParamDef, ParamPassing, RecordDef, ReturnDef};
 use crate::ir::ids::{EnumId, RecordId};
 use crate::ir::types::TypeExpr;
 use crate::render::python::{
-    NamingConvention, PythonEnumType, PythonLowerError, PythonParameter, PythonRecordType,
-    PythonSequenceType, PythonType,
+    NamingConvention, PythonDirectRecordField, PythonDirectRecordLayout, PythonEnumType,
+    PythonLowerError, PythonParameter, PythonRecordTransport, PythonRecordType, PythonSequenceType,
+    PythonType,
 };
 
 use super::PythonLowerer;
@@ -49,12 +50,12 @@ impl PythonLowerer<'_> {
         }
     }
 
-    fn lower_type(&self, type_expr: &TypeExpr) -> Option<PythonType> {
+    pub(super) fn lower_type(&self, type_expr: &TypeExpr) -> Option<PythonType> {
         match type_expr {
             TypeExpr::Primitive(primitive) => Some(PythonType::Primitive(*primitive)),
-            TypeExpr::Record(record_id) => self
-                .lower_blittable_record_type(record_id)
-                .map(PythonType::Record),
+            TypeExpr::Record(record_id) => {
+                self.lower_record_type(record_id).map(PythonType::Record)
+            }
             TypeExpr::Enum(enum_id) => self
                 .lower_c_style_enum_type(enum_id)
                 .map(PythonType::CStyleEnum),
@@ -71,9 +72,14 @@ impl PythonLowerer<'_> {
             TypeExpr::Primitive(primitive) => Some(PythonType::Sequence(
                 PythonSequenceType::PrimitiveVec(*primitive),
             )),
+            TypeExpr::String => Some(PythonType::Sequence(PythonSequenceType::StringVec)),
             TypeExpr::Enum(enum_id) => self
                 .lower_c_style_enum_type(enum_id)
                 .map(PythonSequenceType::CStyleEnumVec)
+                .map(PythonType::Sequence),
+            TypeExpr::Record(record_id) => self
+                .lower_record_type(record_id)
+                .map(PythonSequenceType::RecordVec)
                 .map(PythonType::Sequence),
             _ => None,
         }
@@ -92,22 +98,64 @@ impl PythonLowerer<'_> {
         })
     }
 
-    pub(super) fn lower_blittable_record_type(
-        &self,
-        record_id: &RecordId,
-    ) -> Option<PythonRecordType> {
-        let record = self.ffi_contract.catalog.resolve_record(record_id)?;
-        let abi_record = self.resolve_abi_record(record_id);
-
-        if !record.is_blittable() || !abi_record.is_blittable {
+    pub(super) fn lower_record_type(&self, record_id: &RecordId) -> Option<PythonRecordType> {
+        if self.record_stack.borrow().contains(record_id) {
             return None;
         }
+
+        self.record_stack.borrow_mut().insert(record_id.clone());
+
+        let record = self.ffi_contract.catalog.resolve_record(record_id)?;
+        let abi_record = self.resolve_abi_record(record_id);
+        let lowered_fields = record
+            .fields
+            .iter()
+            .map(|field| self.lower_type(&field.type_expr))
+            .collect::<Option<Vec<_>>>();
+
+        let transport = if record.is_blittable() && abi_record.is_blittable {
+            PythonRecordTransport::Direct(Self::lower_direct_record_layout(
+                record,
+                abi_record.size?,
+            ))
+        } else if lowered_fields.is_some() {
+            PythonRecordTransport::Encoded
+        } else {
+            self.record_stack.borrow_mut().remove(record_id);
+            return None;
+        };
+
+        self.record_stack.borrow_mut().remove(record_id);
 
         Some(PythonRecordType {
             native_name_stem: boltffi_ffi_rules::naming::to_snake_case(record_id.as_str()),
             class_name: NamingConvention::class_name(record_id.as_str()),
             c_type_name: format!("___{}", record_id.as_str()),
+            transport,
         })
+    }
+
+    fn lower_direct_record_layout(
+        record: &RecordDef,
+        size_bytes: usize,
+    ) -> PythonDirectRecordLayout {
+        PythonDirectRecordLayout {
+            size_bytes,
+            fields: record
+                .fields
+                .iter()
+                .map(|field| {
+                    let TypeExpr::Primitive(primitive) = &field.type_expr else {
+                        unreachable!("direct python record fields must be primitive");
+                    };
+
+                    PythonDirectRecordField {
+                        native_name: field.name.as_str().to_string(),
+                        primitive: *primitive,
+                    }
+                })
+                .collect(),
+        }
     }
 }
 

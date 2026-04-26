@@ -87,10 +87,11 @@ mod tests {
     use super::PythonPackageSources;
     use crate::ir::types::PrimitiveType;
     use crate::render::python::{
-        PythonCStyleEnum, PythonCStyleEnumVariant, PythonCallable, PythonEnumConstructor,
-        PythonEnumMethod, PythonEnumType, PythonFunction, PythonModule, PythonParameter,
-        PythonRecord, PythonRecordConstructor, PythonRecordField, PythonRecordMethod,
-        PythonRecordType, PythonRuntimeVersion, PythonSequenceType, PythonType,
+        PythonCStyleEnum, PythonCStyleEnumVariant, PythonCallable, PythonDirectRecordField,
+        PythonDirectRecordLayout, PythonEnumConstructor, PythonEnumMethod, PythonEnumType,
+        PythonFunction, PythonModule, PythonParameter, PythonRecord, PythonRecordConstructor,
+        PythonRecordField, PythonRecordMethod, PythonRecordTransport, PythonRecordType,
+        PythonRuntimeVersion, PythonSequenceType, PythonType,
     };
 
     struct NativePythonPackageFixture;
@@ -101,6 +102,19 @@ mod tests {
                 native_name_stem: "point".to_string(),
                 class_name: "Point".to_string(),
                 c_type_name: "___Point".to_string(),
+                transport: PythonRecordTransport::Direct(PythonDirectRecordLayout {
+                    size_bytes: 16,
+                    fields: vec![
+                        PythonDirectRecordField {
+                            native_name: "x".to_string(),
+                            primitive: PrimitiveType::F64,
+                        },
+                        PythonDirectRecordField {
+                            native_name: "y".to_string(),
+                            primitive: PrimitiveType::F64,
+                        },
+                    ],
+                }),
             }
         }
 
@@ -109,6 +123,27 @@ mod tests {
                 native_name_stem: "color".to_string(),
                 class_name: "Color".to_string(),
                 c_type_name: "___Color".to_string(),
+                transport: PythonRecordTransport::Direct(PythonDirectRecordLayout {
+                    size_bytes: 4,
+                    fields: vec![
+                        PythonDirectRecordField {
+                            native_name: "r".to_string(),
+                            primitive: PrimitiveType::U8,
+                        },
+                        PythonDirectRecordField {
+                            native_name: "g".to_string(),
+                            primitive: PrimitiveType::U8,
+                        },
+                        PythonDirectRecordField {
+                            native_name: "b".to_string(),
+                            primitive: PrimitiveType::U8,
+                        },
+                        PythonDirectRecordField {
+                            native_name: "a".to_string(),
+                            primitive: PrimitiveType::U8,
+                        },
+                    ],
+                }),
             }
         }
 
@@ -218,12 +253,12 @@ mod tests {
                             PythonRecordField {
                                 python_name: "x".to_string(),
                                 native_name: "x".to_string(),
-                                primitive: PrimitiveType::F64,
+                                type_ref: PythonType::Primitive(PrimitiveType::F64),
                             },
                             PythonRecordField {
                                 python_name: "y".to_string(),
                                 native_name: "y".to_string(),
-                                primitive: PrimitiveType::F64,
+                                type_ref: PythonType::Primitive(PrimitiveType::F64),
                             },
                         ],
                         vec![
@@ -299,36 +334,34 @@ mod tests {
                                 is_static: true,
                             },
                         ],
-                    )
-                    .expect("point record fixture should be valid"),
+                    ),
                     PythonRecord::new(
                         color_type.clone(),
                         vec![
                             PythonRecordField {
                                 python_name: "r".to_string(),
                                 native_name: "r".to_string(),
-                                primitive: PrimitiveType::U8,
+                                type_ref: PythonType::Primitive(PrimitiveType::U8),
                             },
                             PythonRecordField {
                                 python_name: "g".to_string(),
                                 native_name: "g".to_string(),
-                                primitive: PrimitiveType::U8,
+                                type_ref: PythonType::Primitive(PrimitiveType::U8),
                             },
                             PythonRecordField {
                                 python_name: "b".to_string(),
                                 native_name: "b".to_string(),
-                                primitive: PrimitiveType::U8,
+                                type_ref: PythonType::Primitive(PrimitiveType::U8),
                             },
                             PythonRecordField {
                                 python_name: "a".to_string(),
                                 native_name: "a".to_string(),
-                                primitive: PrimitiveType::U8,
+                                type_ref: PythonType::Primitive(PrimitiveType::U8),
                             },
                         ],
                         vec![],
                         vec![],
-                    )
-                    .expect("color record fixture should be valid"),
+                    ),
                 ],
                 enums: vec![status_enum, direction_enum],
                 functions: vec![
@@ -622,5 +655,73 @@ mod tests {
         assert!(generated_stub.contains("class Status(IntEnum):"));
         assert!(generated_stub.contains("def echo_status"));
         assert!(generated_stub.contains("def opposite(self) -> Direction:"));
+    }
+
+    #[test]
+    fn emits_encoded_record_package_sources() {
+        let person_type = PythonRecordType {
+            native_name_stem: "person".to_string(),
+            class_name: "Person".to_string(),
+            c_type_name: "___Person".to_string(),
+            transport: PythonRecordTransport::Encoded,
+        };
+        let module = PythonModule {
+            module_name: "demo_lib".to_string(),
+            package_name: "demo-lib".to_string(),
+            package_version: Some("0.1.0".to_string()),
+            library_name: "demo".to_string(),
+            free_buffer_symbol: "boltffi_free_buf".to_string(),
+            records: vec![PythonRecord::new(
+                person_type.clone(),
+                vec![
+                    PythonRecordField {
+                        python_name: "name".to_string(),
+                        native_name: "name".to_string(),
+                        type_ref: PythonType::String,
+                    },
+                    PythonRecordField {
+                        python_name: "age".to_string(),
+                        native_name: "age".to_string(),
+                        type_ref: PythonType::Primitive(PrimitiveType::U32),
+                    },
+                ],
+                vec![],
+                vec![],
+            )],
+            enums: vec![],
+            functions: vec![PythonFunction {
+                python_name: "echo_person".to_string(),
+                callable: PythonCallable {
+                    native_name: "echo_person".to_string(),
+                    ffi_symbol: "boltffi_echo_person".to_string(),
+                    parameters: vec![PythonParameter {
+                        name: "value".to_string(),
+                        type_ref: PythonType::Record(person_type.clone()),
+                    }],
+                    return_type: PythonType::Record(person_type),
+                },
+            }],
+        };
+        let rendered = PythonEmitter::emit(&module);
+        let init_source =
+            NativePythonPackageFixture::rendered_file(&rendered, "demo_lib/__init__.py");
+        let native_source =
+            NativePythonPackageFixture::rendered_file(&rendered, "demo_lib/_native.c");
+
+        assert!(init_source.contains("class Person:"));
+        assert!(init_source.contains("name: str"));
+        assert!(init_source.contains("age: int"));
+        assert!(native_source.contains(
+            "typedef FfiBuf_u8 (*boltffi_python_symbol_echo_person_fn)(const uint8_t *, uintptr_t);"
+        ));
+        assert!(native_source.contains("static int boltffi_python_encode_person_wire"));
+        assert!(native_source.contains("static PyObject *boltffi_python_decode_person_wire"));
+        assert!(native_source.contains(
+            "static int boltffi_python_parse_person(PyObject *value, boltffi_python_buffer_input *out)"
+        ));
+        assert!(
+            native_source.contains("static PyObject *boltffi_python_box_person(FfiBuf_u8 buffer)")
+        );
+        assert!(!native_source.contains("} ___Person;"));
     }
 }

@@ -11,6 +11,7 @@ pub use callable::{
 pub use enumeration::{PythonCStyleEnum, PythonCStyleEnumVariant, PythonEnumType};
 pub use module::PythonModule;
 pub use record::{
-    PythonRecord, PythonRecordConstructor, PythonRecordField, PythonRecordMethod, PythonRecordType,
+    PythonDirectRecordField, PythonDirectRecordLayout, PythonRecord, PythonRecordConstructor,
+    PythonRecordField, PythonRecordMethod, PythonRecordTransport, PythonRecordType,
 };
 pub use type_shape::{PythonSequenceType, PythonType};

@@ -1,6 +1,5 @@
 use crate::ir::abi::CallId;
 use crate::ir::definitions::{ConstructorDef, FieldDef, MethodDef, Receiver, RecordDef, ReturnDef};
-use crate::ir::types::TypeExpr;
 use crate::render::python::{
     NamingConvention, PythonCallable, PythonLowerError, PythonParameter, PythonRecord,
     PythonRecordConstructor, PythonRecordField, PythonRecordMethod, PythonRecordType, PythonType,
@@ -22,15 +21,18 @@ impl PythonLowerer<'_> {
     }
 
     fn lower_record(&self, record: &RecordDef) -> Result<Option<PythonRecord>, PythonLowerError> {
-        let Some(type_ref) = self.lower_blittable_record_type(&record.id) else {
+        let Some(type_ref) = self.lower_record_type(&record.id) else {
             return Ok(None);
         };
 
-        let fields = record
+        let Some(fields) = record
             .fields
             .iter()
-            .map(Self::lower_record_field)
-            .collect::<Vec<_>>();
+            .map(|field| self.lower_record_field(field))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
 
         Self::validate_record_field_names(type_ref.class_name.as_str(), &fields)?;
 
@@ -65,22 +67,20 @@ impl PythonLowerer<'_> {
             &methods,
         )?;
 
-        Ok(Some(
-            PythonRecord::new(type_ref, fields, constructors, methods)
-                .expect("direct python record should always have at least one field"),
-        ))
+        Ok(Some(PythonRecord::new(
+            type_ref,
+            fields,
+            constructors,
+            methods,
+        )))
     }
 
-    fn lower_record_field(field: &FieldDef) -> PythonRecordField {
-        let TypeExpr::Primitive(primitive) = &field.type_expr else {
-            unreachable!("blittable python records must contain only primitive fields");
-        };
-
-        PythonRecordField {
+    fn lower_record_field(&self, field: &FieldDef) -> Option<PythonRecordField> {
+        Some(PythonRecordField {
             python_name: NamingConvention::record_field_name(field.name.as_str()),
             native_name: field.name.as_str().to_string(),
-            primitive: *primitive,
-        }
+            type_ref: self.lower_type(&field.type_expr)?,
+        })
     }
 
     fn lower_record_constructor(
@@ -184,7 +184,7 @@ mod tests {
     };
     use crate::ir::ids::{MethodId, ParamName, RecordId};
     use crate::ir::types::{PrimitiveType, TypeExpr};
-    use crate::render::python::PythonType;
+    use crate::render::python::{PythonRecordTransport, PythonType};
 
     use super::super::test_support::lower_contract;
 
@@ -275,8 +275,8 @@ mod tests {
 
         assert_eq!(module.records.len(), 1);
         assert_eq!(module.records[0].type_ref.class_name, "Point");
-        assert_eq!(module.records[0].fields.first().python_name, "x");
-        assert_eq!(module.records[0].fields.first().native_name, "x");
+        assert_eq!(module.records[0].fields.first().unwrap().python_name, "x");
+        assert_eq!(module.records[0].fields.first().unwrap().native_name, "x");
         assert_eq!(
             module.records[0].constructors[0].callable.return_type,
             PythonType::Record(module.records[0].type_ref.clone())
@@ -284,6 +284,48 @@ mod tests {
         assert_eq!(
             module.records[0].methods[1].callable.return_type,
             PythonType::Record(module.records[0].type_ref.clone())
+        );
+    }
+
+    #[test]
+    fn lower_contract_supports_encoded_records() {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_record(RecordDef {
+            id: RecordId::new("Person"),
+            is_repr_c: false,
+            is_error: false,
+            fields: vec![
+                FieldDef {
+                    name: "name".into(),
+                    type_expr: TypeExpr::String,
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: "age".into(),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::U32),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(catalog, vec![]).expect("python lowering should succeed");
+        let record = &module.records[0];
+
+        assert_eq!(record.type_ref.class_name, "Person");
+        assert!(matches!(
+            record.type_ref.transport,
+            PythonRecordTransport::Encoded
+        ));
+        assert_eq!(record.fields.first().unwrap().type_ref, PythonType::String);
+        assert_eq!(
+            record.fields.iter().nth(1).unwrap().type_ref,
+            PythonType::Primitive(PrimitiveType::U32)
         );
     }
 }

@@ -75,6 +75,14 @@ impl PythonCallable {
         self.return_type.is_c_style_enum_vector()
     }
 
+    pub fn returns_string_vector(&self) -> bool {
+        self.return_type.is_string_vector()
+    }
+
+    pub fn returns_record_vector(&self) -> bool {
+        self.return_type.is_record_vector()
+    }
+
     pub fn return_primitive(&self) -> Option<PrimitiveType> {
         match &self.return_type {
             PythonType::Primitive(primitive) => Some(*primitive),
@@ -99,6 +107,10 @@ impl PythonCallable {
 
     pub fn return_vector_c_style_enum(&self) -> Option<&PythonEnumType> {
         self.return_type.sequence_c_style_enum()
+    }
+
+    pub fn return_vector_record(&self) -> Option<&PythonRecordType> {
+        self.return_type.sequence_record()
     }
 }
 

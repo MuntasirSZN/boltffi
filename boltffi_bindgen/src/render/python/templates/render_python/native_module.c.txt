@@ -14,6 +14,7 @@
 typedef struct FfiBuf_u8 { uint8_t* ptr; size_t len; size_t cap; size_t align; } FfiBuf_u8;
 typedef void (*boltffi_python_free_buf_fn)(FfiBuf_u8);
 static boltffi_python_free_buf_fn boltffi_python_free_buf_symbol = NULL;
+static int boltffi_python_validate_owned_buffer(FfiBuf_u8 buffer);
 {% endif %}
 {% if module.uses_records() %}
 {% for record in module.records %}
@@ -48,11 +49,13 @@ static boltffi_python_c_style_enum_registration {{ enumeration.type_ref.registra
 {% endif %}
 {% if module.uses_records() %}
 {% for record in module.records %}
+{% if record.is_direct() %}
 typedef struct {
-{% for field in record.fields.iter() %}
+{% for field in record.type_ref.direct_layout_unwrap().fields %}
     {{ field.primitive.c_type_name() }} {{ field.native_name }};
 {% endfor %}
 } {{ record.type_ref.c_type_name }};
+{% endif %}
 {% endfor %}
 {% endif %}
 {% for binding in module.native_callables() %}
@@ -349,6 +352,439 @@ static PyObject *{{ primitive.boxer_name() }}({{ primitive.c_type_name() }} valu
     return PyLong_FromSize_t((size_t)value);
 {% elif primitive.boxes_as_double() %}
     return PyFloat_FromDouble((double)value);
+{% endif %}
+}
+
+{% endfor %}
+{% endif %}
+{% if module.uses_wire_codec() %}
+
+typedef struct boltffi_python_wire_writer {
+    uint8_t *data;
+    size_t len;
+    size_t cap;
+} boltffi_python_wire_writer;
+
+typedef struct boltffi_python_wire_reader {
+    const uint8_t *data;
+    size_t len;
+    size_t offset;
+} boltffi_python_wire_reader;
+
+static void boltffi_python_wire_writer_init(boltffi_python_wire_writer *writer) {
+    writer->data = NULL;
+    writer->len = 0;
+    writer->cap = 0;
+}
+
+static void boltffi_python_wire_writer_deinit(boltffi_python_wire_writer *writer) {
+    PyMem_Free(writer->data);
+    boltffi_python_wire_writer_init(writer);
+}
+
+static int boltffi_python_wire_writer_reserve(boltffi_python_wire_writer *writer, size_t additional_len) {
+    uint8_t *grown = NULL;
+    size_t required_len = 0;
+    size_t next_cap = 0;
+    if (additional_len > SIZE_MAX - writer->len) {
+        PyErr_SetString(PyExc_OverflowError, "encoded value is too large");
+        return 0;
+    }
+    required_len = writer->len + additional_len;
+    if (required_len <= writer->cap) {
+        return 1;
+    }
+    next_cap = writer->cap == 0 ? 64 : writer->cap;
+    while (next_cap < required_len) {
+        if (next_cap > SIZE_MAX / 2) {
+            next_cap = required_len;
+            break;
+        }
+        next_cap *= 2;
+    }
+    grown = PyMem_Realloc(writer->data, next_cap);
+    if (grown == NULL) {
+        PyErr_NoMemory();
+        return 0;
+    }
+    writer->data = grown;
+    writer->cap = next_cap;
+    return 1;
+}
+
+static int boltffi_python_wire_writer_write_bytes(
+    boltffi_python_wire_writer *writer,
+    const void *data,
+    size_t len
+) {
+    if (!boltffi_python_wire_writer_reserve(writer, len)) {
+        return 0;
+    }
+    if (len != 0) {
+        memcpy(writer->data + writer->len, data, len);
+    }
+    writer->len += len;
+    return 1;
+}
+
+static int boltffi_python_wire_writer_write_u32(
+    boltffi_python_wire_writer *writer,
+    uint32_t value
+) {
+    return boltffi_python_wire_writer_write_bytes(writer, &value, sizeof(uint32_t));
+}
+
+static int boltffi_python_wire_writer_write_sequence_count(
+    boltffi_python_wire_writer *writer,
+    Py_ssize_t count
+) {
+    if (count < 0 || (size_t)count > (size_t)UINT32_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "sequence is too large for Rust");
+        return 0;
+    }
+    return boltffi_python_wire_writer_write_u32(writer, (uint32_t)count);
+}
+
+static int boltffi_python_wire_writer_write_string_object(
+    boltffi_python_wire_writer *writer,
+    PyObject *value
+) {
+    const char *utf8_data = NULL;
+    Py_ssize_t utf8_length = 0;
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "expected str");
+        return 0;
+    }
+    utf8_data = PyUnicode_AsUTF8AndSize(value, &utf8_length);
+    if (utf8_data == NULL) {
+        return 0;
+    }
+    if ((size_t)utf8_length > (size_t)UINT32_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "string is too large for Rust");
+        return 0;
+    }
+    return boltffi_python_wire_writer_write_u32(writer, (uint32_t)utf8_length)
+        && boltffi_python_wire_writer_write_bytes(writer, utf8_data, (size_t)utf8_length);
+}
+
+static int boltffi_python_wire_writer_write_bytes_object(
+    boltffi_python_wire_writer *writer,
+    PyObject *value
+) {
+    Py_buffer view;
+    int wrote = 0;
+    memset(&view, 0, sizeof(Py_buffer));
+    if (PyObject_GetBuffer(value, &view, PyBUF_CONTIG_RO) != 0) {
+        return 0;
+    }
+    if (view.ndim != 1 || view.itemsize != 1) {
+        PyBuffer_Release(&view);
+        PyErr_SetString(PyExc_TypeError, "expected bytes-like object");
+        return 0;
+    }
+    if ((size_t)view.len > (size_t)UINT32_MAX) {
+        PyBuffer_Release(&view);
+        PyErr_SetString(PyExc_OverflowError, "bytes value is too large for Rust");
+        return 0;
+    }
+    wrote = boltffi_python_wire_writer_write_u32(writer, (uint32_t)view.len)
+        && boltffi_python_wire_writer_write_bytes(writer, view.buf, (size_t)view.len);
+    PyBuffer_Release(&view);
+    return wrote;
+}
+
+{% if module.uses_buffer_input_parameters() %}
+static int boltffi_python_wire_writer_finish_input(
+    boltffi_python_wire_writer *writer,
+    boltffi_python_buffer_input *out
+) {
+    boltffi_python_init_buffer_input(out);
+    if (writer->len > (size_t)UINTPTR_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "encoded value is too large for Rust");
+        return 0;
+    }
+    out->ptr = writer->data;
+    out->len = (uintptr_t)writer->len;
+    out->owned_copy = writer->data;
+    writer->data = NULL;
+    writer->len = 0;
+    writer->cap = 0;
+    return 1;
+}
+{% endif %}
+
+static void boltffi_python_wire_reader_init(
+    boltffi_python_wire_reader *reader,
+    const uint8_t *data,
+    size_t len
+) {
+    reader->data = data;
+    reader->len = len;
+    reader->offset = 0;
+}
+
+static int boltffi_python_wire_reader_read_bytes(
+    boltffi_python_wire_reader *reader,
+    size_t len,
+    const uint8_t **out
+) {
+    if (len > reader->len || reader->offset > reader->len - len) {
+        PyErr_SetString(PyExc_RuntimeError, "native wire buffer is invalid");
+        return 0;
+    }
+    *out = reader->data + reader->offset;
+    reader->offset += len;
+    return 1;
+}
+
+static int boltffi_python_wire_reader_read_u32(
+    boltffi_python_wire_reader *reader,
+    uint32_t *out
+) {
+    const uint8_t *data = NULL;
+    if (!boltffi_python_wire_reader_read_bytes(reader, sizeof(uint32_t), &data)) {
+        return 0;
+    }
+    memcpy(out, data, sizeof(uint32_t));
+    return 1;
+}
+
+static int boltffi_python_wire_reader_finish(
+    boltffi_python_wire_reader *reader
+) {
+    if (reader->offset != reader->len) {
+        PyErr_SetString(PyExc_RuntimeError, "native wire buffer has trailing bytes");
+        return 0;
+    }
+    return 1;
+}
+
+static PyObject *boltffi_python_wire_reader_read_string(
+    boltffi_python_wire_reader *reader
+) {
+    uint32_t utf8_length = 0;
+    const uint8_t *utf8_data = NULL;
+    if (!boltffi_python_wire_reader_read_u32(reader, &utf8_length)) {
+        return NULL;
+    }
+    if ((size_t)utf8_length > (size_t)PY_SSIZE_T_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "string result is too large for Python");
+        return NULL;
+    }
+    if (!boltffi_python_wire_reader_read_bytes(reader, (size_t)utf8_length, &utf8_data)) {
+        return NULL;
+    }
+    return PyUnicode_DecodeUTF8((const char *)utf8_data, (Py_ssize_t)utf8_length, NULL);
+}
+
+static PyObject *boltffi_python_wire_reader_read_bytes_object(
+    boltffi_python_wire_reader *reader
+) {
+    uint32_t byte_length = 0;
+    const uint8_t *byte_data = NULL;
+    if (!boltffi_python_wire_reader_read_u32(reader, &byte_length)) {
+        return NULL;
+    }
+    if ((size_t)byte_length > (size_t)PY_SSIZE_T_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "bytes result is too large for Python");
+        return NULL;
+    }
+    if (!boltffi_python_wire_reader_read_bytes(reader, (size_t)byte_length, &byte_data)) {
+        return NULL;
+    }
+    return PyBytes_FromStringAndSize((const char *)byte_data, (Py_ssize_t)byte_length);
+}
+
+static int boltffi_python_wire_reader_read_count(
+    boltffi_python_wire_reader *reader,
+    Py_ssize_t *out
+) {
+    uint32_t count = 0;
+    if (!boltffi_python_wire_reader_read_u32(reader, &count)) {
+        return 0;
+    }
+    if ((size_t)count > (size_t)PY_SSIZE_T_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "sequence result is too large for Python");
+        return 0;
+    }
+    *out = (Py_ssize_t)count;
+    return 1;
+}
+
+static int boltffi_python_wire_encode_vec_string(
+    PyObject *value,
+    boltffi_python_wire_writer *writer
+) {
+    PyObject *sequence = NULL;
+    Py_ssize_t sequence_length = 0;
+    Py_ssize_t index = 0;
+    sequence = PySequence_Fast(value, "expected sequence");
+    if (sequence == NULL) {
+        return 0;
+    }
+    sequence_length = PySequence_Fast_GET_SIZE(sequence);
+    if (!boltffi_python_wire_writer_write_sequence_count(writer, sequence_length)) {
+        Py_DECREF(sequence);
+        return 0;
+    }
+    for (index = 0; index < sequence_length; index += 1) {
+        if (!boltffi_python_wire_writer_write_string_object(writer, PySequence_Fast_GET_ITEM(sequence, index))) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+    }
+    Py_DECREF(sequence);
+    return 1;
+}
+
+static PyObject *boltffi_python_wire_decode_vec_string(
+    boltffi_python_wire_reader *reader
+) {
+    PyObject *decoded = NULL;
+    PyObject *item = NULL;
+    Py_ssize_t item_count = 0;
+    Py_ssize_t index = 0;
+    if (!boltffi_python_wire_reader_read_count(reader, &item_count)) {
+        return NULL;
+    }
+    decoded = PyList_New(item_count);
+    if (decoded == NULL) {
+        return NULL;
+    }
+    for (index = 0; index < item_count; index += 1) {
+        item = boltffi_python_wire_reader_read_string(reader);
+        if (item == NULL) {
+            Py_DECREF(decoded);
+            return NULL;
+        }
+        PyList_SET_ITEM(decoded, index, item);
+    }
+    return decoded;
+}
+
+{% for primitive in used_primitive_types %}
+static int {{ primitive.wire_vector_encoder_name() }}(
+    PyObject *value,
+    boltffi_python_wire_writer *writer
+) {
+    PyObject *sequence = NULL;
+    Py_ssize_t sequence_length = 0;
+    Py_ssize_t index = 0;
+    {{ primitive.c_type_name() }} native_value = 0;
+    {{ primitive.wire_c_type_name() }} wire_value = 0;
+{% if primitive.is_u8() %}
+    Py_buffer view;
+    memset(&view, 0, sizeof(Py_buffer));
+    if (PyObject_GetBuffer(value, &view, PyBUF_CONTIG_RO) == 0) {
+        if (view.ndim == 1 && view.itemsize == 1) {
+            if ((size_t)view.len > (size_t)UINT32_MAX) {
+                PyBuffer_Release(&view);
+                PyErr_SetString(PyExc_OverflowError, "sequence is too large for Rust");
+                return 0;
+            }
+            if (!boltffi_python_wire_writer_write_u32(writer, (uint32_t)view.len)
+                || !boltffi_python_wire_writer_write_bytes(writer, view.buf, (size_t)view.len)) {
+                PyBuffer_Release(&view);
+                return 0;
+            }
+            PyBuffer_Release(&view);
+            return 1;
+        }
+        PyBuffer_Release(&view);
+    }
+    PyErr_Clear();
+{% endif %}
+    sequence = PySequence_Fast(value, "expected sequence");
+    if (sequence == NULL) {
+        return 0;
+    }
+    sequence_length = PySequence_Fast_GET_SIZE(sequence);
+    if (!boltffi_python_wire_writer_write_sequence_count(writer, sequence_length)) {
+        Py_DECREF(sequence);
+        return 0;
+    }
+    for (index = 0; index < sequence_length; index += 1) {
+        if (!{{ primitive.parser_name() }}(PySequence_Fast_GET_ITEM(sequence, index), &native_value)) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+{% if primitive.uses_bool_parser() %}
+        wire_value = native_value ? 1 : 0;
+{% elif primitive.uses_isize_parser() || primitive.uses_usize_parser() %}
+        wire_value = ({{ primitive.wire_c_type_name() }})native_value;
+{% else %}
+        wire_value = native_value;
+{% endif %}
+        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_value, {{ primitive.wire_size_bytes() }})) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+    }
+    Py_DECREF(sequence);
+    return 1;
+}
+
+static PyObject *{{ primitive.wire_vector_decoder_name() }}(
+    boltffi_python_wire_reader *reader
+) {
+    PyObject *decoded = NULL;
+    PyObject *item = NULL;
+    Py_ssize_t item_count = 0;
+    Py_ssize_t index = 0;
+    const uint8_t *raw_value = NULL;
+    {{ primitive.wire_c_type_name() }} wire_value = 0;
+    {{ primitive.c_type_name() }} native_value = 0;
+    if (!boltffi_python_wire_reader_read_count(reader, &item_count)) {
+        return NULL;
+    }
+{% if primitive.is_u8() %}
+    if (!boltffi_python_wire_reader_read_bytes(reader, (size_t)item_count, &raw_value)) {
+        return NULL;
+    }
+    return PyBytes_FromStringAndSize((const char *)raw_value, item_count);
+{% else %}
+    decoded = PyList_New(item_count);
+    if (decoded == NULL) {
+        return NULL;
+    }
+    for (index = 0; index < item_count; index += 1) {
+        if (!boltffi_python_wire_reader_read_bytes(reader, {{ primitive.wire_size_bytes() }}, &raw_value)) {
+            Py_DECREF(decoded);
+            return NULL;
+        }
+        memcpy(&wire_value, raw_value, {{ primitive.wire_size_bytes() }});
+{% if primitive.uses_bool_parser() %}
+        if (wire_value > 1) {
+            Py_DECREF(decoded);
+            PyErr_SetString(PyExc_RuntimeError, "native bool value is invalid");
+            return NULL;
+        }
+        native_value = wire_value != 0;
+{% elif primitive.uses_isize_parser() %}
+        if (wire_value < (int64_t)INTPTR_MIN || wire_value > (int64_t)INTPTR_MAX) {
+            Py_DECREF(decoded);
+            PyErr_SetString(PyExc_OverflowError, "isize result is out of range");
+            return NULL;
+        }
+        native_value = (intptr_t)wire_value;
+{% elif primitive.uses_usize_parser() %}
+        if (wire_value > (uint64_t)UINTPTR_MAX) {
+            Py_DECREF(decoded);
+            PyErr_SetString(PyExc_OverflowError, "usize result is out of range");
+            return NULL;
+        }
+        native_value = (uintptr_t)wire_value;
+{% else %}
+        native_value = wire_value;
+{% endif %}
+        item = {{ primitive.boxer_name() }}(native_value);
+        if (item == NULL) {
+            Py_DECREF(decoded);
+            return NULL;
+        }
+        PyList_SET_ITEM(decoded, index, item);
+    }
+    return decoded;
 {% endif %}
 }
 
@@ -807,6 +1243,76 @@ static PyObject *{{ enumeration.type_ref.boxer_name() }}({{ enumeration.type_ref
     return {{ enumeration.type_ref.box_from_wire_tag_name() }}(wire_tag);
 }
 
+{% if module.uses_wire_codec() %}
+static int {{ enumeration.type_ref.wire_vector_encoder_name() }}(
+    PyObject *value,
+    boltffi_python_wire_writer *writer
+) {
+    PyObject *sequence = NULL;
+    Py_ssize_t sequence_length = 0;
+    Py_ssize_t index = 0;
+    {{ enumeration.type_ref.tag_type.c_type_name() }} native_value = 0;
+    int32_t wire_tag = 0;
+    sequence = PySequence_Fast(value, "expected sequence");
+    if (sequence == NULL) {
+        return 0;
+    }
+    sequence_length = PySequence_Fast_GET_SIZE(sequence);
+    if (!boltffi_python_wire_writer_write_sequence_count(writer, sequence_length)) {
+        Py_DECREF(sequence);
+        return 0;
+    }
+    for (index = 0; index < sequence_length; index += 1) {
+        if (!{{ enumeration.type_ref.parser_name() }}(PySequence_Fast_GET_ITEM(sequence, index), &native_value)) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+        if (!{{ enumeration.type_ref.native_to_wire_tag_name() }}(native_value, &wire_tag)) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_tag, sizeof(int32_t))) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+    }
+    Py_DECREF(sequence);
+    return 1;
+}
+
+static PyObject *{{ enumeration.type_ref.wire_vector_decoder_name() }}(
+    boltffi_python_wire_reader *reader
+) {
+    PyObject *decoded = NULL;
+    PyObject *item = NULL;
+    Py_ssize_t item_count = 0;
+    Py_ssize_t index = 0;
+    const uint8_t *raw_value = NULL;
+    int32_t wire_tag = 0;
+    if (!boltffi_python_wire_reader_read_count(reader, &item_count)) {
+        return NULL;
+    }
+    decoded = PyList_New(item_count);
+    if (decoded == NULL) {
+        return NULL;
+    }
+    for (index = 0; index < item_count; index += 1) {
+        if (!boltffi_python_wire_reader_read_bytes(reader, sizeof(int32_t), &raw_value)) {
+            Py_DECREF(decoded);
+            return NULL;
+        }
+        memcpy(&wire_tag, raw_value, sizeof(int32_t));
+        item = {{ enumeration.type_ref.box_from_wire_tag_name() }}(wire_tag);
+        if (item == NULL) {
+            Py_DECREF(decoded);
+            return NULL;
+        }
+        PyList_SET_ITEM(decoded, index, item);
+    }
+    return decoded;
+}
+
+{% endif %}
 {% endfor %}
 {% endif %}
 {% if module.uses_records() %}
@@ -842,6 +1348,21 @@ static PyObject *boltffi_python_box_registered_record(
     return record_value;
 }
 
+{% if module.uses_wire_codec() %}
+{% for record in module.records %}
+static int {{ record.type_ref.wire_encoder_name() }}(PyObject *value, boltffi_python_wire_writer *writer);
+static PyObject *{{ record.type_ref.wire_decoder_name() }}(boltffi_python_wire_reader *reader);
+static int {{ record.type_ref.wire_vector_encoder_name() }}(PyObject *value, boltffi_python_wire_writer *writer);
+static PyObject *{{ record.type_ref.wire_vector_decoder_name() }}(boltffi_python_wire_reader *reader);
+{% if module.uses_buffer_input_parameters() %}
+static int {{ record.type_ref.vector_parser_name() }}(PyObject *value, boltffi_python_buffer_input *out);
+{% endif %}
+{% if module.uses_owned_buffer_returns() %}
+static PyObject *{{ record.type_ref.vector_decoder_name() }}(FfiBuf_u8 buffer);
+{% endif %}
+{% endfor %}
+{% endif %}
+
 {% for record in module.records %}
 static PyObject *{{ record.type_ref.registration_wrapper_name() }}(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     (void)self;
@@ -859,6 +1380,7 @@ static PyObject *{{ record.type_ref.registration_wrapper_name() }}(PyObject *sel
     Py_RETURN_NONE;
 }
 
+{% if record.is_direct() %}
 static int {{ record.type_ref.parser_name() }}(PyObject *value, {{ record.type_ref.c_type_name }} *out) {
 {% for field in record.fields.iter() %}
     PyObject *{{ field.python_name }}_value = NULL;
@@ -872,7 +1394,8 @@ static int {{ record.type_ref.parser_name() }}(PyObject *value, {{ record.type_r
     if ({{ field.python_name }}_value == NULL) {
         goto cleanup;
     }
-    if (!{{ field.primitive.parser_name() }}({{ field.python_name }}_value, &out->{{ field.native_name }})) {
+{% let primitive = field.type_ref.primitive().unwrap() %}
+    if (!{{ primitive.parser_name() }}({{ field.python_name }}_value, &out->{{ field.native_name }})) {
         goto cleanup;
     }
     Py_DECREF({{ field.python_name }}_value);
@@ -894,7 +1417,8 @@ static PyObject *{{ record.type_ref.boxer_name() }}({{ record.type_ref.c_type_na
         return NULL;
     }
 {% for field in record.fields.iter() %}
-    field_value = {{ field.primitive.boxer_name() }}(value.{{ field.native_name }});
+{% let primitive = field.type_ref.primitive().unwrap() %}
+    field_value = {{ primitive.boxer_name() }}(value.{{ field.native_name }});
     if (field_value == NULL) {
         Py_DECREF(constructor_args);
         return NULL;
@@ -908,8 +1432,464 @@ static PyObject *{{ record.type_ref.boxer_name() }}({{ record.type_ref.c_type_na
         "{{ record.class_name() }}"
     );
 }
+{% endif %}
+
+{% if module.uses_wire_codec() %}
+static int {{ record.type_ref.wire_encoder_name() }}(PyObject *value, boltffi_python_wire_writer *writer) {
+{% if record.is_direct() %}
+    {{ record.type_ref.c_type_name }} native_value;
+    if (!{{ record.type_ref.parser_name() }}(value, &native_value)) {
+        return 0;
+    }
+    return boltffi_python_wire_writer_write_bytes(writer, &native_value, {{ record.type_ref.direct_layout_unwrap().size_bytes }});
+{% else %}
+{% for field in record.fields.iter() %}
+    PyObject *{{ field.python_name }}_value = NULL;
+{% endfor %}
+    int encoded = 0;
+    if (!boltffi_python_expect_type_instance(value, {{ record.type_ref.type_object_name() }}, "{{ record.class_name() }}")) {
+        return 0;
+    }
+{% for field in record.fields.iter() %}
+    {{ field.python_name }}_value = boltffi_python_get_record_field(value, "{{ record.class_name() }}", "{{ field.python_name }}");
+    if ({{ field.python_name }}_value == NULL) {
+        goto cleanup;
+    }
+{% if field.type_ref.is_string() %}
+    if (!boltffi_python_wire_writer_write_string_object(writer, {{ field.python_name }}_value)) {
+        goto cleanup;
+    }
+{% elif field.type_ref.is_bytes() %}
+    if (!boltffi_python_wire_writer_write_bytes_object(writer, {{ field.python_name }}_value)) {
+        goto cleanup;
+    }
+{% elif field.type_ref.is_primitive_vector() %}
+{% let primitive = field.type_ref.sequence_primitive().unwrap() %}
+    if (!{{ primitive.wire_vector_encoder_name() }}({{ field.python_name }}_value, writer)) {
+        goto cleanup;
+    }
+{% elif field.type_ref.is_string_vector() %}
+    if (!boltffi_python_wire_encode_vec_string({{ field.python_name }}_value, writer)) {
+        goto cleanup;
+    }
+{% elif field.type_ref.is_c_style_enum_vector() %}
+{% let enum_type = field.type_ref.sequence_c_style_enum().unwrap() %}
+    if (!{{ enum_type.wire_vector_encoder_name() }}({{ field.python_name }}_value, writer)) {
+        goto cleanup;
+    }
+{% elif field.type_ref.is_record_vector() %}
+{% let record_type = field.type_ref.sequence_record().unwrap() %}
+    if (!{{ record_type.wire_vector_encoder_name() }}({{ field.python_name }}_value, writer)) {
+        goto cleanup;
+    }
+{% elif field.type_ref.is_c_style_enum() %}
+{% let enum_type = field.type_ref.c_style_enum().unwrap() %}
+    {
+        {{ enum_type.tag_type.c_type_name() }} native_value = 0;
+        int32_t wire_tag = 0;
+        if (!{{ enum_type.parser_name() }}({{ field.python_name }}_value, &native_value)) {
+            goto cleanup;
+        }
+        if (!{{ enum_type.native_to_wire_tag_name() }}(native_value, &wire_tag)) {
+            goto cleanup;
+        }
+        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_tag, sizeof(int32_t))) {
+            goto cleanup;
+        }
+    }
+{% elif field.type_ref.is_record() %}
+{% let record_type = field.type_ref.record().unwrap() %}
+    if (!{{ record_type.wire_encoder_name() }}({{ field.python_name }}_value, writer)) {
+        goto cleanup;
+    }
+{% else %}
+{% let primitive = field.type_ref.primitive().unwrap() %}
+    {
+        {{ primitive.c_type_name() }} native_value = 0;
+        {{ primitive.wire_c_type_name() }} wire_value = 0;
+        if (!{{ primitive.parser_name() }}({{ field.python_name }}_value, &native_value)) {
+            goto cleanup;
+        }
+{% if primitive.uses_bool_parser() %}
+        wire_value = native_value ? 1 : 0;
+{% elif primitive.uses_isize_parser() || primitive.uses_usize_parser() %}
+        wire_value = ({{ primitive.wire_c_type_name() }})native_value;
+{% else %}
+        wire_value = native_value;
+{% endif %}
+        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_value, {{ primitive.wire_size_bytes() }})) {
+            goto cleanup;
+        }
+    }
+{% endif %}
+    Py_DECREF({{ field.python_name }}_value);
+    {{ field.python_name }}_value = NULL;
+{% endfor %}
+    encoded = 1;
+cleanup:
+{% for field in record.fields.iter() %}
+    Py_XDECREF({{ field.python_name }}_value);
+{% endfor %}
+    return encoded;
+{% endif %}
+}
+
+static PyObject *{{ record.type_ref.wire_decoder_name() }}(boltffi_python_wire_reader *reader) {
+{% if record.is_direct() %}
+    const uint8_t *raw_value = NULL;
+    {{ record.type_ref.c_type_name }} native_value;
+    if (!boltffi_python_wire_reader_read_bytes(reader, {{ record.type_ref.direct_layout_unwrap().size_bytes }}, &raw_value)) {
+        return NULL;
+    }
+    memcpy(&native_value, raw_value, {{ record.type_ref.direct_layout_unwrap().size_bytes }});
+    return {{ record.type_ref.boxer_name() }}(native_value);
+{% else %}
+    PyObject *constructor_args = NULL;
+    PyObject *field_value = NULL;
+    constructor_args = PyTuple_New({{ record.field_count() }});
+    if (constructor_args == NULL) {
+        return NULL;
+    }
+{% for field in record.fields.iter() %}
+{% if field.type_ref.is_string() %}
+    field_value = boltffi_python_wire_reader_read_string(reader);
+{% elif field.type_ref.is_bytes() %}
+    field_value = boltffi_python_wire_reader_read_bytes_object(reader);
+{% elif field.type_ref.is_primitive_vector() %}
+{% let primitive = field.type_ref.sequence_primitive().unwrap() %}
+    field_value = {{ primitive.wire_vector_decoder_name() }}(reader);
+{% elif field.type_ref.is_string_vector() %}
+    field_value = boltffi_python_wire_decode_vec_string(reader);
+{% elif field.type_ref.is_c_style_enum_vector() %}
+{% let enum_type = field.type_ref.sequence_c_style_enum().unwrap() %}
+    field_value = {{ enum_type.wire_vector_decoder_name() }}(reader);
+{% elif field.type_ref.is_record_vector() %}
+{% let record_type = field.type_ref.sequence_record().unwrap() %}
+    field_value = {{ record_type.wire_vector_decoder_name() }}(reader);
+{% elif field.type_ref.is_c_style_enum() %}
+{% let enum_type = field.type_ref.c_style_enum().unwrap() %}
+    {
+        const uint8_t *raw_value = NULL;
+        int32_t wire_tag = 0;
+        if (!boltffi_python_wire_reader_read_bytes(reader, sizeof(int32_t), &raw_value)) {
+            Py_DECREF(constructor_args);
+            return NULL;
+        }
+        memcpy(&wire_tag, raw_value, sizeof(int32_t));
+        field_value = {{ enum_type.box_from_wire_tag_name() }}(wire_tag);
+    }
+{% elif field.type_ref.is_record() %}
+{% let record_type = field.type_ref.record().unwrap() %}
+    field_value = {{ record_type.wire_decoder_name() }}(reader);
+{% else %}
+{% let primitive = field.type_ref.primitive().unwrap() %}
+    {
+        const uint8_t *raw_value = NULL;
+        {{ primitive.wire_c_type_name() }} wire_value = 0;
+        {{ primitive.c_type_name() }} native_value = 0;
+        if (!boltffi_python_wire_reader_read_bytes(reader, {{ primitive.wire_size_bytes() }}, &raw_value)) {
+            Py_DECREF(constructor_args);
+            return NULL;
+        }
+        memcpy(&wire_value, raw_value, {{ primitive.wire_size_bytes() }});
+{% if primitive.uses_bool_parser() %}
+        if (wire_value > 1) {
+            Py_DECREF(constructor_args);
+            PyErr_SetString(PyExc_RuntimeError, "native bool value is invalid");
+            return NULL;
+        }
+        native_value = wire_value != 0;
+{% elif primitive.uses_isize_parser() %}
+        if (wire_value < (int64_t)INTPTR_MIN || wire_value > (int64_t)INTPTR_MAX) {
+            Py_DECREF(constructor_args);
+            PyErr_SetString(PyExc_OverflowError, "isize result is out of range");
+            return NULL;
+        }
+        native_value = (intptr_t)wire_value;
+{% elif primitive.uses_usize_parser() %}
+        if (wire_value > (uint64_t)UINTPTR_MAX) {
+            Py_DECREF(constructor_args);
+            PyErr_SetString(PyExc_OverflowError, "usize result is out of range");
+            return NULL;
+        }
+        native_value = (uintptr_t)wire_value;
+{% else %}
+        native_value = wire_value;
+{% endif %}
+        field_value = {{ primitive.boxer_name() }}(native_value);
+    }
+{% endif %}
+    if (field_value == NULL) {
+        Py_DECREF(constructor_args);
+        return NULL;
+    }
+    PyTuple_SET_ITEM(constructor_args, {{ loop.index0 }}, field_value);
+    field_value = NULL;
+{% endfor %}
+    return boltffi_python_box_registered_record(
+        {{ record.type_ref.type_object_name() }},
+        constructor_args,
+        "{{ record.class_name() }}"
+    );
+{% endif %}
+}
+
+{% if record.is_encoded() %}
+static int {{ record.type_ref.parser_name() }}(PyObject *value, boltffi_python_buffer_input *out) {
+    boltffi_python_wire_writer writer;
+    int parsed = 0;
+    boltffi_python_wire_writer_init(&writer);
+    if (!{{ record.type_ref.wire_encoder_name() }}(value, &writer)) {
+        goto cleanup;
+    }
+    if (!boltffi_python_wire_writer_finish_input(&writer, out)) {
+        goto cleanup;
+    }
+    parsed = 1;
+cleanup:
+    boltffi_python_wire_writer_deinit(&writer);
+    return parsed;
+}
+
+{% if module.uses_owned_buffer_returns() %}
+static PyObject *{{ record.type_ref.boxer_name() }}(FfiBuf_u8 buffer) {
+    PyObject *decoded = NULL;
+    boltffi_python_wire_reader reader;
+    if (!boltffi_python_validate_owned_buffer(buffer)) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    boltffi_python_wire_reader_init(&reader, buffer.ptr, buffer.len);
+    decoded = {{ record.type_ref.wire_decoder_name() }}(&reader);
+    if (decoded != NULL && !boltffi_python_wire_reader_finish(&reader)) {
+        Py_DECREF(decoded);
+        decoded = NULL;
+    }
+    boltffi_python_free_buf_symbol(buffer);
+    return decoded;
+}
+{% endif %}
+{% endif %}
+{% endif %}
 
 {% endfor %}
+{% if module.uses_wire_codec() %}
+{% for record in module.records %}
+static int {{ record.type_ref.wire_vector_encoder_name() }}(
+    PyObject *value,
+    boltffi_python_wire_writer *writer
+) {
+    PyObject *sequence = NULL;
+    Py_ssize_t sequence_length = 0;
+    Py_ssize_t index = 0;
+    sequence = PySequence_Fast(value, "expected sequence");
+    if (sequence == NULL) {
+        return 0;
+    }
+    sequence_length = PySequence_Fast_GET_SIZE(sequence);
+    if (!boltffi_python_wire_writer_write_sequence_count(writer, sequence_length)) {
+        Py_DECREF(sequence);
+        return 0;
+    }
+    for (index = 0; index < sequence_length; index += 1) {
+{% if record.is_direct() %}
+        {{ record.type_ref.c_type_name }} native_value;
+        if (!{{ record.type_ref.parser_name() }}(PySequence_Fast_GET_ITEM(sequence, index), &native_value)) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+        if (!boltffi_python_wire_writer_write_bytes(writer, &native_value, {{ record.type_ref.direct_layout_unwrap().size_bytes }})) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+{% else %}
+        if (!{{ record.type_ref.wire_encoder_name() }}(PySequence_Fast_GET_ITEM(sequence, index), writer)) {
+            Py_DECREF(sequence);
+            return 0;
+        }
+{% endif %}
+    }
+    Py_DECREF(sequence);
+    return 1;
+}
+
+static PyObject *{{ record.type_ref.wire_vector_decoder_name() }}(
+    boltffi_python_wire_reader *reader
+) {
+    PyObject *decoded = NULL;
+    PyObject *item = NULL;
+    Py_ssize_t item_count = 0;
+    Py_ssize_t index = 0;
+    if (!boltffi_python_wire_reader_read_count(reader, &item_count)) {
+        return NULL;
+    }
+    decoded = PyList_New(item_count);
+    if (decoded == NULL) {
+        return NULL;
+    }
+    for (index = 0; index < item_count; index += 1) {
+{% if record.is_direct() %}
+        const uint8_t *raw_value = NULL;
+        {{ record.type_ref.c_type_name }} native_value;
+        if (!boltffi_python_wire_reader_read_bytes(reader, {{ record.type_ref.direct_layout_unwrap().size_bytes }}, &raw_value)) {
+            Py_DECREF(decoded);
+            return NULL;
+        }
+        memcpy(&native_value, raw_value, {{ record.type_ref.direct_layout_unwrap().size_bytes }});
+        item = {{ record.type_ref.boxer_name() }}(native_value);
+{% else %}
+        item = {{ record.type_ref.wire_decoder_name() }}(reader);
+{% endif %}
+        if (item == NULL) {
+            Py_DECREF(decoded);
+            return NULL;
+        }
+        PyList_SET_ITEM(decoded, index, item);
+    }
+    return decoded;
+}
+
+{% if module.uses_buffer_input_parameters() %}
+static int {{ record.type_ref.vector_parser_name() }}(PyObject *value, boltffi_python_buffer_input *out) {
+{% if record.is_direct() %}
+    PyObject *sequence = NULL;
+    Py_ssize_t sequence_length = 0;
+    Py_ssize_t index = 0;
+    uint8_t *encoded_values = NULL;
+    size_t encoded_size = 0;
+    boltffi_python_init_buffer_input(out);
+    sequence = PySequence_Fast(value, "expected sequence");
+    if (sequence == NULL) {
+        return 0;
+    }
+    sequence_length = PySequence_Fast_GET_SIZE(sequence);
+    if (sequence_length < 0 || (size_t)sequence_length > (size_t)UINTPTR_MAX / {{ record.type_ref.direct_layout_unwrap().size_bytes }}) {
+        Py_DECREF(sequence);
+        PyErr_SetString(PyExc_OverflowError, "sequence is too large for Rust");
+        return 0;
+    }
+    encoded_size = (size_t)sequence_length * {{ record.type_ref.direct_layout_unwrap().size_bytes }};
+    if (encoded_size != 0) {
+        encoded_values = PyMem_Malloc(encoded_size);
+        if (encoded_values == NULL) {
+            Py_DECREF(sequence);
+            PyErr_NoMemory();
+            return 0;
+        }
+    }
+    for (index = 0; index < sequence_length; index += 1) {
+        {{ record.type_ref.c_type_name }} native_value;
+        if (!{{ record.type_ref.parser_name() }}(PySequence_Fast_GET_ITEM(sequence, index), &native_value)) {
+            PyMem_Free(encoded_values);
+            Py_DECREF(sequence);
+            return 0;
+        }
+        memcpy(encoded_values + ((size_t)index * {{ record.type_ref.direct_layout_unwrap().size_bytes }}), &native_value, {{ record.type_ref.direct_layout_unwrap().size_bytes }});
+    }
+    Py_DECREF(sequence);
+    out->ptr = encoded_values;
+    out->len = (uintptr_t)encoded_size;
+    out->owned_copy = encoded_values;
+    return 1;
+{% else %}
+    boltffi_python_wire_writer writer;
+    int parsed = 0;
+    boltffi_python_wire_writer_init(&writer);
+    if (!{{ record.type_ref.wire_vector_encoder_name() }}(value, &writer)) {
+        goto cleanup;
+    }
+    if (!boltffi_python_wire_writer_finish_input(&writer, out)) {
+        goto cleanup;
+    }
+    parsed = 1;
+cleanup:
+    boltffi_python_wire_writer_deinit(&writer);
+    return parsed;
+{% endif %}
+}
+{% endif %}
+
+{% if module.uses_owned_buffer_returns() %}
+static PyObject *{{ record.type_ref.vector_decoder_name() }}(FfiBuf_u8 buffer) {
+{% if record.is_direct() %}
+    PyObject *decoded = NULL;
+    PyObject *item = NULL;
+    Py_ssize_t item_count = 0;
+    Py_ssize_t index = 0;
+    const uint8_t *raw_values = NULL;
+    if (!boltffi_python_validate_owned_buffer(buffer)) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    if (buffer.len % {{ record.type_ref.direct_layout_unwrap().size_bytes }} != 0) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_RuntimeError, "native vector buffer is invalid");
+        return NULL;
+    }
+    if (buffer.len / {{ record.type_ref.direct_layout_unwrap().size_bytes }} > (size_t)PY_SSIZE_T_MAX) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_OverflowError, "vector result is too large for Python");
+        return NULL;
+    }
+    item_count = (Py_ssize_t)(buffer.len / {{ record.type_ref.direct_layout_unwrap().size_bytes }});
+    decoded = PyList_New(item_count);
+    if (decoded == NULL) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    raw_values = buffer.ptr;
+    for (index = 0; index < item_count; index += 1) {
+        {{ record.type_ref.c_type_name }} native_value;
+        memcpy(&native_value, raw_values + ((size_t)index * {{ record.type_ref.direct_layout_unwrap().size_bytes }}), {{ record.type_ref.direct_layout_unwrap().size_bytes }});
+        item = {{ record.type_ref.boxer_name() }}(native_value);
+        if (item == NULL) {
+            Py_DECREF(decoded);
+            boltffi_python_free_buf_symbol(buffer);
+            return NULL;
+        }
+        PyList_SET_ITEM(decoded, index, item);
+    }
+    boltffi_python_free_buf_symbol(buffer);
+    return decoded;
+{% else %}
+    PyObject *decoded = NULL;
+    boltffi_python_wire_reader reader;
+    if (!boltffi_python_validate_owned_buffer(buffer)) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    boltffi_python_wire_reader_init(&reader, buffer.ptr, buffer.len);
+    decoded = {{ record.type_ref.wire_vector_decoder_name() }}(&reader);
+    if (decoded != NULL && !boltffi_python_wire_reader_finish(&reader)) {
+        Py_DECREF(decoded);
+        decoded = NULL;
+    }
+    boltffi_python_free_buf_symbol(buffer);
+    return decoded;
+{% endif %}
+}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+{% endif %}
+{% if module.used_string_vector_parameter_types() %}
+
+static int boltffi_python_parse_vec_string(PyObject *value, boltffi_python_buffer_input *out) {
+    boltffi_python_wire_writer writer;
+    int parsed = 0;
+    boltffi_python_wire_writer_init(&writer);
+    if (!boltffi_python_wire_encode_vec_string(value, &writer)) {
+        goto cleanup;
+    }
+    if (!boltffi_python_wire_writer_finish_input(&writer, out)) {
+        goto cleanup;
+    }
+    parsed = 1;
+cleanup:
+    boltffi_python_wire_writer_deinit(&writer);
+    return parsed;
+}
 {% endif %}
 {% if !module.used_enum_vector_parameter_types().is_empty() %}
 
@@ -1035,6 +2015,24 @@ static PyObject *boltffi_python_decode_owned_bytes(FfiBuf_u8 buffer) {
         byte_data = (const char *)buffer.ptr;
     }
     decoded = PyBytes_FromStringAndSize(byte_data, (Py_ssize_t)buffer.len);
+    boltffi_python_free_buf_symbol(buffer);
+    return decoded;
+}
+{% endif %}
+{% if module.uses_string_vector_returns() %}
+static PyObject *boltffi_python_decode_owned_vec_string(FfiBuf_u8 buffer) {
+    PyObject *decoded = NULL;
+    boltffi_python_wire_reader reader;
+    if (!boltffi_python_validate_owned_buffer(buffer)) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    boltffi_python_wire_reader_init(&reader, buffer.ptr, buffer.len);
+    decoded = boltffi_python_wire_decode_vec_string(&reader);
+    if (decoded != NULL && !boltffi_python_wire_reader_finish(&reader)) {
+        Py_DECREF(decoded);
+        decoded = NULL;
+    }
     boltffi_python_free_buf_symbol(buffer);
     return decoded;
 }
@@ -1188,9 +2186,14 @@ static PyObject *{{ binding.callable.wrapper_name() }}(PyObject *self, PyObject 
 {% elif binding.callable.returns_primitive_vector() %}
 {% let return_primitive = binding.callable.return_vector_primitive().unwrap() %}
     python_result = boltffi_python_decode_owned_vec_{{ return_primitive.rust_name() }}(result);
+{% elif binding.callable.returns_string_vector() %}
+    python_result = boltffi_python_decode_owned_vec_string(result);
 {% elif binding.callable.returns_c_style_enum_vector() %}
 {% let return_enum = binding.callable.return_vector_c_style_enum().unwrap() %}
     python_result = {{ return_enum.vector_decoder_name() }}(result);
+{% elif binding.callable.returns_record_vector() %}
+{% let return_record = binding.callable.return_vector_record().unwrap() %}
+    python_result = {{ return_record.vector_decoder_name() }}(result);
 {% else %}
 {% let return_primitive = binding.callable.return_primitive().unwrap() %}
     python_result = {{ return_primitive.boxer_name() }}(result);

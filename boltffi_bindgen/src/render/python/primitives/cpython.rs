@@ -12,7 +12,11 @@ pub(crate) trait CPythonPrimitiveTypeExt {
     fn parser_name(self) -> &'static str;
     fn boxer_name(self) -> &'static str;
     fn vector_parser_name(self) -> &'static str;
+    fn wire_vector_encoder_name(self) -> &'static str;
+    fn wire_vector_decoder_name(self) -> &'static str;
     fn buffer_kind_constant(self) -> &'static str;
+    fn wire_c_type_name(self) -> &'static str;
+    fn wire_size_bytes(self) -> usize;
     fn allows_untyped_vector_buffer(self) -> bool;
     fn uses_bool_parser(self) -> bool;
     fn uses_signed_long_long_parser(self) -> bool;
@@ -25,6 +29,7 @@ pub(crate) trait CPythonPrimitiveTypeExt {
     fn uses_usize_parser(self) -> bool;
     fn uses_f32_parser(self) -> bool;
     fn uses_f64_parser(self) -> bool;
+    fn is_u8(&self) -> bool;
     fn boxes_as_bool(self) -> bool;
     fn boxes_as_signed_long(self) -> bool;
     fn boxes_as_unsigned_long(self) -> bool;
@@ -109,6 +114,42 @@ impl CPythonPrimitiveTypeExt for PrimitiveType {
         }
     }
 
+    fn wire_vector_encoder_name(self) -> &'static str {
+        match self {
+            PrimitiveType::Bool => "boltffi_python_wire_encode_vec_bool",
+            PrimitiveType::I8 => "boltffi_python_wire_encode_vec_i8",
+            PrimitiveType::U8 => "boltffi_python_wire_encode_vec_u8",
+            PrimitiveType::I16 => "boltffi_python_wire_encode_vec_i16",
+            PrimitiveType::U16 => "boltffi_python_wire_encode_vec_u16",
+            PrimitiveType::I32 => "boltffi_python_wire_encode_vec_i32",
+            PrimitiveType::U32 => "boltffi_python_wire_encode_vec_u32",
+            PrimitiveType::I64 => "boltffi_python_wire_encode_vec_i64",
+            PrimitiveType::U64 => "boltffi_python_wire_encode_vec_u64",
+            PrimitiveType::ISize => "boltffi_python_wire_encode_vec_isize",
+            PrimitiveType::USize => "boltffi_python_wire_encode_vec_usize",
+            PrimitiveType::F32 => "boltffi_python_wire_encode_vec_f32",
+            PrimitiveType::F64 => "boltffi_python_wire_encode_vec_f64",
+        }
+    }
+
+    fn wire_vector_decoder_name(self) -> &'static str {
+        match self {
+            PrimitiveType::Bool => "boltffi_python_wire_decode_vec_bool",
+            PrimitiveType::I8 => "boltffi_python_wire_decode_vec_i8",
+            PrimitiveType::U8 => "boltffi_python_wire_decode_vec_u8",
+            PrimitiveType::I16 => "boltffi_python_wire_decode_vec_i16",
+            PrimitiveType::U16 => "boltffi_python_wire_decode_vec_u16",
+            PrimitiveType::I32 => "boltffi_python_wire_decode_vec_i32",
+            PrimitiveType::U32 => "boltffi_python_wire_decode_vec_u32",
+            PrimitiveType::I64 => "boltffi_python_wire_decode_vec_i64",
+            PrimitiveType::U64 => "boltffi_python_wire_decode_vec_u64",
+            PrimitiveType::ISize => "boltffi_python_wire_decode_vec_isize",
+            PrimitiveType::USize => "boltffi_python_wire_decode_vec_usize",
+            PrimitiveType::F32 => "boltffi_python_wire_decode_vec_f32",
+            PrimitiveType::F64 => "boltffi_python_wire_decode_vec_f64",
+        }
+    }
+
     fn buffer_kind_constant(self) -> &'static str {
         match self {
             PrimitiveType::Bool => "BOLTFFI_PY_BUFFER_BOOL",
@@ -125,6 +166,25 @@ impl CPythonPrimitiveTypeExt for PrimitiveType {
             PrimitiveType::F32 => "BOLTFFI_PY_BUFFER_F32",
             PrimitiveType::F64 => "BOLTFFI_PY_BUFFER_F64",
         }
+    }
+
+    fn wire_c_type_name(self) -> &'static str {
+        match self {
+            PrimitiveType::Bool | PrimitiveType::U8 => "uint8_t",
+            PrimitiveType::I8 => "int8_t",
+            PrimitiveType::I16 => "int16_t",
+            PrimitiveType::U16 => "uint16_t",
+            PrimitiveType::I32 => "int32_t",
+            PrimitiveType::U32 => "uint32_t",
+            PrimitiveType::I64 | PrimitiveType::ISize => "int64_t",
+            PrimitiveType::U64 | PrimitiveType::USize => "uint64_t",
+            PrimitiveType::F32 => "float",
+            PrimitiveType::F64 => "double",
+        }
+    }
+
+    fn wire_size_bytes(self) -> usize {
+        PrimitiveType::wire_size_bytes(self)
     }
 
     fn allows_untyped_vector_buffer(self) -> bool {
@@ -198,6 +258,10 @@ impl CPythonPrimitiveTypeExt for PrimitiveType {
         matches!(self, PrimitiveType::F64)
     }
 
+    fn is_u8(&self) -> bool {
+        matches!(self, PrimitiveType::U8)
+    }
+
     fn boxes_as_bool(self) -> bool {
         matches!(self, PrimitiveType::Bool)
     }
@@ -264,6 +328,7 @@ impl CPythonTypeExt for PythonType {
         match self {
             PythonType::Void => "void".to_string(),
             PythonType::Primitive(primitive) => primitive.c_type_name().to_string(),
+            PythonType::Record(record_type) if record_type.is_encoded() => "FfiBuf_u8".to_string(),
             PythonType::Record(record_type) => record_type.c_type_name.clone(),
             PythonType::CStyleEnum(enum_type) => enum_type.tag_type.c_type_name().to_string(),
             PythonType::String | PythonType::Sequence(_) => "FfiBuf_u8".to_string(),
@@ -288,6 +353,16 @@ impl CPythonParameterExt for PythonParameter {
                 c_type_name: primitive.c_type_name().to_string(),
                 name: self.value_binding_name(),
             }],
+            PythonType::Record(record_type) if record_type.is_encoded() => vec![
+                CPythonCBinding {
+                    c_type_name: "const uint8_t *".to_string(),
+                    name: format!("{}.ptr", self.parser_state_name()),
+                },
+                CPythonCBinding {
+                    c_type_name: "uintptr_t".to_string(),
+                    name: format!("{}.len", self.parser_state_name()),
+                },
+            ],
             PythonType::Record(record_type) => vec![CPythonCBinding {
                 c_type_name: record_type.c_type_name.clone(),
                 name: self.value_binding_name(),
@@ -326,7 +401,9 @@ impl CPythonParameterExt for PythonParameter {
                     name: format!("{}.len", self.parser_state_name()),
                 },
             ],
-            PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_)) => vec![
+            PythonType::Sequence(PythonSequenceType::StringVec)
+            | PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_))
+            | PythonType::Sequence(PythonSequenceType::RecordVec(_)) => vec![
                 CPythonCBinding {
                     c_type_name: "const uint8_t *".to_string(),
                     name: format!("{}.ptr", self.parser_state_name()),
@@ -346,6 +423,10 @@ impl CPythonParameterExt for PythonParameter {
                 c_type_name: primitive.c_type_name().to_string(),
                 name: self.value_binding_name(),
             }],
+            PythonType::Record(record_type) if record_type.is_encoded() => vec![CPythonCBinding {
+                c_type_name: "boltffi_python_buffer_input".to_string(),
+                name: self.parser_state_name(),
+            }],
             PythonType::Record(record_type) => vec![CPythonCBinding {
                 c_type_name: record_type.c_type_name.clone(),
                 name: self.value_binding_name(),
@@ -360,7 +441,9 @@ impl CPythonParameterExt for PythonParameter {
             }],
             PythonType::Sequence(PythonSequenceType::Bytes)
             | PythonType::Sequence(PythonSequenceType::PrimitiveVec(_))
-            | PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_)) => {
+            | PythonType::Sequence(PythonSequenceType::StringVec)
+            | PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_))
+            | PythonType::Sequence(PythonSequenceType::RecordVec(_)) => {
                 vec![CPythonCBinding {
                     c_type_name: "boltffi_python_buffer_input".to_string(),
                     name: self.parser_state_name(),
@@ -382,8 +465,14 @@ impl CPythonParameterExt for PythonParameter {
             PythonType::Sequence(PythonSequenceType::PrimitiveVec(primitive)) => {
                 primitive.vector_parser_name().to_string()
             }
+            PythonType::Sequence(PythonSequenceType::StringVec) => {
+                "boltffi_python_parse_vec_string".to_string()
+            }
             PythonType::Sequence(PythonSequenceType::CStyleEnumVec(enum_type)) => {
                 enum_type.vector_parser_name()
+            }
+            PythonType::Sequence(PythonSequenceType::RecordVec(record_type)) => {
+                record_type.vector_parser_name()
             }
         }
     }
@@ -391,9 +480,13 @@ impl CPythonParameterExt for PythonParameter {
     fn parser_output_arguments(&self) -> Vec<String> {
         match &self.type_ref {
             PythonType::Void => unreachable!("python parameters cannot be void"),
-            PythonType::Primitive(_) | PythonType::Record(_) | PythonType::CStyleEnum(_) => {
+            PythonType::Primitive(_) | PythonType::CStyleEnum(_) => {
                 vec![format!("&{}", self.value_binding_name())]
             }
+            PythonType::Record(record_type) if record_type.is_encoded() => {
+                vec![format!("&{}", self.parser_state_name())]
+            }
+            PythonType::Record(_) => vec![format!("&{}", self.value_binding_name())],
             PythonType::String | PythonType::Sequence(_) => {
                 vec![format!("&{}", self.parser_state_name())]
             }
@@ -403,9 +496,14 @@ impl CPythonParameterExt for PythonParameter {
     fn ffi_argument_expressions(&self) -> Vec<String> {
         match &self.type_ref {
             PythonType::Void => unreachable!("python parameters cannot be void"),
-            PythonType::Primitive(_) | PythonType::Record(_) | PythonType::CStyleEnum(_) => {
+            PythonType::Primitive(_) | PythonType::CStyleEnum(_) => {
                 vec![self.value_binding_name()]
             }
+            PythonType::Record(record_type) if record_type.is_encoded() => vec![
+                format!("(const uint8_t *){}.ptr", self.parser_state_name()),
+                format!("{}.len", self.parser_state_name()),
+            ],
+            PythonType::Record(_) => vec![self.value_binding_name()],
             PythonType::String => vec![
                 format!("{}.ptr", self.parser_state_name()),
                 format!("{}.len", self.parser_state_name()),
@@ -422,7 +520,9 @@ impl CPythonParameterExt for PythonParameter {
                 ),
                 format!("{}.len", self.parser_state_name()),
             ],
-            PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_)) => vec![
+            PythonType::Sequence(PythonSequenceType::StringVec)
+            | PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_))
+            | PythonType::Sequence(PythonSequenceType::RecordVec(_)) => vec![
                 format!("(const uint8_t *){}.ptr", self.parser_state_name()),
                 format!("{}.len", self.parser_state_name()),
             ],
@@ -431,12 +531,15 @@ impl CPythonParameterExt for PythonParameter {
 
     fn cleanup_statement(&self) -> Option<String> {
         match &self.type_ref {
-            PythonType::Sequence(PythonSequenceType::Bytes)
-            | PythonType::Sequence(PythonSequenceType::PrimitiveVec(_)) => Some(format!(
+            PythonType::Record(record_type) if record_type.is_encoded() => Some(format!(
                 "boltffi_python_release_buffer_input(&{});",
                 self.parser_state_name()
             )),
-            PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_)) => Some(format!(
+            PythonType::Sequence(PythonSequenceType::Bytes)
+            | PythonType::Sequence(PythonSequenceType::PrimitiveVec(_))
+            | PythonType::Sequence(PythonSequenceType::StringVec)
+            | PythonType::Sequence(PythonSequenceType::CStyleEnumVec(_))
+            | PythonType::Sequence(PythonSequenceType::RecordVec(_)) => Some(format!(
                 "boltffi_python_release_buffer_input(&{});",
                 self.parser_state_name()
             )),
