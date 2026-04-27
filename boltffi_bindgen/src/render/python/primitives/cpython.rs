@@ -14,6 +14,8 @@ pub(crate) trait CPythonPrimitiveTypeExt {
     fn vector_parser_name(self) -> &'static str;
     fn wire_vector_encoder_name(self) -> &'static str;
     fn wire_vector_decoder_name(self) -> &'static str;
+    fn wire_writer_name(self) -> &'static str;
+    fn wire_reader_name(self) -> &'static str;
     fn buffer_kind_constant(self) -> &'static str;
     fn wire_c_type_name(self) -> &'static str;
     fn wire_size_bytes(self) -> usize;
@@ -147,6 +149,36 @@ impl CPythonPrimitiveTypeExt for PrimitiveType {
             PrimitiveType::USize => "boltffi_python_wire_decode_vec_usize",
             PrimitiveType::F32 => "boltffi_python_wire_decode_vec_f32",
             PrimitiveType::F64 => "boltffi_python_wire_decode_vec_f64",
+        }
+    }
+
+    fn wire_writer_name(self) -> &'static str {
+        match self {
+            PrimitiveType::Bool | PrimitiveType::U8 => "boltffi_python_wire_writer_write_u8",
+            PrimitiveType::I8 => "boltffi_python_wire_writer_write_i8",
+            PrimitiveType::I16 => "boltffi_python_wire_writer_write_i16",
+            PrimitiveType::U16 => "boltffi_python_wire_writer_write_u16",
+            PrimitiveType::I32 => "boltffi_python_wire_writer_write_i32",
+            PrimitiveType::U32 => "boltffi_python_wire_writer_write_u32",
+            PrimitiveType::I64 | PrimitiveType::ISize => "boltffi_python_wire_writer_write_i64",
+            PrimitiveType::U64 | PrimitiveType::USize => "boltffi_python_wire_writer_write_u64",
+            PrimitiveType::F32 => "boltffi_python_wire_writer_write_f32",
+            PrimitiveType::F64 => "boltffi_python_wire_writer_write_f64",
+        }
+    }
+
+    fn wire_reader_name(self) -> &'static str {
+        match self {
+            PrimitiveType::Bool | PrimitiveType::U8 => "boltffi_python_wire_reader_read_u8",
+            PrimitiveType::I8 => "boltffi_python_wire_reader_read_i8",
+            PrimitiveType::I16 => "boltffi_python_wire_reader_read_i16",
+            PrimitiveType::U16 => "boltffi_python_wire_reader_read_u16",
+            PrimitiveType::I32 => "boltffi_python_wire_reader_read_i32",
+            PrimitiveType::U32 => "boltffi_python_wire_reader_read_u32",
+            PrimitiveType::I64 | PrimitiveType::ISize => "boltffi_python_wire_reader_read_i64",
+            PrimitiveType::U64 | PrimitiveType::USize => "boltffi_python_wire_reader_read_u64",
+            PrimitiveType::F32 => "boltffi_python_wire_reader_read_f32",
+            PrimitiveType::F64 => "boltffi_python_wire_reader_read_f64",
         }
     }
 

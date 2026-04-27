@@ -427,11 +427,47 @@ static int boltffi_python_wire_writer_write_bytes(
     return 1;
 }
 
-static int boltffi_python_wire_writer_write_u32(
+static int boltffi_python_wire_writer_write_unsigned(
     boltffi_python_wire_writer *writer,
-    uint32_t value
+    uint64_t value,
+    size_t byte_count
 ) {
-    return boltffi_python_wire_writer_write_bytes(writer, &value, sizeof(uint32_t));
+    uint8_t bytes[sizeof(uint64_t)];
+    size_t byte_index = 0;
+    while (byte_index < byte_count) {
+        bytes[byte_index] = (uint8_t)((value >> (byte_index * 8)) & 0xffu);
+        byte_index += 1;
+    }
+    return boltffi_python_wire_writer_write_bytes(writer, bytes, byte_count);
+}
+
+#define BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(name, value_type, storage_type) \
+static int boltffi_python_wire_writer_write_##name( \
+    boltffi_python_wire_writer *writer, \
+    value_type value \
+) { \
+    storage_type wire_value = 0; \
+    memcpy(&wire_value, &value, sizeof(value)); \
+    return boltffi_python_wire_writer_write_unsigned(writer, (uint64_t)wire_value, sizeof(wire_value)); \
+}
+
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(u8, uint8_t, uint8_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(i8, int8_t, uint8_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(u16, uint16_t, uint16_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(i16, int16_t, uint16_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(u32, uint32_t, uint32_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(i32, int32_t, uint32_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(u64, uint64_t, uint64_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(i64, int64_t, uint64_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(f32, float, uint32_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(f64, double, uint64_t)
+
+#undef BOLTFFI_PYTHON_DEFINE_WIRE_WRITER
+
+static int boltffi_python_wire_writer_write_empty_record(
+    boltffi_python_wire_writer *writer
+) {
+    return boltffi_python_wire_writer_write_u16(writer, 0);
 }
 
 static int boltffi_python_wire_writer_write_sequence_count(
@@ -537,15 +573,60 @@ static int boltffi_python_wire_reader_read_bytes(
     return 1;
 }
 
-static int boltffi_python_wire_reader_read_u32(
+static int boltffi_python_wire_reader_read_unsigned(
     boltffi_python_wire_reader *reader,
-    uint32_t *out
+    size_t byte_count,
+    uint64_t *out
 ) {
     const uint8_t *data = NULL;
-    if (!boltffi_python_wire_reader_read_bytes(reader, sizeof(uint32_t), &data)) {
+    size_t byte_index = 0;
+    uint64_t value = 0;
+    if (!boltffi_python_wire_reader_read_bytes(reader, byte_count, &data)) {
         return 0;
     }
-    memcpy(out, data, sizeof(uint32_t));
+    while (byte_index < byte_count) {
+        value |= ((uint64_t)data[byte_index]) << (byte_index * 8);
+        byte_index += 1;
+    }
+    *out = value;
+    return 1;
+}
+
+#define BOLTFFI_PYTHON_DEFINE_WIRE_READER(name, value_type, storage_type) \
+static int boltffi_python_wire_reader_read_##name( \
+    boltffi_python_wire_reader *reader, \
+    value_type *out \
+) { \
+    uint64_t unsigned_value = 0; \
+    storage_type wire_value = 0; \
+    if (!boltffi_python_wire_reader_read_unsigned(reader, sizeof(wire_value), &unsigned_value)) { \
+        return 0; \
+    } \
+    wire_value = (storage_type)unsigned_value; \
+    memcpy(out, &wire_value, sizeof(*out)); \
+    return 1; \
+}
+
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(u8, uint8_t, uint8_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(i8, int8_t, uint8_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(u16, uint16_t, uint16_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(i16, int16_t, uint16_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(u32, uint32_t, uint32_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(i32, int32_t, uint32_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(u64, uint64_t, uint64_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(i64, int64_t, uint64_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(f32, float, uint32_t)
+BOLTFFI_PYTHON_DEFINE_WIRE_READER(f64, double, uint64_t)
+
+#undef BOLTFFI_PYTHON_DEFINE_WIRE_READER
+
+static int boltffi_python_wire_reader_read_empty_record(
+    boltffi_python_wire_reader *reader
+) {
+    uint16_t empty_record_marker = 0;
+    if (!boltffi_python_wire_reader_read_u16(reader, &empty_record_marker)) {
+        return 0;
+    }
     return 1;
 }
 
@@ -715,7 +796,7 @@ static int {{ primitive.wire_vector_encoder_name() }}(
 {% else %}
         wire_value = native_value;
 {% endif %}
-        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_value, {{ primitive.wire_size_bytes() }})) {
+        if (!{{ primitive.wire_writer_name() }}(writer, wire_value)) {
             Py_DECREF(sequence);
             return 0;
         }
@@ -748,11 +829,10 @@ static PyObject *{{ primitive.wire_vector_decoder_name() }}(
         return NULL;
     }
     for (index = 0; index < item_count; index += 1) {
-        if (!boltffi_python_wire_reader_read_bytes(reader, {{ primitive.wire_size_bytes() }}, &raw_value)) {
+        if (!{{ primitive.wire_reader_name() }}(reader, &wire_value)) {
             Py_DECREF(decoded);
             return NULL;
         }
-        memcpy(&wire_value, raw_value, {{ primitive.wire_size_bytes() }});
 {% if primitive.uses_bool_parser() %}
         if (wire_value > 1) {
             Py_DECREF(decoded);
@@ -1271,7 +1351,7 @@ static int {{ enumeration.type_ref.wire_vector_encoder_name() }}(
             Py_DECREF(sequence);
             return 0;
         }
-        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_tag, sizeof(int32_t))) {
+        if (!boltffi_python_wire_writer_write_i32(writer, wire_tag)) {
             Py_DECREF(sequence);
             return 0;
         }
@@ -1287,7 +1367,6 @@ static PyObject *{{ enumeration.type_ref.wire_vector_decoder_name() }}(
     PyObject *item = NULL;
     Py_ssize_t item_count = 0;
     Py_ssize_t index = 0;
-    const uint8_t *raw_value = NULL;
     int32_t wire_tag = 0;
     if (!boltffi_python_wire_reader_read_count(reader, &item_count)) {
         return NULL;
@@ -1297,11 +1376,10 @@ static PyObject *{{ enumeration.type_ref.wire_vector_decoder_name() }}(
         return NULL;
     }
     for (index = 0; index < item_count; index += 1) {
-        if (!boltffi_python_wire_reader_read_bytes(reader, sizeof(int32_t), &raw_value)) {
+        if (!boltffi_python_wire_reader_read_i32(reader, &wire_tag)) {
             Py_DECREF(decoded);
             return NULL;
         }
-        memcpy(&wire_tag, raw_value, sizeof(int32_t));
         item = {{ enumeration.type_ref.box_from_wire_tag_name() }}(wire_tag);
         if (item == NULL) {
             Py_DECREF(decoded);
@@ -1450,6 +1528,11 @@ static int {{ record.type_ref.wire_encoder_name() }}(PyObject *value, boltffi_py
     if (!boltffi_python_expect_type_instance(value, {{ record.type_ref.type_object_name() }}, "{{ record.class_name() }}")) {
         return 0;
     }
+{% if record.fields.is_empty() %}
+    if (!boltffi_python_wire_writer_write_empty_record(writer)) {
+        goto cleanup;
+    }
+{% endif %}
 {% for field in record.fields.iter() %}
     {{ field.python_name }}_value = boltffi_python_get_record_field(value, "{{ record.class_name() }}", "{{ field.python_name }}");
     if ({{ field.python_name }}_value == NULL) {
@@ -1493,7 +1576,7 @@ static int {{ record.type_ref.wire_encoder_name() }}(PyObject *value, boltffi_py
         if (!{{ enum_type.native_to_wire_tag_name() }}(native_value, &wire_tag)) {
             goto cleanup;
         }
-        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_tag, sizeof(int32_t))) {
+        if (!boltffi_python_wire_writer_write_i32(writer, wire_tag)) {
             goto cleanup;
         }
     }
@@ -1517,7 +1600,7 @@ static int {{ record.type_ref.wire_encoder_name() }}(PyObject *value, boltffi_py
 {% else %}
         wire_value = native_value;
 {% endif %}
-        if (!boltffi_python_wire_writer_write_bytes(writer, &wire_value, {{ primitive.wire_size_bytes() }})) {
+        if (!{{ primitive.wire_writer_name() }}(writer, wire_value)) {
             goto cleanup;
         }
     }
@@ -1550,6 +1633,12 @@ static PyObject *{{ record.type_ref.wire_decoder_name() }}(boltffi_python_wire_r
     if (constructor_args == NULL) {
         return NULL;
     }
+{% if record.fields.is_empty() %}
+    if (!boltffi_python_wire_reader_read_empty_record(reader)) {
+        Py_DECREF(constructor_args);
+        return NULL;
+    }
+{% endif %}
 {% for field in record.fields.iter() %}
 {% if field.type_ref.is_string() %}
     field_value = boltffi_python_wire_reader_read_string(reader);
@@ -1569,13 +1658,11 @@ static PyObject *{{ record.type_ref.wire_decoder_name() }}(boltffi_python_wire_r
 {% elif field.type_ref.is_c_style_enum() %}
 {% let enum_type = field.type_ref.c_style_enum().unwrap() %}
     {
-        const uint8_t *raw_value = NULL;
         int32_t wire_tag = 0;
-        if (!boltffi_python_wire_reader_read_bytes(reader, sizeof(int32_t), &raw_value)) {
+        if (!boltffi_python_wire_reader_read_i32(reader, &wire_tag)) {
             Py_DECREF(constructor_args);
             return NULL;
         }
-        memcpy(&wire_tag, raw_value, sizeof(int32_t));
         field_value = {{ enum_type.box_from_wire_tag_name() }}(wire_tag);
     }
 {% elif field.type_ref.is_record() %}
@@ -1584,14 +1671,12 @@ static PyObject *{{ record.type_ref.wire_decoder_name() }}(boltffi_python_wire_r
 {% else %}
 {% let primitive = field.type_ref.primitive().unwrap() %}
     {
-        const uint8_t *raw_value = NULL;
         {{ primitive.wire_c_type_name() }} wire_value = 0;
         {{ primitive.c_type_name() }} native_value = 0;
-        if (!boltffi_python_wire_reader_read_bytes(reader, {{ primitive.wire_size_bytes() }}, &raw_value)) {
+        if (!{{ primitive.wire_reader_name() }}(reader, &wire_value)) {
             Py_DECREF(constructor_args);
             return NULL;
         }
-        memcpy(&wire_value, raw_value, {{ primitive.wire_size_bytes() }});
 {% if primitive.uses_bool_parser() %}
         if (wire_value > 1) {
             Py_DECREF(constructor_args);
@@ -1634,7 +1719,7 @@ static PyObject *{{ record.type_ref.wire_decoder_name() }}(boltffi_python_wire_r
 {% endif %}
 }
 
-{% if record.is_encoded() %}
+{% if record.is_encoded() && module.uses_buffer_input_parameters() %}
 static int {{ record.type_ref.parser_name() }}(PyObject *value, boltffi_python_buffer_input *out) {
     boltffi_python_wire_writer writer;
     int parsed = 0;
@@ -1650,8 +1735,9 @@ cleanup:
     boltffi_python_wire_writer_deinit(&writer);
     return parsed;
 }
+{% endif %}
 
-{% if module.uses_owned_buffer_returns() %}
+{% if record.is_encoded() && module.uses_owned_buffer_returns() %}
 static PyObject *{{ record.type_ref.boxer_name() }}(FfiBuf_u8 buffer) {
     PyObject *decoded = NULL;
     boltffi_python_wire_reader reader;
@@ -1668,7 +1754,6 @@ static PyObject *{{ record.type_ref.boxer_name() }}(FfiBuf_u8 buffer) {
     boltffi_python_free_buf_symbol(buffer);
     return decoded;
 }
-{% endif %}
 {% endif %}
 {% endif %}
 
@@ -1895,62 +1980,19 @@ cleanup:
 
 {% for enumeration in module.used_enum_vector_parameter_types() %}
 static int {{ enumeration.vector_parser_name() }}(PyObject *value, boltffi_python_buffer_input *out) {
-    PyObject *sequence = NULL;
-    Py_ssize_t sequence_length = 0;
-    Py_ssize_t index = 0;
-    uint8_t *encoded_values = NULL;
-    {{ enumeration.tag_type.c_type_name() }} native_value = 0;
-    int32_t encoded_length = 0;
-    int32_t wire_tag = 0;
-    size_t encoded_size = 0;
-    boltffi_python_init_buffer_input(out);
-    sequence = PySequence_Fast(value, "expected sequence");
-    if (sequence == NULL) {
-        return 0;
+    boltffi_python_wire_writer writer;
+    int parsed = 0;
+    boltffi_python_wire_writer_init(&writer);
+    if (!{{ enumeration.wire_vector_encoder_name() }}(value, &writer)) {
+        goto cleanup;
     }
-    sequence_length = PySequence_Fast_GET_SIZE(sequence);
-    if (sequence_length > (Py_ssize_t)INT32_MAX) {
-        Py_DECREF(sequence);
-        PyErr_SetString(PyExc_OverflowError, "sequence is too large for Rust");
-        return 0;
+    if (!boltffi_python_wire_writer_finish_input(&writer, out)) {
+        goto cleanup;
     }
-    if ((size_t)sequence_length > ((size_t)UINTPTR_MAX - sizeof(int32_t)) / sizeof(int32_t)) {
-        Py_DECREF(sequence);
-        PyErr_SetString(PyExc_OverflowError, "sequence is too large for Rust");
-        return 0;
-    }
-    encoded_size = sizeof(int32_t) + ((size_t)sequence_length * sizeof(int32_t));
-    encoded_values = PyMem_Malloc(encoded_size);
-    if (encoded_values == NULL) {
-        Py_DECREF(sequence);
-        PyErr_NoMemory();
-        return 0;
-    }
-    encoded_length = (int32_t)sequence_length;
-    memcpy(encoded_values, &encoded_length, sizeof(int32_t));
-    for (index = 0; index < sequence_length; index += 1) {
-        if (!{{ enumeration.parser_name() }}(PySequence_Fast_GET_ITEM(sequence, index), &native_value)) {
-            PyMem_Free(encoded_values);
-            Py_DECREF(sequence);
-            return 0;
-        }
-        if (!{{ enumeration.native_to_wire_tag_name() }}(native_value, &wire_tag)) {
-            PyMem_Free(encoded_values);
-            Py_DECREF(sequence);
-            return 0;
-        }
-        memcpy(
-            encoded_values + sizeof(int32_t) + ((size_t)index * sizeof(int32_t)),
-            &wire_tag,
-            sizeof(int32_t)
-        );
-    }
-    Py_DECREF(sequence);
-    out->ptr = encoded_values;
-    /* Encoded enum vectors cross the ABI as a byte buffer, so len is the encoded byte count here. */
-    out->len = (uintptr_t)encoded_size;
-    out->owned_copy = encoded_values;
-    return 1;
+    parsed = 1;
+cleanup:
+    boltffi_python_wire_writer_deinit(&writer);
+    return parsed;
 }
 
 {% endfor %}
@@ -1979,7 +2021,10 @@ static PyObject *boltffi_python_decode_owned_utf8(FfiBuf_u8 buffer) {
         PyErr_SetString(PyExc_RuntimeError, "native string buffer is invalid");
         return NULL;
     }
-    memcpy(&utf8_length, buffer.ptr, sizeof(uint32_t));
+    utf8_length = ((uint32_t)buffer.ptr[0])
+        | ((uint32_t)buffer.ptr[1] << 8)
+        | ((uint32_t)buffer.ptr[2] << 16)
+        | ((uint32_t)buffer.ptr[3] << 24);
     if (buffer.len != sizeof(uint32_t) + (size_t)utf8_length) {
         boltffi_python_free_buf_symbol(buffer);
         PyErr_SetString(PyExc_RuntimeError, "native string buffer is invalid");
@@ -2081,59 +2126,16 @@ static PyObject *boltffi_python_decode_owned_vec_{{ primitive.rust_name() }}(Ffi
 {% for enumeration in module.used_enum_vector_return_types() %}
 static PyObject *{{ enumeration.vector_decoder_name() }}(FfiBuf_u8 buffer) {
     PyObject *decoded = NULL;
-    PyObject *item = NULL;
-    Py_ssize_t item_count = 0;
-    Py_ssize_t index = 0;
-    const uint8_t *encoded_values = NULL;
-    int32_t encoded_length = 0;
-    int32_t wire_tag = 0;
-    size_t expected_size = 0;
+    boltffi_python_wire_reader reader;
     if (!boltffi_python_validate_owned_buffer(buffer)) {
         boltffi_python_free_buf_symbol(buffer);
         return NULL;
     }
-    if (buffer.len < sizeof(int32_t)) {
-        boltffi_python_free_buf_symbol(buffer);
-        PyErr_SetString(PyExc_RuntimeError, "native vector buffer is invalid");
-        return NULL;
-    }
-    memcpy(&encoded_length, buffer.ptr, sizeof(int32_t));
-    if (encoded_length < 0) {
-        boltffi_python_free_buf_symbol(buffer);
-        PyErr_SetString(PyExc_RuntimeError, "native vector buffer is invalid");
-        return NULL;
-    }
-    if ((size_t)encoded_length > ((size_t)SIZE_MAX - sizeof(int32_t)) / sizeof(int32_t)) {
-        boltffi_python_free_buf_symbol(buffer);
-        PyErr_SetString(PyExc_RuntimeError, "native vector buffer is invalid");
-        return NULL;
-    }
-    expected_size = sizeof(int32_t) + ((size_t)encoded_length * sizeof(int32_t));
-    if (buffer.len != expected_size) {
-        boltffi_python_free_buf_symbol(buffer);
-        PyErr_SetString(PyExc_RuntimeError, "native vector buffer is invalid");
-        return NULL;
-    }
-    item_count = (Py_ssize_t)encoded_length;
-    decoded = PyList_New(item_count);
-    if (decoded == NULL) {
-        boltffi_python_free_buf_symbol(buffer);
-        return NULL;
-    }
-    encoded_values = buffer.ptr;
-    for (index = 0; index < item_count; index += 1) {
-        memcpy(
-            &wire_tag,
-            encoded_values + sizeof(int32_t) + ((size_t)index * sizeof(int32_t)),
-            sizeof(int32_t)
-        );
-        item = {{ enumeration.box_from_wire_tag_name() }}(wire_tag);
-        if (item == NULL) {
-            Py_DECREF(decoded);
-            boltffi_python_free_buf_symbol(buffer);
-            return NULL;
-        }
-        PyList_SET_ITEM(decoded, index, item);
+    boltffi_python_wire_reader_init(&reader, buffer.ptr, buffer.len);
+    decoded = {{ enumeration.wire_vector_decoder_name() }}(&reader);
+    if (decoded != NULL && !boltffi_python_wire_reader_finish(&reader)) {
+        Py_DECREF(decoded);
+        decoded = NULL;
     }
     boltffi_python_free_buf_symbol(buffer);
     return decoded;

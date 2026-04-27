@@ -724,4 +724,108 @@ mod tests {
         );
         assert!(!native_source.contains("} ___Person;"));
     }
+
+    #[test]
+    fn emits_empty_encoded_record_wire_marker() {
+        let unit_type = PythonRecordType {
+            native_name_stem: "unit".to_string(),
+            class_name: "Unit".to_string(),
+            c_type_name: "___Unit".to_string(),
+            transport: PythonRecordTransport::Encoded,
+        };
+        let module = PythonModule {
+            module_name: "demo_lib".to_string(),
+            package_name: "demo-lib".to_string(),
+            package_version: Some("0.1.0".to_string()),
+            library_name: "demo".to_string(),
+            free_buffer_symbol: "boltffi_free_buf".to_string(),
+            records: vec![PythonRecord::new(unit_type.clone(), vec![], vec![], vec![])],
+            enums: vec![],
+            functions: vec![PythonFunction {
+                python_name: "echo_unit".to_string(),
+                callable: PythonCallable {
+                    native_name: "echo_unit".to_string(),
+                    ffi_symbol: "boltffi_echo_unit".to_string(),
+                    parameters: vec![PythonParameter {
+                        name: "value".to_string(),
+                        type_ref: PythonType::Record(unit_type.clone()),
+                    }],
+                    return_type: PythonType::Record(unit_type),
+                },
+            }],
+        };
+        let rendered = PythonEmitter::emit(&module);
+        let native_source =
+            NativePythonPackageFixture::rendered_file(&rendered, "demo_lib/_native.c");
+
+        assert!(native_source.contains("boltffi_python_wire_writer_write_empty_record(writer)"));
+        assert!(native_source.contains("boltffi_python_wire_reader_read_empty_record(reader)"));
+    }
+
+    #[test]
+    fn skips_encoded_record_input_parser_when_record_is_not_an_input() {
+        let person_type = PythonRecordType {
+            native_name_stem: "person".to_string(),
+            class_name: "Person".to_string(),
+            c_type_name: "___Person".to_string(),
+            transport: PythonRecordTransport::Encoded,
+        };
+        let module = PythonModule {
+            module_name: "demo_lib".to_string(),
+            package_name: "demo-lib".to_string(),
+            package_version: Some("0.1.0".to_string()),
+            library_name: "demo".to_string(),
+            free_buffer_symbol: "boltffi_free_buf".to_string(),
+            records: vec![PythonRecord::new(
+                person_type.clone(),
+                vec![PythonRecordField {
+                    python_name: "name".to_string(),
+                    native_name: "name".to_string(),
+                    type_ref: PythonType::String,
+                }],
+                vec![],
+                vec![],
+            )],
+            enums: vec![],
+            functions: vec![PythonFunction {
+                python_name: "make_person".to_string(),
+                callable: PythonCallable {
+                    native_name: "make_person".to_string(),
+                    ffi_symbol: "boltffi_make_person".to_string(),
+                    parameters: vec![],
+                    return_type: PythonType::Record(person_type),
+                },
+            }],
+        };
+        let rendered = PythonEmitter::emit(&module);
+        let native_source =
+            NativePythonPackageFixture::rendered_file(&rendered, "demo_lib/_native.c");
+
+        assert!(!native_source.contains("static int boltffi_python_parse_person"));
+        assert!(!native_source.contains("boltffi_python_wire_writer_finish_input"));
+        assert!(native_source.contains("static PyObject *boltffi_python_box_person"));
+    }
+
+    #[test]
+    fn emits_little_endian_wire_scalar_helpers() {
+        let rendered = NativePythonPackageFixture::rendered();
+        let native_source =
+            NativePythonPackageFixture::rendered_file(&rendered, "demo_lib/_native.c");
+
+        assert!(native_source.contains("static int boltffi_python_wire_writer_write_unsigned"));
+        assert!(
+            native_source.contains("BOLTFFI_PYTHON_DEFINE_WIRE_WRITER(i32, int32_t, uint32_t)")
+        );
+        assert!(native_source.contains("static int boltffi_python_wire_reader_read_unsigned"));
+        assert!(
+            native_source.contains("BOLTFFI_PYTHON_DEFINE_WIRE_READER(i32, int32_t, uint32_t)")
+        );
+        assert!(
+            native_source
+                .contains("if (!boltffi_python_wire_writer_write_u32(writer, wire_value))")
+        );
+        assert!(
+            native_source.contains("if (!boltffi_python_wire_reader_read_i32(reader, &wire_tag))")
+        );
+    }
 }
