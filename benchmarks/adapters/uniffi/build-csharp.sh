@@ -24,13 +24,11 @@ resolve_bindgen_cs() {
         return 0
     fi
 
-    if command -v uniffi-bindgen-cs >/dev/null 2>&1; then
-        command -v uniffi-bindgen-cs
-        return 0
-    fi
-
     local install_root="$SCRIPT_DIR/target/uniffi-bindgen-cs"
     local install_binary="$install_root/bin/uniffi-bindgen-cs"
+    if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+        install_binary="${install_binary}.exe"
+    fi
     local install_stamp="$install_root/.rev"
 
     if [[ -x "$install_binary" && -f "$install_stamp" && "$(cat "$install_stamp")" == "$UNIFFI_BINDGEN_CS_REV" ]]; then
@@ -56,6 +54,9 @@ if [[ "$(uname)" == "Darwin" ]]; then
 elif [[ "$(expr substr "$(uname -s)" 1 5)" == "Linux" ]]; then
     LIBRARY_FILE="lib${PACKAGE}.so"
     BENCH_LIBRARY_FILE="lib${BENCH_LIBRARY_BASENAME}.so"
+elif [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+    LIBRARY_FILE="${PACKAGE}.dll"
+    BENCH_LIBRARY_FILE="${BENCH_LIBRARY_BASENAME}.dll"
 else
     echo "Unknown platform: $(uname)" >&2
     exit 1
