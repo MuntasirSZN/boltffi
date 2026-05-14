@@ -84,6 +84,7 @@ pub struct KotlinEnumVariant {
 pub struct KotlinEnumField {
     pub name: String,
     pub kotlin_type: String,
+    pub overrides_message: bool,
     pub wire_decode_expr: String,
     pub wire_size_expr: String,
     pub wire_encode: String,

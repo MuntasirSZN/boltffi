@@ -346,11 +346,32 @@ Email = { type = "java.net.URI", conversion = "url_string" }
 
         assert!(common.contains("package com.boltffi.demo"));
         assert!(common.contains("typealias Email = String"));
+        assert!(common.contains(
+            "class FfiException(val code: kotlin.Int, message: kotlin.String) : kotlin.Exception(message)"
+        ));
+        assert!(common.contains("sealed class BoltFFIResult<out T, out E>"));
         assert!(common.contains("data class Point("));
+        assert!(common.contains("sealed class MathError : kotlin.Exception()"));
+        assert!(common.contains("data class AppError("));
+        assert!(common.contains("sealed class ComputeError : kotlin.Exception()"));
+        assert!(common.contains("data class Triangle(val a: com.boltffi.demo.Point"));
+        assert!(common.contains("data class BenchmarkResponse("));
+        assert!(common.contains("val result: BoltFFIResult<DataPoint, ComputeError>"));
         assert!(common.contains("enum class LogLevel(val value: Byte)"));
         assert!(common.contains("expect fun echoBytes"));
+        assert!(common.contains("expect fun checkedDivide(a: Int, b: Int): Int"));
+        assert!(
+            common.contains("expect fun resultToString(v: BoltFFIResult<Int, String>): String")
+        );
         assert!(common.contains("Unsupported in the initial KMP generator slice"));
         assert!(jvm_actual.contains("actual fun echoBytes"));
+        assert!(jvm_actual.contains("actual fun checkedDivide(a: Int, b: Int): Int"));
+        assert!(jvm_actual.contains("catch (err: com.boltffi.demo.jvm.MathError)"));
+        assert!(jvm_actual.contains("catch (err: com.boltffi.demo.jvm.FfiException)"));
+        assert!(jvm_actual.contains("private fun MathError.toBoltFfiJvm()"));
+        assert!(
+            jvm_actual.contains("private fun com.boltffi.demo.jvm.MathError.toBoltFfiCommon()")
+        );
         assert!(jvm_actual.contains("com.boltffi.demo.jvm.echoBytes"));
         assert!(jvm_actual.contains("toBoltFfiJvm"));
         assert_eq!(jvm_actual, android_actual);

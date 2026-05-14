@@ -1,5 +1,5 @@
 {%- if fields.is_empty() %}
-{{ self::kdoc_block(doc, "") }}object {{ class_name }} {
+{{ self::kdoc_block(doc, "") }}object {{ class_name }}{% if is_error %} : kotlin.Exception(""){% endif %} {
     fun decode(reader: WireReader): {{ class_name }} = {{ class_name }}
 
     fun wireEncodedSize(): Int = 0
@@ -12,7 +12,7 @@
 {%- for field in fields %}
 {{ self::kdoc_block(field.doc, "    ") }}    {% if is_error && field.name == "message" %}override {% endif %}val {{ field.name }}: {{ field.kotlin_type }}{% if field.has_default() %} = {{ field.default_expr() }}{% endif %}{% if !loop.last %},{% endif %}
 {%- endfor %}
-) {% if is_error %}: Exception({% match message_field_name %}{% when Some with (message_field_name) %}{{ message_field_name }}{% when None %}""{% endmatch %}){% endif %}{
+) {% if is_error %}: kotlin.Exception({% match message_field_name %}{% when Some with (message_field_name) %}{{ message_field_name }}{% when None %}""{% endmatch %}){% endif %}{
     companion object {
 {%- if is_blittable %}
         const val SIZE_BYTES: Int = {{ struct_size }}

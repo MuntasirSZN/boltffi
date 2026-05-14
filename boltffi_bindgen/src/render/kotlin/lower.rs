@@ -804,7 +804,7 @@ impl<'a> KotlinLowerer<'a> {
             AbiEnumPayload::Unit => Vec::new(),
             AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => fields
                 .iter()
-                .map(|field| self.lower_enum_field(field, variant_names))
+                .map(|field| self.lower_enum_field(field, kind, variant_names))
                 .collect(),
         };
         let name = match kind {
@@ -822,11 +822,15 @@ impl<'a> KotlinLowerer<'a> {
     fn lower_enum_field(
         &self,
         field: &AbiEnumField,
+        kind: KotlinEnumKind,
         variant_names: &HashSet<String>,
     ) -> KotlinEnumField {
         let (mut kotlin_type, decode_name) =
             self.kotlin_type_with_disambiguation(&field.type_expr, variant_names);
         let field_name = NamingConvention::property_name(field.name.as_str());
+        let overrides_message = matches!(kind, KotlinEnumKind::Error)
+            && field_name == "message"
+            && self.is_throwable_message_type(&field.type_expr);
         let base_decode = self.decode_expr_with_native_conversion(&field.type_expr, &field.decode);
         let mut wire_decode_expr = self.qualify_decode_expr(base_decode, decode_name.as_deref());
         let base_size = emit::emit_size_expr_for_write_seq(&field.encode);
@@ -842,9 +846,92 @@ impl<'a> KotlinLowerer<'a> {
         KotlinEnumField {
             name: field_name,
             kotlin_type,
+            overrides_message,
             wire_decode_expr,
             wire_size_expr,
             wire_encode,
+        }
+    }
+
+    fn is_throwable_message_type(&self, ty: &TypeExpr) -> bool {
+        self.is_throwable_message_type_inner(ty, &mut HashSet::new())
+    }
+
+    fn is_throwable_message_type_inner(
+        &self,
+        ty: &TypeExpr,
+        visited_custom_types: &mut HashSet<String>,
+    ) -> bool {
+        match ty {
+            TypeExpr::String => true,
+            TypeExpr::Option(inner) => {
+                self.is_throwable_message_option_inner_type(inner, visited_custom_types)
+            }
+            TypeExpr::Custom(id) => {
+                if !visited_custom_types.insert(id.as_str().to_string()) {
+                    return false;
+                }
+                self.contract
+                    .catalog
+                    .resolve_custom(id)
+                    .is_some_and(|custom| {
+                        self.is_throwable_message_type_inner(&custom.repr, visited_custom_types)
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    fn is_throwable_message_option_inner_type(
+        &self,
+        ty: &TypeExpr,
+        visited_custom_types: &mut HashSet<String>,
+    ) -> bool {
+        match ty {
+            TypeExpr::String => true,
+            TypeExpr::Custom(id) => {
+                if !visited_custom_types.insert(id.as_str().to_string()) {
+                    return false;
+                }
+                self.contract
+                    .catalog
+                    .resolve_custom(id)
+                    .is_some_and(|custom| {
+                        self.is_throwable_message_alias_expansion(
+                            &custom.repr,
+                            visited_custom_types,
+                        )
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    fn is_throwable_message_alias_expansion(
+        &self,
+        ty: &TypeExpr,
+        visited_custom_types: &mut HashSet<String>,
+    ) -> bool {
+        match ty {
+            TypeExpr::String => true,
+            TypeExpr::Option(inner) => {
+                self.is_throwable_message_option_inner_type(inner, visited_custom_types)
+            }
+            TypeExpr::Custom(id) => {
+                if !visited_custom_types.insert(id.as_str().to_string()) {
+                    return false;
+                }
+                self.contract
+                    .catalog
+                    .resolve_custom(id)
+                    .is_some_and(|custom| {
+                        self.is_throwable_message_alias_expansion(
+                            &custom.repr,
+                            visited_custom_types,
+                        )
+                    })
+            }
+            _ => false,
         }
     }
 

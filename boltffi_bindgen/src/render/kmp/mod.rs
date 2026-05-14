@@ -1,9 +1,12 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::ir::definitions::{EnumRepr, VariantPayload};
 use crate::ir::{self, AbiContract, FfiContract};
 use crate::render::jni::{JniEmitter, JniLowerer, JvmBindingStyle};
 use crate::render::kotlin::{KotlinEmitter, KotlinLowerer, KotlinOptions, NamingConvention};
+
+const KMP_COMMON_RUNTIME_TYPE_NAMES: &[&str] = &["FfiException", "BoltFFIResult"];
 
 #[derive(Debug, Clone)]
 pub struct KMPOptions {
@@ -72,11 +75,61 @@ struct KmpSurfaceSupport {
     custom_types: HashSet<String>,
 }
 
+struct KmpEnumVariant {
+    name: String,
+    payload: VariantPayload,
+    doc: Option<String>,
+}
+
+struct KmpEnumField {
+    name: String,
+    type_expr: ir::types::TypeExpr,
+}
+
+impl KmpEnumField {
+    fn kotlin_name(&self) -> String {
+        self.name.clone()
+    }
+}
+
 impl KmpSurfaceSupport {
     fn for_contract(contract: &ir::FfiContract) -> Self {
-        let records = supported_records(contract);
-        let enums = supported_c_style_enums(contract);
-        let custom_types = supported_custom_types(contract, &records, &enums);
+        let mut records = HashSet::new();
+        let mut enums = HashSet::new();
+        let mut custom_types = HashSet::new();
+
+        loop {
+            let before = records.len() + enums.len() + custom_types.len();
+
+            contract.catalog.all_enums().for_each(|enumeration| {
+                if enum_supported_with_sets(enumeration, contract, &records, &enums, &custom_types)
+                {
+                    enums.insert(enumeration.id.as_str().to_string());
+                }
+            });
+
+            contract.catalog.all_records().for_each(|record| {
+                if record_supported_with_sets(record, contract, &records, &enums, &custom_types) {
+                    records.insert(record.id.as_str().to_string());
+                }
+            });
+
+            contract.catalog.all_custom_types().for_each(|custom| {
+                if custom_type_supported_with_sets(
+                    custom,
+                    contract,
+                    &records,
+                    &enums,
+                    &custom_types,
+                ) {
+                    custom_types.insert(custom.id.as_str().to_string());
+                }
+            });
+
+            if records.len() + enums.len() + custom_types.len() == before {
+                break;
+            }
+        }
 
         Self {
             records,
@@ -102,17 +155,21 @@ impl KMPEmitter {
         let common_package_path = Self::package_path(&package_name);
         let internal_package_path = Self::package_path(&internal_package);
         let platform_adapters = Self::default_platform_adapters();
+        let support = KmpSurfaceSupport::for_contract(contract);
 
-        let rendered = Self::render_surfaces(
+        let rendered = Self::render_surfaces_with_support(
             contract,
             &package_name,
             &internal_package,
             &platform_adapters,
+            &support,
         );
+        let internal_contract = filter_contract_for_kmp_surface(contract, &support);
+        let internal_abi = filter_abi_for_kmp_surface(contract, abi, &support);
 
         let kotlin_module = KotlinLowerer::new(
-            contract,
-            abi,
+            &internal_contract,
+            &internal_abi,
             internal_package.clone(),
             module_name.clone(),
             kotlin_options,
@@ -120,9 +177,14 @@ impl KMPEmitter {
         .lower();
         let jvm_source = KotlinEmitter::emit(&kotlin_module);
 
-        let jni_module = JniLowerer::new(contract, abi, internal_package, module_name.clone())
-            .with_jvm_binding_style(JvmBindingStyle::Kotlin)
-            .lower();
+        let jni_module = JniLowerer::new(
+            &internal_contract,
+            &internal_abi,
+            internal_package,
+            module_name.clone(),
+        )
+        .with_jvm_binding_style(JvmBindingStyle::Kotlin)
+        .lower();
         let jni_source = JniEmitter::emit(&jni_module);
 
         let common_dir = PathBuf::from("src/commonMain/kotlin").join(&common_package_path);
@@ -197,7 +259,23 @@ impl KMPEmitter {
         platform_adapters: &[KmpPlatformAdapter],
     ) -> KmpRender {
         let support = KmpSurfaceSupport::for_contract(contract);
-        let common = Self::render_common_surface(contract, package_name, &support);
+        Self::render_surfaces_with_support(
+            contract,
+            package_name,
+            internal_package,
+            platform_adapters,
+            &support,
+        )
+    }
+
+    fn render_surfaces_with_support(
+        contract: &ir::FfiContract,
+        package_name: &str,
+        internal_package: &str,
+        platform_adapters: &[KmpPlatformAdapter],
+        support: &KmpSurfaceSupport,
+    ) -> KmpRender {
+        let common = Self::render_common_surface(contract, package_name, support);
         let platform_actuals = platform_adapters
             .iter()
             .map(|adapter| KmpPlatformActual {
@@ -206,7 +284,7 @@ impl KMPEmitter {
                     contract,
                     package_name,
                     internal_package,
-                    &support,
+                    support,
                     *adapter,
                 ),
             })
@@ -226,6 +304,7 @@ impl KMPEmitter {
         let mut common_sections = Vec::new();
         common_sections.push("// Auto-generated by BoltFFI. Do not edit.".to_string());
         common_sections.push(format!("package {package_name}"));
+        common_sections.push(Self::render_common_result_runtime());
 
         let mut unsupported = Vec::new();
 
@@ -240,14 +319,14 @@ impl KMPEmitter {
             .catalog
             .all_records()
             .filter(|record| support.records.contains(record.id.as_str()))
-            .map(Self::render_common_record)
+            .map(|record| Self::render_common_record(record, contract))
             .for_each(|section| common_sections.push(section));
 
         contract
             .catalog
             .all_enums()
             .filter(|enumeration| support.enums.contains(enumeration.id.as_str()))
-            .map(Self::render_common_enum)
+            .map(|enumeration| Self::render_common_enum(enumeration, package_name, contract))
             .for_each(|section| common_sections.push(section));
 
         contract.functions.iter().for_each(|function| {
@@ -302,6 +381,20 @@ impl KMPEmitter {
             .for_each(|section| actual_sections.push(section));
 
         contract
+            .catalog
+            .all_enums()
+            .filter(|enumeration| support.enums.contains(enumeration.id.as_str()))
+            .filter(|enumeration| !common_enum_is_c_style_value(enumeration))
+            .map(|enumeration| {
+                Self::render_enum_actual_conversions(enumeration, internal_package, contract)
+            })
+            .for_each(|section| actual_sections.push(section));
+
+        actual_sections.push(Self::render_ffi_exception_actual_conversion(
+            internal_package,
+        ));
+
+        contract
             .functions
             .iter()
             .filter(|function| function_supported(function, contract, support))
@@ -313,6 +406,45 @@ impl KMPEmitter {
         join_kotlin_sections(actual_sections)
     }
 
+    fn render_common_result_runtime() -> String {
+        r#"class FfiException(val code: kotlin.Int, message: kotlin.String) : kotlin.Exception(message)
+
+sealed class BoltFFIResult<out T, out E> {
+    data class Ok<T>(val value: T) : BoltFFIResult<T, kotlin.Nothing>()
+    data class Err<E>(val error: E) : BoltFFIResult<kotlin.Nothing, E>()
+
+    val isSuccess: kotlin.Boolean get() = this is Ok
+    val isFailure: kotlin.Boolean get() = this is Err
+
+    fun getOrThrow(): T = when (this) {
+        is Ok -> value
+        is Err -> throw when (error) {
+            is kotlin.Throwable -> error
+            else -> FfiException(-1, error.toString())
+        }
+    }
+
+    fun getOrNull(): T? = when (this) {
+        is Ok -> value
+        is Err -> null
+    }
+
+    fun exceptionOrNull(): kotlin.Throwable? = when (this) {
+        is Ok -> null
+        is Err -> when (error) {
+            is kotlin.Throwable -> error
+            else -> FfiException(-1, error.toString())
+        }
+    }
+
+    inline fun <R> fold(onSuccess: (T) -> R, onFailure: (E) -> R): R = when (this) {
+        is Ok -> onSuccess(value)
+        is Err -> onFailure(error)
+    }
+}"#
+        .to_string()
+    }
+
     fn render_custom_type(custom: &ir::definitions::CustomTypeDef) -> String {
         format!(
             "typealias {} = {}",
@@ -321,8 +453,18 @@ impl KMPEmitter {
         )
     }
 
-    fn render_common_record(record: &ir::definitions::RecordDef) -> String {
+    fn render_common_record(
+        record: &ir::definitions::RecordDef,
+        contract: &ir::FfiContract,
+    ) -> String {
         if record.fields.is_empty() {
+            if record.is_error {
+                return format!(
+                    "{}object {} : kotlin.Exception(\"\")",
+                    kdoc_block(&record.doc),
+                    NamingConvention::class_name(record.id.as_str())
+                );
+            }
             return format!(
                 "{}object {}",
                 kdoc_block(&record.doc),
@@ -330,24 +472,42 @@ impl KMPEmitter {
             );
         }
 
+        let message_field_name = compatible_record_message_field(record, contract)
+            .map(|field| NamingConvention::property_name(field.name.as_str()));
+        let can_extend_exception = !error_record_has_incompatible_message_field(record, contract);
         let params = record
             .fields
             .iter()
             .map(|field| {
+                let name = NamingConvention::property_name(field.name.as_str());
+                let prefix = if record.is_error
+                    && can_extend_exception
+                    && message_field_name.as_deref() == Some(name.as_str())
+                {
+                    "override "
+                } else {
+                    ""
+                };
                 format!(
-                    "val {}: {}",
-                    NamingConvention::property_name(field.name.as_str()),
+                    "{prefix}val {}: {}",
+                    name,
                     common_type_name(&field.type_expr)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
 
+        let class_name = NamingConvention::class_name(record.id.as_str());
+        let error_suffix = if record.is_error && can_extend_exception {
+            let message_field = message_field_name.unwrap_or_else(|| "\"\"".to_string());
+            format!(" : kotlin.Exception({message_field})")
+        } else {
+            String::new()
+        };
+
         format!(
-            "{}data class {}({})",
-            kdoc_block(&record.doc),
-            NamingConvention::class_name(record.id.as_str()),
-            params
+            "{}data class {class_name}({params}){error_suffix}",
+            kdoc_block(&record.doc)
         )
     }
 
@@ -384,7 +544,7 @@ impl KMPEmitter {
                 format!(
                     "{} = {}",
                     name,
-                    to_common_expr(&field.type_expr, &name, contract)
+                    to_common_expr(&field.type_expr, &name, contract, internal_package)
                 )
             })
             .collect::<Vec<_>>()
@@ -395,18 +555,99 @@ impl KMPEmitter {
         )
     }
 
-    fn render_common_enum(enumeration: &ir::definitions::EnumDef) -> String {
-        let ir::definitions::EnumRepr::CStyle { tag_type, variants } = &enumeration.repr else {
-            unreachable!("caller filters data enums");
-        };
-        let value_type = enum_value_type(*tag_type);
+    fn render_enum_actual_conversions(
+        enumeration: &ir::definitions::EnumDef,
+        internal_package: &str,
+        contract: &ir::FfiContract,
+    ) -> String {
+        let class_name = NamingConvention::class_name(enumeration.id.as_str());
+        let to_jvm_arms = enum_variants(enumeration)
+            .iter()
+            .map(|variant| {
+                let variant_name = NamingConvention::class_name(variant.name.as_str());
+                let fields = enum_variant_fields(&variant.payload);
+                if fields.is_empty() {
+                    return format!(
+                        "    is {class_name}.{variant_name} -> {internal_package}.{class_name}.{variant_name}"
+                    );
+                }
+                let args = fields
+                    .iter()
+                    .map(|field| {
+                        let name = field.kotlin_name();
+                        to_jvm_expr(&field.type_expr, &name, contract, internal_package)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "    is {class_name}.{variant_name} -> {internal_package}.{class_name}.{variant_name}({args})"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let to_common_arms = enum_variants(enumeration)
+            .iter()
+            .map(|variant| {
+                let variant_name = NamingConvention::class_name(variant.name.as_str());
+                let fields = enum_variant_fields(&variant.payload);
+                if fields.is_empty() {
+                    return format!(
+                        "    is {internal_package}.{class_name}.{variant_name} -> {class_name}.{variant_name}"
+                    );
+                }
+                let args = fields
+                    .iter()
+                    .map(|field| {
+                        let name = field.kotlin_name();
+                        to_common_expr(&field.type_expr, &name, contract, internal_package)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "    is {internal_package}.{class_name}.{variant_name} -> {class_name}.{variant_name}({args})"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!(
+            "private fun {class_name}.toBoltFfiJvm(): {internal_package}.{class_name} = when (this) {{\n{to_jvm_arms}\n}}\n\nprivate fun {internal_package}.{class_name}.toBoltFfiCommon(): {class_name} = when (this) {{\n{to_common_arms}\n}}"
+        )
+    }
+
+    fn render_ffi_exception_actual_conversion(internal_package: &str) -> String {
+        format!(
+            "private fun {internal_package}.FfiException.toBoltFfiCommon(): FfiException = FfiException(code, message ?: \"\")"
+        )
+    }
+
+    fn render_common_enum(
+        enumeration: &ir::definitions::EnumDef,
+        package_name: &str,
+        contract: &ir::FfiContract,
+    ) -> String {
+        if !enumeration.is_error
+            && let ir::definitions::EnumRepr::CStyle { tag_type, variants } = &enumeration.repr
+        {
+            return Self::render_common_c_style_enum(enumeration, *tag_type, variants);
+        }
+
+        Self::render_common_sealed_enum(enumeration, package_name, contract)
+    }
+
+    fn render_common_c_style_enum(
+        enumeration: &ir::definitions::EnumDef,
+        tag_type: ir::types::PrimitiveType,
+        variants: &[ir::definitions::CStyleVariant],
+    ) -> String {
+        let value_type = enum_value_type(tag_type);
         let entries = variants
             .iter()
             .map(|variant| {
                 format!(
                     "{}({})",
                     NamingConvention::enum_entry_name(variant.name.as_str()),
-                    enum_literal(variant.discriminant, *tag_type)
+                    enum_literal(variant.discriminant, tag_type)
                 )
             })
             .collect::<Vec<_>>()
@@ -414,7 +655,70 @@ impl KMPEmitter {
         let class_name = NamingConvention::class_name(enumeration.id.as_str());
 
         format!(
-            "{}enum class {class_name}(val value: {value_type}) {{\n    {entries};\n\n    companion object {{\n        fun fromValue(value: {value_type}): {class_name} = entries.firstOrNull {{ it.value == value }} ?: throw IllegalArgumentException(\"Unknown {class_name} value: $value\")\n    }}\n}}",
+            "{}enum class {class_name}(val value: {value_type}) {{\n    {entries};\n\n    companion object {{\n        fun fromValue(value: {value_type}): {class_name} = entries.firstOrNull {{ it.value == value }} ?: throw kotlin.IllegalArgumentException(\"Unknown {class_name} value: $value\")\n    }}\n}}",
+            kdoc_block(&enumeration.doc)
+        )
+    }
+
+    fn render_common_sealed_enum(
+        enumeration: &ir::definitions::EnumDef,
+        package_name: &str,
+        contract: &ir::FfiContract,
+    ) -> String {
+        let class_name = NamingConvention::class_name(enumeration.id.as_str());
+        let can_extend_exception =
+            !error_enum_has_incompatible_message_field(enumeration, contract);
+        let error_suffix = if enumeration.is_error && can_extend_exception {
+            " : kotlin.Exception()"
+        } else {
+            ""
+        };
+        let variant_names = enum_variants(enumeration)
+            .iter()
+            .map(|variant| NamingConvention::class_name(variant.name.as_str()))
+            .collect::<HashSet<_>>();
+        let variants = enum_variants(enumeration)
+            .iter()
+            .map(|variant| {
+                let variant_name = NamingConvention::class_name(variant.name.as_str());
+                let fields = enum_variant_fields(&variant.payload);
+                let doc = kdoc_block(&variant.doc);
+                if fields.is_empty() {
+                    format!("{doc}    data object {variant_name} : {class_name}()")
+                } else {
+                    let params = fields
+                        .iter()
+                        .map(|field| {
+                            let name = field.kotlin_name();
+                            let prefix = if enumeration.is_error
+                                && can_extend_exception
+                                && name == "message"
+                                && is_throwable_message_type(&field.type_expr, contract)
+                            {
+                                "override "
+                            } else {
+                                ""
+                            };
+                            format!(
+                                "{prefix}val {}: {}",
+                                name,
+                                common_type_name_with_disambiguation(
+                                    &field.type_expr,
+                                    &variant_names,
+                                    package_name
+                                )
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{doc}    data class {variant_name}({params}) : {class_name}()")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        format!(
+            "{}sealed class {class_name}{error_suffix} {{\n{variants}\n}}",
             kdoc_block(&enumeration.doc)
         )
     }
@@ -459,11 +763,37 @@ impl KMPEmitter {
             .collect::<Vec<_>>()
             .join(", ");
         let delegated = format!("{internal_package}.{function_name}({args})");
-        let actual_body = return_type_expr(&function.returns, delegated, contract);
+        let actual_body =
+            return_type_expr(&function.returns, delegated, contract, internal_package);
+        let return_line = actual_return_line(&function.returns, &actual_body);
+
+        let catch_blocks =
+            Self::render_actual_catches(&function.returns, contract, internal_package);
+        format!(
+            "{}actual {suspend_prefix}fun {function_name}({params}){return_suffix} {{\n    try {{\n{return_line}\n    }}{catch_blocks}\n}}",
+            kdoc_block(&function.doc)
+        )
+    }
+
+    fn render_actual_catches(
+        returns: &ir::definitions::ReturnDef,
+        contract: &ir::FfiContract,
+        internal_package: &str,
+    ) -> String {
+        let typed_catch = match returns {
+            ir::definitions::ReturnDef::Result { err, .. } => {
+                typed_error_class_name(err, contract).map(|class_name| {
+                    format!(
+                        " catch (err: {internal_package}.{class_name}) {{\n        throw err.toBoltFfiCommon()\n    }}"
+                    )
+                })
+            }
+            _ => None,
+        }
+        .unwrap_or_default();
 
         format!(
-            "{}actual {suspend_prefix}fun {function_name}({params}){return_suffix} = {actual_body}",
-            kdoc_block(&function.doc)
+            "{typed_catch} catch (err: {internal_package}.FfiException) {{\n        throw err.toBoltFfiCommon()\n    }}"
         )
     }
 
@@ -576,62 +906,313 @@ fn kdoc_block(doc: &Option<String>) -> String {
         .unwrap_or_default()
 }
 
-fn supported_records(contract: &ir::FfiContract) -> HashSet<String> {
-    let mut supported = HashSet::new();
-    loop {
-        let before = supported.len();
-        contract.catalog.all_records().for_each(|record| {
-            if record.fields.iter().all(|field| {
-                type_supported_with_sets(
-                    &field.type_expr,
-                    contract,
-                    &supported,
-                    &supported_c_style_enums(contract),
-                    &supported_custom_types(
-                        contract,
-                        &supported,
-                        &supported_c_style_enums(contract),
-                    ),
-                )
-            }) {
-                supported.insert(record.id.as_str().to_string());
-            }
-        });
-        if supported.len() == before {
-            break;
-        }
-    }
-    supported
-}
+fn filter_contract_for_kmp_surface(
+    contract: &ir::FfiContract,
+    support: &KmpSurfaceSupport,
+) -> ir::FfiContract {
+    let mut catalog = ir::TypeCatalog::new();
 
-fn supported_c_style_enums(contract: &ir::FfiContract) -> HashSet<String> {
+    contract
+        .catalog
+        .all_custom_types()
+        .filter(|custom| support.custom_types.contains(custom.id.as_str()))
+        .cloned()
+        .for_each(|custom| catalog.insert_custom(custom));
+
+    contract
+        .catalog
+        .all_records()
+        .filter(|record| support.records.contains(record.id.as_str()))
+        .map(|record| {
+            let mut record = record.clone();
+            record.constructors.clear();
+            record.methods.clear();
+            record
+        })
+        .for_each(|record| catalog.insert_record(record));
+
     contract
         .catalog
         .all_enums()
-        .filter(|enumeration| !enumeration.is_error)
-        .filter(|enumeration| matches!(enumeration.repr, ir::definitions::EnumRepr::CStyle { .. }))
-        .map(|enumeration| enumeration.id.as_str().to_string())
-        .collect()
+        .filter(|enumeration| support.enums.contains(enumeration.id.as_str()))
+        .map(|enumeration| {
+            let mut enumeration = enumeration.clone();
+            enumeration.constructors.clear();
+            enumeration.methods.clear();
+            enumeration
+        })
+        .for_each(|enumeration| catalog.insert_enum(enumeration));
+
+    let functions = contract
+        .functions
+        .iter()
+        .filter(|function| function_supported(function, contract, support))
+        .cloned()
+        .collect();
+
+    ir::FfiContract {
+        package: contract.package.clone(),
+        catalog,
+        functions,
+    }
 }
 
-fn supported_custom_types(
+fn filter_abi_for_kmp_surface(
+    contract: &ir::FfiContract,
+    abi: &AbiContract,
+    support: &KmpSurfaceSupport,
+) -> AbiContract {
+    let supported_function_ids = contract
+        .functions
+        .iter()
+        .filter(|function| function_supported(function, contract, support))
+        .map(|function| function.id.as_str().to_string())
+        .collect::<HashSet<_>>();
+
+    AbiContract {
+        package: abi.package.clone(),
+        calls: abi
+            .calls
+            .iter()
+            .filter(|call| match &call.id {
+                ir::abi::CallId::Function(id) => supported_function_ids.contains(id.as_str()),
+                ir::abi::CallId::Method { .. }
+                | ir::abi::CallId::Constructor { .. }
+                | ir::abi::CallId::RecordMethod { .. }
+                | ir::abi::CallId::RecordConstructor { .. }
+                | ir::abi::CallId::EnumMethod { .. }
+                | ir::abi::CallId::EnumConstructor { .. } => false,
+            })
+            .cloned()
+            .collect(),
+        callbacks: Vec::new(),
+        streams: Vec::new(),
+        records: abi
+            .records
+            .iter()
+            .filter(|record| support.records.contains(record.id.as_str()))
+            .cloned()
+            .collect(),
+        enums: abi
+            .enums
+            .iter()
+            .filter(|enumeration| support.enums.contains(enumeration.id.as_str()))
+            .cloned()
+            .collect(),
+        free_buf: abi.free_buf.clone(),
+        atomic_cas: abi.atomic_cas.clone(),
+    }
+}
+
+fn common_enum_is_c_style_value(enumeration: &ir::definitions::EnumDef) -> bool {
+    !enumeration.is_error && matches!(enumeration.repr, EnumRepr::CStyle { .. })
+}
+
+fn enum_variants(enumeration: &ir::definitions::EnumDef) -> Vec<KmpEnumVariant> {
+    match &enumeration.repr {
+        EnumRepr::CStyle { variants, .. } => variants
+            .iter()
+            .map(|variant| KmpEnumVariant {
+                name: variant.name.as_str().to_string(),
+                payload: VariantPayload::Unit,
+                doc: variant.doc.clone(),
+            })
+            .collect(),
+        EnumRepr::Data { variants, .. } => variants
+            .iter()
+            .map(|variant| KmpEnumVariant {
+                name: variant.name.as_str().to_string(),
+                payload: variant.payload.clone(),
+                doc: variant.doc.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn enum_variant_fields(payload: &VariantPayload) -> Vec<KmpEnumField> {
+    match payload {
+        VariantPayload::Unit => Vec::new(),
+        VariantPayload::Tuple(types) => types
+            .iter()
+            .enumerate()
+            .map(|(index, type_expr)| KmpEnumField {
+                name: NamingConvention::property_name(&format!("value{index}")),
+                type_expr: type_expr.clone(),
+            })
+            .collect(),
+        VariantPayload::Struct(fields) => fields
+            .iter()
+            .map(|field| KmpEnumField {
+                name: NamingConvention::property_name(field.name.as_str()),
+                type_expr: field.type_expr.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn has_reserved_common_runtime_type_name(id: &str) -> bool {
+    let class_name = NamingConvention::class_name(id);
+    KMP_COMMON_RUNTIME_TYPE_NAMES.contains(&class_name.as_str())
+}
+
+fn custom_type_supported_with_sets(
+    custom: &ir::definitions::CustomTypeDef,
     contract: &ir::FfiContract,
     records: &HashSet<String>,
     enums: &HashSet<String>,
-) -> HashSet<String> {
-    let mut supported = HashSet::new();
-    loop {
-        let before = supported.len();
-        contract.catalog.all_custom_types().for_each(|custom| {
-            if type_supported_with_sets(&custom.repr, contract, records, enums, &supported) {
-                supported.insert(custom.id.as_str().to_string());
+    custom_types: &HashSet<String>,
+) -> bool {
+    !has_reserved_common_runtime_type_name(custom.id.as_str())
+        && type_supported_with_sets(&custom.repr, contract, records, enums, custom_types)
+}
+
+fn record_supported_with_sets(
+    record: &ir::definitions::RecordDef,
+    contract: &ir::FfiContract,
+    records: &HashSet<String>,
+    enums: &HashSet<String>,
+    custom_types: &HashSet<String>,
+) -> bool {
+    !has_reserved_common_runtime_type_name(record.id.as_str())
+        && !error_record_has_incompatible_message_field(record, contract)
+        && record.fields.iter().all(|field| {
+            type_supported_with_sets(&field.type_expr, contract, records, enums, custom_types)
+        })
+}
+
+fn compatible_record_message_field<'a>(
+    record: &'a ir::definitions::RecordDef,
+    contract: &ir::FfiContract,
+) -> Option<&'a ir::definitions::FieldDef> {
+    record.fields.iter().find(|field| {
+        NamingConvention::property_name(field.name.as_str()) == "message"
+            && is_throwable_message_type(&field.type_expr, contract)
+    })
+}
+
+fn error_record_has_incompatible_message_field(
+    record: &ir::definitions::RecordDef,
+    contract: &ir::FfiContract,
+) -> bool {
+    record.is_error
+        && record.fields.iter().any(|field| {
+            NamingConvention::property_name(field.name.as_str()) == "message"
+                && !is_throwable_message_type(&field.type_expr, contract)
+        })
+}
+
+fn error_enum_has_incompatible_message_field(
+    enumeration: &ir::definitions::EnumDef,
+    contract: &ir::FfiContract,
+) -> bool {
+    enumeration.is_error
+        && enum_variants(enumeration).iter().any(|variant| {
+            enum_variant_fields(&variant.payload).iter().any(|field| {
+                field.kotlin_name() == "message"
+                    && !is_throwable_message_type(&field.type_expr, contract)
+            })
+        })
+}
+
+fn is_throwable_message_type(ty: &ir::types::TypeExpr, contract: &ir::FfiContract) -> bool {
+    is_throwable_message_type_inner(ty, contract, &mut HashSet::new())
+}
+
+fn is_throwable_message_type_inner(
+    ty: &ir::types::TypeExpr,
+    contract: &ir::FfiContract,
+    visited_custom_types: &mut HashSet<String>,
+) -> bool {
+    match ty {
+        ir::types::TypeExpr::String => true,
+        ir::types::TypeExpr::Option(inner) => {
+            is_throwable_message_option_inner_type(inner, contract, visited_custom_types)
+        }
+        ir::types::TypeExpr::Custom(id) => {
+            if !visited_custom_types.insert(id.as_str().to_string()) {
+                return false;
             }
-        });
-        if supported.len() == before {
-            break;
+            contract.catalog.resolve_custom(id).is_some_and(|custom| {
+                is_throwable_message_alias_expansion(&custom.repr, contract, visited_custom_types)
+            })
+        }
+        _ => false,
+    }
+}
+
+fn is_throwable_message_option_inner_type(
+    ty: &ir::types::TypeExpr,
+    contract: &ir::FfiContract,
+    visited_custom_types: &mut HashSet<String>,
+) -> bool {
+    match ty {
+        ir::types::TypeExpr::String => true,
+        ir::types::TypeExpr::Custom(id) => {
+            if !visited_custom_types.insert(id.as_str().to_string()) {
+                return false;
+            }
+            contract.catalog.resolve_custom(id).is_some_and(|custom| {
+                is_throwable_message_alias_expansion(&custom.repr, contract, visited_custom_types)
+            })
+        }
+        _ => false,
+    }
+}
+
+fn is_throwable_message_alias_expansion(
+    ty: &ir::types::TypeExpr,
+    contract: &ir::FfiContract,
+    visited_custom_types: &mut HashSet<String>,
+) -> bool {
+    match ty {
+        ir::types::TypeExpr::String => true,
+        ir::types::TypeExpr::Option(inner) => {
+            is_throwable_message_option_inner_type(inner, contract, visited_custom_types)
+        }
+        ir::types::TypeExpr::Custom(id) => {
+            if !visited_custom_types.insert(id.as_str().to_string()) {
+                return false;
+            }
+            contract.catalog.resolve_custom(id).is_some_and(|custom| {
+                is_throwable_message_alias_expansion(&custom.repr, contract, visited_custom_types)
+            })
+        }
+        _ => false,
+    }
+}
+
+fn typed_error_class_name(ty: &ir::types::TypeExpr, contract: &ir::FfiContract) -> Option<String> {
+    fn resolve(
+        ty: &ir::types::TypeExpr,
+        contract: &ir::FfiContract,
+        visited_custom_types: &mut HashSet<String>,
+    ) -> Option<String> {
+        match ty {
+            ir::types::TypeExpr::Enum(id) => contract
+                .catalog
+                .resolve_enum(id)
+                .filter(|enumeration| enumeration.is_error)
+                .map(|_| NamingConvention::class_name(id.as_str())),
+            ir::types::TypeExpr::Record(id) => contract
+                .catalog
+                .resolve_record(id)
+                .filter(|record| record.is_error)
+                .map(|_| NamingConvention::class_name(id.as_str())),
+            ir::types::TypeExpr::Custom(id) => {
+                if !visited_custom_types.insert(id.as_str().to_string()) {
+                    return None;
+                }
+                contract
+                    .catalog
+                    .resolve_custom(id)
+                    .and_then(|custom| resolve(&custom.repr, contract, visited_custom_types))
+            }
+            ir::types::TypeExpr::Option(inner) => resolve(inner, contract, visited_custom_types),
+            _ => None,
         }
     }
-    supported
+
+    resolve(ty, contract, &mut HashSet::new())
 }
 
 fn type_supported(
@@ -667,10 +1248,36 @@ fn type_supported_with_sets(
         ir::types::TypeExpr::Record(id) => records.contains(id.as_str()),
         ir::types::TypeExpr::Enum(id) => enums.contains(id.as_str()),
         ir::types::TypeExpr::Custom(id) => custom_types.contains(id.as_str()),
+        ir::types::TypeExpr::Result { ok, err } => {
+            type_supported_with_sets(ok, contract, records, enums, custom_types)
+                && type_supported_with_sets(err, contract, records, enums, custom_types)
+        }
         ir::types::TypeExpr::Builtin(_)
         | ir::types::TypeExpr::Callback(_)
-        | ir::types::TypeExpr::Handle(_)
-        | ir::types::TypeExpr::Result { .. } => false,
+        | ir::types::TypeExpr::Handle(_) => false,
+    }
+}
+
+fn enum_supported_with_sets(
+    enumeration: &ir::definitions::EnumDef,
+    contract: &ir::FfiContract,
+    records: &HashSet<String>,
+    enums: &HashSet<String>,
+    custom_types: &HashSet<String>,
+) -> bool {
+    if has_reserved_common_runtime_type_name(enumeration.id.as_str())
+        || error_enum_has_incompatible_message_field(enumeration, contract)
+    {
+        return false;
+    }
+
+    match &enumeration.repr {
+        EnumRepr::CStyle { .. } => true,
+        EnumRepr::Data { variants, .. } => variants.iter().all(|variant| {
+            enum_variant_fields(&variant.payload).iter().all(|field| {
+                type_supported_with_sets(&field.type_expr, contract, records, enums, custom_types)
+            })
+        }),
     }
 }
 
@@ -682,7 +1289,9 @@ fn return_supported(
     match returns {
         ir::definitions::ReturnDef::Void => true,
         ir::definitions::ReturnDef::Value(ty) => type_supported(ty, contract, support),
-        ir::definitions::ReturnDef::Result { .. } => false,
+        ir::definitions::ReturnDef::Result { ok, err } => {
+            type_supported(ok, contract, support) && type_supported(err, contract, support)
+        }
     }
 }
 
@@ -719,6 +1328,95 @@ fn common_type_name(ty: &ir::types::TypeExpr) -> String {
                 common_type_name(err)
             )
         }
+    }
+}
+
+fn common_type_name_with_disambiguation(
+    ty: &ir::types::TypeExpr,
+    reserved_names: &HashSet<String>,
+    package_name: &str,
+) -> String {
+    match ty {
+        ir::types::TypeExpr::Void => {
+            disambiguated_kotlin_type_name("Unit", reserved_names, "kotlin")
+        }
+        ir::types::TypeExpr::Primitive(primitive) => {
+            let name = primitive_type_name(*primitive);
+            disambiguated_kotlin_type_name(&name, reserved_names, "kotlin")
+        }
+        ir::types::TypeExpr::String => {
+            disambiguated_kotlin_type_name("String", reserved_names, "kotlin")
+        }
+        ir::types::TypeExpr::Bytes => {
+            disambiguated_kotlin_type_name("ByteArray", reserved_names, "kotlin")
+        }
+        ir::types::TypeExpr::Vec(inner) => match inner.as_ref() {
+            ir::types::TypeExpr::Primitive(_) => {
+                let name = vec_type_name(inner);
+                disambiguated_kotlin_type_name(&name, reserved_names, "kotlin")
+            }
+            _ => {
+                let list_name =
+                    disambiguated_kotlin_type_name("List", reserved_names, "kotlin.collections");
+                format!(
+                    "{list_name}<{}>",
+                    common_type_name_with_disambiguation(inner, reserved_names, package_name)
+                )
+            }
+        },
+        ir::types::TypeExpr::Option(inner) => format!(
+            "{}?",
+            common_type_name_with_disambiguation(inner, reserved_names, package_name)
+        ),
+        ir::types::TypeExpr::Result { ok, err } => format!(
+            "{}<{}, {}>",
+            disambiguated_kotlin_type_name("BoltFFIResult", reserved_names, package_name),
+            common_type_name_with_disambiguation(ok, reserved_names, package_name),
+            common_type_name_with_disambiguation(err, reserved_names, package_name)
+        ),
+        ir::types::TypeExpr::Record(id) => {
+            disambiguated_class_name(id.as_str(), reserved_names, package_name)
+        }
+        ir::types::TypeExpr::Enum(id) => {
+            disambiguated_class_name(id.as_str(), reserved_names, package_name)
+        }
+        ir::types::TypeExpr::Custom(id) => {
+            disambiguated_class_name(id.as_str(), reserved_names, package_name)
+        }
+        ir::types::TypeExpr::Builtin(id) => {
+            disambiguated_class_name(id.as_str(), reserved_names, package_name)
+        }
+        ir::types::TypeExpr::Handle(id) => {
+            disambiguated_class_name(id.as_str(), reserved_names, package_name)
+        }
+        ir::types::TypeExpr::Callback(id) => {
+            disambiguated_class_name(id.as_str(), reserved_names, package_name)
+        }
+    }
+}
+
+fn disambiguated_kotlin_type_name(
+    name: &str,
+    reserved_names: &HashSet<String>,
+    package_name: &str,
+) -> String {
+    if reserved_names.contains(name) {
+        format!("{package_name}.{name}")
+    } else {
+        name.to_string()
+    }
+}
+
+fn disambiguated_class_name(
+    id: &str,
+    reserved_names: &HashSet<String>,
+    package_name: &str,
+) -> String {
+    let class_name = NamingConvention::class_name(id);
+    if reserved_names.contains(&class_name) {
+        format!("{package_name}.{class_name}")
+    } else {
+        class_name
     }
 }
 
@@ -816,7 +1514,16 @@ fn to_jvm_expr(
         ir::types::TypeExpr::Record(_) => format!("{expr}.toBoltFfiJvm()"),
         ir::types::TypeExpr::Enum(id) => {
             let class_name = NamingConvention::class_name(id.as_str());
-            format!("{internal_package}.{class_name}.fromValue({expr}.value)")
+            if contract
+                .catalog
+                .resolve_enum(id)
+                .map(common_enum_is_c_style_value)
+                .unwrap_or(false)
+            {
+                format!("{internal_package}.{class_name}.fromValue({expr}.value)")
+            } else {
+                format!("{expr}.toBoltFfiJvm()")
+            }
         }
         ir::types::TypeExpr::Vec(inner) => to_jvm_vec_expr(inner, expr, contract, internal_package),
         ir::types::TypeExpr::Option(inner) => {
@@ -830,6 +1537,13 @@ fn to_jvm_expr(
             .resolve_custom(id)
             .map(|custom| to_jvm_expr(&custom.repr, expr, contract, internal_package))
             .unwrap_or_else(|| expr.to_string()),
+        ir::types::TypeExpr::Result { ok, err } => {
+            let ok_expr = to_jvm_expr(ok, "boltffiResult.value", contract, internal_package);
+            let err_expr = to_jvm_expr(err, "boltffiResult.error", contract, internal_package);
+            format!(
+                "when (val boltffiResult = {expr}) {{ is BoltFFIResult.Ok -> {internal_package}.BoltFFIResult.Ok({ok_expr}); is BoltFFIResult.Err -> {internal_package}.BoltFFIResult.Err({err_expr}) }}"
+            )
+        }
         _ => expr.to_string(),
     }
 }
@@ -849,34 +1563,74 @@ fn to_jvm_vec_expr(
     }
 }
 
-fn to_common_expr(ty: &ir::types::TypeExpr, expr: &str, contract: &ir::FfiContract) -> String {
+fn to_common_expr(
+    ty: &ir::types::TypeExpr,
+    expr: &str,
+    contract: &ir::FfiContract,
+    internal_package: &str,
+) -> String {
     match ty {
         ir::types::TypeExpr::Primitive(_) => expr.to_string(),
         ir::types::TypeExpr::Record(_) => format!("{expr}.toBoltFfiCommon()"),
         ir::types::TypeExpr::Enum(id) => {
             let class_name = NamingConvention::class_name(id.as_str());
-            format!("{class_name}.fromValue({expr}.value)")
+            if contract
+                .catalog
+                .resolve_enum(id)
+                .map(common_enum_is_c_style_value)
+                .unwrap_or(false)
+            {
+                format!("{class_name}.fromValue({expr}.value)")
+            } else {
+                format!("{expr}.toBoltFfiCommon()")
+            }
         }
-        ir::types::TypeExpr::Vec(inner) => to_common_vec_expr(inner, expr, contract),
+        ir::types::TypeExpr::Vec(inner) => {
+            to_common_vec_expr(inner, expr, contract, internal_package)
+        }
         ir::types::TypeExpr::Option(inner) => {
             format!(
                 "{expr}?.let {{ {} }}",
-                to_common_expr(inner, "it", contract)
+                to_common_expr(inner, "it", contract, internal_package)
             )
         }
         ir::types::TypeExpr::Custom(id) => contract
             .catalog
             .resolve_custom(id)
-            .map(|custom| to_common_expr(&custom.repr, expr, contract))
+            .map(|custom| to_common_expr(&custom.repr, expr, contract, internal_package))
             .unwrap_or_else(|| expr.to_string()),
+        ir::types::TypeExpr::Result { ok, err } => {
+            let ok_expr = to_common_expr(ok, "boltffiResult.value", contract, internal_package);
+            let err_expr = to_common_expr(err, "boltffiResult.error", contract, internal_package);
+            format!(
+                "when (val boltffiResult = {expr}) {{ is {internal_package}.BoltFFIResult.Ok -> BoltFFIResult.Ok({ok_expr}); is {internal_package}.BoltFFIResult.Err -> BoltFFIResult.Err({err_expr}) }}"
+            )
+        }
         _ => expr.to_string(),
     }
 }
 
-fn to_common_vec_expr(ty: &ir::types::TypeExpr, expr: &str, contract: &ir::FfiContract) -> String {
+fn to_common_vec_expr(
+    ty: &ir::types::TypeExpr,
+    expr: &str,
+    contract: &ir::FfiContract,
+    internal_package: &str,
+) -> String {
     match ty {
         ir::types::TypeExpr::Primitive(_) => expr.to_string(),
-        _ => format!("{expr}.map {{ {} }}", to_common_expr(ty, "it", contract)),
+        _ => format!(
+            "{expr}.map {{ {} }}",
+            to_common_expr(ty, "it", contract, internal_package)
+        ),
+    }
+}
+
+fn actual_return_line(returns: &ir::definitions::ReturnDef, actual_body: &str) -> String {
+    match returns {
+        ir::definitions::ReturnDef::Void => format!("        {actual_body}"),
+        ir::definitions::ReturnDef::Value(_) | ir::definitions::ReturnDef::Result { .. } => {
+            format!("        return {actual_body}")
+        }
     }
 }
 
@@ -884,11 +1638,16 @@ fn return_type_expr(
     returns: &ir::definitions::ReturnDef,
     delegated: String,
     contract: &ir::FfiContract,
+    internal_package: &str,
 ) -> String {
     match returns {
         ir::definitions::ReturnDef::Void => delegated,
-        ir::definitions::ReturnDef::Value(ty) => to_common_expr(ty, &delegated, contract),
-        ir::definitions::ReturnDef::Result { ok, .. } => to_common_expr(ok, &delegated, contract),
+        ir::definitions::ReturnDef::Value(ty) => {
+            to_common_expr(ty, &delegated, contract, internal_package)
+        }
+        ir::definitions::ReturnDef::Result { ok, .. } => {
+            to_common_expr(ok, &delegated, contract, internal_package)
+        }
     }
 }
 
@@ -909,6 +1668,41 @@ mod tests {
         }
     }
 
+    fn field(name: &str, type_expr: ir::types::TypeExpr) -> ir::definitions::FieldDef {
+        ir::definitions::FieldDef {
+            name: name.into(),
+            type_expr,
+            doc: None,
+            default: None,
+        }
+    }
+
+    fn error_record(id: &str) -> ir::definitions::RecordDef {
+        ir::definitions::RecordDef {
+            id: id.into(),
+            is_repr_c: false,
+            is_error: true,
+            fields: vec![field("message", ir::types::TypeExpr::String)],
+            constructors: Vec::new(),
+            methods: Vec::new(),
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    fn custom_type(id: &str, repr: ir::types::TypeExpr) -> ir::definitions::CustomTypeDef {
+        ir::definitions::CustomTypeDef {
+            id: id.into(),
+            rust_type: ir::ids::QualifiedName::new(format!("demo::{id}")),
+            repr,
+            converters: ir::ids::ConverterPath {
+                into_ffi: ir::ids::QualifiedName::new("into_ffi"),
+                try_from_ffi: ir::ids::QualifiedName::new("try_from_ffi"),
+            },
+            doc: None,
+        }
+    }
+
     fn empty_contract() -> ir::FfiContract {
         ir::FfiContract {
             package: ir::PackageInfo {
@@ -920,11 +1714,25 @@ mod tests {
         }
     }
 
+    fn sync_function(
+        id: &str,
+        returns: ir::definitions::ReturnDef,
+    ) -> ir::definitions::FunctionDef {
+        ir::definitions::FunctionDef {
+            id: id.into(),
+            params: Vec::new(),
+            returns,
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        }
+    }
+
     #[test]
     fn empty_records_render_as_objects() {
         let record = empty_record();
 
-        let common = KMPEmitter::render_common_record(&record);
+        let common = KMPEmitter::render_common_record(&record, &empty_contract());
         let actual = KMPEmitter::render_record_actual_conversions(
             &record,
             "com.example.demo.jvm",
@@ -936,6 +1744,719 @@ mod tests {
         assert!(actual.contains("= Empty"));
         assert!(!common.contains("data class Empty()"));
         assert!(!actual.contains("Empty()"));
+    }
+
+    #[test]
+    fn common_surface_reserves_result_runtime_type_names() {
+        let mut contract = empty_contract();
+        let mut ffi_exception = empty_record();
+        ffi_exception.id = "FfiException".into();
+        ffi_exception.fields = vec![field(
+            "code",
+            ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+        )];
+        contract.catalog.insert_record(ffi_exception);
+        contract.catalog.insert_custom(custom_type(
+            "bolt_f_f_i_result",
+            ir::types::TypeExpr::String,
+        ));
+        contract.functions.push(sync_function(
+            "load",
+            ir::definitions::ReturnDef::Value(ir::types::TypeExpr::Record("FfiException".into())),
+        ));
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(&contract, "com.example.demo", &support);
+        let internal_contract = filter_contract_for_kmp_surface(&contract, &support);
+
+        assert!(!support.records.contains("FfiException"));
+        assert!(!support.custom_types.contains("bolt_f_f_i_result"));
+        assert_eq!(common.matches("class FfiException").count(), 1);
+        assert_eq!(common.matches("sealed class BoltFFIResult").count(), 1);
+        assert!(!common.contains("data class FfiException("));
+        assert!(!common.contains("typealias BoltFFIResult"));
+        assert!(!common.contains("expect fun load"));
+        assert!(common.contains("Unsupported in the initial KMP generator slice: load"));
+        assert_eq!(internal_contract.catalog.all_records().count(), 0);
+        assert_eq!(internal_contract.catalog.all_custom_types().count(), 0);
+        assert!(internal_contract.functions.is_empty());
+    }
+
+    #[test]
+    fn common_runtime_qualifies_stdlib_exception_types() {
+        let mut contract = empty_contract();
+        let mut exception = empty_record();
+        exception.id = "Exception".into();
+        let mut throwable = empty_record();
+        throwable.id = "Throwable".into();
+        let mut illegal_argument_exception = empty_record();
+        illegal_argument_exception.id = "IllegalArgumentException".into();
+        contract.catalog.insert_record(exception);
+        contract.catalog.insert_record(throwable);
+        contract.catalog.insert_record(illegal_argument_exception);
+        for id in ["String", "Int", "Boolean", "Nothing"] {
+            let mut record = empty_record();
+            record.id = id.into();
+            contract.catalog.insert_record(record);
+        }
+        contract.catalog.insert_enum(ir::definitions::EnumDef {
+            id: "Status".into(),
+            repr: EnumRepr::CStyle {
+                tag_type: ir::types::PrimitiveType::I32,
+                variants: vec![ir::definitions::CStyleVariant {
+                    name: "Ready".into(),
+                    discriminant: 0,
+                    doc: None,
+                }],
+            },
+            is_error: false,
+            constructors: Vec::new(),
+            methods: Vec::new(),
+            doc: None,
+            deprecated: None,
+        });
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(&contract, "com.example.demo", &support);
+
+        assert!(support.records.contains("Exception"));
+        assert!(support.records.contains("Throwable"));
+        assert!(support.records.contains("IllegalArgumentException"));
+        assert!(support.records.contains("String"));
+        assert!(support.records.contains("Int"));
+        assert!(support.records.contains("Boolean"));
+        assert!(support.records.contains("Nothing"));
+        assert!(common.contains("object Exception"));
+        assert!(common.contains("object Throwable"));
+        assert!(common.contains("object IllegalArgumentException"));
+        assert!(common.contains("object String"));
+        assert!(common.contains("object Int"));
+        assert!(common.contains("object Boolean"));
+        assert!(common.contains("object Nothing"));
+        assert!(common.contains(
+            "class FfiException(val code: kotlin.Int, message: kotlin.String) : kotlin.Exception(message)"
+        ));
+        assert!(common.contains("BoltFFIResult<T, kotlin.Nothing>"));
+        assert!(common.contains("BoltFFIResult<kotlin.Nothing, E>"));
+        assert!(common.contains("val isSuccess: kotlin.Boolean"));
+        assert!(common.contains("is kotlin.Throwable -> error"));
+        assert!(common.contains("fun exceptionOrNull(): kotlin.Throwable?"));
+        assert!(common.contains("throw kotlin.IllegalArgumentException"));
+    }
+
+    #[test]
+    fn error_record_message_fields_use_normalized_kotlin_name() {
+        let mut record = error_record("ServiceError");
+        record.fields = vec![field("Message", ir::types::TypeExpr::String)];
+
+        let common = KMPEmitter::render_common_record(&record, &empty_contract());
+
+        assert_eq!(
+            common,
+            "data class ServiceError(override val message: String) : kotlin.Exception(message)"
+        );
+    }
+
+    #[test]
+    fn error_record_nullable_message_fields_override_throwable_message() {
+        let mut record = error_record("ServiceError");
+        record.fields = vec![field(
+            "message",
+            ir::types::TypeExpr::Option(Box::new(ir::types::TypeExpr::String)),
+        )];
+
+        let common = KMPEmitter::render_common_record(&record, &empty_contract());
+
+        assert_eq!(
+            common,
+            "data class ServiceError(override val message: String?) : kotlin.Exception(message)"
+        );
+    }
+
+    #[test]
+    fn error_record_message_fields_use_string_custom_aliases() {
+        let mut contract = empty_contract();
+        contract
+            .catalog
+            .insert_custom(custom_type("MessageText", ir::types::TypeExpr::String));
+        let mut record = error_record("ServiceError");
+        record.fields = vec![field(
+            "message",
+            ir::types::TypeExpr::Custom("MessageText".into()),
+        )];
+        contract.catalog.insert_record(record.clone());
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_record(&record, &contract);
+
+        assert!(support.custom_types.contains("MessageText"));
+        assert!(support.records.contains("ServiceError"));
+        assert_eq!(
+            common,
+            "data class ServiceError(override val message: MessageText) : kotlin.Exception(message)"
+        );
+    }
+
+    #[test]
+    fn error_record_option_message_fields_accept_nullable_string_aliases() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_custom(custom_type(
+            "MessageText",
+            ir::types::TypeExpr::Option(Box::new(ir::types::TypeExpr::String)),
+        ));
+        let mut record = error_record("ServiceError");
+        record.fields = vec![field(
+            "message",
+            ir::types::TypeExpr::Option(Box::new(ir::types::TypeExpr::Custom(
+                "MessageText".into(),
+            ))),
+        )];
+        contract.catalog.insert_record(record.clone());
+        contract.functions.push(sync_function(
+            "load",
+            ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Record("ServiceError".into()),
+            },
+        ));
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(&contract, "com.example.demo", &support);
+
+        assert!(support.custom_types.contains("MessageText"));
+        assert!(support.records.contains("ServiceError"));
+        assert!(function_supported(
+            &contract.functions[0],
+            &contract,
+            &support
+        ));
+        assert!(common.contains("typealias MessageText = String?"));
+        assert!(common.contains(
+            "data class ServiceError(override val message: MessageText?) : kotlin.Exception(message)"
+        ));
+        assert!(common.contains("expect fun load(): String"));
+    }
+
+    #[test]
+    fn error_record_non_string_message_field_is_not_supported() {
+        let mut contract = empty_contract();
+        let mut record = error_record("ServiceError");
+        record.fields = vec![field(
+            "message",
+            ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+        )];
+        contract.catalog.insert_record(record.clone());
+        contract.functions.push(sync_function(
+            "load",
+            ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Record("ServiceError".into()),
+            },
+        ));
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(&contract, "com.example.demo", &support);
+        let direct = KMPEmitter::render_common_record(&record, &contract);
+
+        assert!(!support.records.contains("ServiceError"));
+        assert!(!direct.contains("override val message: Int"));
+        assert_eq!(direct, "data class ServiceError(val message: Int)");
+        assert!(!common.contains("data class ServiceError("));
+        assert!(!common.contains("expect fun load"));
+        assert!(common.contains("Unsupported in the initial KMP generator slice: load"));
+    }
+
+    #[test]
+    fn emit_filters_unsupported_kmp_surface_from_internal_sources() {
+        let mut contract = empty_contract();
+        let mut record = error_record("ServiceError");
+        record.fields = vec![field(
+            "message",
+            ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+        )];
+        contract.catalog.insert_record(record);
+        contract.functions.push(sync_function(
+            "load",
+            ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Record("ServiceError".into()),
+            },
+        ));
+        let abi = ir::Lowerer::new(&contract).to_abi_contract();
+
+        let output = KMPEmitter::emit(
+            &contract,
+            &abi,
+            KMPOptions {
+                package_name: "com.example.demo".to_string(),
+                module_name: "Demo".to_string(),
+                min_sdk: 23,
+                kotlin_options: KotlinOptions::default(),
+            },
+        );
+        let common = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path.as_path()
+                    == Path::new("src/commonMain/kotlin/com/example/demo/Demo.kt")
+            })
+            .expect("common source should be emitted");
+        let internal_jvm = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path.as_path()
+                    == Path::new("src/jvmMain/kotlin/com/example/demo/jvm/Demo.kt")
+            })
+            .expect("jvm internal source should be emitted");
+        let jni_glue = output
+            .files
+            .iter()
+            .find(|file| file.relative_path.as_path() == Path::new("src/jvmMain/c/jni_glue.c"))
+            .expect("jvm JNI glue should be emitted");
+
+        assert!(!common.contents.contains("data class ServiceError("));
+        assert!(!common.contents.contains("expect fun load"));
+        assert!(
+            common
+                .contents
+                .contains("Unsupported in the initial KMP generator slice: load")
+        );
+        assert!(!internal_jvm.contents.contains("data class ServiceError("));
+        assert!(!internal_jvm.contents.contains("fun load("));
+        assert!(!jni_glue.contents.contains("boltffi_load"));
+    }
+
+    #[test]
+    fn error_enum_message_fields_override_throwable_message() {
+        let enumeration = ir::definitions::EnumDef {
+            id: "DomainError".into(),
+            repr: EnumRepr::Data {
+                tag_type: ir::types::PrimitiveType::I32,
+                variants: vec![ir::definitions::DataVariant {
+                    name: "Invalid".into(),
+                    discriminant: 0,
+                    payload: VariantPayload::Struct(vec![field(
+                        "message",
+                        ir::types::TypeExpr::String,
+                    )]),
+                    doc: None,
+                }],
+            },
+            is_error: true,
+            constructors: Vec::new(),
+            methods: Vec::new(),
+            doc: None,
+            deprecated: None,
+        };
+
+        let common = KMPEmitter::render_common_sealed_enum(
+            &enumeration,
+            "com.example.demo",
+            &empty_contract(),
+        );
+
+        assert!(
+            common.contains("data class Invalid(override val message: String) : DomainError()")
+        );
+        assert!(!common.contains("data class Invalid(val message: String)"));
+    }
+
+    #[test]
+    fn emit_makes_error_enum_message_fields_override_throwable_message() {
+        let mut contract = empty_contract();
+        let enumeration = ir::definitions::EnumDef {
+            id: "DomainError".into(),
+            repr: EnumRepr::Data {
+                tag_type: ir::types::PrimitiveType::I32,
+                variants: vec![ir::definitions::DataVariant {
+                    name: "Invalid".into(),
+                    discriminant: 0,
+                    payload: VariantPayload::Struct(vec![field(
+                        "message",
+                        ir::types::TypeExpr::String,
+                    )]),
+                    doc: None,
+                }],
+            },
+            is_error: true,
+            constructors: Vec::new(),
+            methods: Vec::new(),
+            doc: None,
+            deprecated: None,
+        };
+        contract.catalog.insert_enum(enumeration);
+        contract.functions.push(sync_function(
+            "load",
+            ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Enum("DomainError".into()),
+            },
+        ));
+        let abi = ir::Lowerer::new(&contract).to_abi_contract();
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        assert!(support.enums.contains("DomainError"));
+        assert!(function_supported(
+            &contract.functions[0],
+            &contract,
+            &support
+        ));
+
+        let output = KMPEmitter::emit(
+            &contract,
+            &abi,
+            KMPOptions {
+                package_name: "com.example.demo".to_string(),
+                module_name: "Demo".to_string(),
+                min_sdk: 23,
+                kotlin_options: KotlinOptions::default(),
+            },
+        );
+        let common = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path.as_path()
+                    == Path::new("src/commonMain/kotlin/com/example/demo/Demo.kt")
+            })
+            .expect("common source should be emitted");
+        let internal_jvm = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path.as_path()
+                    == Path::new("src/jvmMain/kotlin/com/example/demo/jvm/Demo.kt")
+            })
+            .expect("jvm internal source should be emitted");
+
+        assert!(
+            common
+                .contents
+                .contains("data class Invalid(override val message: String) : DomainError()")
+        );
+        assert!(
+            internal_jvm
+                .contents
+                .contains("data class Invalid(override val message: String) : DomainError()")
+        );
+    }
+
+    #[test]
+    fn error_enum_non_string_message_field_is_not_supported() {
+        let mut contract = empty_contract();
+        let enumeration = ir::definitions::EnumDef {
+            id: "DomainError".into(),
+            repr: EnumRepr::Data {
+                tag_type: ir::types::PrimitiveType::I32,
+                variants: vec![ir::definitions::DataVariant {
+                    name: "Invalid".into(),
+                    discriminant: 0,
+                    payload: VariantPayload::Struct(vec![field(
+                        "message",
+                        ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+                    )]),
+                    doc: None,
+                }],
+            },
+            is_error: true,
+            constructors: Vec::new(),
+            methods: Vec::new(),
+            doc: None,
+            deprecated: None,
+        };
+        contract.catalog.insert_enum(enumeration.clone());
+        contract.functions.push(sync_function(
+            "load",
+            ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Enum("DomainError".into()),
+            },
+        ));
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(&contract, "com.example.demo", &support);
+        let direct =
+            KMPEmitter::render_common_sealed_enum(&enumeration, "com.example.demo", &contract);
+
+        assert!(!support.enums.contains("DomainError"));
+        assert!(!direct.contains("sealed class DomainError : kotlin.Exception()"));
+        assert!(!direct.contains("override val message: Int"));
+        assert!(!common.contains("sealed class DomainError"));
+        assert!(!common.contains("expect fun load"));
+        assert!(common.contains("Unsupported in the initial KMP generator slice: load"));
+    }
+
+    #[test]
+    fn result_actual_catches_errors_behind_custom_aliases() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(error_record("ServiceError"));
+        contract.catalog.insert_custom(custom_type(
+            "ServiceFailureWire",
+            ir::types::TypeExpr::Record("ServiceError".into()),
+        ));
+        contract.catalog.insert_custom(custom_type(
+            "ServiceFailure",
+            ir::types::TypeExpr::Custom("ServiceFailureWire".into()),
+        ));
+        contract.functions.push(ir::definitions::FunctionDef {
+            id: "load".into(),
+            params: Vec::new(),
+            returns: ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Custom("ServiceFailure".into()),
+            },
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        assert!(function_supported(
+            &contract.functions[0],
+            &contract,
+            &support
+        ));
+
+        let actual = KMPEmitter::render_kotlin_jvm_function_actual(
+            &contract.functions[0],
+            &contract,
+            "com.example.demo.jvm",
+        );
+
+        assert!(actual.contains("catch (err: com.example.demo.jvm.ServiceError)"));
+        assert!(!actual.contains("catch (err: com.example.demo.jvm.ServiceFailure)"));
+        assert!(actual.contains("catch (err: com.example.demo.jvm.FfiException)"));
+    }
+
+    #[test]
+    fn result_actual_catches_errors_behind_options() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(error_record("ServiceError"));
+        contract.functions.push(ir::definitions::FunctionDef {
+            id: "load".into(),
+            params: Vec::new(),
+            returns: ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Option(Box::new(ir::types::TypeExpr::Record(
+                    "ServiceError".into(),
+                ))),
+            },
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        assert!(function_supported(
+            &contract.functions[0],
+            &contract,
+            &support
+        ));
+
+        let actual = KMPEmitter::render_kotlin_jvm_function_actual(
+            &contract.functions[0],
+            &contract,
+            "com.example.demo.jvm",
+        );
+
+        assert!(actual.contains("catch (err: com.example.demo.jvm.ServiceError)"));
+        assert!(actual.contains("catch (err: com.example.demo.jvm.FfiException)"));
+    }
+
+    #[test]
+    fn emit_makes_empty_error_records_typed_catchable() {
+        let mut contract = empty_contract();
+        let mut empty_error = empty_record();
+        empty_error.id = "EmptyError".into();
+        empty_error.is_error = true;
+        contract.catalog.insert_record(empty_error);
+        contract.catalog.insert_custom(custom_type(
+            "EmptyFailureWire",
+            ir::types::TypeExpr::Record("EmptyError".into()),
+        ));
+        contract.catalog.insert_custom(custom_type(
+            "EmptyFailure",
+            ir::types::TypeExpr::Option(Box::new(ir::types::TypeExpr::Custom(
+                "EmptyFailureWire".into(),
+            ))),
+        ));
+        contract.functions.push(sync_function(
+            "load",
+            ir::definitions::ReturnDef::Result {
+                ok: ir::types::TypeExpr::String,
+                err: ir::types::TypeExpr::Custom("EmptyFailure".into()),
+            },
+        ));
+        let abi = ir::Lowerer::new(&contract).to_abi_contract();
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        assert!(function_supported(
+            &contract.functions[0],
+            &contract,
+            &support
+        ));
+
+        let output = KMPEmitter::emit(
+            &contract,
+            &abi,
+            KMPOptions {
+                package_name: "com.example.demo".to_string(),
+                module_name: "Demo".to_string(),
+                min_sdk: 23,
+                kotlin_options: KotlinOptions::default(),
+            },
+        );
+        let common = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path.as_path()
+                    == Path::new("src/commonMain/kotlin/com/example/demo/Demo.kt")
+            })
+            .expect("common source should be emitted");
+        let jvm_actual = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path.as_path()
+                    == Path::new("src/jvmMain/kotlin/com/example/demo/DemoJvmActual.kt")
+            })
+            .expect("jvm actual source should be emitted");
+        let internal_jvm = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path.as_path()
+                    == Path::new("src/jvmMain/kotlin/com/example/demo/jvm/Demo.kt")
+            })
+            .expect("jvm internal source should be emitted");
+
+        assert!(
+            common
+                .contents
+                .contains("object EmptyError : kotlin.Exception(\"\")")
+        );
+        assert!(
+            jvm_actual
+                .contents
+                .contains("catch (err: com.example.demo.jvm.EmptyError)")
+        );
+        assert!(
+            internal_jvm
+                .contents
+                .contains("object EmptyError : kotlin.Exception(\"\")")
+        );
+    }
+
+    #[test]
+    fn non_result_actual_converts_internal_ffi_exception() {
+        let mut contract = empty_contract();
+        contract.functions.push(ir::definitions::FunctionDef {
+            id: "describe".into(),
+            params: Vec::new(),
+            returns: ir::definitions::ReturnDef::Value(ir::types::TypeExpr::String),
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+
+        let actual = KMPEmitter::render_kotlin_jvm_function_actual(
+            &contract.functions[0],
+            &contract,
+            "com.example.demo.jvm",
+        );
+
+        assert!(actual.contains("actual fun describe(): String {"));
+        assert!(actual.contains("return com.example.demo.jvm.describe()"));
+        assert!(actual.contains("catch (err: com.example.demo.jvm.FfiException)"));
+        assert!(!actual.contains("actual fun describe(): String ="));
+    }
+
+    #[test]
+    fn data_enum_payload_types_disambiguate_kotlin_builtins() {
+        let enumeration = ir::definitions::EnumDef {
+            id: "JsonValue".into(),
+            repr: EnumRepr::Data {
+                tag_type: ir::types::PrimitiveType::I32,
+                variants: vec![
+                    ir::definitions::DataVariant {
+                        name: "String".into(),
+                        discriminant: 0,
+                        payload: VariantPayload::Tuple(vec![ir::types::TypeExpr::String]),
+                        doc: None,
+                    },
+                    ir::definitions::DataVariant {
+                        name: "Int".into(),
+                        discriminant: 1,
+                        payload: VariantPayload::Tuple(vec![ir::types::TypeExpr::Primitive(
+                            ir::types::PrimitiveType::I32,
+                        )]),
+                        doc: None,
+                    },
+                    ir::definitions::DataVariant {
+                        name: "ByteArray".into(),
+                        discriminant: 2,
+                        payload: VariantPayload::Tuple(vec![ir::types::TypeExpr::Bytes]),
+                        doc: None,
+                    },
+                    ir::definitions::DataVariant {
+                        name: "IntArray".into(),
+                        discriminant: 3,
+                        payload: VariantPayload::Tuple(vec![ir::types::TypeExpr::Vec(Box::new(
+                            ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+                        ))]),
+                        doc: None,
+                    },
+                    ir::definitions::DataVariant {
+                        name: "List".into(),
+                        discriminant: 4,
+                        payload: VariantPayload::Tuple(vec![ir::types::TypeExpr::Vec(Box::new(
+                            ir::types::TypeExpr::String,
+                        ))]),
+                        doc: None,
+                    },
+                    ir::definitions::DataVariant {
+                        name: "bolt_f_f_i_result".into(),
+                        discriminant: 5,
+                        payload: VariantPayload::Tuple(vec![ir::types::TypeExpr::Result {
+                            ok: Box::new(ir::types::TypeExpr::String),
+                            err: Box::new(ir::types::TypeExpr::String),
+                        }]),
+                        doc: None,
+                    },
+                ],
+            },
+            is_error: false,
+            constructors: Vec::new(),
+            methods: Vec::new(),
+            doc: None,
+            deprecated: None,
+        };
+
+        let common = KMPEmitter::render_common_sealed_enum(
+            &enumeration,
+            "com.example.demo",
+            &empty_contract(),
+        );
+
+        assert_eq!(
+            NamingConvention::class_name("bolt_f_f_i_result"),
+            "BoltFFIResult"
+        );
+        assert!(common.contains("data class String(val value0: kotlin.String) : JsonValue()"));
+        assert!(common.contains("data class Int(val value0: kotlin.Int) : JsonValue()"));
+        assert!(
+            common.contains("data class ByteArray(val value0: kotlin.ByteArray) : JsonValue()")
+        );
+        assert!(common.contains("data class IntArray(val value0: kotlin.IntArray) : JsonValue()"));
+        assert!(common.contains(
+            "data class List(val value0: kotlin.collections.List<kotlin.String>) : JsonValue()"
+        ));
+        assert!(common.contains(
+            "data class BoltFFIResult(val value0: com.example.demo.BoltFFIResult<kotlin.String, kotlin.String>) : JsonValue()"
+        ));
     }
 
     #[test]

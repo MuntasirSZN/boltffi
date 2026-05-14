@@ -2,9 +2,9 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
-sealed class ApiError : Exception() {
+sealed class ApiError : kotlin.Exception() {
 
-    data class NetworkError(val message: String) : ApiError()
+    data class NetworkError(override val message: String) : ApiError()
 
     data object NotFound : ApiError()
 
