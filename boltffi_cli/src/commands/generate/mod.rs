@@ -367,6 +367,17 @@ Email = { type = "java.net.URI", conversion = "url_string" }
         assert!(common.contains("fun `get`(): Int"));
         assert!(common.contains("expect class MathUtils {"));
         assert!(common.contains("fun add(a: Int, b: Int): Int"));
+        assert!(common.contains("interface ValueCallback {"));
+        assert!(common.contains("fun onValue(`value`: Int): Int"));
+        assert!(
+            common.contains(
+                "expect fun invokeValueCallback(callback: ValueCallback, input: Int): Int"
+            )
+        );
+        assert!(common.contains("interface ResultCallback {"));
+        assert!(common.contains(
+            "expect fun invokeResultCallback(callback: ResultCallback, `value`: Int): Int"
+        ));
         assert!(common.contains("Unsupported in the initial KMP generator slice"));
         assert!(jvm_actual.contains("actual fun echoBytes"));
         assert!(jvm_actual.contains("actual fun checkedDivide(a: Int, b: Int): Int"));
@@ -386,6 +397,11 @@ Email = { type = "java.net.URI", conversion = "url_string" }
         assert!(jvm_actual.contains("return this.delegate.`get`()"));
         assert!(jvm_actual.contains("actual companion object"));
         assert!(jvm_actual.contains("return com.boltffi.demo.jvm.MathUtils.add(a, b)"));
+        assert!(jvm_actual.contains("object : com.boltffi.demo.jvm.ValueCallback"));
+        assert!(jvm_actual.contains("boltffiCommonCallback.onValue(`value`)"));
+        assert!(jvm_actual.contains("com.boltffi.demo.jvm.invokeValueCallback(kotlin.run"));
+        assert!(jvm_actual.contains("catch (err: MathError)"));
+        assert!(jvm_actual.contains("throw err.toBoltFfiJvm()"));
         assert_eq!(jvm_actual, android_actual);
         assert!(jvm_internal.contains("package com.boltffi.demo.jvm"));
         assert!(jvm_internal.contains("typealias Email = String"));

@@ -74,6 +74,7 @@ struct KmpSurfaceSupport {
     enums: HashSet<String>,
     custom_types: HashSet<String>,
     classes: HashSet<String>,
+    callbacks: HashSet<String>,
 }
 
 struct KmpEnumVariant {
@@ -121,6 +122,7 @@ impl KmpSurfaceSupport {
                     &enums,
                     &custom_types,
                     &classes,
+                    &HashSet::new(),
                 ) {
                     enums.insert(enumeration.id.as_str().to_string());
                 }
@@ -135,6 +137,7 @@ impl KmpSurfaceSupport {
                         &enums,
                         &custom_types,
                         &classes,
+                        &HashSet::new(),
                     )
                 }) {
                     records.insert(record.id.as_str().to_string());
@@ -149,6 +152,7 @@ impl KmpSurfaceSupport {
                     &enums,
                     &custom_types,
                     &classes,
+                    &HashSet::new(),
                 ) {
                     custom_types.insert(custom.id.as_str().to_string());
                 }
@@ -159,11 +163,29 @@ impl KmpSurfaceSupport {
             }
         }
 
+        let callbacks = contract
+            .catalog
+            .all_callbacks()
+            .filter(|callback| {
+                callback_supported_with_sets(
+                    callback,
+                    contract,
+                    &records,
+                    &enums,
+                    &custom_types,
+                    &classes,
+                    &HashSet::new(),
+                )
+            })
+            .map(|callback| callback.id.as_str().to_string())
+            .collect();
+
         Self {
             records,
             enums,
             custom_types,
             classes,
+            callbacks,
         }
     }
 }
@@ -336,6 +358,13 @@ impl KMPEmitter {
             .all_enums()
             .filter(|enumeration| support.enums.contains(enumeration.id.as_str()))
             .map(|enumeration| Self::render_common_enum(enumeration, package_name, support))
+            .for_each(|section| common_sections.push(section));
+
+        contract
+            .catalog
+            .all_callbacks()
+            .filter(|callback| support.callbacks.contains(callback.id.as_str()))
+            .map(Self::render_common_callback)
             .for_each(|section| common_sections.push(section));
 
         contract
@@ -747,6 +776,26 @@ sealed class BoltFFIResult<out T, out E> {
         format!(
             "{}sealed class {class_name}{error_suffix} {{\n{variants}\n}}",
             kdoc_block(&enumeration.doc)
+        )
+    }
+
+    fn render_common_callback(callback: &ir::definitions::CallbackTraitDef) -> String {
+        let interface_name = NamingConvention::class_name(callback.id.as_str());
+        let fun_prefix = if callback.kind == ir::definitions::CallbackKind::Closure {
+            "fun "
+        } else {
+            ""
+        };
+        let methods = callback
+            .methods
+            .iter()
+            .map(|method| format!("    {}", render_common_callback_method_signature(method)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!(
+            "{}{fun_prefix}interface {interface_name} {{\n{methods}\n}}",
+            kdoc_block(&callback.doc)
         )
     }
 
@@ -1280,6 +1329,20 @@ fn render_common_method_signature(method: &ir::definitions::MethodDef) -> String
     format!("{suspend_prefix}fun {method_name}({param_list}){return_suffix}")
 }
 
+fn render_common_callback_method_signature(method: &ir::definitions::CallbackMethodDef) -> String {
+    let method_name = NamingConvention::method_name(method.id.as_str());
+    let suspend_prefix = if method.is_async() { "suspend " } else { "" };
+    let params = method.params.iter().collect::<Vec<_>>();
+    let param_list = render_param_list(&params);
+    let return_type = return_type_name(&method.returns);
+    let return_suffix = return_type
+        .as_ref()
+        .map(|ty| format!(": {ty}"))
+        .unwrap_or_default();
+
+    format!("{suspend_prefix}fun {method_name}({param_list}){return_suffix}")
+}
+
 fn kmp_constructor_surfaces(
     constructors: &[ir::definitions::ConstructorDef],
     factory_style: FactoryStyle,
@@ -1392,6 +1455,7 @@ fn type_supported(
         &support.enums,
         &support.custom_types,
         &support.classes,
+        &support.callbacks,
     )
 }
 
@@ -1402,6 +1466,7 @@ fn type_supported_with_sets(
     enums: &HashSet<String>,
     custom_types: &HashSet<String>,
     classes: &HashSet<String>,
+    callbacks: &HashSet<String>,
 ) -> bool {
     let _ = contract;
     match ty {
@@ -1410,17 +1475,41 @@ fn type_supported_with_sets(
         | ir::types::TypeExpr::String
         | ir::types::TypeExpr::Bytes => true,
         ir::types::TypeExpr::Vec(inner) | ir::types::TypeExpr::Option(inner) => {
-            type_supported_with_sets(inner, contract, records, enums, custom_types, classes)
+            type_supported_with_sets(
+                inner,
+                contract,
+                records,
+                enums,
+                custom_types,
+                classes,
+                callbacks,
+            )
         }
         ir::types::TypeExpr::Record(id) => records.contains(id.as_str()),
         ir::types::TypeExpr::Enum(id) => enums.contains(id.as_str()),
         ir::types::TypeExpr::Custom(id) => custom_types.contains(id.as_str()),
         ir::types::TypeExpr::Handle(id) => classes.contains(id.as_str()),
+        ir::types::TypeExpr::Callback(id) => callbacks.contains(id.as_str()),
         ir::types::TypeExpr::Result { ok, err } => {
-            type_supported_with_sets(ok, contract, records, enums, custom_types, classes)
-                && type_supported_with_sets(err, contract, records, enums, custom_types, classes)
+            type_supported_with_sets(
+                ok,
+                contract,
+                records,
+                enums,
+                custom_types,
+                classes,
+                callbacks,
+            ) && type_supported_with_sets(
+                err,
+                contract,
+                records,
+                enums,
+                custom_types,
+                classes,
+                callbacks,
+            )
         }
-        ir::types::TypeExpr::Builtin(_) | ir::types::TypeExpr::Callback(_) => false,
+        ir::types::TypeExpr::Builtin(_) => false,
     }
 }
 
@@ -1431,6 +1520,7 @@ fn enum_supported_with_sets(
     enums: &HashSet<String>,
     custom_types: &HashSet<String>,
     classes: &HashSet<String>,
+    callbacks: &HashSet<String>,
 ) -> bool {
     match &enumeration.repr {
         EnumRepr::CStyle { .. } => true,
@@ -1443,6 +1533,7 @@ fn enum_supported_with_sets(
                     enums,
                     custom_types,
                     classes,
+                    callbacks,
                 )
             })
         }),
@@ -1454,12 +1545,110 @@ fn return_supported(
     contract: &ir::FfiContract,
     support: &KmpSurfaceSupport,
 ) -> bool {
+    return_supported_with_sets(
+        returns,
+        contract,
+        &support.records,
+        &support.enums,
+        &support.custom_types,
+        &support.classes,
+        &support.callbacks,
+    )
+}
+
+fn return_supported_with_sets(
+    returns: &ir::definitions::ReturnDef,
+    contract: &ir::FfiContract,
+    records: &HashSet<String>,
+    enums: &HashSet<String>,
+    custom_types: &HashSet<String>,
+    classes: &HashSet<String>,
+    callbacks: &HashSet<String>,
+) -> bool {
     match returns {
         ir::definitions::ReturnDef::Void => true,
-        ir::definitions::ReturnDef::Value(ty) => type_supported(ty, contract, support),
-        ir::definitions::ReturnDef::Result { ok, err } => {
-            type_supported(ok, contract, support) && type_supported(err, contract, support)
+        ir::definitions::ReturnDef::Value(ty) => {
+            !type_contains_callback(ty)
+                && type_supported_with_sets(
+                    ty,
+                    contract,
+                    records,
+                    enums,
+                    custom_types,
+                    classes,
+                    callbacks,
+                )
         }
+        ir::definitions::ReturnDef::Result { ok, err } => {
+            !type_contains_callback(ok)
+                && !type_contains_callback(err)
+                && type_supported_with_sets(
+                    ok,
+                    contract,
+                    records,
+                    enums,
+                    custom_types,
+                    classes,
+                    callbacks,
+                )
+                && type_supported_with_sets(
+                    err,
+                    contract,
+                    records,
+                    enums,
+                    custom_types,
+                    classes,
+                    callbacks,
+                )
+        }
+    }
+}
+
+fn callback_supported_with_sets(
+    callback: &ir::definitions::CallbackTraitDef,
+    contract: &ir::FfiContract,
+    records: &HashSet<String>,
+    enums: &HashSet<String>,
+    custom_types: &HashSet<String>,
+    classes: &HashSet<String>,
+    callbacks: &HashSet<String>,
+) -> bool {
+    !callback.methods.is_empty()
+        && callback.methods.iter().all(|method| {
+            !method.is_async()
+                && return_supported_with_sets(
+                    &method.returns,
+                    contract,
+                    records,
+                    enums,
+                    custom_types,
+                    classes,
+                    callbacks,
+                )
+                && method.params.iter().all(|param| {
+                    type_supported_with_sets(
+                        &param.type_expr,
+                        contract,
+                        records,
+                        enums,
+                        custom_types,
+                        classes,
+                        callbacks,
+                    )
+                })
+        })
+}
+
+fn type_contains_callback(ty: &ir::types::TypeExpr) -> bool {
+    match ty {
+        ir::types::TypeExpr::Callback(_) => true,
+        ir::types::TypeExpr::Vec(inner) | ir::types::TypeExpr::Option(inner) => {
+            type_contains_callback(inner)
+        }
+        ir::types::TypeExpr::Result { ok, err } => {
+            type_contains_callback(ok) || type_contains_callback(err)
+        }
+        _ => false,
     }
 }
 
@@ -1666,6 +1855,53 @@ fn enum_literal(value: i128, primitive: ir::types::PrimitiveType) -> String {
     kotlin_integer_literal(value, &enum_value_type(primitive))
 }
 
+fn jvm_type_name(ty: &ir::types::TypeExpr, internal_package: &str) -> String {
+    match ty {
+        ir::types::TypeExpr::Void => "Unit".to_string(),
+        ir::types::TypeExpr::Primitive(primitive) => primitive_type_name(*primitive),
+        ir::types::TypeExpr::String => "String".to_string(),
+        ir::types::TypeExpr::Bytes => "ByteArray".to_string(),
+        ir::types::TypeExpr::Vec(inner) => match inner.as_ref() {
+            ir::types::TypeExpr::Primitive(_) => vec_type_name(inner),
+            _ => format!("List<{}>", jvm_type_name(inner, internal_package)),
+        },
+        ir::types::TypeExpr::Option(inner) => {
+            format!("{}?", jvm_type_name(inner, internal_package))
+        }
+        ir::types::TypeExpr::Record(id) => format!(
+            "{internal_package}.{}",
+            NamingConvention::class_name(id.as_str())
+        ),
+        ir::types::TypeExpr::Enum(id) => format!(
+            "{internal_package}.{}",
+            NamingConvention::class_name(id.as_str())
+        ),
+        ir::types::TypeExpr::Custom(id) => format!(
+            "{internal_package}.{}",
+            NamingConvention::class_name(id.as_str())
+        ),
+        ir::types::TypeExpr::Builtin(id) => format!(
+            "{internal_package}.{}",
+            NamingConvention::class_name(id.as_str())
+        ),
+        ir::types::TypeExpr::Handle(id) => format!(
+            "{internal_package}.{}",
+            NamingConvention::class_name(id.as_str())
+        ),
+        ir::types::TypeExpr::Callback(id) => format!(
+            "{internal_package}.{}",
+            NamingConvention::class_name(id.as_str())
+        ),
+        ir::types::TypeExpr::Result { ok, err } => {
+            format!(
+                "{internal_package}.BoltFFIResult<{}, {}>",
+                jvm_type_name(ok, internal_package),
+                jvm_type_name(err, internal_package)
+            )
+        }
+    }
+}
+
 fn kotlin_integer_literal(value: i128, kotlin_type: &str) -> String {
     match kotlin_type {
         "Byte" => format!("({value}L).toByte()"),
@@ -1696,6 +1932,118 @@ fn return_type_name(returns: &ir::definitions::ReturnDef) -> Option<String> {
     }
 }
 
+fn jvm_return_type_name(
+    returns: &ir::definitions::ReturnDef,
+    internal_package: &str,
+) -> Option<String> {
+    match returns {
+        ir::definitions::ReturnDef::Void => None,
+        ir::definitions::ReturnDef::Value(ty) => Some(jvm_type_name(ty, internal_package)),
+        ir::definitions::ReturnDef::Result { ok, .. } => Some(jvm_type_name(ok, internal_package)),
+    }
+}
+
+fn render_kotlin_jvm_callback_adapter(
+    callback_id: &ir::ids::CallbackId,
+    expr: &str,
+    contract: &ir::FfiContract,
+    internal_package: &str,
+) -> String {
+    let callback = contract
+        .catalog
+        .resolve_callback(callback_id)
+        .expect("supported callback must resolve");
+    let interface_name = NamingConvention::class_name(callback.id.as_str());
+    let methods = callback
+        .methods
+        .iter()
+        .map(|method| render_kotlin_jvm_callback_adapter_method(method, contract, internal_package))
+        .map(|method| indent_lines(&method, "        "))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    format!(
+        "kotlin.run {{\n    val boltffiCommonCallback = {expr}\n    object : {internal_package}.{interface_name} {{\n{methods}\n    }}\n}}"
+    )
+}
+
+fn render_kotlin_jvm_callback_adapter_method(
+    method: &ir::definitions::CallbackMethodDef,
+    contract: &ir::FfiContract,
+    internal_package: &str,
+) -> String {
+    let method_name = NamingConvention::method_name(method.id.as_str());
+    let params = method.params.iter().collect::<Vec<_>>();
+    let param_list = params
+        .iter()
+        .map(|param| {
+            format!(
+                "{}: {}",
+                NamingConvention::param_name(param.name.as_str()),
+                jvm_type_name(&param.type_expr, internal_package)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let return_type = jvm_return_type_name(&method.returns, internal_package);
+    let return_suffix = return_type
+        .as_ref()
+        .map(|ty| format!(": {ty}"))
+        .unwrap_or_default();
+    let args = params
+        .iter()
+        .map(|param| {
+            let name = NamingConvention::param_name(param.name.as_str());
+            to_common_expr(&param.type_expr, &name, contract, internal_package)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let common_call = format!("boltffiCommonCallback.{method_name}({args})");
+    let body = match &method.returns {
+        ir::definitions::ReturnDef::Void => format!("            {common_call}"),
+        ir::definitions::ReturnDef::Value(ty) => {
+            let result = to_jvm_expr(ty, "boltffiCallbackResult", contract, internal_package);
+            format!(
+                "            val boltffiCallbackResult = {common_call}\n            return {result}"
+            )
+        }
+        ir::definitions::ReturnDef::Result { ok, .. } => {
+            let result = to_jvm_expr(ok, "boltffiCallbackResult", contract, internal_package);
+            format!(
+                "            val boltffiCallbackResult = {common_call}\n            return {result}"
+            )
+        }
+    };
+    let catches =
+        render_kotlin_jvm_callback_adapter_catches(&method.returns, contract, internal_package);
+
+    format!(
+        "override fun {method_name}({param_list}){return_suffix} {{\n        try {{\n{body}\n        }}{catches}\n    }}"
+    )
+}
+
+fn render_kotlin_jvm_callback_adapter_catches(
+    returns: &ir::definitions::ReturnDef,
+    contract: &ir::FfiContract,
+    internal_package: &str,
+) -> String {
+    let typed_catch = match returns {
+        ir::definitions::ReturnDef::Result { err, .. } => {
+            typed_error_class_name(err, contract).map(|class_name| {
+                format!(
+                    " catch (err: {class_name}) {{\n            throw err.toBoltFfiJvm()\n        }}"
+                )
+            })
+        }
+        _ => None,
+    }
+    .unwrap_or_default();
+
+    format!(
+        "{typed_catch} catch (err: FfiException) {{\n            throw {internal_package}.FfiException(err.code, err.message ?: \"\")\n        }}"
+    )
+}
+
 fn to_jvm_expr(
     ty: &ir::types::TypeExpr,
     expr: &str,
@@ -1706,6 +2054,9 @@ fn to_jvm_expr(
         ir::types::TypeExpr::Primitive(_) => expr.to_string(),
         ir::types::TypeExpr::Record(_) => format!("{expr}.toBoltFfiJvm()"),
         ir::types::TypeExpr::Handle(_) => format!("{expr}.delegate"),
+        ir::types::TypeExpr::Callback(id) => {
+            render_kotlin_jvm_callback_adapter(id, expr, contract, internal_package)
+        }
         ir::types::TypeExpr::Enum(id) => {
             let class_name = NamingConvention::class_name(id.as_str());
             if contract
@@ -1884,6 +2235,15 @@ mod tests {
         }
     }
 
+    fn callback_param(name: &str, callback_id: &str) -> ir::definitions::ParamDef {
+        ir::definitions::ParamDef {
+            name: name.into(),
+            type_expr: ir::types::TypeExpr::Callback(callback_id.into()),
+            passing: ir::definitions::ParamPassing::ImplTrait,
+            doc: None,
+        }
+    }
+
     fn error_record(id: &str) -> ir::definitions::RecordDef {
         ir::definitions::RecordDef {
             id: id.into(),
@@ -2009,6 +2369,67 @@ mod tests {
             streams: Vec::new(),
             doc: None,
             deprecated: None,
+        }
+    }
+
+    fn value_callback() -> ir::definitions::CallbackTraitDef {
+        ir::definitions::CallbackTraitDef {
+            id: "ValueCallback".into(),
+            methods: vec![ir::definitions::CallbackMethodDef {
+                id: "on_value".into(),
+                params: vec![param(
+                    "value",
+                    ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+                )],
+                returns: ir::definitions::ReturnDef::Value(ir::types::TypeExpr::Primitive(
+                    ir::types::PrimitiveType::I32,
+                )),
+                execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+                doc: None,
+            }],
+            kind: ir::definitions::CallbackKind::Trait,
+            doc: None,
+        }
+    }
+
+    fn result_callback() -> ir::definitions::CallbackTraitDef {
+        ir::definitions::CallbackTraitDef {
+            id: "ResultCallback".into(),
+            methods: vec![ir::definitions::CallbackMethodDef {
+                id: "compute".into(),
+                params: vec![param(
+                    "value",
+                    ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+                )],
+                returns: ir::definitions::ReturnDef::Result {
+                    ok: ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+                    err: ir::types::TypeExpr::Record("MathError".into()),
+                },
+                execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+                doc: None,
+            }],
+            kind: ir::definitions::CallbackKind::Trait,
+            doc: None,
+        }
+    }
+
+    fn async_callback() -> ir::definitions::CallbackTraitDef {
+        ir::definitions::CallbackTraitDef {
+            id: "AsyncFetcher".into(),
+            methods: vec![ir::definitions::CallbackMethodDef {
+                id: "fetch".into(),
+                params: vec![param(
+                    "key",
+                    ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+                )],
+                returns: ir::definitions::ReturnDef::Value(ir::types::TypeExpr::Primitive(
+                    ir::types::PrimitiveType::I32,
+                )),
+                execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Async,
+                doc: None,
+            }],
+            kind: ir::definitions::CallbackKind::Trait,
+            doc: None,
         }
     }
 
@@ -2198,6 +2619,131 @@ mod tests {
     }
 
     #[test]
+    fn sync_callback_params_render_common_interfaces_and_jvm_adapters() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_callback(value_callback());
+        contract.functions.push(ir::definitions::FunctionDef {
+            id: "invoke_value_callback".into(),
+            params: vec![
+                callback_param("callback", "ValueCallback"),
+                param(
+                    "input",
+                    ir::types::TypeExpr::Primitive(ir::types::PrimitiveType::I32),
+                ),
+            ],
+            returns: ir::definitions::ReturnDef::Value(ir::types::TypeExpr::Primitive(
+                ir::types::PrimitiveType::I32,
+            )),
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(
+            &contract,
+            "com.example.demo",
+            &support,
+            FactoryStyle::Constructors,
+        );
+        let actual = KMPEmitter::render_kotlin_jvm_actual(
+            &contract,
+            "com.example.demo",
+            "com.example.demo.jvm",
+            &support,
+            FactoryStyle::Constructors,
+        );
+
+        assert!(common.contains("interface ValueCallback {"));
+        assert!(common.contains("fun onValue(`value`: Int): Int"));
+        assert!(
+            common.contains(
+                "expect fun invokeValueCallback(callback: ValueCallback, input: Int): Int"
+            )
+        );
+        assert!(
+            actual.contains(
+                "actual fun invokeValueCallback(callback: ValueCallback, input: Int): Int"
+            )
+        );
+        assert!(actual.contains("object : com.example.demo.jvm.ValueCallback"));
+        assert!(actual.contains("override fun onValue(`value`: Int): Int"));
+        assert!(actual.contains("boltffiCommonCallback.onValue(`value`)"));
+        assert!(actual.contains("com.example.demo.jvm.invokeValueCallback(kotlin.run"));
+    }
+
+    #[test]
+    fn result_callback_adapters_convert_common_errors_to_internal_errors() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(error_record("MathError"));
+        contract.catalog.insert_callback(result_callback());
+        contract.functions.push(ir::definitions::FunctionDef {
+            id: "invoke_result_callback".into(),
+            params: vec![callback_param("callback", "ResultCallback")],
+            returns: ir::definitions::ReturnDef::Value(ir::types::TypeExpr::Primitive(
+                ir::types::PrimitiveType::I32,
+            )),
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(
+            &contract,
+            "com.example.demo",
+            &support,
+            FactoryStyle::Constructors,
+        );
+        let actual = KMPEmitter::render_kotlin_jvm_actual(
+            &contract,
+            "com.example.demo",
+            "com.example.demo.jvm",
+            &support,
+            FactoryStyle::Constructors,
+        );
+
+        assert!(common.contains("interface ResultCallback {"));
+        assert!(common.contains("fun compute(`value`: Int): Int"));
+        assert!(actual.contains("catch (err: MathError)"));
+        assert!(actual.contains("throw err.toBoltFfiJvm()"));
+        assert!(actual.contains("catch (err: FfiException)"));
+        assert!(actual.contains("throw com.example.demo.jvm.FfiException"));
+    }
+
+    #[test]
+    fn async_callbacks_remain_unsupported_in_the_sync_callback_slice() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_callback(async_callback());
+        contract.functions.push(ir::definitions::FunctionDef {
+            id: "fetch_with_async_callback".into(),
+            params: vec![callback_param("fetcher", "AsyncFetcher")],
+            returns: ir::definitions::ReturnDef::Value(ir::types::TypeExpr::Primitive(
+                ir::types::PrimitiveType::I32,
+            )),
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+
+        let support = KmpSurfaceSupport::for_contract(&contract);
+        let common = KMPEmitter::render_common_surface(
+            &contract,
+            "com.example.demo",
+            &support,
+            FactoryStyle::Constructors,
+        );
+
+        assert!(!common.contains("interface AsyncFetcher"));
+        assert!(!common.contains("expect fun fetchWithAsyncCallback"));
+        assert!(
+            common.contains(
+                "Unsupported in the initial KMP generator slice: fetch_with_async_callback"
+            )
+        );
+    }
+
+    #[test]
     fn error_enum_message_fields_override_throwable_message() {
         let enumeration = ir::definitions::EnumDef {
             id: "DomainError".into(),
@@ -2228,6 +2774,7 @@ mod tests {
                 enums: HashSet::new(),
                 custom_types: HashSet::new(),
                 classes: HashSet::new(),
+                callbacks: HashSet::new(),
             },
         );
 
@@ -2407,6 +2954,7 @@ mod tests {
                 enums: HashSet::new(),
                 custom_types: HashSet::new(),
                 classes: HashSet::new(),
+                callbacks: HashSet::new(),
             },
         );
 
