@@ -361,6 +361,12 @@ Email = { type = "java.net.URI", conversion = "url_string" }
         assert!(
             common.contains("expect fun resultToString(v: BoltFFIResult<Int, String>): String")
         );
+        assert!(common.contains("expect class Counter {"));
+        assert!(common.contains("constructor(initial: Int)"));
+        assert!(common.contains("fun close()"));
+        assert!(common.contains("fun `get`(): Int"));
+        assert!(common.contains("expect class MathUtils {"));
+        assert!(common.contains("fun add(a: Int, b: Int): Int"));
         assert!(common.contains("Unsupported in the initial KMP generator slice"));
         assert!(jvm_actual.contains("actual fun echoBytes"));
         assert!(jvm_actual.contains("actual fun checkedDivide(a: Int, b: Int): Int"));
@@ -372,6 +378,14 @@ Email = { type = "java.net.URI", conversion = "url_string" }
         );
         assert!(jvm_actual.contains("com.boltffi.demo.jvm.echoBytes"));
         assert!(jvm_actual.contains("toBoltFfiJvm"));
+        assert!(jvm_actual.contains(
+            "actual class Counter internal constructor(internal val delegate: com.boltffi.demo.jvm.Counter)"
+        ));
+        assert!(jvm_actual.contains("actual constructor(initial: Int) : this("));
+        assert!(jvm_actual.contains("com.boltffi.demo.jvm.Counter(initial)"));
+        assert!(jvm_actual.contains("return this.delegate.`get`()"));
+        assert!(jvm_actual.contains("actual companion object"));
+        assert!(jvm_actual.contains("return com.boltffi.demo.jvm.MathUtils.add(a, b)"));
         assert_eq!(jvm_actual, android_actual);
         assert!(jvm_internal.contains("package com.boltffi.demo.jvm"));
         assert!(jvm_internal.contains("typealias Email = String"));
