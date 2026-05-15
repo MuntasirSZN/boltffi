@@ -345,6 +345,7 @@ Email = { type = "java.net.URI", conversion = "url_string" }
             fs::read_to_string(&settings_gradle_path).expect("settings file should be readable");
 
         assert!(common.contains("package com.boltffi.demo"));
+        assert!(common.contains("import kotlinx.coroutines.flow.Flow"));
         assert!(common.contains("typealias Email = String"));
         assert!(common.contains("class FfiException(val code: Int, message: String)"));
         assert!(common.contains("sealed class BoltFFIResult<out T, out E>"));
@@ -365,6 +366,9 @@ Email = { type = "java.net.URI", conversion = "url_string" }
         assert!(common.contains("constructor(initial: Int)"));
         assert!(common.contains("fun close()"));
         assert!(common.contains("fun `get`(): Int"));
+        assert!(common.contains("expect class EventBus {"));
+        assert!(common.contains("fun subscribeValues(): Flow<Int>"));
+        assert!(common.contains("fun subscribePoints(): Flow<Point>"));
         assert!(common.contains("expect class MathUtils {"));
         assert!(common.contains("fun add(a: Int, b: Int): Int"));
         assert!(common.contains("interface ValueCallback {"));
@@ -397,6 +401,14 @@ Email = { type = "java.net.URI", conversion = "url_string" }
         assert!(jvm_actual.contains("return this.delegate.`get`()"));
         assert!(jvm_actual.contains("actual companion object"));
         assert!(jvm_actual.contains("return com.boltffi.demo.jvm.MathUtils.add(a, b)"));
+        assert!(jvm_actual.contains("import kotlinx.coroutines.flow.map"));
+        assert!(jvm_actual.contains("actual fun subscribeValues(): Flow<Int> ="));
+        assert!(jvm_actual.contains("this.delegate.subscribeValues()"));
+        assert!(jvm_actual.contains("actual fun subscribePoints(): Flow<Point> ="));
+        assert!(
+            jvm_actual
+                .contains(".map { boltffiStreamItem -> boltffiStreamItem.toBoltFfiCommon() }")
+        );
         assert!(jvm_actual.contains("object : com.boltffi.demo.jvm.ValueCallback"));
         assert!(jvm_actual.contains("boltffiCommonCallback.onValue(`value`)"));
         assert!(jvm_actual.contains("com.boltffi.demo.jvm.invokeValueCallback(kotlin.run"));
@@ -405,6 +417,13 @@ Email = { type = "java.net.URI", conversion = "url_string" }
         assert_eq!(jvm_actual, android_actual);
         assert!(jvm_internal.contains("package com.boltffi.demo.jvm"));
         assert!(jvm_internal.contains("typealias Email = String"));
+        assert!(jvm_internal.contains("fun subscribeValues(): Flow<Int> = callbackFlow {"));
+        assert!(jvm_internal.contains("awaitClose { context.requestTermination() }"));
+        assert!(
+            jvm_internal
+                .contains("unsubscribe = Native::boltffi_event_bus_subscribe_values_unsubscribe")
+        );
+        assert!(jvm_internal.contains("freeFn = Native::boltffi_event_bus_subscribe_values_free"));
         assert!(jvm_internal.contains("@JvmStatic external fun"));
         assert!(jni_glue.contains("JNIEXPORT"));
         assert!(build_gradle.contains("kotlin(\"multiplatform\")"));
