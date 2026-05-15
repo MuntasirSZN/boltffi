@@ -182,6 +182,19 @@ pub struct KotlinMultiplatformConfig {
     pub enabled: bool,
     pub package: Option<String>,
     pub module_name: Option<String>,
+    #[serde(default)]
+    pub apple: KotlinMultiplatformAppleConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct KotlinMultiplatformAppleConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub include_macos: bool,
+    pub ios_architectures: Option<Vec<AppleIosArchitecture>>,
+    pub simulator_architectures: Option<Vec<AppleArchitecture>>,
+    pub macos_architectures: Option<Vec<AppleArchitecture>>,
 }
 
 impl Default for KotlinMultiplatformConfig {
@@ -191,6 +204,7 @@ impl Default for KotlinMultiplatformConfig {
             enabled: false,
             package: None,
             module_name: None,
+            apple: KotlinMultiplatformAppleConfig::default(),
         }
     }
 }
@@ -810,6 +824,44 @@ impl Config {
             }
         }
 
+        if self.is_kotlin_multiplatform_apple_enabled() {
+            validate_unique(
+                self.targets
+                    .kotlin_multiplatform
+                    .apple
+                    .ios_architectures
+                    .as_deref(),
+                "targets.kotlin_multiplatform.apple.ios_architectures",
+                AppleIosArchitecture::canonical_name,
+            )?;
+            validate_unique(
+                self.targets
+                    .kotlin_multiplatform
+                    .apple
+                    .simulator_architectures
+                    .as_deref(),
+                "targets.kotlin_multiplatform.apple.simulator_architectures",
+                AppleArchitecture::canonical_name,
+            )?;
+            if self.kotlin_multiplatform_apple_include_macos() {
+                validate_unique(
+                    self.targets
+                        .kotlin_multiplatform
+                        .apple
+                        .macos_architectures
+                        .as_deref(),
+                    "targets.kotlin_multiplatform.apple.macos_architectures",
+                    AppleArchitecture::canonical_name,
+                )?;
+            }
+
+            if self.kotlin_multiplatform_apple_targets().is_empty() {
+                return Err(ConfigError::Validation(
+                    "Kotlin Multiplatform Apple support requires at least one configured slice across targets.kotlin_multiplatform.apple.ios_architectures, targets.kotlin_multiplatform.apple.simulator_architectures, or enabled macOS architectures".to_string(),
+                ));
+            }
+        }
+
         if (self.is_java_jvm_enabled() || self.is_kotlin_multiplatform_enabled())
             && let Some(host_targets) = self.targets.java.jvm.host_targets.as_ref()
             && host_targets.is_empty()
@@ -954,6 +1006,10 @@ impl Config {
         self.targets.kotlin_multiplatform.enabled
     }
 
+    pub fn is_kotlin_multiplatform_apple_enabled(&self) -> bool {
+        self.is_kotlin_multiplatform_enabled() && self.targets.kotlin_multiplatform.apple.enabled
+    }
+
     pub fn apple_include_macos(&self) -> bool {
         self.targets.apple.include_macos
     }
@@ -1004,6 +1060,68 @@ impl Config {
         targets.extend(self.apple_simulator_targets());
         if self.apple_include_macos() {
             targets.extend(self.apple_macos_targets());
+        }
+        targets
+    }
+
+    pub fn kotlin_multiplatform_apple_include_macos(&self) -> bool {
+        self.targets.kotlin_multiplatform.apple.include_macos
+    }
+
+    pub fn kotlin_multiplatform_apple_ios_architectures(&self) -> &[AppleIosArchitecture] {
+        self.targets
+            .kotlin_multiplatform
+            .apple
+            .ios_architectures
+            .as_deref()
+            .unwrap_or(AppleIosArchitecture::ALL)
+    }
+
+    pub fn kotlin_multiplatform_apple_simulator_architectures(&self) -> &[AppleArchitecture] {
+        self.targets
+            .kotlin_multiplatform
+            .apple
+            .simulator_architectures
+            .as_deref()
+            .unwrap_or(AppleArchitecture::ALL)
+    }
+
+    pub fn kotlin_multiplatform_apple_macos_architectures(&self) -> &[AppleArchitecture] {
+        self.targets
+            .kotlin_multiplatform
+            .apple
+            .macos_architectures
+            .as_deref()
+            .unwrap_or(AppleArchitecture::ALL)
+    }
+
+    pub fn kotlin_multiplatform_apple_ios_targets(&self) -> Vec<RustTarget> {
+        resolve_apple_ios_targets(self.kotlin_multiplatform_apple_ios_architectures())
+    }
+
+    pub fn kotlin_multiplatform_apple_simulator_targets(&self) -> Vec<RustTarget> {
+        resolve_apple_simulator_targets(self.kotlin_multiplatform_apple_simulator_architectures())
+    }
+
+    pub fn kotlin_multiplatform_apple_macos_targets(&self) -> Vec<RustTarget> {
+        self.targets
+            .kotlin_multiplatform
+            .apple
+            .macos_architectures
+            .as_deref()
+            .map(resolve_apple_macos_targets)
+            .unwrap_or_else(|| RustTarget::ALL_MACOS.to_vec())
+    }
+
+    pub fn kotlin_multiplatform_apple_targets(&self) -> Vec<RustTarget> {
+        if !self.is_kotlin_multiplatform_apple_enabled() {
+            return Vec::new();
+        }
+
+        let mut targets = self.kotlin_multiplatform_apple_ios_targets();
+        targets.extend(self.kotlin_multiplatform_apple_simulator_targets());
+        if self.kotlin_multiplatform_apple_include_macos() {
+            targets.extend(self.kotlin_multiplatform_apple_macos_targets());
         }
         targets
     }
@@ -2637,6 +2755,74 @@ module_name = "AndroidBindings"
         );
 
         assert_eq!(config.kotlin_multiplatform_module_name(), "AndroidBindings");
+    }
+
+    #[test]
+    fn kotlin_multiplatform_apple_targets_are_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        assert!(!config.is_kotlin_multiplatform_apple_enabled());
+        assert!(config.kotlin_multiplatform_apple_targets().is_empty());
+    }
+
+    #[test]
+    fn kotlin_multiplatform_apple_is_ignored_when_kmp_is_disabled() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = false
+
+[targets.kotlin_multiplatform.apple]
+enabled = true
+ios_architectures = []
+simulator_architectures = []
+macos_architectures = []
+"#,
+        );
+
+        assert!(!config.is_kotlin_multiplatform_enabled());
+        assert!(!config.is_kotlin_multiplatform_apple_enabled());
+        assert!(config.kotlin_multiplatform_apple_targets().is_empty());
+    }
+
+    #[test]
+    fn kotlin_multiplatform_apple_targets_use_configured_slices() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+
+[targets.kotlin_multiplatform.apple]
+enabled = true
+include_macos = true
+ios_architectures = ["arm64"]
+simulator_architectures = ["arm64"]
+macos_architectures = ["x86_64"]
+"#,
+        );
+
+        assert_eq!(
+            config.kotlin_multiplatform_apple_targets(),
+            vec![
+                crate::target::RustTarget::IOS_ARM64,
+                crate::target::RustTarget::IOS_SIM_ARM64,
+                crate::target::RustTarget::MACOS_X86_64,
+            ]
+        );
     }
 
     #[test]

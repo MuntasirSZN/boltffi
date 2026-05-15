@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ir::definitions::{EnumRepr, VariantPayload};
 use crate::ir::{self, AbiContract, FfiContract};
+use crate::render::c::CHeaderLowerer;
 use crate::render::jni::{JniEmitter, JniLowerer, JvmBindingStyle};
 use crate::render::kotlin::{
     FactoryStyle, KotlinEmitter, KotlinLowerer, KotlinOptions, NamingConvention,
@@ -14,6 +15,8 @@ pub struct KMPOptions {
     pub module_name: String,
     pub min_sdk: u32,
     pub kotlin_options: KotlinOptions,
+    pub native_library_name: String,
+    pub apple_targets: Vec<KmpAppleTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,9 +32,41 @@ pub struct KMPOutput {
 
 pub struct KMPEmitter;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KmpAppleTarget {
+    IosArm64,
+    IosSimulatorArm64,
+    IosSimulatorX64,
+    MacosArm64,
+    MacosX64,
+}
+
+impl KmpAppleTarget {
+    fn gradle_target_function(self) -> &'static str {
+        match self {
+            Self::IosArm64 => "iosArm64",
+            Self::IosSimulatorArm64 => "iosSimulatorArm64",
+            Self::IosSimulatorX64 => "iosX64",
+            Self::MacosArm64 => "macosArm64",
+            Self::MacosX64 => "macosX64",
+        }
+    }
+
+    fn main_source_set(self) -> &'static str {
+        match self {
+            Self::IosArm64 => "iosArm64Main",
+            Self::IosSimulatorArm64 => "iosSimulatorArm64Main",
+            Self::IosSimulatorX64 => "iosX64Main",
+            Self::MacosArm64 => "macosArm64Main",
+            Self::MacosX64 => "macosX64Main",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KmpActualBackend {
     KotlinJvm,
+    KotlinNativeApple,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +90,14 @@ impl KmpPlatformAdapter {
             source_set: "androidMain",
             actual_file_suffix: "AndroidActual",
             backend: KmpActualBackend::KotlinJvm,
+        }
+    }
+
+    const fn apple() -> Self {
+        Self {
+            source_set: "appleMain",
+            actual_file_suffix: "AppleActual",
+            backend: KmpActualBackend::KotlinNativeApple,
         }
     }
 }
@@ -229,12 +272,15 @@ impl KMPEmitter {
             module_name,
             min_sdk,
             kotlin_options,
+            native_library_name,
+            apple_targets,
         } = options;
         let internal_package = format!("{package_name}.jvm");
         let factory_style = kotlin_options.factory_style;
         let common_package_path = Self::package_path(&package_name);
         let internal_package_path = Self::package_path(&internal_package);
-        let platform_adapters = Self::default_platform_adapters();
+        let apple_targets = Self::deduplicate_apple_targets(&apple_targets);
+        let platform_adapters = Self::platform_adapters(!apple_targets.is_empty());
 
         let rendered = Self::render_surfaces(
             contract,
@@ -268,7 +314,7 @@ impl KMPEmitter {
             },
             KMPOutputFile {
                 relative_path: PathBuf::from("build.gradle.kts"),
-                contents: Self::render_build_gradle(&package_name, min_sdk),
+                contents: Self::render_build_gradle(&package_name, min_sdk, &apple_targets),
             },
             KMPOutputFile {
                 relative_path: common_dir.join(format!("{module_name}.kt")),
@@ -313,11 +359,41 @@ impl KMPEmitter {
                 });
             });
 
+        if !apple_targets.is_empty() {
+            let header_name = format!("{native_library_name}.h");
+            files.push(KMPOutputFile {
+                relative_path: PathBuf::from("src/nativeInterop/cinterop/boltffi.def"),
+                contents: Self::render_native_cinterop_def(&header_name),
+            });
+            files.push(KMPOutputFile {
+                relative_path: PathBuf::from("src/nativeInterop/cinterop/include")
+                    .join(&header_name),
+                contents: CHeaderLowerer::new(contract, abi).generate(),
+            });
+        }
+
         KMPOutput { files }
     }
 
     fn default_platform_adapters() -> Vec<KmpPlatformAdapter> {
         vec![KmpPlatformAdapter::jvm(), KmpPlatformAdapter::android()]
+    }
+
+    fn platform_adapters(include_apple: bool) -> Vec<KmpPlatformAdapter> {
+        let mut adapters = Self::default_platform_adapters();
+        if include_apple {
+            adapters.push(KmpPlatformAdapter::apple());
+        }
+        adapters
+    }
+
+    fn deduplicate_apple_targets(targets: &[KmpAppleTarget]) -> Vec<KmpAppleTarget> {
+        let mut seen = HashSet::new();
+        targets
+            .iter()
+            .copied()
+            .filter(|target| seen.insert(*target))
+            .collect()
     }
 
     fn source_set_kotlin_dir(source_set: &str, package_path: &Path) -> PathBuf {
@@ -439,6 +515,12 @@ impl KMPEmitter {
                 support,
                 factory_style,
             ),
+            KmpActualBackend::KotlinNativeApple => Self::render_kotlin_native_apple_actual(
+                contract,
+                package_name,
+                support,
+                factory_style,
+            ),
         }
     }
 
@@ -507,6 +589,183 @@ impl KMPEmitter {
             .for_each(|section| actual_sections.push(section));
 
         join_kotlin_sections(actual_sections)
+    }
+
+    fn render_kotlin_native_apple_actual(
+        contract: &ir::FfiContract,
+        package_name: &str,
+        support: &KmpSurfaceSupport,
+        factory_style: FactoryStyle,
+    ) -> String {
+        let mut actual_sections = Vec::new();
+        actual_sections.push("// Auto-generated by BoltFFI. Do not edit.".to_string());
+        actual_sections.push(format!("package {package_name}"));
+        if support.has_streams() {
+            actual_sections.push("import kotlinx.coroutines.flow.Flow".to_string());
+        }
+
+        contract
+            .catalog
+            .all_classes()
+            .filter(|class| support.classes.contains(class.id.as_str()))
+            .map(|class| {
+                Self::render_kotlin_native_apple_class_stub(class, contract, support, factory_style)
+            })
+            .for_each(|section| actual_sections.push(section));
+
+        contract
+            .functions
+            .iter()
+            .filter(|function| function_supported(function, contract, support))
+            .map(Self::render_kotlin_native_apple_function_stub)
+            .for_each(|section| actual_sections.push(section));
+
+        join_kotlin_sections(actual_sections)
+    }
+
+    fn render_kotlin_native_apple_class_stub(
+        class: &ir::definitions::ClassDef,
+        contract: &ir::FfiContract,
+        support: &KmpSurfaceSupport,
+        factory_style: FactoryStyle,
+    ) -> String {
+        let class_name = NamingConvention::class_name(class.id.as_str());
+        let constructor_surfaces = kmp_constructor_surfaces(&class.constructors, factory_style);
+        let mut members = Vec::new();
+        let mut companion_members = Vec::new();
+
+        class
+            .constructors
+            .iter()
+            .zip(constructor_surfaces.iter())
+            .filter(|(constructor, _)| constructor_supported(constructor, contract, support))
+            .for_each(|(constructor, surface)| match surface {
+                KmpConstructorSurface::Constructor => {
+                    members.push(Self::render_kotlin_native_apple_constructor_stub(
+                        constructor,
+                    ));
+                }
+                KmpConstructorSurface::CompanionFactory => {
+                    companion_members.push(Self::render_kotlin_native_apple_factory_stub(
+                        class,
+                        constructor,
+                    ));
+                }
+            });
+
+        members.push(Self::render_kotlin_native_apple_close_stub());
+
+        class
+            .methods
+            .iter()
+            .filter(|method| method_supported(method, contract, support))
+            .for_each(|method| {
+                let rendered = Self::render_kotlin_native_apple_method_stub(method);
+                if method.receiver == ir::definitions::Receiver::Static {
+                    companion_members.push(rendered);
+                } else {
+                    members.push(indent_lines(&rendered, "    "));
+                }
+            });
+
+        class
+            .streams
+            .iter()
+            .filter(|stream| stream_supported(class, stream, contract, support))
+            .map(Self::render_kotlin_native_apple_stream_stub)
+            .map(|rendered| indent_lines(&rendered, "    "))
+            .for_each(|section| members.push(section));
+
+        if !companion_members.is_empty() {
+            members.push(format!(
+                "    actual companion object {{\n{}\n    }}",
+                companion_members
+                    .iter()
+                    .map(|member| indent_lines(member, "        "))
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            ));
+        }
+
+        format!("actual class {class_name} {{\n{}\n}}", members.join("\n\n"))
+    }
+
+    fn render_kotlin_native_apple_constructor_stub(
+        constructor: &ir::definitions::ConstructorDef,
+    ) -> String {
+        let params = constructor.params();
+        let param_list = render_param_list(&params);
+        format!(
+            "    actual constructor({param_list}) {{\n        {}\n    }}",
+            kotlin_native_apple_scaffold_throw()
+        )
+    }
+
+    fn render_kotlin_native_apple_factory_stub(
+        class: &ir::definitions::ClassDef,
+        constructor: &ir::definitions::ConstructorDef,
+    ) -> String {
+        let class_name = NamingConvention::class_name(class.id.as_str());
+        let name = constructor
+            .name()
+            .map(|name| NamingConvention::method_name(name.as_str()))
+            .unwrap_or_else(|| "new".to_string());
+        let params = constructor.params();
+        let param_list = render_param_list(&params);
+
+        format!(
+            "actual fun {name}({param_list}): {class_name} = {}",
+            kotlin_native_apple_scaffold_throw()
+        )
+    }
+
+    fn render_kotlin_native_apple_close_stub() -> String {
+        format!(
+            "    actual fun close() {{\n        {}\n    }}",
+            kotlin_native_apple_scaffold_throw()
+        )
+    }
+
+    fn render_kotlin_native_apple_method_stub(method: &ir::definitions::MethodDef) -> String {
+        let method_name = NamingConvention::method_name(method.id.as_str());
+        let suspend_prefix = if method.is_async() { "suspend " } else { "" };
+        let params = method.params.iter().collect::<Vec<_>>();
+        let param_list = render_param_list(&params);
+        let return_type = return_type_name(&method.returns);
+        let return_suffix = return_type
+            .as_ref()
+            .map(|ty| format!(": {ty}"))
+            .unwrap_or_default();
+        let body = kotlin_native_apple_stub_body(&method.returns);
+
+        format!("actual {suspend_prefix}fun {method_name}({param_list}){return_suffix} {body}")
+    }
+
+    fn render_kotlin_native_apple_stream_stub(stream: &ir::definitions::StreamDef) -> String {
+        let method_name = NamingConvention::method_name(stream.id.as_str());
+        let item_type = common_type_name(&stream.item_type);
+
+        format!(
+            "actual fun {method_name}(): Flow<{item_type}> = {}",
+            kotlin_native_apple_scaffold_throw()
+        )
+    }
+
+    fn render_kotlin_native_apple_function_stub(function: &ir::definitions::FunctionDef) -> String {
+        let function_name = NamingConvention::method_name(function.id.as_str());
+        let suspend_prefix = if function.is_async() { "suspend " } else { "" };
+        let params = Self::render_common_function_params(function);
+        let return_type = return_type_name(&function.returns);
+        let return_suffix = return_type
+            .as_ref()
+            .map(|ty| format!(": {ty}"))
+            .unwrap_or_default();
+        let body = kotlin_native_apple_stub_body(&function.returns);
+
+        format!(
+            "{}actual {suspend_prefix}fun {function_name}({params}){return_suffix} {body}",
+            kdoc_block(&function.doc)
+        )
     }
 
     fn render_common_result_runtime() -> String {
@@ -1204,7 +1463,15 @@ sealed class BoltFFIResult<out T, out E> {
             .join(", ")
     }
 
-    fn render_build_gradle(package_name: &str, min_sdk: u32) -> String {
+    fn render_build_gradle(
+        package_name: &str,
+        min_sdk: u32,
+        apple_targets: &[KmpAppleTarget],
+    ) -> String {
+        if !apple_targets.is_empty() {
+            return Self::render_build_gradle_with_apple(package_name, min_sdk, apple_targets);
+        }
+
         format!(
             r#"import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -1246,6 +1513,107 @@ android {{
         targetCompatibility = JavaVersion.VERSION_1_8
     }}
 }}
+"#
+        )
+    }
+
+    fn render_build_gradle_with_apple(
+        package_name: &str,
+        min_sdk: u32,
+        apple_targets: &[KmpAppleTarget],
+    ) -> String {
+        let target_entries = apple_targets
+            .iter()
+            .map(|target| format!("        {}(),", target.gradle_target_function()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let apple_source_set_links = apple_targets
+            .iter()
+            .map(|target| {
+                format!(
+                    "        val {} by getting {{\n            dependsOn(appleMain)\n        }}",
+                    target.main_source_set()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string();
+
+        format!(
+            r#"import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {{
+    kotlin("multiplatform") version "2.3.21"
+    id("com.android.library") version "8.5.2"
+}}
+
+kotlin {{
+    jvm {{
+        compilerOptions {{
+            jvmTarget.set(JvmTarget.JVM_1_8)
+        }}
+    }}
+
+    androidTarget {{
+        compilerOptions {{
+            jvmTarget.set(JvmTarget.JVM_1_8)
+        }}
+    }}
+
+    val boltffiAppleTargets = listOf(
+{target_entries}
+    )
+
+    boltffiAppleTargets.forEach {{ target ->
+        target.compilations.getByName("main") {{
+            cinterops {{
+                val boltffi by creating {{
+                    definitionFile.set(project.file("src/nativeInterop/cinterop/boltffi.def"))
+                    packageName("{package_name}.cinterop")
+                    includeDirs("src/nativeInterop/cinterop/include")
+                }}
+            }}
+        }}
+    }}
+
+    sourceSets {{
+        val commonMain by getting {{
+            dependencies {{
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+            }}
+        }}
+
+        val appleMain = maybeCreate("appleMain").apply {{
+            dependsOn(commonMain)
+        }}
+
+{apple_source_set_links}
+    }}
+}}
+
+android {{
+    namespace = "{package_name}"
+    compileSdk = 35
+
+    defaultConfig {{
+        minSdk = {min_sdk}
+    }}
+
+    compileOptions {{
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }}
+}}
+"#
+        )
+    }
+
+    fn render_native_cinterop_def(header_name: &str) -> String {
+        format!(
+            r#"# Auto-generated by BoltFFI. Do not edit.
+headers = {header_name}
+headerFilter = {header_name}
 "#
         )
     }
@@ -1400,6 +1768,21 @@ fn render_common_stream_signature(stream: &ir::definitions::StreamDef) -> String
         "fun {method_name}(): Flow<{}>",
         common_type_name(&stream.item_type)
     )
+}
+
+fn kotlin_native_apple_stub_body(returns: &ir::definitions::ReturnDef) -> String {
+    match returns {
+        ir::definitions::ReturnDef::Void => {
+            format!("{{\n    {}\n}}", kotlin_native_apple_scaffold_throw())
+        }
+        ir::definitions::ReturnDef::Value(_) | ir::definitions::ReturnDef::Result { .. } => {
+            format!("= {}", kotlin_native_apple_scaffold_throw())
+        }
+    }
+}
+
+fn kotlin_native_apple_scaffold_throw() -> &'static str {
+    "throw UnsupportedOperationException(\"Kotlin/Native Apple actuals are scaffolded but not implemented yet\")"
 }
 
 fn render_common_callback_method_signature(method: &ir::definitions::CallbackMethodDef) -> String {
@@ -2890,6 +3273,8 @@ mod tests {
                 module_name: "Demo".to_string(),
                 min_sdk: 23,
                 kotlin_options: KotlinOptions::default(),
+                native_library_name: "demo".to_string(),
+                apple_targets: Vec::new(),
             },
         );
 
@@ -3290,6 +3675,101 @@ mod tests {
                 .iter()
                 .all(|adapter| matches!(adapter.backend, KmpActualBackend::KotlinJvm))
         );
+    }
+
+    #[test]
+    fn apple_platform_adapter_is_opt_in() {
+        let adapters = KMPEmitter::platform_adapters(true);
+
+        assert_eq!(adapters.len(), 3);
+        assert_eq!(adapters[2], KmpPlatformAdapter::apple());
+        assert_eq!(adapters[2].source_set, "appleMain");
+        assert!(matches!(
+            adapters[2].backend,
+            KmpActualBackend::KotlinNativeApple
+        ));
+    }
+
+    #[test]
+    fn apple_scaffold_generates_targets_cinterop_and_stub_actuals() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(point_record());
+        contract.catalog.insert_class(counter_class());
+        contract.catalog.insert_class(event_bus_class());
+        contract.functions.push(ir::definitions::FunctionDef {
+            id: "echo_point".into(),
+            params: vec![param("point", ir::types::TypeExpr::Record("Point".into()))],
+            returns: ir::definitions::ReturnDef::Value(ir::types::TypeExpr::Record("Point".into())),
+            execution_kind: boltffi_ffi_rules::callable::ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+        let abi = ir::lower::Lowerer::new(&contract).to_abi_contract();
+        let output = KMPEmitter::emit(
+            &contract,
+            &abi,
+            KMPOptions {
+                package_name: "com.example.demo".to_string(),
+                module_name: "Demo".to_string(),
+                min_sdk: 23,
+                kotlin_options: KotlinOptions::default(),
+                native_library_name: "demo".to_string(),
+                apple_targets: vec![KmpAppleTarget::IosArm64, KmpAppleTarget::IosSimulatorArm64],
+            },
+        );
+
+        let build_gradle = output
+            .files
+            .iter()
+            .find(|file| file.relative_path == PathBuf::from("build.gradle.kts"))
+            .expect("build.gradle should be generated")
+            .contents
+            .as_str();
+        let apple_actual = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path
+                    == PathBuf::from("src/appleMain/kotlin/com/example/demo/DemoAppleActual.kt")
+            })
+            .expect("apple actual source should be generated")
+            .contents
+            .as_str();
+        let cinterop_def = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path == PathBuf::from("src/nativeInterop/cinterop/boltffi.def")
+            })
+            .expect("cinterop definition should be generated")
+            .contents
+            .as_str();
+        let header = output
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path == PathBuf::from("src/nativeInterop/cinterop/include/demo.h")
+            })
+            .expect("c header should be generated")
+            .contents
+            .as_str();
+
+        assert!(build_gradle.contains("iosArm64(),"));
+        assert!(build_gradle.contains("iosSimulatorArm64(),"));
+        assert!(build_gradle.contains("val appleMain = maybeCreate(\"appleMain\")"));
+        assert!(build_gradle.contains("val iosArm64Main by getting"));
+        assert!(build_gradle.contains("val iosSimulatorArm64Main by getting"));
+        assert!(apple_actual.contains("actual class Counter {"));
+        assert!(apple_actual.contains("actual constructor(initial: Int)"));
+        assert!(apple_actual.contains(
+            "actual fun echoPoint(point: Point): Point = throw UnsupportedOperationException"
+        ));
+        assert!(apple_actual.contains(
+            "actual fun subscribeValues(): Flow<Int> = throw UnsupportedOperationException"
+        ));
+        assert!(build_gradle.contains("includeDirs(\"src/nativeInterop/cinterop/include\")"));
+        assert!(cinterop_def.contains("headers = demo.h"));
+        assert!(header.contains("typedef struct FfiStatus"));
     }
 
     #[test]

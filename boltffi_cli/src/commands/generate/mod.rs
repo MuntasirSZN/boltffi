@@ -486,4 +486,78 @@ module_name = "Demo"
 
         fs::remove_dir_all(output_directory).expect("cleanup generated output");
     }
+
+    #[test]
+    fn kotlin_multiplatform_generate_writes_apple_scaffold_when_enabled() {
+        let output_directory = unique_temp_dir("boltffi-kmp-generate-apple-test");
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "demo"
+version = "0.1.0"
+
+[targets.kotlin_multiplatform]
+enabled = true
+package = "com.boltffi.demo"
+
+[targets.kotlin_multiplatform.apple]
+enabled = true
+ios_architectures = ["arm64"]
+simulator_architectures = ["arm64"]
+"#,
+        );
+
+        KMPGenerator::generate_from_source_directory_with_desktop_fallback_library_name(
+            &config,
+            Some(output_directory.clone()),
+            &demo_source_directory(),
+            "demo",
+            None,
+        )
+        .expect("kotlin multiplatform generate should succeed");
+
+        let apple_actual_path =
+            output_directory.join("src/appleMain/kotlin/com/boltffi/demo/DemoAppleActual.kt");
+        let cinterop_def_path = output_directory.join("src/nativeInterop/cinterop/boltffi.def");
+        let header_path = output_directory.join("src/nativeInterop/cinterop/include/demo.h");
+        let build_gradle_path = output_directory.join("build.gradle.kts");
+
+        let apple_actual =
+            fs::read_to_string(&apple_actual_path).expect("apple actual should be readable");
+        let cinterop_def =
+            fs::read_to_string(&cinterop_def_path).expect("cinterop def should be readable");
+        let header = fs::read_to_string(&header_path).expect("c header should be readable");
+        let build_gradle =
+            fs::read_to_string(&build_gradle_path).expect("gradle file should be readable");
+
+        assert!(build_gradle.contains("iosArm64(),"));
+        assert!(build_gradle.contains("iosSimulatorArm64(),"));
+        assert!(!build_gradle.contains("macosArm64(),"));
+        assert!(build_gradle.contains("val appleMain = maybeCreate(\"appleMain\")"));
+        assert!(build_gradle.contains("val iosArm64Main by getting"));
+        assert!(build_gradle.contains(
+            "definitionFile.set(project.file(\"src/nativeInterop/cinterop/boltffi.def\"))"
+        ));
+        assert!(build_gradle.contains("packageName(\"com.boltffi.demo.cinterop\")"));
+        assert!(build_gradle.contains("includeDirs(\"src/nativeInterop/cinterop/include\")"));
+        assert!(apple_actual.contains("package com.boltffi.demo"));
+        assert!(apple_actual.contains("import kotlinx.coroutines.flow.Flow"));
+        assert!(apple_actual.contains("actual class Counter {"));
+        assert!(apple_actual.contains("actual constructor(initial: Int)"));
+        assert!(
+            apple_actual.contains("actual fun `get`(): Int = throw UnsupportedOperationException")
+        );
+        assert!(apple_actual.contains(
+            "actual fun subscribeValues(): Flow<Int> = throw UnsupportedOperationException"
+        ));
+        assert!(apple_actual.contains("actual fun echoBytes"));
+        assert!(cinterop_def.contains("headers = demo.h"));
+        assert!(cinterop_def.contains("headerFilter = demo.h"));
+        assert!(header.contains("BoltFFICallbackHandle"));
+        assert!(header.contains("boltffi"));
+
+        fs::remove_dir_all(output_directory).expect("cleanup generated output");
+    }
 }
