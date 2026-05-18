@@ -12,7 +12,7 @@ use super::mappings;
 use super::names::NamingConvention;
 use super::plan::{
     JavaAsyncCall, JavaAsyncCallbackInvoker, JavaAsyncCallbackMethod, JavaAsyncMode,
-    JavaBlittableField, JavaBlittableLayout, JavaBridgeParam, JavaBridgeReturn,
+    JavaBlittableField, JavaBlittableLayout, JavaBridgeParam, JavaBridgeReturn, JavaBuiltinSet,
     JavaCallbackErrorCapture, JavaCallbackProxyAsyncMethod, JavaCallbackProxySyncMethod,
     JavaCallbackTrait, JavaClass, JavaClassMethod, JavaClosureInterface, JavaConstructor,
     JavaConstructorKind, JavaDirectCompositeInput, JavaEnum, JavaEnumField, JavaEnumKind,
@@ -216,6 +216,13 @@ impl<'a> JavaLowerer<'a> {
             .unwrap_or_else(|| naming::library_name(&self.module_name));
 
         let prefix = boltffi_ffi_rules::naming::ffi_prefix().to_string();
+        let builtins = JavaBuiltinSet::from_kinds(
+            self.ffi
+                .catalog
+                .all_builtins()
+                .map(|builtin| builtin.kind)
+                .collect(),
+        );
 
         let enums: Vec<JavaEnum> = self
             .ffi
@@ -274,6 +281,7 @@ impl<'a> JavaLowerer<'a> {
             desktop_loader: self.options.desktop_loader,
             java_version: self.options.min_java_version,
             async_mode: JavaAsyncMode::from_version(self.options.min_java_version),
+            builtins,
             prefix,
             records,
             enums,
@@ -904,7 +912,7 @@ impl<'a> JavaLowerer<'a> {
                 format!("Double.compare({left}, {right}) == 0")
             }
             TypeExpr::Primitive(_) => format!("{left} == {right}"),
-            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Builtin(_) => {
                 format!("java.util.Objects.equals({left}, {right})")
             }
             TypeExpr::Bytes => format!("java.util.Arrays.equals({left}, {right})"),
@@ -966,7 +974,7 @@ impl<'a> JavaLowerer<'a> {
             | TypeExpr::Primitive(PrimitiveType::USize) => format!("Long.hashCode({value})"),
             TypeExpr::Primitive(PrimitiveType::F32) => format!("Float.hashCode({value})"),
             TypeExpr::Primitive(PrimitiveType::F64) => format!("Double.hashCode({value})"),
-            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Builtin(_) => {
                 format!("java.util.Objects.hashCode({value})")
             }
             TypeExpr::Bytes => format!("java.util.Arrays.hashCode({value})"),
@@ -4097,6 +4105,28 @@ mod tests {
         assert!(func.return_plan.is_decode());
         assert_eq!(func.return_plan.decode_expr(), "reader.readDuration()");
         assert_eq!(func.input_bindings.wire_writers.len(), 1);
+    }
+
+    #[test]
+    fn record_builtin_field_uses_object_equality_and_hash() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(record_def(
+            "Timing",
+            vec![field(
+                "duration",
+                TypeExpr::Builtin(BuiltinId::new("Duration")),
+            )],
+        ));
+
+        let module = lower(&contract);
+        let field = &module.records[0].fields[0];
+
+        assert_eq!(field.java_type, "java.time.Duration");
+        assert_eq!(
+            field.equals_expr,
+            "java.util.Objects.equals(this.duration, other.duration)"
+        );
+        assert_eq!(field.hash_expr, "java.util.Objects.hashCode(duration)");
     }
 
     #[test]
