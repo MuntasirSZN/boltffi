@@ -1811,7 +1811,7 @@ impl<'a> TypeScriptLowerer<'a> {
         if let Some(optional_decode) = emit_raw_optional_primitive_read(decode_ops) {
             return (
                 Some(ts_type_str),
-                TsOutputRoute::f64_optional(optional_decode),
+                TsOutputRoute::nan_boxed_optional(optional_decode),
             );
         }
         match decode_ops.ops.first() {
@@ -1905,7 +1905,7 @@ impl<'a> TypeScriptLowerer<'a> {
                     Some(Transport::Callback { .. }) => Some("number".to_string()),
                     _ => None,
                 }
-            } else if return_route.is_f64_optional() {
+            } else if return_route.is_nan_boxed_optional() {
                 Some("number".to_string())
             } else if return_route.is_struct_return_slot() || return_route.is_void_slot() {
                 None
@@ -2116,10 +2116,12 @@ fn emit_raw_optional_primitive_read(seq: &ReadSeq) -> Option<String> {
         PrimitiveType::U16 => "unpackOptionU16",
         PrimitiveType::I32 => "unpackOptionI32",
         PrimitiveType::U32 => "unpackOptionU32",
-        PrimitiveType::I64 | PrimitiveType::U64 => return None,
+        PrimitiveType::I64 => "unpackOptionI64",
+        PrimitiveType::U64 => "unpackOptionU64",
         PrimitiveType::F32 => "unpackOptionF32",
         PrimitiveType::F64 => "unpackOptionF64",
-        PrimitiveType::ISize | PrimitiveType::USize => return None,
+        PrimitiveType::ISize => "unpackOptionI32",
+        PrimitiveType::USize => "unpackOptionU32",
     };
 
     Some(format!("_module.{method}(packed)"))
@@ -2863,7 +2865,7 @@ mod tests {
             .find(|function| function.name == "findEven")
             .expect("findEven should be lowered");
 
-        assert!(function.return_route.is_f64_optional());
+        assert!(function.return_route.is_nan_boxed_optional());
         assert_eq!(
             function.return_route.decode_expr(),
             "_module.unpackOptionI32(packed)"
@@ -2894,10 +2896,76 @@ mod tests {
             .find(|import| import.ffi_name == "boltffi_safe_sqrt")
             .expect("wasm import should exist");
 
-        assert!(function.return_route.is_f64_optional());
+        assert!(function.return_route.is_nan_boxed_optional());
         assert_eq!(
             function.return_route.decode_expr(),
             "_module.unpackOptionF64(packed)"
+        );
+        assert_eq!(import.return_wasm_type.as_deref(), Some("number"));
+    }
+
+    #[test]
+    fn option_i64_return_uses_nan_optional_decode() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "find_positive_i64",
+            vec![primitive_param("value", PrimitiveType::I64)],
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Primitive(
+                PrimitiveType::I64,
+            )))),
+            ExecutionKind::Sync,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "findPositiveI64")
+            .expect("findPositiveI64 should be lowered");
+        let import = module
+            .wasm_imports
+            .iter()
+            .find(|import| import.ffi_name == "boltffi_find_positive_i64")
+            .expect("wasm import should exist");
+
+        assert_eq!(function.return_type.as_deref(), Some("bigint | null"));
+        assert!(function.return_route.is_nan_boxed_optional());
+        assert_eq!(
+            function.return_route.decode_expr(),
+            "_module.unpackOptionI64(packed)"
+        );
+        assert_eq!(import.return_wasm_type.as_deref(), Some("number"));
+    }
+
+    #[test]
+    fn option_u64_return_uses_nan_optional_decode() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "find_positive_u64",
+            vec![primitive_param("value", PrimitiveType::U64)],
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Primitive(
+                PrimitiveType::U64,
+            )))),
+            ExecutionKind::Sync,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "findPositiveU64")
+            .expect("findPositiveU64 should be lowered");
+        let import = module
+            .wasm_imports
+            .iter()
+            .find(|import| import.ffi_name == "boltffi_find_positive_u64")
+            .expect("wasm import should exist");
+
+        assert_eq!(function.return_type.as_deref(), Some("bigint | null"));
+        assert!(function.return_route.is_nan_boxed_optional());
+        assert_eq!(
+            function.return_route.decode_expr(),
+            "_module.unpackOptionU64(packed)"
         );
         assert_eq!(import.return_wasm_type.as_deref(), Some("number"));
     }
