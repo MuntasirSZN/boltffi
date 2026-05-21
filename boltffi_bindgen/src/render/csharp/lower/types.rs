@@ -20,7 +20,17 @@ impl<'a> CSharpLowerer<'a> {
             if let TypeExpr::Callback(id) = &param.type_expr {
                 return self.lower_callback_param(param, id);
             }
-            return None;
+            // `&mut [T]` is only safe when T uses an in-place array
+            // representation. Wire-encoded element types would mutate a
+            // temporary buffer with no writeback to the managed caller
+            // (#345).
+            if !matches!(
+                (&param.passing, &param.type_expr),
+                (ParamPassing::RefMut, TypeExpr::Vec(inner))
+                    if self.is_blittable_vec_element(inner)
+            ) {
+                return None;
+            }
         }
 
         let csharp_type = self.lower_type(&param.type_expr)?;
