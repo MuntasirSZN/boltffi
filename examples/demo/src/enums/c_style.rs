@@ -111,6 +111,146 @@ impl Direction {
     }
 
     #[demo_bench_macros::demo_case(
+        "enums.c_style.direction.try_from_id.should_return_direction_for_known_id",
+        justification = "Ensure Direction::try_from_id returns the Direction variant for a known id.",
+        directions = "Call `enums::c_style::Direction::try_from_id` through the generated binding and assert it returns the Direction variant for a known id.",
+        exclude(
+            swift,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Swift demo suite yet. Add it when Swift demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            kotlin,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Kotlin demo suite yet. Add it when Kotlin demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            java,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Java demo suite yet. Add it when Java demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            typescript,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the TypeScript demo suite yet. Add it when TypeScript demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            python,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Python demo suite yet. Add it when Python demo coverage expands for fallible C-style enum constructors."
+        )
+    )]
+    #[demo_bench_macros::demo_case(
+        "enums.c_style.direction.try_from_id.should_return_error_for_unknown_id",
+        justification = "Ensure Direction::try_from_id returns a language-native error for an unknown id.",
+        directions = "Call `enums::c_style::Direction::try_from_id` through the generated binding and assert it returns a language-native error for an unknown id.",
+        exclude(
+            swift,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Swift demo suite yet. Add it when Swift demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            kotlin,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Kotlin demo suite yet. Add it when Kotlin demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            java,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Java demo suite yet. Add it when Java demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            typescript,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the TypeScript demo suite yet. Add it when TypeScript demo coverage expands for fallible C-style enum constructors."
+        ),
+        exclude(
+            python,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Python demo suite yet. Add it when Python demo coverage expands for fallible C-style enum constructors."
+        )
+    )]
+    pub fn try_from_id(id: i32) -> Result<Self, String> {
+        match id {
+            0 => Ok(Direction::North),
+            1 => Ok(Direction::South),
+            2 => Ok(Direction::East),
+            3 => Ok(Direction::West),
+            other => Err(format!("unknown direction id: {other}")),
+        }
+    }
+
+    #[demo_bench_macros::demo_case(
+        "enums.c_style.direction.maybe_from_id.should_return_some_for_known_id",
+        justification = "Ensure Direction::maybe_from_id returns Some(Direction) for a known id.",
+        directions = "Call `enums::c_style::Direction::maybe_from_id` through the generated binding and assert it returns Some(Direction) for a known id.",
+        exclude(
+            swift,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Swift demo suite yet. Add it when Swift demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            kotlin,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Kotlin demo suite yet. Add it when Kotlin demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            java,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Java demo suite yet. Add it when Java demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            typescript,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the TypeScript demo suite yet. Add it when TypeScript demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            python,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Python demo suite yet. Add it when Python demo coverage expands for optional C-style enum constructors."
+        )
+    )]
+    #[demo_bench_macros::demo_case(
+        "enums.c_style.direction.maybe_from_id.should_return_none_for_unknown_id",
+        justification = "Ensure Direction::maybe_from_id returns None for an unknown id.",
+        directions = "Call `enums::c_style::Direction::maybe_from_id` through the generated binding and assert it returns None for an unknown id.",
+        exclude(
+            swift,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Swift demo suite yet. Add it when Swift demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            kotlin,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Kotlin demo suite yet. Add it when Kotlin demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            java,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Java demo suite yet. Add it when Java demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            typescript,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the TypeScript demo suite yet. Add it when TypeScript demo coverage expands for optional C-style enum constructors."
+        ),
+        exclude(
+            python,
+            reason = ExclusionReason::CoverageGap,
+            details = "This C# regression case is not asserted by the Python demo suite yet. Add it when Python demo coverage expands for optional C-style enum constructors."
+        )
+    )]
+    pub fn maybe_from_id(id: i32) -> Option<Self> {
+        match id {
+            0 => Some(Direction::North),
+            1 => Some(Direction::South),
+            2 => Some(Direction::East),
+            3 => Some(Direction::West),
+            _ => None,
+        }
+    }
+
+    #[demo_bench_macros::demo_case(
         "enums.c_style.direction.should_return_opposite_from_method",
         justification = "Ensure Direction::opposite returns the opposite compass direction.",
         directions = "Call `enums::c_style::Direction::opposite` through the generated binding and assert Direction::opposite returns the opposite compass direction."

@@ -592,6 +592,22 @@ public static class DemoTest
         DemoCase("case:enums.c_style.direction.should_construct_from_raw_value");
         Require(DirectionMethods.New(2) == Direction.East, "New(2) == East");
 
+        DemoCase("case:enums.c_style.direction.try_from_id.should_return_direction_for_known_id");
+        Require(DirectionMethods.TryFromId(2) == Direction.East, "TryFromId(2) == East");
+        DemoCase("case:enums.c_style.direction.try_from_id.should_return_error_for_unknown_id");
+        try
+        {
+            DirectionMethods.TryFromId(99);
+            throw new Exception("expected DirectionMethods.TryFromId(99) to throw");
+        }
+        catch (BoltException) { }
+
+        DemoCase("case:enums.c_style.direction.maybe_from_id.should_return_some_for_known_id");
+        Direction? maybeDir = DirectionMethods.MaybeFromId(3);
+        Require(maybeDir.HasValue && maybeDir.Value == Direction.West, "MaybeFromId(3)");
+        DemoCase("case:enums.c_style.direction.maybe_from_id.should_return_none_for_unknown_id");
+        Require(!DirectionMethods.MaybeFromId(99).HasValue, "MaybeFromId(99)");
+
         DemoCase("case:enums.c_style.direction.should_return_degrees");
         Require(DirectionToDegrees(Direction.North) == 0, "DirectionToDegrees(North)");
         Require(DirectionToDegrees(Direction.East) == 90, "DirectionToDegrees(East)");
