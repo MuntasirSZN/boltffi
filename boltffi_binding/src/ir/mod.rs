@@ -120,4 +120,4 @@ pub use surface::{
 pub use symbol::{
     ImportModule, ImportSymbol, NativeSymbol, NativeSymbolTable, SymbolName, VTableSlot,
 };
-pub use types::{ClosureTypeRef, HandleTarget, ReturnTypeRef, TypeRef};
+pub use types::{ClosureTypeRef, HandlePresence, HandleTarget, ReturnTypeRef, TypeRef};

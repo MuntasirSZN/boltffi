@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use boltffi_ast::{
-    ClassDef as SourceClass, EnumDef as SourceEnum, EnumId as SourceEnumId,
-    RecordDef as SourceRecord, RecordId as SourceRecordId, SourceContract,
+    ClassDef as SourceClass, ClassId as SourceClassId, EnumDef as SourceEnum,
+    EnumId as SourceEnumId, RecordDef as SourceRecord, RecordId as SourceRecordId, SourceContract,
+    TraitDef as SourceTrait, TraitId as SourceTraitId,
 };
 
 /// Borrowed view over a [`SourceContract`] with lookup tables for the
@@ -18,6 +19,8 @@ pub(super) struct Index<'src> {
     source: &'src SourceContract,
     records: HashMap<&'src str, &'src SourceRecord>,
     enums: HashMap<&'src str, &'src SourceEnum>,
+    classes: HashMap<&'src str, &'src SourceClass>,
+    traits: HashMap<&'src str, &'src SourceTrait>,
 }
 
 impl<'src> Index<'src> {
@@ -33,6 +36,16 @@ impl<'src> Index<'src> {
                 .enums
                 .iter()
                 .map(|enumeration| (enumeration.id.as_str(), enumeration))
+                .collect(),
+            classes: source
+                .classes
+                .iter()
+                .map(|class| (class.id.as_str(), class))
+                .collect(),
+            traits: source
+                .traits
+                .iter()
+                .map(|r#trait| (r#trait.id.as_str(), r#trait))
                 .collect(),
         }
     }
@@ -53,11 +66,23 @@ impl<'src> Index<'src> {
         &self.source.classes
     }
 
+    pub(super) fn traits(&self) -> &'src [SourceTrait] {
+        &self.source.traits
+    }
+
     pub(super) fn record(&self, id: &SourceRecordId) -> Option<&'src SourceRecord> {
         self.records.get(id.as_str()).copied()
     }
 
     pub(super) fn enumeration(&self, id: &SourceEnumId) -> Option<&'src SourceEnum> {
         self.enums.get(id.as_str()).copied()
+    }
+
+    pub(super) fn class(&self, id: &SourceClassId) -> Option<&'src SourceClass> {
+        self.classes.get(id.as_str()).copied()
+    }
+
+    pub(super) fn r#trait(&self, id: &SourceTraitId) -> Option<&'src SourceTrait> {
+        self.traits.get(id.as_str()).copied()
     }
 }

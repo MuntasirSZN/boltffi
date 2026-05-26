@@ -1,6 +1,46 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CallbackId, ClassId, CustomTypeId, EnumId, Primitive, RecordId, ReturnDef};
+use crate::{ClassId, CustomTypeId, EnumId, Primitive, RecordId, ReturnDef, TraitId};
+
+/// Form in which a Rust trait appears as a boundary value.
+///
+/// Names the supported Rust spellings for trait-typed values: a
+/// monomorphized `impl Trait`, an owned `Box<dyn Trait>`, or a shared
+/// `Arc<dyn Trait>`.
+///
+/// All three forms share the same FFI wire shape for a callback handle
+/// carrier. They differ in how Rust reconstructs the value at the call
+/// boundary:
+///
+/// - [`TraitUseForm::ImplTrait`] reconstructs the generated foreign wrapper.
+/// - [`TraitUseForm::BoxedDyn`] reconstructs `Box<dyn Trait>`.
+/// - [`TraitUseForm::ArcDyn`] reconstructs `Arc<dyn Trait>`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum TraitUseForm {
+    /// `impl Trait`.
+    ImplTrait,
+    /// `Box<dyn Trait>`.
+    BoxedDyn,
+    /// `Arc<dyn Trait>`.
+    ArcDyn,
+}
+
+/// Whether a handle-typed value is always present at the boundary or may be
+/// absent.
+///
+/// Nullability is a property of the handle slot itself, not a wrapping
+/// type. A nullable callback param crosses the boundary as the same carrier
+/// as a required callback param; the absence is encoded with a zero handle
+/// sentinel. Modelling presence on the type, rather than wrapping the type
+/// in [`TypeExpr::Option`], preserves the wire-level truth that no extra
+/// slot or presence flag exists.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum HandlePresence {
+    /// Caller must supply a live handle.
+    Required,
+    /// Caller may omit the handle; a zero/null sentinel encodes absence.
+    Nullable,
+}
 
 /// A type expression in the exported Rust surface.
 ///
@@ -15,14 +55,51 @@ use crate::{CallbackId, ClassId, CustomTypeId, EnumId, Primitive, RecordId, Retu
 pub enum TypeExpr {
     /// A primitive Rust scalar.
     Primitive(Primitive),
+    /// The Rust unit type `()` used as the success channel of a
+    /// `Result<(), E>` return.
+    ///
+    /// This is the only position the lowering pass accepts `Unit` in.
+    /// The return lowering short-circuits `Result<Unit, E>` to a void
+    /// lift plus an encoded error channel without routing the empty
+    /// success value through the codec lane. Any other position (field,
+    /// parameter, `Vec<()>`, `Option<()>`, `Tuple` element, map key or
+    /// value) is rejected with `UnsupportedType::UnitInValuePosition`,
+    /// since the wire shape "a value that is always zero bytes" carries
+    /// no information worth crossing the boundary.
+    ///
+    /// Outer-position units (a callable that returns nothing) are
+    /// recorded by [`ReturnDef::Void`](crate::ReturnDef::Void) instead,
+    /// so "returns nothing" stays structurally distinct from "returns a
+    /// value that happens to be `()`".
+    Unit,
     /// A record declaration by ID.
     Record(RecordId),
     /// An enum declaration by ID.
     Enum(EnumId),
     /// A class-style object declaration by ID.
     Class(ClassId),
-    /// A callback trait declaration by ID.
-    Callback(CallbackId),
+    /// A reference to a Rust trait the user wrote.
+    ///
+    /// The source entity is a trait, such as `trait Listener { ... }`, and this
+    /// variant references it. "Callback" describes what the trait does at
+    /// the FFI boundary (foreign code provides the impl, Rust calls into
+    /// it); it does not describe what the source entity is, so it does
+    /// not belong in the variant name.
+    ///
+    /// Carries the trait use form ([`TraitUseForm`]) and the boundary
+    /// presence model ([`HandlePresence`]). Source `Option<Box<dyn T>>`
+    /// collapses to a single
+    /// `Trait { form: BoxedDyn, presence: Nullable }` rather than
+    /// wrapping in [`TypeExpr::Option`] because the wire shape is a single
+    /// nullable handle slot, not a presence-flagged optional.
+    Trait {
+        /// The trait declaration this reference resolves to.
+        id: TraitId,
+        /// Rust form used at this trait-typed boundary value.
+        form: TraitUseForm,
+        /// Whether the boundary slot is nullable.
+        presence: HandlePresence,
+    },
     /// An inline closure signature such as `impl Fn(u32) -> String`.
     Closure(Box<ClosureType>),
     /// A custom type declaration by ID.
@@ -32,6 +109,11 @@ pub enum TypeExpr {
     /// A `Vec<T>` source type.
     Vec(Box<TypeExpr>),
     /// An `Option<T>` source type.
+    ///
+    /// Used for ordinary optional values, such as `Option<i32>` and
+    /// `Option<String>`. Source `Option<...>` wrapping a supported
+    /// trait-typed value lands in [`TypeExpr::Trait`] with
+    /// `presence: Nullable`.
     Option(Box<TypeExpr>),
     /// A `Result<T, E>` source type.
     ///
@@ -50,6 +132,7 @@ pub enum TypeExpr {
     /// `(u32, String)` is represented as `ReturnDef::Value(TypeExpr::Tuple(_))`,
     /// while a function returning `Result<(u32, String), Error>` is represented
     /// as `ReturnDef::Value(TypeExpr::Result { ok: TypeExpr::Tuple(_), err: ... })`.
+    /// The empty tuple is *not* represented here; use [`TypeExpr::Unit`].
     Tuple(Vec<TypeExpr>),
     /// A map-like source type.
     Map {
@@ -103,11 +186,18 @@ impl TypeExpr {
     /// The `closure` parameter contains the callable signature written inside a
     /// closure-like parameter type.
     ///
-    /// Returns a closure type expression that can be paired with
-    /// [`ParameterPassing::ImplTrait`](crate::ParameterPassing::ImplTrait) or
-    /// [`ParameterPassing::BoxedDyn`](crate::ParameterPassing::BoxedDyn).
+    /// Returns a closure type expression.
     pub fn closure(closure: ClosureType) -> Self {
         Self::Closure(Box::new(closure))
+    }
+
+    /// Builds a trait-reference type expression.
+    ///
+    /// The `id` parameter is the trait declaration. The `form` parameter is
+    /// the Rust form used at the boundary. The `presence` parameter is the
+    /// boundary slot's nullability.
+    pub fn r#trait(id: TraitId, form: TraitUseForm, presence: HandlePresence) -> Self {
+        Self::Trait { id, form, presence }
     }
 
     /// Builds a tuple type expression.

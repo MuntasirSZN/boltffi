@@ -184,8 +184,8 @@ pub enum DeclarationFamily {
     Functions,
     /// Class-style object declarations.
     Classes,
-    /// Callback trait declarations.
-    CallbackTraits,
+    /// Trait declarations.
+    Traits,
     /// Stream declarations.
     Streams,
     /// Constant declarations.
@@ -205,7 +205,7 @@ impl fmt::Display for DeclarationFamily {
             Self::Enums => "enums",
             Self::Functions => "functions",
             Self::Classes => "classes",
-            Self::CallbackTraits => "callback traits",
+            Self::Traits => "traits",
             Self::Streams => "streams",
             Self::Constants => "constants",
             Self::CustomTypes => "custom types",
@@ -235,10 +235,19 @@ pub enum UnsupportedType {
     DefaultValue,
     /// An `async` callable cannot be lowered yet.
     AsyncCallable,
-    /// An `impl Trait` parameter has no IR slice yet.
-    ImplTraitParameter,
-    /// A `Box<dyn Trait>` parameter has no IR slice yet.
-    BoxedDynParameter,
+    /// `()` appeared in a position that requires a value-shaped type (a field
+    /// or parameter). Unit is only meaningful as a callable result; carrying
+    /// it as a value would force every consumer to special-case empty data.
+    UnitInValuePosition,
+    /// `Self` appeared in a callback trait signature where the trait object
+    /// has no concrete implementer type to substitute.
+    SelfInCallbackTrait,
+    /// A callback method snake-cases to a name already taken by the vtable
+    /// lifecycle slot (`free` or `clone`) or by another callback method.
+    CallbackMethodSlotCollision,
+    /// A callback method declared a static or owned receiver, neither of
+    /// which the callback handle protocol can dispatch.
+    InvalidCallbackReceiver,
     /// An owned class receiver has no handle-transfer protocol yet.
     OwnedClassReceiver,
 }
@@ -253,8 +262,10 @@ impl fmt::Display for UnsupportedType {
             Self::FallibleClosureReturn => "fallible closure return",
             Self::DefaultValue => "default value",
             Self::AsyncCallable => "async callable",
-            Self::ImplTraitParameter => "impl Trait parameter",
-            Self::BoxedDynParameter => "Box<dyn Trait> parameter",
+            Self::UnitInValuePosition => "unit type `()` in a value position",
+            Self::SelfInCallbackTrait => "Self in callback trait method",
+            Self::CallbackMethodSlotCollision => "callback method name collides with vtable slot",
+            Self::InvalidCallbackReceiver => "callback method receiver",
             Self::OwnedClassReceiver => "owned class receiver",
         })
     }

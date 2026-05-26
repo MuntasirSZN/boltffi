@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use boltffi_ast::{
-    CallbackId as SourceCallbackId, ClassId as SourceClassId, CustomTypeId as SourceCustomTypeId,
-    EnumId as SourceEnumId, RecordId as SourceRecordId, SourceContract,
+    ClassId as SourceClassId, CustomTypeId as SourceCustomTypeId, EnumId as SourceEnumId,
+    RecordId as SourceRecordId, SourceContract, TraitId as SourceTraitId,
 };
 
 use crate::{CallbackId, ClassId, CustomTypeId, EnumId, RecordId};
@@ -46,9 +46,9 @@ impl DeclarationIds {
                 ClassId::from_raw,
             )?,
             callbacks: collect_ids(
-                source.callback_traits.iter(),
-                DeclarationFamily::CallbackTraits,
-                |callback| callback.id.as_str(),
+                source.traits.iter(),
+                DeclarationFamily::Traits,
+                |source_trait| source_trait.id.as_str(),
                 CallbackId::from_raw,
             )?,
             customs: collect_ids(
@@ -81,7 +81,7 @@ impl DeclarationIds {
             .ok_or_else(|| LowerError::unknown_class(id))
     }
 
-    pub(super) fn callback(&self, id: &SourceCallbackId) -> Result<CallbackId, LowerError> {
+    pub(super) fn callback(&self, id: &SourceTraitId) -> Result<CallbackId, LowerError> {
         self.callbacks
             .get(id.as_str())
             .copied()

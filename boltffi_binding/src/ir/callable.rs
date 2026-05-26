@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AsyncProtocolIntrospect, BindingError, BindingErrorKind, BufferShapeRules, CanonicalName,
-    ElementMeta, HandleTarget, IntegerRepr, NativeSymbol, ReadPlan, Surface, TypeRef, WritePlan,
+    ElementMeta, HandlePresence, HandleTarget, IntegerRepr, NativeSymbol, ReadPlan, Surface,
+    TypeRef, WritePlan,
 };
 
 /// One call shape ready to be turned into target code.
@@ -224,6 +225,8 @@ pub enum LowerPlan<S: Surface> {
         carrier: S::HandleCarrier,
         /// Rust-side receive mode.
         receive: Receive,
+        /// Whether the slot is required or may be null.
+        presence: HandlePresence,
     },
 }
 
@@ -327,6 +330,8 @@ pub enum LiftPlan<S: Surface> {
         target: HandleTarget,
         /// Carrier used to move the handle across the boundary.
         carrier: S::HandleCarrier,
+        /// Whether the returned slot may be null.
+        presence: HandlePresence,
     },
     /// Opaque handle written through a trailing out-pointer parameter.
     HandleOut {
@@ -334,6 +339,8 @@ pub enum LiftPlan<S: Surface> {
         target: HandleTarget,
         /// Carrier used to move the handle across the boundary.
         carrier: S::HandleCarrier,
+        /// Whether the returned slot may be null.
+        presence: HandlePresence,
     },
 }
 
@@ -342,7 +349,15 @@ impl<S: Surface> LiftPlan<S> {
         match self {
             Self::Direct { ty } => Self::DirectOut { ty },
             Self::Encoded { ty, read, shape } => Self::EncodedOut { ty, read, shape },
-            Self::Handle { target, carrier } => Self::HandleOut { target, carrier },
+            Self::Handle {
+                target,
+                carrier,
+                presence,
+            } => Self::HandleOut {
+                target,
+                carrier,
+                presence,
+            },
             other => other,
         }
     }

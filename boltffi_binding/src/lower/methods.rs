@@ -7,7 +7,9 @@
 //! discriminator, target symbol allocation, and owner-specific constructed
 //! type recorded on an initializer.
 
-use boltffi_ast::{ClassDef, EnumDef, MethodDef, Receiver, RecordDef, ReturnDef, TypeExpr};
+use boltffi_ast::{
+    ClassDef, EnumDef, MethodDef, Receiver, RecordDef, ReturnDef, TraitDef, TypeExpr,
+};
 
 use crate::{
     CanonicalName, InitializerDecl, InitializerId, MethodDecl, MethodId, NativeSymbol,
@@ -21,7 +23,9 @@ use super::{
     index::Index,
     metadata,
     surface::SurfaceLower,
-    symbol::{SymbolAllocator, SymbolOwner, initializer_symbol_name, member_symbol_name},
+    symbol::{
+        CallbackSlot, SymbolAllocator, SymbolOwner, initializer_symbol_name, member_symbol_name,
+    },
 };
 
 /// Lowers every initializer-shaped method on `record`.
@@ -274,6 +278,61 @@ fn mint_initializer_symbol(
     allocator.mint(symbol_name)
 }
 
+/// Lowers every method on `callback` with a per-surface dispatch
+/// target.
+///
+/// Records and enums and classes all use [`NativeSymbol`] as the
+/// method target because their methods are Rust-implemented. Callback
+/// traits invert ownership: foreign code provides each method, so the
+/// target is surface-divergent — a [`crate::VTableSlot`] on native, a
+/// [`crate::ImportSymbol`] on wasm32.
+///
+/// The `target_for` closure receives a [`CallbackSlot`], not a raw
+/// string. The slot is constructed once here from the source method
+/// ident, so the type system guarantees the value handed to each
+/// surface is the canonical snake-cased name. A future caller of the
+/// per-surface name constructors cannot bypass normalization because
+/// they cannot construct a [`CallbackSlot`] from arbitrary text.
+pub(super) fn lower_callback_methods<S: SurfaceLower, T, F>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    source_trait: &TraitDef,
+    mut target_for: F,
+) -> Result<Vec<MethodDecl<S, T>>, LowerError>
+where
+    F: FnMut(&CallbackSlot) -> Result<T, LowerError>,
+{
+    let owner = callable::CallableOwner::Trait(source_trait);
+    source_trait
+        .methods
+        .iter()
+        .enumerate()
+        .map(|(index, method)| {
+            require_callback_receiver(method.receiver)?;
+            let callable_decl = callable::lower_method::<S>(idx, ids, owner, method)?;
+            let raw_method_name = method.name.parts().last().map_or("", |part| part.as_str());
+            let slot = CallbackSlot::from_method_name(raw_method_name);
+            let target = target_for(&slot)?;
+            Ok(MethodDecl::new(
+                MethodId::from_raw(index as u32),
+                CanonicalName::from(&method.name),
+                metadata::decl_meta(method.doc.as_ref(), method.deprecated.as_ref()),
+                target,
+                callable_decl,
+            ))
+        })
+        .collect()
+}
+
+fn require_callback_receiver(receiver: Receiver) -> Result<(), LowerError> {
+    match receiver {
+        Receiver::Shared | Receiver::Mutable => Ok(()),
+        Receiver::None | Receiver::Owned => Err(LowerError::unsupported_type(
+            UnsupportedType::InvalidCallbackReceiver,
+        )),
+    }
+}
+
 fn symbol_owner(owner: callable::CallableOwner<'_>) -> SymbolOwner<'_> {
     match owner {
         callable::CallableOwner::Record(record) => SymbolOwner::record(record.id.as_str()),
@@ -281,6 +340,9 @@ fn symbol_owner(owner: callable::CallableOwner<'_>) -> SymbolOwner<'_> {
             SymbolOwner::enumeration(enumeration.id.as_str())
         }
         callable::CallableOwner::Class(class) => SymbolOwner::class(class.id.as_str()),
+        callable::CallableOwner::Trait(source_trait) => {
+            SymbolOwner::callback(source_trait.id.as_str())
+        }
     }
 }
 

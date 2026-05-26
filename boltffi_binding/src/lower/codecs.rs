@@ -45,7 +45,7 @@ pub(super) fn node(
             }
         }
         TypeExpr::Class(id) => CodecNode::ClassHandle(ids.class(id)?),
-        TypeExpr::Callback(id) => CodecNode::CallbackHandle(ids.callback(id)?),
+        TypeExpr::Trait { id, .. } => CodecNode::CallbackHandle(ids.callback(id)?),
         TypeExpr::Closure(closure) => CodecNode::ClosureHandle(types::lower_closure(ids, closure)?),
         TypeExpr::Custom(id) => CodecNode::Custom(ids.custom(id)?),
         TypeExpr::Vec(element) => {
@@ -75,6 +75,11 @@ pub(super) fn node(
             key: Box::new(node(idx, ids, key, ValueRef::self_value())?),
             value: Box::new(node(idx, ids, item, ValueRef::self_value())?),
         },
+        TypeExpr::Unit => {
+            return Err(LowerError::unsupported_type(
+                super::error::UnsupportedType::UnitInValuePosition,
+            ));
+        }
         TypeExpr::SelfType => {
             return Err(LowerError::unsupported_type(
                 super::error::UnsupportedType::SelfType,
