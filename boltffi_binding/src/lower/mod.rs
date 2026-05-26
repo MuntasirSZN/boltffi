@@ -12,15 +12,15 @@
 //!
 //! 1. Build [`DeclarationIds`] from the source. Duplicate ids in the
 //!    same family fail here, before any walk.
-//! 2. Reject declaration families that have no IR slice yet (free
-//!    functions, streams, constants, custom types). Records, enums,
-//!    classes, and traits all lower below.
+//! 2. Reject declaration families that have no IR slice yet (streams,
+//!    constants, custom types). Records, enums, classes, traits, and
+//!    free functions all lower below.
 //! 3. Build an [`Index`] of the source for cross-decl lookups during
 //!    type and codec lowering.
 //! 4. Lower every record into [`RecordDecl<S>`], every enum into
-//!    [`EnumDecl<S>`], every class into [`ClassDecl<S>`], and every
-//!    trait into [`CallbackDecl<S>`] (the trait's per-surface dispatch
-//!    protocol).
+//!    [`EnumDecl<S>`], every class into [`ClassDecl<S>`], every trait
+//!    into [`CallbackDecl<S>`] (the trait's per-surface dispatch
+//!    protocol), and every free function into [`FunctionDecl<S>`].
 //! 5. Hand the collected decls to [`Bindings::from_decls`], which
 //!    derives the native symbol table from the symbols the decls
 //!    reference and validates the result.
@@ -44,6 +44,7 @@ mod classes;
 mod codecs;
 mod enums;
 mod error;
+mod functions;
 mod ids;
 mod index;
 mod layout;
@@ -79,6 +80,7 @@ pub fn lower<S: SurfaceLower>(source: &SourceContract) -> Result<Bindings<S>, Lo
     let enums = enums::lower::<S>(&index, &ids, &mut allocator)?;
     let classes = classes::lower::<S>(&index, &ids, &mut allocator)?;
     let callbacks = callbacks::lower::<S>(&index, &ids, &mut allocator)?;
+    let functions = functions::lower::<S>(&index, &ids, &mut allocator)?;
 
     let decls = records
         .into_iter()
@@ -98,6 +100,11 @@ pub fn lower<S: SurfaceLower>(source: &SourceContract) -> Result<Bindings<S>, Lo
                 .into_iter()
                 .map(|callback| Decl::Callback(Box::new(callback))),
         )
+        .chain(
+            functions
+                .into_iter()
+                .map(|function| Decl::Function(Box::new(function))),
+        )
         .collect::<Vec<_>>();
 
     let package = PackageInfo::new(
@@ -110,7 +117,6 @@ pub fn lower<S: SurfaceLower>(source: &SourceContract) -> Result<Bindings<S>, Lo
 
 fn reject_unsupported(source: &SourceContract) -> Result<(), LowerError> {
     [
-        (!source.functions.is_empty(), DeclarationFamily::Functions),
         (!source.streams.is_empty(), DeclarationFamily::Streams),
         (!source.constants.is_empty(), DeclarationFamily::Constants),
         (!source.customs.is_empty(), DeclarationFamily::CustomTypes),

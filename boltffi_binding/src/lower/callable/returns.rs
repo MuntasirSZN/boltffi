@@ -1,7 +1,8 @@
 use boltffi_ast::{ReturnDef, TypeExpr};
 
 use crate::{
-    ElementMeta, ErrorDecl, HandlePresence, HandleTarget, LiftPlan, ReadPlan, ReturnDecl, ValueRef,
+    ElementMeta, ErrorDecl, HandlePresence, HandleTarget, LiftPlan, Primitive, ReadPlan,
+    ReturnDecl, TypeRef, ValueRef,
 };
 
 use super::super::{
@@ -44,12 +45,61 @@ pub(super) fn lower<S: SurfaceLower>(
                 ));
             }
             let type_expr = substitute_self_type(owner, type_expr)?;
-            let lift = lower_lift::<S>(idx, ids, &type_expr)?;
+            let lift = lower_plain_lift::<S>(idx, ids, &type_expr)?;
             Ok((
                 ReturnDecl::new(ElementMeta::new(None, None, None), lift),
                 ErrorDecl::none(),
             ))
         }
+    }
+}
+
+fn lower_plain_lift<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+) -> Result<LiftPlan<S>, LowerError> {
+    match specialize_return::<S>(idx, ids, type_expr)? {
+        Some(lift) => Ok(lift),
+        None => lower_lift::<S>(idx, ids, type_expr),
+    }
+}
+
+fn specialize_return<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+) -> Result<Option<LiftPlan<S>>, LowerError> {
+    Ok(match type_expr {
+        TypeExpr::Option(inner) => {
+            primitive(inner).map(|primitive| LiftPlan::ScalarOption { primitive })
+        }
+        TypeExpr::Vec(inner) => {
+            direct_vec_element(idx, ids, inner)?.map(|element| LiftPlan::DirectVec { element })
+        }
+        _ => None,
+    })
+}
+
+fn primitive(type_expr: &TypeExpr) -> Option<Primitive> {
+    if let TypeExpr::Primitive(p) = type_expr {
+        Some(Primitive::from(*p))
+    } else {
+        None
+    }
+}
+
+fn direct_vec_element(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+) -> Result<Option<TypeRef>, LowerError> {
+    match type_expr {
+        TypeExpr::Primitive(_) => Ok(Some(types::lower(ids, type_expr)?)),
+        TypeExpr::Record(id) if idx.record(id).is_some_and(records::is_direct) => {
+            Ok(Some(types::lower(ids, type_expr)?))
+        }
+        _ => Ok(None),
     }
 }
 

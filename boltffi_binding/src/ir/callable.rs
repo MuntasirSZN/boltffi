@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AsyncProtocolIntrospect, BindingError, BindingErrorKind, BufferShapeRules, CanonicalName,
-    ElementMeta, HandlePresence, HandleTarget, IntegerRepr, NativeSymbol, ReadPlan, Surface,
-    TypeRef, WritePlan,
+    ElementMeta, HandlePresence, HandleTarget, IntegerRepr, NativeSymbol, Primitive, ReadPlan,
+    Surface, TypeRef, WritePlan,
 };
 
 /// One call shape ready to be turned into target code.
@@ -342,6 +342,33 @@ pub enum LiftPlan<S: Surface> {
         /// Whether the returned slot may be null.
         presence: HandlePresence,
     },
+    /// `Option<P>` for a primitive `P`, returned through the surface's
+    /// scalar-option path.
+    ///
+    /// Native and wasm32 emit different wire shapes for this variant
+    /// (native packs the value through `FfiBuf::wire_encode`, wasm32
+    /// returns a single `f64` with `f64::NAN` as the `None` sentinel),
+    /// but the IR records only the inner primitive. The renderer
+    /// dispatches on the surface it is targeting. Specialization fires
+    /// only for plain (infallible) returns; the `Result<T, E>` success
+    /// channel falls back to [`LiftPlan::Encoded`] so the error channel
+    /// is free to use the return slot.
+    ScalarOption {
+        /// Primitive carried inside the `Option`.
+        primitive: Primitive,
+    },
+    /// `Vec<T>` returned through the surface's direct-vector path.
+    ///
+    /// `T` is either a primitive or a direct (blittable) record. Native
+    /// emits `VecTransport::pack_vec` into the return slot; wasm32 emits
+    /// a void return and writes the buffer descriptor through the
+    /// runtime's thread-local return slot. The IR records the element
+    /// type; the renderer dispatches per surface. Specialization fires
+    /// only for plain (infallible) returns.
+    DirectVec {
+        /// Element type stored in the vector.
+        element: TypeRef,
+    },
 }
 
 impl<S: Surface> LiftPlan<S> {
@@ -365,7 +392,11 @@ impl<S: Surface> LiftPlan<S> {
     pub(crate) const fn uses_return_slot(&self) -> bool {
         matches!(
             self,
-            Self::Direct { .. } | Self::Encoded { .. } | Self::Handle { .. }
+            Self::Direct { .. }
+                | Self::Encoded { .. }
+                | Self::Handle { .. }
+                | Self::ScalarOption { .. }
+                | Self::DirectVec { .. }
         )
     }
 

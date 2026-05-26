@@ -114,6 +114,15 @@ pub(super) fn class_release_symbol_name(class_id: &str) -> String {
     format!("{}_release_class_{}", FFI_PREFIX, symbol_path(class_id))
 }
 
+/// Builds the symbol foreign code links to invoke a free function.
+///
+/// Free functions have no owning type, so the symbol carries only the
+/// `function` lane and the path. The path is the source id snake-cased,
+/// matching the convention every other lane uses.
+pub(super) fn function_symbol_name(function_id: &str) -> String {
+    format!("{}_function_{}", FFI_PREFIX, symbol_path(function_id))
+}
+
 /// Builds the Rust-side symbol that installs a foreign-provided vtable.
 pub(super) fn callback_register_symbol_name(callback_id: &str) -> String {
     format!(

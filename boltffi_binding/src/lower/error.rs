@@ -92,6 +92,9 @@ impl fmt::Display for LowerError {
                     unsupported
                 )
             }
+            LowerErrorKind::InvalidFunctionForm => {
+                formatter.write_str("function declaration has non-function callable form")
+            }
             LowerErrorKind::DuplicateSourceId { family, id } => {
                 write!(formatter, "duplicate {} source id `{id}`", family)
             }
@@ -147,6 +150,8 @@ pub enum LowerErrorKind {
     UnsupportedDeclaration(DeclarationFamily),
     /// A source type has no binding-IR representation yet.
     UnsupportedType(UnsupportedType),
+    /// A function declaration carried a non-function source placement.
+    InvalidFunctionForm,
     /// Two declarations in the same family share one source id.
     DuplicateSourceId {
         /// Declaration family where the duplicate was found.

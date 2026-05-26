@@ -1143,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn vec_return_lowers_to_encoded() {
+    fn vec_of_primitive_return_lowers_to_direct_vec() {
         let bindings = lower_point_method::<Native>(method_with(
             "samples",
             Receiver::Shared,
@@ -1153,29 +1153,15 @@ mod tests {
         let methods = first_record_methods(&bindings);
 
         match methods[0].callable().returns().lift() {
-            LiftPlan::Encoded {
-                ty,
-                read,
-                shape: native::BufferShape::Buffer,
-            } => {
-                assert_eq!(
-                    ty,
-                    &TypeRef::Sequence(Box::new(TypeRef::Primitive(BindingPrimitive::F64)))
-                );
-                let CodecNode::Sequence { element, .. } = read.root() else {
-                    panic!("expected sequence codec, got {:?}", read.root());
-                };
-                assert_eq!(
-                    element.as_ref(),
-                    &CodecNode::Primitive(BindingPrimitive::F64)
-                );
+            LiftPlan::DirectVec { element } => {
+                assert_eq!(element, &TypeRef::Primitive(BindingPrimitive::F64));
             }
-            other => panic!("expected encoded vec return, got {other:?}"),
+            other => panic!("expected DirectVec lift, got {other:?}"),
         }
     }
 
     #[test]
-    fn vec_self_return_substitutes_to_owning_record_and_lowers_encoded() {
+    fn vec_self_return_substitutes_to_owning_record_and_lowers_direct_vec() {
         let bindings = lower_point_method::<Native>(method_with(
             "neighbours",
             Receiver::Shared,
@@ -1185,24 +1171,10 @@ mod tests {
         let methods = first_record_methods(&bindings);
 
         match methods[0].callable().returns().lift() {
-            LiftPlan::Encoded {
-                ty,
-                read,
-                shape: native::BufferShape::Buffer,
-            } => {
-                assert_eq!(
-                    ty,
-                    &TypeRef::Sequence(Box::new(TypeRef::Record(RecordId::from_raw(0))))
-                );
-                let CodecNode::Sequence { element, .. } = read.root() else {
-                    panic!("expected sequence codec, got {:?}", read.root());
-                };
-                assert_eq!(
-                    element.as_ref(),
-                    &CodecNode::DirectRecord(RecordId::from_raw(0))
-                );
+            LiftPlan::DirectVec { element } => {
+                assert_eq!(element, &TypeRef::Record(RecordId::from_raw(0)));
             }
-            other => panic!("expected encoded return, got {other:?}"),
+            other => panic!("expected DirectVec lift, got {other:?}"),
         }
     }
 

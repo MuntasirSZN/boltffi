@@ -35,7 +35,7 @@
 mod params;
 mod returns;
 
-use boltffi_ast::{ExecutionKind, MethodDef, Receiver};
+use boltffi_ast::{ExecutionKind, FunctionDef, MethodDef, Receiver};
 
 use crate::{CallableDecl, ExecutionDecl, Receive};
 
@@ -58,6 +58,10 @@ pub(super) enum CallableOwner<'src> {
     Class(&'src boltffi_ast::ClassDef),
     /// Owned by a trait.
     Trait(&'src boltffi_ast::TraitDef),
+    /// A top-level free function. Free functions have no `Self` and no
+    /// owning type, so type-expression substitution rejects any `Self`
+    /// reference encountered in this position.
+    Function,
 }
 
 impl<'src> CallableOwner<'src> {
@@ -69,12 +73,13 @@ impl<'src> CallableOwner<'src> {
             Self::Trait(_) => Err(LowerError::unsupported_type(
                 UnsupportedType::SelfInCallbackTrait,
             )),
+            Self::Function => Err(LowerError::unsupported_type(UnsupportedType::SelfType)),
         }
     }
 
     pub(super) fn owns_type_expr(self, type_expr: &boltffi_ast::TypeExpr) -> bool {
         match (self, type_expr) {
-            (Self::Trait(_), boltffi_ast::TypeExpr::SelfType) => false,
+            (Self::Trait(_) | Self::Function, boltffi_ast::TypeExpr::SelfType) => false,
             (_, boltffi_ast::TypeExpr::SelfType) => true,
             (Self::Record(record), boltffi_ast::TypeExpr::Record(id)) => id == &record.id,
             (Self::Enum(enumeration), boltffi_ast::TypeExpr::Enum(id)) => id == &enumeration.id,
@@ -109,6 +114,32 @@ pub(super) fn lower_method<S: SurfaceLower>(
 
     Ok(CallableDecl::new(
         receiver,
+        parameters,
+        returns,
+        error,
+        ExecutionDecl::synchronous(),
+    )?)
+}
+
+/// Lowers one [`FunctionDef`] into a [`CallableDecl<S>`] for a free
+/// function. There is no receiver and no `Self`; the owner context
+/// rejects any `Self` reference found while walking parameter and
+/// return types.
+pub(super) fn lower_function<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    function: &FunctionDef,
+) -> Result<CallableDecl<S>, LowerError> {
+    if matches!(function.execution, ExecutionKind::Async) {
+        return Err(LowerError::unsupported_type(UnsupportedType::AsyncCallable));
+    }
+
+    let owner = CallableOwner::Function;
+    let parameters = params::lower::<S>(idx, ids, owner, &function.parameters)?;
+    let (returns, error) = returns::lower::<S>(idx, ids, owner, &function.returns)?;
+
+    Ok(CallableDecl::new(
+        None,
         parameters,
         returns,
         error,
