@@ -76,8 +76,21 @@ pub enum TypeExpr {
     Record(RecordId),
     /// An enum declaration by ID.
     Enum(EnumId),
-    /// A class-style object declaration by ID.
-    Class(ClassId),
+    /// A class-style object reference.
+    ///
+    /// Class instances cross the boundary as opaque handles. The
+    /// `presence` field records whether the boundary slot is always
+    /// populated or may carry the null-handle sentinel: source
+    /// `Option<Engine>` collapses to `Class { id, presence: Nullable }`
+    /// rather than wrapping in [`TypeExpr::Option`] because the wire
+    /// shape is a single nullable handle slot, not a presence-flagged
+    /// optional. Mirrors the [`TypeExpr::Trait`] presence model.
+    Class {
+        /// The class declaration this reference resolves to.
+        id: ClassId,
+        /// Whether the boundary handle slot is nullable.
+        presence: HandlePresence,
+    },
     /// A reference to a Rust trait the user wrote.
     ///
     /// The source entity is a trait, such as `trait Listener { ... }`, and this
@@ -198,6 +211,14 @@ impl TypeExpr {
     /// boundary slot's nullability.
     pub fn r#trait(id: TraitId, form: TraitUseForm, presence: HandlePresence) -> Self {
         Self::Trait { id, form, presence }
+    }
+
+    /// Builds a class-reference type expression.
+    ///
+    /// The `id` parameter is the class declaration. The `presence`
+    /// parameter is the boundary handle slot's nullability.
+    pub fn class(id: ClassId, presence: HandlePresence) -> Self {
+        Self::Class { id, presence }
     }
 
     /// Builds a tuple type expression.

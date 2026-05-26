@@ -166,10 +166,10 @@ fn lower_lift<S: SurfaceLower>(
             carrier: S::closure_handle_carrier(),
             presence: HandlePresence::Required,
         }),
-        TypeExpr::Class(id) => Ok(LiftPlan::Handle {
+        TypeExpr::Class { id, presence } => Ok(LiftPlan::Handle {
             target: HandleTarget::Class(ids.class(id)?),
             carrier: S::class_handle_carrier(),
-            presence: HandlePresence::Required,
+            presence: lower_presence(*presence),
         }),
         TypeExpr::Trait {
             id,

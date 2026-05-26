@@ -69,7 +69,10 @@ impl<'src> CallableOwner<'src> {
         match self {
             Self::Record(record) => Ok(boltffi_ast::TypeExpr::Record(record.id.clone())),
             Self::Enum(enumeration) => Ok(boltffi_ast::TypeExpr::Enum(enumeration.id.clone())),
-            Self::Class(class) => Ok(boltffi_ast::TypeExpr::Class(class.id.clone())),
+            Self::Class(class) => Ok(boltffi_ast::TypeExpr::Class {
+                id: class.id.clone(),
+                presence: boltffi_ast::HandlePresence::Required,
+            }),
             Self::Trait(_) => Err(LowerError::unsupported_type(
                 UnsupportedType::SelfInCallbackTrait,
             )),
@@ -83,7 +86,7 @@ impl<'src> CallableOwner<'src> {
             (_, boltffi_ast::TypeExpr::SelfType) => true,
             (Self::Record(record), boltffi_ast::TypeExpr::Record(id)) => id == &record.id,
             (Self::Enum(enumeration), boltffi_ast::TypeExpr::Enum(id)) => id == &enumeration.id,
-            (Self::Class(class), boltffi_ast::TypeExpr::Class(id)) => id == &class.id,
+            (Self::Class(class), boltffi_ast::TypeExpr::Class { id, .. }) => id == &class.id,
             (Self::Trait(source_trait), boltffi_ast::TypeExpr::Trait { id, .. }) => {
                 id == &source_trait.id
             }
@@ -208,7 +211,7 @@ pub(super) fn substitute_self_type(
         | TypeExpr::Bytes
         | TypeExpr::Record(_)
         | TypeExpr::Enum(_)
-        | TypeExpr::Class(_)
+        | TypeExpr::Class { .. }
         | TypeExpr::Trait { .. }
         | TypeExpr::Custom(_)
         | TypeExpr::Parameter(_) => type_expr.clone(),

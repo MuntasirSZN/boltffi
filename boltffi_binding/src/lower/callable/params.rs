@@ -1,7 +1,8 @@
 use boltffi_ast::{ParameterDef, ParameterPassing, TypeExpr};
 
 use crate::{
-    CanonicalName, HandlePresence, HandleTarget, LowerPlan, ParamDecl, Receive, ValueRef, WritePlan,
+    CanonicalName, HandlePresence, HandleTarget, LowerPlan, ParamDecl, Primitive, Receive, TypeRef,
+    ValueRef, WritePlan,
 };
 
 use super::super::{
@@ -33,9 +34,64 @@ fn lower_one<S: SurfaceLower>(
     let receive = receive_for_passing(parameter.passing);
     let canonical_name = CanonicalName::from(&parameter.name);
     let value = ValueRef::named(canonical_name.clone());
-    let plan = lower_plan::<S>(idx, ids, &type_expr, value, receive)?;
+    let plan = lower_plain_plan::<S>(idx, ids, &type_expr, value, receive)?;
     let meta = metadata::element_meta(parameter.doc.as_ref(), None, parameter.default.as_ref())?;
     Ok(ParamDecl::new(canonical_name, meta, plan))
+}
+
+fn lower_plain_plan<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+    value: ValueRef,
+    receive: Receive,
+) -> Result<LowerPlan<S>, LowerError> {
+    match specialize_param::<S>(idx, ids, type_expr, receive)? {
+        Some(plan) => Ok(plan),
+        None => lower_plan::<S>(idx, ids, type_expr, value, receive),
+    }
+}
+
+fn specialize_param<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+    receive: Receive,
+) -> Result<Option<LowerPlan<S>>, LowerError> {
+    if !matches!(receive, Receive::ByValue) {
+        return Ok(None);
+    }
+    Ok(match type_expr {
+        TypeExpr::Option(inner) => {
+            primitive(inner).map(|primitive| LowerPlan::ScalarOption { primitive })
+        }
+        TypeExpr::Vec(inner) => {
+            direct_vec_element(idx, ids, inner)?.map(|element| LowerPlan::DirectVec { element })
+        }
+        _ => None,
+    })
+}
+
+fn primitive(type_expr: &TypeExpr) -> Option<Primitive> {
+    if let TypeExpr::Primitive(p) = type_expr {
+        Some(Primitive::from(*p))
+    } else {
+        None
+    }
+}
+
+fn direct_vec_element(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+) -> Result<Option<TypeRef>, LowerError> {
+    match type_expr {
+        TypeExpr::Primitive(_) => Ok(Some(types::lower(ids, type_expr)?)),
+        TypeExpr::Record(id) if idx.record(id).is_some_and(records::is_direct) => {
+            Ok(Some(types::lower(ids, type_expr)?))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn receive_for_passing(passing: ParameterPassing) -> Receive {
@@ -105,11 +161,11 @@ fn lower_plan<S: SurfaceLower>(
             receive,
             presence: HandlePresence::Required,
         }),
-        TypeExpr::Class(id) => Ok(LowerPlan::Handle {
+        TypeExpr::Class { id, presence } => Ok(LowerPlan::Handle {
             target: HandleTarget::Class(ids.class(id)?),
             carrier: S::class_handle_carrier(),
             receive,
-            presence: HandlePresence::Required,
+            presence: lower_presence(*presence),
         }),
         TypeExpr::Trait {
             id,

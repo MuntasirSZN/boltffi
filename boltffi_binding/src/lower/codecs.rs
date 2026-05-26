@@ -44,7 +44,7 @@ pub(super) fn node(
                 CodecNode::DataEnum(id)
             }
         }
-        TypeExpr::Class(id) => CodecNode::ClassHandle(ids.class(id)?),
+        TypeExpr::Class { id, .. } => CodecNode::ClassHandle(ids.class(id)?),
         TypeExpr::Trait { id, .. } => CodecNode::CallbackHandle(ids.callback(id)?),
         TypeExpr::Closure(closure) => CodecNode::ClosureHandle(types::lower_closure(ids, closure)?),
         TypeExpr::Custom(id) => CodecNode::Custom(ids.custom(id)?),

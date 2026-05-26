@@ -57,16 +57,16 @@ fn lower_one<S: SurfaceLower>(
 mod tests {
     use boltffi_ast::{
         CanonicalName as SourceName, ClassDef, DeprecationInfo as SourceDeprecationInfo,
-        DocComment as SourceDocComment, EnumDef, FieldDef, MethodDef, MethodId as SourceMethodId,
-        PackageInfo as SourcePackage, ParameterDef, Primitive, Receiver, RecordDef, ReturnDef,
-        SourceContract, TypeExpr, VariantDef,
+        DocComment as SourceDocComment, EnumDef, FieldDef, HandlePresence as SourcePresence,
+        MethodDef, MethodId as SourceMethodId, PackageInfo as SourcePackage, ParameterDef,
+        Primitive, Receiver, RecordDef, ReturnDef, SourceContract, TypeExpr, VariantDef,
     };
 
     use crate::lower::lower;
     use crate::{
         BindingErrorKind, Bindings, CanonicalName, ClassDecl, ClassId, CodecNode, Decl, EnumId,
         ErrorDecl, ExecutionDecl, HandlePresence, HandleTarget, InitializerId, LiftPlan,
-        LowerError, LowerErrorKind, LowerPlan, MethodId, Native, NativeSymbol,
+        LowerError, LowerErrorKind, LowerPlan, MethodId, Native, NativeSymbol, ParamDecl,
         Primitive as BindingPrimitive, Receive, RecordId, ReturnTypeRef, Surface, SurfaceLower,
         TypeRef, UnsupportedType, Wasm32, native, wasm32,
     };
@@ -319,9 +319,10 @@ mod tests {
             ReturnDef::Value(TypeExpr::SelfType),
         );
         merge.parameters.push(param("other", TypeExpr::SelfType));
-        merge
-            .parameters
-            .push(param("driver", TypeExpr::Class("demo::Driver".into())));
+        merge.parameters.push(param(
+            "driver",
+            TypeExpr::class("demo::Driver".into(), SourcePresence::Required),
+        ));
         let engine = class("demo::Engine", "Engine", vec![merge]);
         let mut contract = package();
         contract.classes = vec![driver, engine];
@@ -560,6 +561,176 @@ mod tests {
                 .map(|method| method.callable().returns().lift()),
             Some(&LiftPlan::Direct {
                 ty: TypeRef::Enum(EnumId::from_raw(0)),
+            })
+        );
+    }
+
+    #[test]
+    fn class_param_with_required_presence_lowers_to_required_handle() {
+        let driver = class("demo::Driver", "Driver", Vec::new());
+        let mut method = method("install", Receiver::Mutable, ReturnDef::Void);
+        method.parameters.push(param(
+            "driver",
+            TypeExpr::class("demo::Driver".into(), SourcePresence::Required),
+        ));
+        let engine = class("demo::Engine", "Engine", vec![method]);
+        let mut contract = package();
+        contract.classes = vec![driver, engine];
+
+        let bindings = lower_contract::<Native>(contract).expect("contract should lower");
+        let class_method = class_by_id(&bindings, ClassId::from_raw(1))
+            .methods()
+            .first()
+            .expect("method")
+            .clone();
+
+        assert_eq!(
+            class_method
+                .callable()
+                .params()
+                .first()
+                .map(ParamDecl::lower),
+            Some(&LowerPlan::Handle {
+                target: HandleTarget::Class(ClassId::from_raw(0)),
+                carrier: native::HandleCarrier::U64,
+                receive: Receive::ByValue,
+                presence: HandlePresence::Required,
+            })
+        );
+    }
+
+    #[test]
+    fn class_param_with_nullable_presence_lowers_to_nullable_handle() {
+        let driver = class("demo::Driver", "Driver", Vec::new());
+        let mut method = method("attach", Receiver::Mutable, ReturnDef::Void);
+        method.parameters.push(param(
+            "driver",
+            TypeExpr::class("demo::Driver".into(), SourcePresence::Nullable),
+        ));
+        let engine = class("demo::Engine", "Engine", vec![method]);
+        let mut contract = package();
+        contract.classes = vec![driver, engine];
+
+        let bindings = lower_contract::<Native>(contract).expect("contract should lower");
+        let class_method = class_by_id(&bindings, ClassId::from_raw(1))
+            .methods()
+            .first()
+            .expect("method")
+            .clone();
+
+        assert_eq!(
+            class_method
+                .callable()
+                .params()
+                .first()
+                .map(ParamDecl::lower),
+            Some(&LowerPlan::Handle {
+                target: HandleTarget::Class(ClassId::from_raw(0)),
+                carrier: native::HandleCarrier::U64,
+                receive: Receive::ByValue,
+                presence: HandlePresence::Nullable,
+            })
+        );
+    }
+
+    #[test]
+    fn class_return_with_nullable_presence_lifts_to_nullable_handle() {
+        let mut method = method(
+            "maybe_driver",
+            Receiver::Shared,
+            ReturnDef::Value(TypeExpr::class(
+                "demo::Driver".into(),
+                SourcePresence::Nullable,
+            )),
+        );
+        let driver = class("demo::Driver", "Driver", Vec::new());
+        let _ = &mut method;
+        let engine = class("demo::Engine", "Engine", vec![method]);
+        let mut contract = package();
+        contract.classes = vec![driver, engine];
+
+        let bindings = lower_contract::<Native>(contract).expect("contract should lower");
+        let class_method = class_by_id(&bindings, ClassId::from_raw(1))
+            .methods()
+            .first()
+            .expect("method")
+            .clone();
+
+        assert_eq!(
+            class_method.callable().returns().lift(),
+            &LiftPlan::Handle {
+                target: HandleTarget::Class(ClassId::from_raw(0)),
+                carrier: native::HandleCarrier::U64,
+                presence: HandlePresence::Nullable,
+            }
+        );
+    }
+
+    #[test]
+    fn nullable_class_param_uses_same_carrier_as_required() {
+        let driver = class("demo::Driver", "Driver", Vec::new());
+        let mut required_method = method("install", Receiver::Mutable, ReturnDef::Void);
+        required_method.parameters.push(param(
+            "driver",
+            TypeExpr::class("demo::Driver".into(), SourcePresence::Required),
+        ));
+        let mut nullable_method = method("attach", Receiver::Mutable, ReturnDef::Void);
+        nullable_method.parameters.push(param(
+            "driver",
+            TypeExpr::class("demo::Driver".into(), SourcePresence::Nullable),
+        ));
+        let engine = class(
+            "demo::Engine",
+            "Engine",
+            vec![required_method, nullable_method],
+        );
+        let mut contract = package();
+        contract.classes = vec![driver, engine];
+
+        let bindings = lower_contract::<Native>(contract).expect("contract should lower");
+        let methods = class_by_id(&bindings, ClassId::from_raw(1)).methods();
+
+        let required_carrier = match methods[0].callable().params()[0].lower() {
+            LowerPlan::Handle { carrier, .. } => *carrier,
+            other => panic!("expected handle, got {other:?}"),
+        };
+        let nullable_carrier = match methods[1].callable().params()[0].lower() {
+            LowerPlan::Handle { carrier, .. } => *carrier,
+            other => panic!("expected handle, got {other:?}"),
+        };
+        assert_eq!(required_carrier, nullable_carrier);
+    }
+
+    #[test]
+    fn nullable_class_param_uses_u32_carrier_on_wasm32() {
+        let driver = class("demo::Driver", "Driver", Vec::new());
+        let mut method = method("attach", Receiver::Mutable, ReturnDef::Void);
+        method.parameters.push(param(
+            "driver",
+            TypeExpr::class("demo::Driver".into(), SourcePresence::Nullable),
+        ));
+        let engine = class("demo::Engine", "Engine", vec![method]);
+        let mut contract = package();
+        contract.classes = vec![driver, engine];
+
+        let bindings = lower_contract::<Wasm32>(contract).expect("contract should lower");
+        let class_method = class_by_id(&bindings, ClassId::from_raw(1))
+            .methods()
+            .first()
+            .expect("method")
+            .clone();
+
+        assert_eq!(
+            class_method
+                .callable()
+                .params()
+                .first()
+                .map(ParamDecl::lower),
+            Some(&LowerPlan::Handle {
+                target: HandleTarget::Class(ClassId::from_raw(0)),
+                carrier: wasm32::HandleCarrier::U32,
+                receive: Receive::ByValue,
+                presence: HandlePresence::Nullable,
             })
         );
     }
