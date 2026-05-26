@@ -20,7 +20,7 @@ pub(super) fn lower(ids: &DeclarationIds, type_expr: &TypeExpr) -> Result<TypeRe
         TypeExpr::Record(id) => TypeRef::Record(ids.record(id)?),
         TypeExpr::Enum(id) => TypeRef::Enum(ids.enumeration(id)?),
         TypeExpr::Class(id) => TypeRef::Class(ids.class(id)?),
-        TypeExpr::Callback(id) => TypeRef::Callback(ids.callback(id)?),
+        TypeExpr::Trait { id, .. } => TypeRef::Callback(ids.callback(id)?),
         TypeExpr::Closure(closure) => TypeRef::Closure(Box::new(lower_closure(ids, closure)?)),
         TypeExpr::Custom(id) => TypeRef::Custom(ids.custom(id)?),
         TypeExpr::Vec(element) => TypeRef::Sequence(Box::new(lower(ids, element)?)),
@@ -39,6 +39,11 @@ pub(super) fn lower(ids: &DeclarationIds, type_expr: &TypeExpr) -> Result<TypeRe
             key: Box::new(lower(ids, key)?),
             value: Box::new(lower(ids, value)?),
         },
+        TypeExpr::Unit => {
+            return Err(LowerError::unsupported_type(
+                UnsupportedType::UnitInValuePosition,
+            ));
+        }
         TypeExpr::SelfType => {
             return Err(LowerError::unsupported_type(UnsupportedType::SelfType));
         }

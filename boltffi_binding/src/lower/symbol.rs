@@ -19,6 +19,7 @@ pub(super) enum SymbolOwner<'a> {
     Record(&'a str),
     Enum(&'a str),
     Class(&'a str),
+    Callback(&'a str),
 }
 
 impl<'a> SymbolOwner<'a> {
@@ -34,17 +35,25 @@ impl<'a> SymbolOwner<'a> {
         Self::Class(source_id)
     }
 
+    pub(super) const fn callback(source_id: &'a str) -> Self {
+        Self::Callback(source_id)
+    }
+
     fn family(self) -> &'static str {
         match self {
             Self::Record(_) => "record",
             Self::Enum(_) => "enum",
             Self::Class(_) => "class",
+            Self::Callback(_) => "callback",
         }
     }
 
     fn source_id(self) -> &'a str {
         match self {
-            Self::Record(source_id) | Self::Enum(source_id) | Self::Class(source_id) => source_id,
+            Self::Record(source_id)
+            | Self::Enum(source_id)
+            | Self::Class(source_id)
+            | Self::Callback(source_id) => source_id,
         }
     }
 }
@@ -104,6 +113,101 @@ pub(super) fn initializer_symbol_name(owner: SymbolOwner<'_>, initializer_name: 
 pub(super) fn class_release_symbol_name(class_id: &str) -> String {
     format!("{}_release_class_{}", FFI_PREFIX, symbol_path(class_id))
 }
+
+/// Builds the symbol foreign code links to invoke a free function.
+///
+/// Free functions have no owning type, so the symbol carries only the
+/// `function` lane and the path. The path is the source id snake-cased,
+/// matching the convention every other lane uses.
+pub(super) fn function_symbol_name(function_id: &str) -> String {
+    format!("{}_function_{}", FFI_PREFIX, symbol_path(function_id))
+}
+
+/// Builds the Rust-side symbol that installs a foreign-provided vtable.
+pub(super) fn callback_register_symbol_name(callback_id: &str) -> String {
+    format!(
+        "{}_register_callback_{}",
+        FFI_PREFIX,
+        symbol_path(callback_id)
+    )
+}
+
+/// Builds the Rust-side symbol that mints a callback handle bound to a
+/// foreign implementation.
+pub(super) fn callback_create_handle_symbol_name(callback_id: &str) -> String {
+    format!(
+        "{}_create_callback_{}",
+        FFI_PREFIX,
+        symbol_path(callback_id)
+    )
+}
+
+/// Builds the wasm import name foreign code provides for one method.
+///
+/// Takes a [`CallbackSlot`], so the value is guaranteed to be the
+/// canonical snake-cased slot name. The native vtable slot and the
+/// wasm import suffix for the same method are byte-equal by
+/// construction; there is no `&str` precondition for a caller to
+/// remember or violate.
+pub(super) fn callback_wasm_import_method_name(callback_id: &str, slot: &CallbackSlot) -> String {
+    format!(
+        "__{}_callback_{}_{}",
+        FFI_PREFIX,
+        symbol_path(callback_id),
+        slot.as_str()
+    )
+}
+
+/// Builds the wasm import name foreign code provides to drop a handle.
+pub(super) fn callback_wasm_import_free_name(callback_id: &str) -> String {
+    format!(
+        "__{}_callback_{}_free",
+        FFI_PREFIX,
+        symbol_path(callback_id)
+    )
+}
+
+/// Builds the wasm import name foreign code provides to duplicate a handle.
+pub(super) fn callback_wasm_import_clone_name(callback_id: &str) -> String {
+    format!(
+        "__{}_callback_{}_clone",
+        FFI_PREFIX,
+        symbol_path(callback_id)
+    )
+}
+
+/// The canonical snake-cased name of a callback method's dispatch slot.
+///
+/// Every surface (native vtable slot, wasm import suffix) builds its
+/// dispatch identifier from this same string, so wrapping the value in
+/// a private newtype removes the convention that callers must normalize
+/// a raw method ident before reaching the per-surface constructor. The
+/// only path to a [`CallbackSlot`] runs through
+/// [`CallbackSlot::from_method_name`], which applies [`to_snake_case`]
+/// once.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct CallbackSlot(String);
+
+impl CallbackSlot {
+    /// Normalizes a raw source method ident into the canonical slot name.
+    pub(super) fn from_method_name(method_name: &str) -> Self {
+        Self(to_snake_case(method_name))
+    }
+
+    /// Returns the canonical slot name.
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Wasm import module foreign callback implementations are linked from.
+pub(super) const WASM_CALLBACK_IMPORT_MODULE: &str = "env";
+
+/// Vtable slot the runtime fills with the foreign-provided free fn.
+pub(super) const VTABLE_FREE_SLOT_NAME: &str = "free";
+
+/// Vtable slot the runtime fills with the foreign-provided clone fn.
+pub(super) const VTABLE_CLONE_SLOT_NAME: &str = "clone";
 
 fn symbol_path(source_id: &str) -> String {
     source_id

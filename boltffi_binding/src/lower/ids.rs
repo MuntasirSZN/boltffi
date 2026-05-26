@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use boltffi_ast::{
-    CallbackId as SourceCallbackId, ClassId as SourceClassId, CustomTypeId as SourceCustomTypeId,
-    EnumId as SourceEnumId, RecordId as SourceRecordId, SourceContract,
+    ClassId as SourceClassId, CustomTypeId as SourceCustomTypeId, EnumId as SourceEnumId,
+    FunctionId as SourceFunctionId, RecordId as SourceRecordId, SourceContract,
+    TraitId as SourceTraitId,
 };
 
-use crate::{CallbackId, ClassId, CustomTypeId, EnumId, RecordId};
+use crate::{CallbackId, ClassId, CustomTypeId, EnumId, FunctionId, RecordId};
 
 use super::{LowerError, error::DeclarationFamily};
 
@@ -22,6 +23,7 @@ pub(super) struct DeclarationIds {
     classes: HashMap<String, ClassId>,
     callbacks: HashMap<String, CallbackId>,
     customs: HashMap<String, CustomTypeId>,
+    functions: HashMap<String, FunctionId>,
 }
 
 impl DeclarationIds {
@@ -46,9 +48,9 @@ impl DeclarationIds {
                 ClassId::from_raw,
             )?,
             callbacks: collect_ids(
-                source.callback_traits.iter(),
-                DeclarationFamily::CallbackTraits,
-                |callback| callback.id.as_str(),
+                source.traits.iter(),
+                DeclarationFamily::Traits,
+                |source_trait| source_trait.id.as_str(),
                 CallbackId::from_raw,
             )?,
             customs: collect_ids(
@@ -56,6 +58,12 @@ impl DeclarationIds {
                 DeclarationFamily::CustomTypes,
                 |custom| custom.id.as_str(),
                 CustomTypeId::from_raw,
+            )?,
+            functions: collect_ids(
+                source.functions.iter(),
+                DeclarationFamily::Functions,
+                |function| function.id.as_str(),
+                FunctionId::from_raw,
             )?,
         })
     }
@@ -81,7 +89,7 @@ impl DeclarationIds {
             .ok_or_else(|| LowerError::unknown_class(id))
     }
 
-    pub(super) fn callback(&self, id: &SourceCallbackId) -> Result<CallbackId, LowerError> {
+    pub(super) fn callback(&self, id: &SourceTraitId) -> Result<CallbackId, LowerError> {
         self.callbacks
             .get(id.as_str())
             .copied()
@@ -93,6 +101,13 @@ impl DeclarationIds {
             .get(id.as_str())
             .copied()
             .ok_or_else(|| LowerError::unknown_custom(id))
+    }
+
+    pub(super) fn function(&self, id: &SourceFunctionId) -> Result<FunctionId, LowerError> {
+        self.functions
+            .get(id.as_str())
+            .copied()
+            .ok_or_else(|| LowerError::unknown_function(id))
     }
 }
 

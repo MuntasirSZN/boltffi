@@ -103,6 +103,22 @@ pub enum HandleTarget {
     Stream(StreamId),
 }
 
+/// Whether a handle-typed slot is always populated or may be absent.
+///
+/// Nullability is a per-site decision on the dispatch plan, not a
+/// property of the target type. The same callback trait can be required
+/// on one method and nullable on another. The wire shape is identical;
+/// the carrier is the same width and a zero/null sentinel encodes the
+/// absent state.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum HandlePresence {
+    /// Caller must supply a live handle.
+    Required,
+    /// Caller may omit the handle; a zero/null sentinel encodes absence.
+    Nullable,
+}
+
 /// An inline closure crossing the boundary as a parameter value.
 ///
 /// Records only the closure's signature: the parameter types and the

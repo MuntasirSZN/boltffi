@@ -1,34 +1,41 @@
 //! Lowers AST callables (methods, initializers, free functions) into
 //! [`CallableDecl<S>`].
 //!
-//! Each axis of the IR's call shape — receiver mode, parameter
-//! crossings, return crossing, error transport, execution kind — is
+//! Each axis of the IR's call shape (receiver mode, parameter
+//! crossings, return crossing, error transport, execution kind) is
 //! decided here from the source [`MethodDef`] (and friends) and the
 //! surrounding [`CallableOwner`] context. The resulting
 //! [`CallableDecl`] carries every decision a renderer needs without
 //! re-running the dispatch.
 //!
-//! What this module supports today (intentionally narrow):
+//! What this module supports today:
 //!
 //! - synchronous callables;
 //! - by-value, by-ref, and by-mut-ref receivers;
+//! - callback-trait params and returns in all four shapes
+//!   ([`TraitUseForm`](boltffi_ast::TraitUseForm) crossed with
+//!   [`HandlePresence`](boltffi_ast::HandlePresence)), routed as
+//!   nullable or required callback handles;
+//! - `Result<(), E>` returns, which produce a void lift plus an
+//!   encoded error channel;
 //! - parameter and return types that lower through the existing
 //!   [`super::types`] and [`super::codecs`] passes.
 //!
-//! What it rejects with a precise error (each will become a follow-up):
+//! What it rejects with a precise error (each is a follow-up gap):
 //!
 //! - `async fn` ([`UnsupportedType::AsyncCallable`]);
-//! - `impl Trait` and `Box<dyn Trait>` parameters
-//!   ([`UnsupportedType::ImplTraitParameter`],
-//!   [`UnsupportedType::BoxedDynParameter`]);
+//! - the unit type `()` outside the `Result<(), E>` success channel
+//!   ([`UnsupportedType::UnitInValuePosition`]);
+//! - `Self` referenced from a callback-trait method signature
+//!   ([`UnsupportedType::SelfInCallbackTrait`]);
 //! - parameters whose type references a declaration family the pass
-//!   has not yet lowered — those are caught upstream by
+//!   has not yet lowered. Those are caught upstream by
 //!   [`super::reject_unsupported`] so they cannot reach here.
 
 mod params;
 mod returns;
 
-use boltffi_ast::{ExecutionKind, MethodDef, Receiver};
+use boltffi_ast::{ExecutionKind, FunctionDef, MethodDef, Receiver};
 
 use crate::{CallableDecl, ExecutionDecl, Receive};
 
@@ -49,23 +56,37 @@ pub(super) enum CallableOwner<'src> {
     Enum(&'src boltffi_ast::EnumDef),
     /// Owned by a class.
     Class(&'src boltffi_ast::ClassDef),
+    /// Owned by a trait.
+    Trait(&'src boltffi_ast::TraitDef),
+    /// A top-level free function. Free functions have no `Self` and no
+    /// owning type, so type-expression substitution rejects any `Self`
+    /// reference encountered in this position.
+    Function,
 }
 
 impl<'src> CallableOwner<'src> {
-    fn self_type_expr(self) -> boltffi_ast::TypeExpr {
+    fn self_type_expr(self) -> Result<boltffi_ast::TypeExpr, LowerError> {
         match self {
-            Self::Record(record) => boltffi_ast::TypeExpr::Record(record.id.clone()),
-            Self::Enum(enumeration) => boltffi_ast::TypeExpr::Enum(enumeration.id.clone()),
-            Self::Class(class) => boltffi_ast::TypeExpr::Class(class.id.clone()),
+            Self::Record(record) => Ok(boltffi_ast::TypeExpr::Record(record.id.clone())),
+            Self::Enum(enumeration) => Ok(boltffi_ast::TypeExpr::Enum(enumeration.id.clone())),
+            Self::Class(class) => Ok(boltffi_ast::TypeExpr::Class(class.id.clone())),
+            Self::Trait(_) => Err(LowerError::unsupported_type(
+                UnsupportedType::SelfInCallbackTrait,
+            )),
+            Self::Function => Err(LowerError::unsupported_type(UnsupportedType::SelfType)),
         }
     }
 
     pub(super) fn owns_type_expr(self, type_expr: &boltffi_ast::TypeExpr) -> bool {
         match (self, type_expr) {
+            (Self::Trait(_) | Self::Function, boltffi_ast::TypeExpr::SelfType) => false,
             (_, boltffi_ast::TypeExpr::SelfType) => true,
             (Self::Record(record), boltffi_ast::TypeExpr::Record(id)) => id == &record.id,
             (Self::Enum(enumeration), boltffi_ast::TypeExpr::Enum(id)) => id == &enumeration.id,
             (Self::Class(class), boltffi_ast::TypeExpr::Class(id)) => id == &class.id,
+            (Self::Trait(source_trait), boltffi_ast::TypeExpr::Trait { id, .. }) => {
+                id == &source_trait.id
+            }
             _ => false,
         }
     }
@@ -100,6 +121,32 @@ pub(super) fn lower_method<S: SurfaceLower>(
     )?)
 }
 
+/// Lowers one [`FunctionDef`] into a [`CallableDecl<S>`] for a free
+/// function. There is no receiver and no `Self`; the owner context
+/// rejects any `Self` reference found while walking parameter and
+/// return types.
+pub(super) fn lower_function<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    function: &FunctionDef,
+) -> Result<CallableDecl<S>, LowerError> {
+    if matches!(function.execution, ExecutionKind::Async) {
+        return Err(LowerError::unsupported_type(UnsupportedType::AsyncCallable));
+    }
+
+    let owner = CallableOwner::Function;
+    let parameters = params::lower::<S>(idx, ids, owner, &function.parameters)?;
+    let (returns, error) = returns::lower::<S>(idx, ids, owner, &function.returns)?;
+
+    Ok(CallableDecl::new(
+        None,
+        parameters,
+        returns,
+        error,
+        ExecutionDecl::synchronous(),
+    )?)
+}
+
 fn lower_receiver(receiver: Receiver) -> Option<Receive> {
     match receiver {
         Receiver::None => None,
@@ -120,25 +167,25 @@ fn lower_receiver(receiver: Receiver) -> Option<Receive> {
 pub(super) fn substitute_self_type(
     owner: CallableOwner<'_>,
     type_expr: &boltffi_ast::TypeExpr,
-) -> boltffi_ast::TypeExpr {
+) -> Result<boltffi_ast::TypeExpr, LowerError> {
     use boltffi_ast::TypeExpr;
-    match type_expr {
-        TypeExpr::SelfType => owner.self_type_expr(),
-        TypeExpr::Vec(inner) => TypeExpr::Vec(Box::new(substitute_self_type(owner, inner))),
-        TypeExpr::Option(inner) => TypeExpr::Option(Box::new(substitute_self_type(owner, inner))),
+    Ok(match type_expr {
+        TypeExpr::SelfType => owner.self_type_expr()?,
+        TypeExpr::Vec(inner) => TypeExpr::Vec(Box::new(substitute_self_type(owner, inner)?)),
+        TypeExpr::Option(inner) => TypeExpr::Option(Box::new(substitute_self_type(owner, inner)?)),
         TypeExpr::Tuple(elements) => TypeExpr::Tuple(
             elements
                 .iter()
                 .map(|element| substitute_self_type(owner, element))
-                .collect(),
+                .collect::<Result<Vec<_>, LowerError>>()?,
         ),
         TypeExpr::Map { key, value } => TypeExpr::Map {
-            key: Box::new(substitute_self_type(owner, key)),
-            value: Box::new(substitute_self_type(owner, value)),
+            key: Box::new(substitute_self_type(owner, key)?),
+            value: Box::new(substitute_self_type(owner, value)?),
         },
         TypeExpr::Result { ok, err } => TypeExpr::Result {
-            ok: Box::new(substitute_self_type(owner, ok)),
-            err: Box::new(substitute_self_type(owner, err)),
+            ok: Box::new(substitute_self_type(owner, ok)?),
+            err: Box::new(substitute_self_type(owner, err)?),
         },
         TypeExpr::Closure(closure) => {
             let mut closure = (**closure).clone();
@@ -146,23 +193,24 @@ pub(super) fn substitute_self_type(
                 .parameters
                 .iter()
                 .map(|parameter| substitute_self_type(owner, parameter))
-                .collect();
+                .collect::<Result<Vec<_>, LowerError>>()?;
             closure.returns = match closure.returns {
                 boltffi_ast::ReturnDef::Void => boltffi_ast::ReturnDef::Void,
                 boltffi_ast::ReturnDef::Value(value) => {
-                    boltffi_ast::ReturnDef::Value(substitute_self_type(owner, &value))
+                    boltffi_ast::ReturnDef::Value(substitute_self_type(owner, &value)?)
                 }
             };
             TypeExpr::Closure(Box::new(closure))
         }
         TypeExpr::Primitive(_)
+        | TypeExpr::Unit
         | TypeExpr::String
         | TypeExpr::Bytes
         | TypeExpr::Record(_)
         | TypeExpr::Enum(_)
         | TypeExpr::Class(_)
-        | TypeExpr::Callback(_)
+        | TypeExpr::Trait { .. }
         | TypeExpr::Custom(_)
         | TypeExpr::Parameter(_) => type_expr.clone(),
-    }
+    })
 }

@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CallbackTraitDef, ClassDef, ConstantDef, CustomTypeDef, EnumDef, FunctionDef, RecordDef,
-    StreamDef,
+    ClassDef, ConstantDef, CustomTypeDef, EnumDef, FunctionDef, RecordDef, StreamDef, TraitDef,
 };
 
 /// Package metadata for the crate that produced a source contract.
@@ -49,8 +48,9 @@ pub struct SourceContract {
     pub functions: Vec<FunctionDef>,
     /// Class-style objects exported by the crate.
     pub classes: Vec<ClassDef>,
-    /// Callback traits exported by the crate.
-    pub callback_traits: Vec<CallbackTraitDef>,
+    /// Traits exported by the crate (used as callback targets at the FFI
+    /// boundary).
+    pub traits: Vec<TraitDef>,
     /// Streams exported by the crate.
     pub streams: Vec<StreamDef>,
     /// Constants exported by the crate.
@@ -73,7 +73,7 @@ impl SourceContract {
             enums: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
-            callback_traits: Vec::new(),
+            traits: Vec::new(),
             streams: Vec::new(),
             constants: Vec::new(),
             customs: Vec::new(),

@@ -1,6 +1,8 @@
 use boltffi_ast::{ParameterDef, ParameterPassing, TypeExpr};
 
-use crate::{CanonicalName, HandleTarget, LowerPlan, ParamDecl, Receive, ValueRef, WritePlan};
+use crate::{
+    CanonicalName, HandlePresence, HandleTarget, LowerPlan, ParamDecl, Receive, ValueRef, WritePlan,
+};
 
 use super::super::{
     LowerError, codecs, enums, error::UnsupportedType, ids::DeclarationIds, index::Index, metadata,
@@ -27,8 +29,8 @@ fn lower_one<S: SurfaceLower>(
     owner: CallableOwner<'_>,
     parameter: &ParameterDef,
 ) -> Result<ParamDecl<S>, LowerError> {
-    let receive = lower_passing(parameter.passing)?;
-    let type_expr = substitute_self_type(owner, &parameter.type_expr);
+    let type_expr = substitute_self_type(owner, &parameter.type_expr)?;
+    let receive = receive_for_passing(parameter.passing);
     let canonical_name = CanonicalName::from(&parameter.name);
     let value = ValueRef::named(canonical_name.clone());
     let plan = lower_plan::<S>(idx, ids, &type_expr, value, receive)?;
@@ -36,28 +38,25 @@ fn lower_one<S: SurfaceLower>(
     Ok(ParamDecl::new(canonical_name, meta, plan))
 }
 
-fn lower_passing(passing: ParameterPassing) -> Result<Receive, LowerError> {
+fn receive_for_passing(passing: ParameterPassing) -> Receive {
     match passing {
-        ParameterPassing::Value => Ok(Receive::ByValue),
-        ParameterPassing::Ref => Ok(Receive::ByRef),
-        ParameterPassing::RefMut => Ok(Receive::ByMutRef),
-        ParameterPassing::ImplTrait => Err(LowerError::unsupported_type(
-            UnsupportedType::ImplTraitParameter,
-        )),
-        ParameterPassing::BoxedDyn => Err(LowerError::unsupported_type(
-            UnsupportedType::BoxedDynParameter,
-        )),
+        ParameterPassing::Value => Receive::ByValue,
+        ParameterPassing::Ref => Receive::ByRef,
+        ParameterPassing::RefMut => Receive::ByMutRef,
     }
 }
 
 /// Picks the [`LowerPlan`] for one parameter from its source type.
 ///
-/// The match dispatches per [`TypeExpr`] family to the IR variant
-/// directly. Direct types (primitives, c-style enums, blittable
-/// records) skip codec construction; encoded types build a
-/// [`WritePlan`] from the surrounding value reference; closures cross
-/// as inline handles. Type expressions the lowering pass cannot
-/// represent yet route through [`types::lower`] for a precise error.
+/// Each handle-shaped [`TypeExpr`] carries the dimensions the boundary
+/// needs (callback presence, class identity, closure signature) directly
+/// in its variant. The lowering pass is a structural transform with no
+/// `(passing, type_expr)` cross-product: source like
+/// `Option<Box<dyn Listener>>` has already collapsed into
+/// `TypeExpr::Trait { form: BoxedDyn, presence: Nullable }` at the
+/// scanner, and the surface spelling
+/// [`TraitUseForm`](boltffi_ast::TraitUseForm) is invisible here
+/// because the wire carrier is identical across the supported forms.
 fn lower_plan<S: SurfaceLower>(
     idx: &Index<'_>,
     ids: &DeclarationIds,
@@ -104,17 +103,43 @@ fn lower_plan<S: SurfaceLower>(
             target: HandleTarget::Closure(Box::new(types::lower_closure(ids, closure)?)),
             carrier: S::closure_handle_carrier(),
             receive,
+            presence: HandlePresence::Required,
         }),
         TypeExpr::Class(id) => Ok(LowerPlan::Handle {
             target: HandleTarget::Class(ids.class(id)?),
             carrier: S::class_handle_carrier(),
             receive,
+            presence: HandlePresence::Required,
         }),
-        TypeExpr::Callback(_) | TypeExpr::Custom(_) => Err(types::lower(ids, type_expr)
+        TypeExpr::Trait {
+            id,
+            form: _,
+            presence,
+        } => {
+            if !matches!(receive, Receive::ByValue) {
+                return Err(LowerError::unsupported_type(
+                    UnsupportedType::BorrowedCallbackParameter,
+                ));
+            }
+            Ok(LowerPlan::Handle {
+                target: HandleTarget::Callback(ids.callback(id)?),
+                carrier: S::callback_handle_carrier(),
+                receive,
+                presence: lower_presence(*presence),
+            })
+        }
+        TypeExpr::Custom(_) => Err(types::lower(ids, type_expr)
             .err()
             .unwrap_or_else(|| LowerError::unsupported_type(UnsupportedType::SelfType))),
-        TypeExpr::SelfType | TypeExpr::Parameter(_) => {
+        TypeExpr::Unit | TypeExpr::SelfType | TypeExpr::Parameter(_) => {
             Err(types::lower(ids, type_expr).expect_err("unsupported value-position type expr"))
         }
+    }
+}
+
+fn lower_presence(presence: boltffi_ast::HandlePresence) -> HandlePresence {
+    match presence {
+        boltffi_ast::HandlePresence::Required => HandlePresence::Required,
+        boltffi_ast::HandlePresence::Nullable => HandlePresence::Nullable,
     }
 }

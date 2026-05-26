@@ -14,7 +14,6 @@
 
 mod attribute;
 mod callable;
-mod callback;
 mod class;
 mod constant;
 mod contract;
@@ -28,6 +27,7 @@ mod primitive;
 mod record;
 mod source;
 mod stream;
+mod trait_def;
 mod type_expr;
 
 pub use attribute::{AttributeInput, ReprAttr, ReprItem, UserAttr};
@@ -35,7 +35,6 @@ pub use callable::{
     CallableForm, ExecutionKind, FunctionDef, MethodDef, ParameterDef, ParameterPassing, Receiver,
     ReturnDef,
 };
-pub use callback::CallbackTraitDef;
 pub use class::ClassDef;
 pub use constant::ConstantDef;
 pub use contract::{PackageInfo, SourceContract};
@@ -43,7 +42,7 @@ pub use custom::{CustomTypeConverters, CustomTypeDef};
 pub use documentation::{DeprecationInfo, DocComment};
 pub use enumeration::{EnumDef, VariantDef, VariantPayload};
 pub use ids::{
-    CallbackId, ClassId, ConstantId, CustomTypeId, EnumId, FunctionId, MethodId, RecordId, StreamId,
+    ClassId, ConstantId, CustomTypeId, EnumId, FunctionId, MethodId, RecordId, StreamId, TraitId,
 };
 pub use literal::{ConstExpr, DefaultValue, FloatLiteral, IntegerLiteral, Literal};
 pub use name::{CanonicalName, GenericArgument, NamePart, Path, PathRoot, PathSegment};
@@ -51,4 +50,5 @@ pub use primitive::Primitive;
 pub use record::{FieldDef, RecordDef};
 pub use source::{Source, SourceFile, SourceSpan, Visibility};
 pub use stream::{StreamDef, StreamMode};
-pub use type_expr::{ClosureType, TypeExpr, TypeParameter};
+pub use trait_def::TraitDef;
+pub use type_expr::{ClosureType, HandlePresence, TraitUseForm, TypeExpr, TypeParameter};

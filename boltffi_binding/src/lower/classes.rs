@@ -65,10 +65,10 @@ mod tests {
     use crate::lower::lower;
     use crate::{
         BindingErrorKind, Bindings, CanonicalName, ClassDecl, ClassId, CodecNode, Decl, EnumId,
-        ErrorDecl, ExecutionDecl, HandleTarget, InitializerId, LiftPlan, LowerError,
-        LowerErrorKind, LowerPlan, MethodId, Native, NativeSymbol, Primitive as BindingPrimitive,
-        Receive, RecordId, ReturnTypeRef, Surface, SurfaceLower, TypeRef, UnsupportedType, Wasm32,
-        native, wasm32,
+        ErrorDecl, ExecutionDecl, HandlePresence, HandleTarget, InitializerId, LiftPlan,
+        LowerError, LowerErrorKind, LowerPlan, MethodId, Native, NativeSymbol,
+        Primitive as BindingPrimitive, Receive, RecordId, ReturnTypeRef, Surface, SurfaceLower,
+        TypeRef, UnsupportedType, Wasm32, native, wasm32,
     };
 
     fn package() -> SourceContract {
@@ -222,6 +222,7 @@ mod tests {
             &LiftPlan::Handle {
                 target: HandleTarget::Class(ClassId::from_raw(0)),
                 carrier: native::HandleCarrier::U64,
+                presence: HandlePresence::Required,
             }
         );
         assert!(matches!(initializer.callable().error(), ErrorDecl::None(_)));
@@ -267,6 +268,7 @@ mod tests {
             &LiftPlan::HandleOut {
                 target: HandleTarget::Class(ClassId::from_raw(0)),
                 carrier: native::HandleCarrier::U64,
+                presence: HandlePresence::Required,
             }
         );
         match initializer.callable().error() {
@@ -338,6 +340,7 @@ mod tests {
                 target: HandleTarget::Class(ClassId::from_raw(1)),
                 carrier: native::HandleCarrier::U64,
                 receive: Receive::ByValue,
+                presence: HandlePresence::Required,
             })
         );
         assert_eq!(
@@ -350,6 +353,7 @@ mod tests {
                 target: HandleTarget::Class(ClassId::from_raw(0)),
                 carrier: native::HandleCarrier::U64,
                 receive: Receive::ByValue,
+                presence: HandlePresence::Required,
             })
         );
         assert_eq!(
@@ -357,6 +361,7 @@ mod tests {
             &LiftPlan::Handle {
                 target: HandleTarget::Class(ClassId::from_raw(1)),
                 carrier: native::HandleCarrier::U64,
+                presence: HandlePresence::Required,
             }
         );
     }
@@ -384,6 +389,7 @@ mod tests {
                 target: HandleTarget::Class(ClassId::from_raw(0)),
                 carrier: wasm32::HandleCarrier::U32,
                 receive: Receive::ByValue,
+                presence: HandlePresence::Required,
             })
         );
         assert_eq!(
@@ -391,6 +397,7 @@ mod tests {
             &LiftPlan::Handle {
                 target: HandleTarget::Class(ClassId::from_raw(0)),
                 carrier: wasm32::HandleCarrier::U32,
+                presence: HandlePresence::Required,
             }
         );
     }

@@ -1,0 +1,690 @@
+//! Free-function lowering.
+//!
+//! Walks every [`FunctionDef`] the source contract exposes and produces
+//! a [`FunctionDecl<S>`] carrying the native symbol foreign code links
+//! against and the [`CallableDecl<S>`] that describes the crossing.
+//! Free functions have no owning declaration and no `Self`, so the
+//! callable owner used while resolving parameter and return types is
+//! [`callable::CallableOwner::Function`], which rejects any `Self`
+//! reference it encounters.
+
+use boltffi_ast::{CallableForm, FunctionDef as SourceFunction};
+
+use crate::{CanonicalName, FunctionDecl};
+
+use super::{
+    LowerError, callable,
+    error::LowerErrorKind,
+    ids::DeclarationIds,
+    index::Index,
+    metadata,
+    surface::SurfaceLower,
+    symbol::{SymbolAllocator, function_symbol_name},
+};
+
+pub(super) fn lower<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+) -> Result<Vec<FunctionDecl<S>>, LowerError> {
+    idx.functions()
+        .iter()
+        .map(|function| lower_one::<S>(idx, ids, allocator, function))
+        .collect()
+}
+
+fn lower_one<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    function: &SourceFunction,
+) -> Result<FunctionDecl<S>, LowerError> {
+    if !matches!(function.form, CallableForm::Function) {
+        return Err(LowerError::new(LowerErrorKind::InvalidFunctionForm));
+    }
+
+    let function_id = ids.function(&function.id)?;
+    let callable_decl = callable::lower_function::<S>(idx, ids, function)?;
+    let symbol = allocator.mint(function_symbol_name(function.id.as_str()))?;
+    Ok(FunctionDecl::new(
+        function_id,
+        CanonicalName::from(&function.name),
+        metadata::decl_meta(function.doc.as_ref(), function.deprecated.as_ref()),
+        symbol,
+        callable_decl,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use boltffi_ast::{
+        CallableForm, CanonicalName as SourceName, DeprecationInfo as SourceDeprecationInfo,
+        DocComment as SourceDocComment, ExecutionKind, FieldDef, FunctionDef,
+        FunctionId as SourceFunctionId, MethodDef, MethodId as SourceMethodId,
+        PackageInfo as SourcePackage, ParameterDef, Primitive, Receiver, RecordDef, ReturnDef,
+        SourceContract, TypeExpr,
+    };
+
+    use crate::lower::{LowerError, LowerErrorKind, UnsupportedType, lower};
+    use crate::{
+        Bindings, CodecNode, Decl, ErrorDecl, ExecutionDecl, FunctionDecl, LiftPlan, LowerPlan,
+        Native, Primitive as BindingPrimitive, Receive, RecordDecl, RecordId, SurfaceLower,
+        TypeRef, ValueRef, Wasm32, native, wasm32,
+    };
+
+    struct TestContract {
+        source: SourceContract,
+    }
+
+    impl TestContract {
+        fn new() -> Self {
+            Self {
+                source: SourceContract::new(SourcePackage::new("demo", Some("0.1.0".to_owned()))),
+            }
+        }
+
+        fn with_function(mut self, function: FunctionDef) -> Self {
+            self.source.functions.push(function);
+            self
+        }
+
+        fn with_record(mut self, record: RecordDef) -> Self {
+            self.source.records.push(record);
+            self
+        }
+
+        fn lower<S: SurfaceLower>(self) -> Result<Bindings<S>, LowerError> {
+            lower::<S>(&self.source)
+        }
+
+        fn lower_ok<S: SurfaceLower>(self) -> Bindings<S> {
+            self.lower::<S>().expect("contract should lower")
+        }
+    }
+
+    fn function(id: &str, function_name: &str) -> FunctionDef {
+        FunctionDef::new(SourceFunctionId::new(id), name(function_name))
+    }
+
+    fn method(method_name: &str, receiver: Receiver) -> MethodDef {
+        MethodDef::new(
+            SourceMethodId::new(method_name),
+            name(method_name),
+            receiver,
+        )
+    }
+
+    fn name(part: &str) -> SourceName {
+        SourceName::single(part)
+    }
+
+    fn value_param(param_name: &str, type_expr: TypeExpr) -> ParameterDef {
+        ParameterDef::value(name(param_name), type_expr)
+    }
+
+    fn point_record() -> RecordDef {
+        let mut point = RecordDef::new("demo::Point".into(), name("Point"));
+        point.fields = vec![FieldDef::new(
+            name("x"),
+            TypeExpr::Primitive(Primitive::F64),
+        )];
+        point
+    }
+
+    fn function_decls<S: SurfaceLower>(bindings: &Bindings<S>) -> Vec<&FunctionDecl<S>> {
+        bindings
+            .decls()
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Function(function) => Some(function.as_ref()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn first_function<S: SurfaceLower>(bindings: &Bindings<S>) -> &FunctionDecl<S> {
+        function_decls(bindings)
+            .into_iter()
+            .next()
+            .expect("expected function declaration")
+    }
+
+    fn record_decls<S: SurfaceLower>(bindings: &Bindings<S>) -> Vec<&RecordDecl<S>> {
+        bindings
+            .decls()
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Record(record) => Some(record.as_ref()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn symbol_names<S: SurfaceLower>(bindings: &Bindings<S>) -> Vec<&str> {
+        bindings
+            .symbols()
+            .symbols()
+            .iter()
+            .map(|symbol| symbol.name().as_str())
+            .collect()
+    }
+
+    fn assert_native_string_error(error: &ErrorDecl<Native>) {
+        match error {
+            ErrorDecl::EncodedReturn { ty, read, shape } => {
+                assert_eq!(ty, &TypeRef::String);
+                assert_eq!(read.root(), &CodecNode::String);
+                assert_eq!(shape, &native::BufferShape::Buffer);
+            }
+            other => panic!("expected encoded string error channel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn void_function_lowers_to_void_lift_with_no_error_channel() {
+        let bindings = TestContract::new()
+            .with_function(function("demo::ping", "ping"))
+            .lower_ok::<Native>();
+        let function = first_function(&bindings);
+
+        assert_eq!(function.name(), &crate::CanonicalName::single("ping"));
+        assert!(matches!(
+            function.callable().returns().lift(),
+            LiftPlan::Void
+        ));
+        assert!(matches!(function.callable().error(), ErrorDecl::None(_)));
+        assert_eq!(function.callable().receiver(), None);
+    }
+
+    #[test]
+    fn primitive_param_lowers_to_direct() {
+        let mut add = function("demo::add", "add");
+        add.parameters = vec![
+            value_param("lhs", TypeExpr::Primitive(Primitive::I32)),
+            value_param("rhs", TypeExpr::Primitive(Primitive::I32)),
+        ];
+        add.returns = ReturnDef::Value(TypeExpr::Primitive(Primitive::I32));
+
+        let bindings = TestContract::new().with_function(add).lower_ok::<Native>();
+        let callable = first_function(&bindings).callable();
+
+        assert_eq!(callable.params().len(), 2);
+        assert_eq!(
+            callable.params()[0].lower(),
+            &LowerPlan::Direct {
+                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                receive: Receive::ByValue,
+            }
+        );
+        assert_eq!(
+            callable.returns().lift(),
+            &LiftPlan::Direct {
+                ty: TypeRef::Primitive(BindingPrimitive::I32),
+            }
+        );
+    }
+
+    #[test]
+    fn string_param_lowers_to_encoded_with_native_slice_shape() {
+        let mut greet = function("demo::greet", "greet");
+        greet.parameters = vec![value_param("name", TypeExpr::String)];
+        greet.returns = ReturnDef::Value(TypeExpr::String);
+
+        let bindings = TestContract::new()
+            .with_function(greet)
+            .lower_ok::<Native>();
+        let callable = first_function(&bindings).callable();
+
+        match callable.params()[0].lower() {
+            LowerPlan::Encoded {
+                ty: TypeRef::String,
+                write,
+                shape: native::BufferShape::Slice,
+                receive: Receive::ByValue,
+            } => {
+                assert_eq!(
+                    write.value(),
+                    &ValueRef::named(crate::CanonicalName::single("name"))
+                );
+                assert_eq!(write.root(), &CodecNode::String);
+            }
+            other => panic!("expected encoded String param with slice shape, got {other:?}"),
+        }
+        match callable.returns().lift() {
+            LiftPlan::Encoded {
+                ty: TypeRef::String,
+                read,
+                shape: native::BufferShape::Buffer,
+            } => {
+                assert_eq!(read.root(), &CodecNode::String);
+            }
+            other => panic!("expected encoded String return with buffer shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wasm32_string_return_uses_packed_shape() {
+        let mut greet = function("demo::greet", "greet");
+        greet.returns = ReturnDef::Value(TypeExpr::String);
+
+        let bindings = TestContract::new()
+            .with_function(greet)
+            .lower_ok::<Wasm32>();
+        let callable = first_function(&bindings).callable();
+
+        match callable.returns().lift() {
+            LiftPlan::Encoded {
+                ty: TypeRef::String,
+                read,
+                shape: wasm32::BufferShape::Packed,
+            } => {
+                assert_eq!(read.root(), &CodecNode::String);
+            }
+            other => panic!("expected wasm32 packed string return, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn result_return_splits_into_lift_and_encoded_error() {
+        let mut try_open = function("demo::try_open", "try_open");
+        try_open.returns = ReturnDef::Value(TypeExpr::result(
+            TypeExpr::Primitive(Primitive::I32),
+            TypeExpr::String,
+        ));
+
+        let bindings = TestContract::new()
+            .with_function(try_open)
+            .lower_ok::<Native>();
+        let callable = first_function(&bindings).callable();
+
+        assert_eq!(
+            callable.returns().lift(),
+            &LiftPlan::DirectOut {
+                ty: TypeRef::Primitive(BindingPrimitive::I32),
+            }
+        );
+        assert_native_string_error(callable.error());
+    }
+
+    #[test]
+    fn result_unit_ok_emits_void_lift_with_encoded_error() {
+        let mut try_init = function("demo::try_init", "try_init");
+        try_init.returns = ReturnDef::Value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String));
+
+        let bindings = TestContract::new()
+            .with_function(try_init)
+            .lower_ok::<Native>();
+        let callable = first_function(&bindings).callable();
+
+        assert!(matches!(callable.returns().lift(), LiftPlan::Void));
+        assert_native_string_error(callable.error());
+    }
+
+    #[test]
+    fn function_symbol_uses_function_lane_and_snake_path() {
+        let bindings = TestContract::new()
+            .with_function(function("demo::nested::DoTheThing", "DoTheThing"))
+            .lower_ok::<Native>();
+        let function = first_function(&bindings);
+
+        assert_eq!(
+            function.symbol().name().as_str(),
+            "boltffi_function_demo_nested_do_the_thing"
+        );
+    }
+
+    #[test]
+    fn async_function_is_rejected() {
+        let mut spin = function("demo::spin", "spin");
+        spin.execution = ExecutionKind::Async;
+
+        let error = TestContract::new()
+            .with_function(spin)
+            .lower::<Native>()
+            .expect_err("async free function must reject until async support lands");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::UnsupportedType(UnsupportedType::AsyncCallable)
+        ));
+    }
+
+    #[test]
+    fn self_in_free_function_param_is_rejected() {
+        let mut weird = function("demo::weird", "weird");
+        weird.parameters = vec![value_param("value", TypeExpr::SelfType)];
+
+        let error = TestContract::new()
+            .with_function(weird)
+            .lower::<Native>()
+            .expect_err("Self has no meaning in a free function");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::UnsupportedType(UnsupportedType::SelfType)
+        ));
+    }
+
+    #[test]
+    fn non_function_callable_form_inside_function_list_is_rejected() {
+        let mut malformed = function("demo::malformed", "malformed");
+        malformed.form = CallableForm::AssociatedFunction;
+
+        let error = TestContract::new()
+            .with_function(malformed)
+            .lower::<Native>()
+            .expect_err("function list only accepts function-form callables");
+
+        assert!(matches!(error.kind(), LowerErrorKind::InvalidFunctionForm));
+    }
+
+    #[test]
+    fn multiple_free_functions_get_sequential_ids_in_source_order() {
+        let bindings = TestContract::new()
+            .with_function(function("demo::one", "one"))
+            .with_function(function("demo::two", "two"))
+            .with_function(function("demo::three", "three"))
+            .lower_ok::<Native>();
+        let function_ids: Vec<u32> = function_decls(&bindings)
+            .into_iter()
+            .map(|function| function.id().raw())
+            .collect();
+
+        assert_eq!(function_ids, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn duplicate_function_source_id_is_rejected() {
+        let error = TestContract::new()
+            .with_function(function("demo::dup", "dup"))
+            .with_function(function("demo::dup", "DupAgain"))
+            .lower::<Native>()
+            .expect_err("two functions cannot share one source id");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::DuplicateSourceId { .. }
+        ));
+    }
+
+    #[test]
+    fn function_doc_and_deprecation_propagate_to_decl_meta() {
+        let mut greet = function("demo::greet", "greet");
+        greet.doc = Some(SourceDocComment::new("greet by name"));
+        greet.deprecated = Some(SourceDeprecationInfo {
+            note: Some("use greet_v2 instead".to_owned()),
+            since: Some("0.5".to_owned()),
+        });
+
+        let bindings = TestContract::new()
+            .with_function(greet)
+            .lower_ok::<Native>();
+        let meta = first_function(&bindings).meta();
+
+        assert_eq!(meta.doc().map(|d| d.as_str()), Some("greet by name"));
+        assert_eq!(
+            meta.deprecated().and_then(|d| d.message()),
+            Some("use greet_v2 instead")
+        );
+    }
+
+    #[test]
+    fn function_taking_record_param_lowers_through_record_decl() {
+        let mut translate = function("demo::translate", "translate");
+        translate.parameters = vec![value_param("point", TypeExpr::Record("demo::Point".into()))];
+        translate.returns = ReturnDef::Value(TypeExpr::Primitive(Primitive::F64));
+
+        let bindings = TestContract::new()
+            .with_record(point_record())
+            .with_function(translate)
+            .lower_ok::<Native>();
+        let records = record_decls(&bindings);
+        let function = first_function(&bindings);
+
+        assert_eq!(records.len(), 1);
+        assert!(matches!(records[0], RecordDecl::Direct(_)));
+        assert_eq!(function.callable().params().len(), 1);
+        assert_eq!(
+            function.callable().params()[0].lower(),
+            &LowerPlan::Direct {
+                ty: TypeRef::Record(RecordId::from_raw(0)),
+                receive: Receive::ByValue,
+            }
+        );
+    }
+
+    #[test]
+    fn function_symbol_lane_does_not_collide_with_record_method_lane() {
+        let mut point = point_record();
+        point.methods.push(method("free", Receiver::Shared));
+
+        let bindings = TestContract::new()
+            .with_record(point)
+            .with_function(function("demo::Point::free", "free"))
+            .lower_ok::<Native>();
+
+        assert_eq!(
+            symbol_names(&bindings),
+            vec![
+                "boltffi_method_record_demo_point_free",
+                "boltffi_function_demo_point_free",
+            ]
+        );
+    }
+
+    #[test]
+    fn free_function_callable_is_synchronous() {
+        let bindings = TestContract::new()
+            .with_function(function("demo::ping", "ping"))
+            .lower_ok::<Native>();
+        let callable = first_function(&bindings).callable();
+
+        assert_eq!(
+            callable.execution(),
+            &ExecutionDecl::Synchronous(Default::default())
+        );
+    }
+
+    fn returning(id: &str, function_name: &str, type_expr: TypeExpr) -> FunctionDef {
+        let mut decl = function(id, function_name);
+        decl.returns = ReturnDef::Value(type_expr);
+        decl
+    }
+
+    #[test]
+    fn option_primitive_return_lowers_to_scalar_option() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::maybe_count",
+                "maybe_count",
+                TypeExpr::option(TypeExpr::Primitive(Primitive::I32)),
+            ))
+            .lower_ok::<Native>();
+
+        assert_eq!(
+            first_function(&bindings).callable().returns().lift(),
+            &LiftPlan::ScalarOption {
+                primitive: BindingPrimitive::I32,
+            }
+        );
+    }
+
+    #[test]
+    fn option_primitive_return_lowers_to_scalar_option_on_wasm32() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::maybe_count",
+                "maybe_count",
+                TypeExpr::option(TypeExpr::Primitive(Primitive::I32)),
+            ))
+            .lower_ok::<Wasm32>();
+
+        assert_eq!(
+            first_function(&bindings).callable().returns().lift(),
+            &LiftPlan::ScalarOption {
+                primitive: BindingPrimitive::I32,
+            }
+        );
+    }
+
+    #[test]
+    fn option_string_return_stays_encoded() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::maybe_name",
+                "maybe_name",
+                TypeExpr::option(TypeExpr::String),
+            ))
+            .lower_ok::<Native>();
+
+        assert!(matches!(
+            first_function(&bindings).callable().returns().lift(),
+            LiftPlan::Encoded { .. }
+        ));
+    }
+
+    #[test]
+    fn option_vec_return_stays_encoded() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::maybe_bytes",
+                "maybe_bytes",
+                TypeExpr::option(TypeExpr::vec(TypeExpr::Primitive(Primitive::U8))),
+            ))
+            .lower_ok::<Native>();
+
+        assert!(matches!(
+            first_function(&bindings).callable().returns().lift(),
+            LiftPlan::Encoded { .. }
+        ));
+    }
+
+    #[test]
+    fn vec_primitive_return_lowers_to_direct_vec() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::counts",
+                "counts",
+                TypeExpr::vec(TypeExpr::Primitive(Primitive::U32)),
+            ))
+            .lower_ok::<Native>();
+
+        assert_eq!(
+            first_function(&bindings).callable().returns().lift(),
+            &LiftPlan::DirectVec {
+                element: TypeRef::Primitive(BindingPrimitive::U32),
+            }
+        );
+    }
+
+    #[test]
+    fn vec_primitive_return_lowers_to_direct_vec_on_wasm32() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::counts",
+                "counts",
+                TypeExpr::vec(TypeExpr::Primitive(Primitive::U32)),
+            ))
+            .lower_ok::<Wasm32>();
+
+        assert_eq!(
+            first_function(&bindings).callable().returns().lift(),
+            &LiftPlan::DirectVec {
+                element: TypeRef::Primitive(BindingPrimitive::U32),
+            }
+        );
+    }
+
+    #[test]
+    fn vec_direct_record_return_lowers_to_direct_vec() {
+        let bindings = TestContract::new()
+            .with_record(point_record())
+            .with_function(returning(
+                "demo::points",
+                "points",
+                TypeExpr::vec(TypeExpr::Record("demo::Point".into())),
+            ))
+            .lower_ok::<Native>();
+
+        match first_function(&bindings).callable().returns().lift() {
+            LiftPlan::DirectVec {
+                element: TypeRef::Record(_),
+            } => {}
+            other => panic!("expected DirectVec of direct record, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vec_string_return_stays_encoded() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::lines",
+                "lines",
+                TypeExpr::vec(TypeExpr::String),
+            ))
+            .lower_ok::<Native>();
+
+        assert!(matches!(
+            first_function(&bindings).callable().returns().lift(),
+            LiftPlan::Encoded { .. }
+        ));
+    }
+
+    #[test]
+    fn nested_vec_return_stays_encoded() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::matrix",
+                "matrix",
+                TypeExpr::vec(TypeExpr::vec(TypeExpr::Primitive(Primitive::F64))),
+            ))
+            .lower_ok::<Native>();
+
+        assert!(matches!(
+            first_function(&bindings).callable().returns().lift(),
+            LiftPlan::Encoded { .. }
+        ));
+    }
+
+    #[test]
+    fn result_option_primitive_ok_does_not_specialize() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::try_count",
+                "try_count",
+                TypeExpr::result(
+                    TypeExpr::option(TypeExpr::Primitive(Primitive::I32)),
+                    TypeExpr::String,
+                ),
+            ))
+            .lower_ok::<Native>();
+        let callable = first_function(&bindings).callable();
+
+        assert!(matches!(
+            callable.returns().lift(),
+            LiftPlan::EncodedOut { .. }
+        ));
+        assert_native_string_error(callable.error());
+    }
+
+    #[test]
+    fn result_vec_primitive_ok_does_not_specialize() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::try_samples",
+                "try_samples",
+                TypeExpr::result(
+                    TypeExpr::vec(TypeExpr::Primitive(Primitive::F64)),
+                    TypeExpr::String,
+                ),
+            ))
+            .lower_ok::<Native>();
+        let callable = first_function(&bindings).callable();
+
+        assert!(matches!(
+            callable.returns().lift(),
+            LiftPlan::EncodedOut { .. }
+        ));
+        assert_native_string_error(callable.error());
+    }
+}

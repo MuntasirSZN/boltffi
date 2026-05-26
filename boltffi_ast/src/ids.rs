@@ -76,8 +76,8 @@ define_id!(
     "Identifies an exported class-style object declaration."
 );
 define_id!(
-    CallbackId,
-    "Identifies a callback trait or closure signature visible to the FFI surface."
+    TraitId,
+    "Identifies a trait declaration exposed to the FFI surface as a callback target."
 );
 define_id!(
     StreamId,

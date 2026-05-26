@@ -21,6 +21,8 @@
 
 use crate::{Native, Surface, Wasm32, native, wasm32};
 
+use super::callbacks::CallbackProtocolBuilder;
+
 mod sealed {
     /// Seals [`super::SurfaceLower`].
     ///
@@ -39,7 +41,12 @@ mod sealed {
 /// Each method names a fixed call-site role and returns the shape the
 /// pass must use there. The choices follow the boltffi convention
 /// shared with the foreign-side bindings.
-pub trait SurfaceLower: Surface + sealed::Sealed {
+///
+/// A private supertrait carries the surface-specific constructor for
+/// `Self::CallbackProtocol` so the constructor never appears in this
+/// trait's public method set.
+#[allow(private_bounds)]
+pub trait SurfaceLower: Surface + sealed::Sealed + CallbackProtocolBuilder {
     /// Buffer shape used for an encoded parameter crossing.
     ///
     /// Encoded params (strings, vecs, encoded records, ...) cross as
@@ -71,6 +78,16 @@ pub trait SurfaceLower: Surface + sealed::Sealed {
     /// 32-bit token ([`wasm32::HandleCarrier::U32`]).
     #[doc(hidden)]
     fn class_handle_carrier() -> Self::HandleCarrier;
+
+    /// Handle carrier used for a named callback trait crossing.
+    ///
+    /// Native callbacks cross through the runtime's
+    /// [`native::HandleCarrier::CallbackHandle`] struct so the inner
+    /// vtable pointer travels with the handle. Wasm32 callbacks cross
+    /// as a 32-bit handle whose vtable dispatch happens through wasm
+    /// imports resolved at link time.
+    #[doc(hidden)]
+    fn callback_handle_carrier() -> Self::HandleCarrier;
 }
 
 impl SurfaceLower for Native {
@@ -89,6 +106,10 @@ impl SurfaceLower for Native {
     fn class_handle_carrier() -> Self::HandleCarrier {
         native::HandleCarrier::U64
     }
+
+    fn callback_handle_carrier() -> Self::HandleCarrier {
+        native::HandleCarrier::CallbackHandle
+    }
 }
 
 impl SurfaceLower for Wasm32 {
@@ -105,6 +126,10 @@ impl SurfaceLower for Wasm32 {
     }
 
     fn class_handle_carrier() -> Self::HandleCarrier {
+        wasm32::HandleCarrier::U32
+    }
+
+    fn callback_handle_carrier() -> Self::HandleCarrier {
         wasm32::HandleCarrier::U32
     }
 }

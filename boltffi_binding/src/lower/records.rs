@@ -143,8 +143,8 @@ mod tests {
     use crate::{
         BindingErrorKind, Bindings, ByteSize, CanonicalName, CodecNode, Decl, DefaultValue,
         DirectRecordDecl, EncodedRecordDecl, EnumId, ErrorDecl, ExecutionDecl, FieldKey,
-        HandleTarget, InitializerDecl, IntegerValue, IntrinsicOp, LiftPlan, LowerError,
-        LowerErrorKind, LowerPlan, MethodDecl, Native, NativeSymbol, OpNode,
+        HandlePresence, HandleTarget, InitializerDecl, IntegerValue, IntrinsicOp, LiftPlan,
+        LowerError, LowerErrorKind, LowerPlan, MethodDecl, Native, NativeSymbol, OpNode,
         Primitive as BindingPrimitive, ReadPlan, Receive, RecordDecl, RecordId, ReturnTypeRef,
         SurfaceLower, TypeRef, UnsupportedType, ValueRef, Wasm32, native, wasm32,
     };
@@ -673,18 +673,6 @@ mod tests {
         parameter
     }
 
-    fn impl_trait_param(param_name: &str, type_expr: TypeExpr) -> ParameterDef {
-        let mut parameter = value_param(param_name, type_expr);
-        parameter.passing = ParameterPassing::ImplTrait;
-        parameter
-    }
-
-    fn boxed_dyn_param(param_name: &str, type_expr: TypeExpr) -> ParameterDef {
-        let mut parameter = value_param(param_name, type_expr);
-        parameter.passing = ParameterPassing::BoxedDyn;
-        parameter
-    }
-
     fn closure(parameters: Vec<TypeExpr>, returns: ReturnDef) -> TypeExpr {
         TypeExpr::closure(ClosureType::new(parameters, returns))
     }
@@ -787,49 +775,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn impl_trait_parameter_rejects_with_specific_error() {
-        let mut record = point_record();
-        record.methods.push(method_with(
-            "apply",
-            Receiver::Shared,
-            vec![impl_trait_param(
-                "callback",
-                closure(vec![], ReturnDef::Void),
-            )],
-            ReturnDef::Void,
-        ));
-
-        let error = lower_record_result::<Native>(record).expect_err("impl Trait should reject");
-
-        match error.kind() {
-            LowerErrorKind::UnsupportedType(UnsupportedType::ImplTraitParameter) => {}
-            other => panic!("expected ImplTraitParameter, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn boxed_dyn_parameter_rejects_with_specific_error() {
-        let mut record = point_record();
-        record.methods.push(method_with(
-            "apply",
-            Receiver::Shared,
-            vec![boxed_dyn_param(
-                "callback",
-                closure(vec![], ReturnDef::Void),
-            )],
-            ReturnDef::Void,
-        ));
-
-        let error =
-            lower_record_result::<Native>(record).expect_err("Box<dyn Trait> should reject");
-
-        match error.kind() {
-            LowerErrorKind::UnsupportedType(UnsupportedType::BoxedDynParameter) => {}
-            other => panic!("expected BoxedDynParameter, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1133,6 +1078,7 @@ mod tests {
                 target: HandleTarget::Closure(closure_ref),
                 carrier: native::HandleCarrier::CallbackHandle,
                 receive: Receive::ByValue,
+                presence: HandlePresence::Required,
             } => {
                 assert_eq!(
                     closure_ref.parameters(),
@@ -1161,6 +1107,7 @@ mod tests {
             LiftPlan::Handle {
                 target: HandleTarget::Closure(closure_ref),
                 carrier: native::HandleCarrier::CallbackHandle,
+                presence: HandlePresence::Required,
             } => {
                 assert_eq!(
                     closure_ref.parameters(),
@@ -1196,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn vec_return_lowers_to_encoded() {
+    fn vec_of_primitive_return_lowers_to_direct_vec() {
         let bindings = lower_point_method::<Native>(method_with(
             "samples",
             Receiver::Shared,
@@ -1206,29 +1153,15 @@ mod tests {
         let methods = first_record_methods(&bindings);
 
         match methods[0].callable().returns().lift() {
-            LiftPlan::Encoded {
-                ty,
-                read,
-                shape: native::BufferShape::Buffer,
-            } => {
-                assert_eq!(
-                    ty,
-                    &TypeRef::Sequence(Box::new(TypeRef::Primitive(BindingPrimitive::F64)))
-                );
-                let CodecNode::Sequence { element, .. } = read.root() else {
-                    panic!("expected sequence codec, got {:?}", read.root());
-                };
-                assert_eq!(
-                    element.as_ref(),
-                    &CodecNode::Primitive(BindingPrimitive::F64)
-                );
+            LiftPlan::DirectVec { element } => {
+                assert_eq!(element, &TypeRef::Primitive(BindingPrimitive::F64));
             }
-            other => panic!("expected encoded vec return, got {other:?}"),
+            other => panic!("expected DirectVec lift, got {other:?}"),
         }
     }
 
     #[test]
-    fn vec_self_return_substitutes_to_owning_record_and_lowers_encoded() {
+    fn vec_self_return_substitutes_to_owning_record_and_lowers_direct_vec() {
         let bindings = lower_point_method::<Native>(method_with(
             "neighbours",
             Receiver::Shared,
@@ -1238,24 +1171,10 @@ mod tests {
         let methods = first_record_methods(&bindings);
 
         match methods[0].callable().returns().lift() {
-            LiftPlan::Encoded {
-                ty,
-                read,
-                shape: native::BufferShape::Buffer,
-            } => {
-                assert_eq!(
-                    ty,
-                    &TypeRef::Sequence(Box::new(TypeRef::Record(RecordId::from_raw(0))))
-                );
-                let CodecNode::Sequence { element, .. } = read.root() else {
-                    panic!("expected sequence codec, got {:?}", read.root());
-                };
-                assert_eq!(
-                    element.as_ref(),
-                    &CodecNode::DirectRecord(RecordId::from_raw(0))
-                );
+            LiftPlan::DirectVec { element } => {
+                assert_eq!(element, &TypeRef::Record(RecordId::from_raw(0)));
             }
-            other => panic!("expected encoded return, got {other:?}"),
+            other => panic!("expected DirectVec lift, got {other:?}"),
         }
     }
 
@@ -1425,6 +1344,7 @@ mod tests {
                 carrier: wasm32::HandleCarrier::U32,
                 target: HandleTarget::Closure(closure_ref),
                 receive: Receive::ByValue,
+                presence: HandlePresence::Required,
             } => {
                 assert_eq!(
                     closure_ref.parameters(),

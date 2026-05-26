@@ -210,10 +210,10 @@ mod tests {
     use crate::{
         BindingErrorKind, Bindings, CStyleEnumDecl, CanonicalName, CodecNode, DataEnumDecl,
         DataVariantPayload, Decl, DefaultValue, EncodedFieldDecl, EnumDecl, EnumId, ErrorDecl,
-        ExecutionDecl, FieldKey, HandleTarget, InitializerDecl, IntegerRepr, IntegerValue,
-        LiftPlan, LowerError, LowerErrorKind, LowerPlan, MethodDecl, Native, NativeSymbol,
-        Primitive as BindingPrimitive, ReadPlan, Receive, RecordId, ReturnTypeRef, SurfaceLower,
-        TypeRef, UnsupportedType, ValueRef, Wasm32, native, wasm32,
+        ExecutionDecl, FieldKey, HandlePresence, HandleTarget, InitializerDecl, IntegerRepr,
+        IntegerValue, LiftPlan, LowerError, LowerErrorKind, LowerPlan, MethodDecl, Native,
+        NativeSymbol, Primitive as BindingPrimitive, ReadPlan, Receive, RecordId, ReturnTypeRef,
+        SurfaceLower, TypeRef, UnsupportedType, ValueRef, Wasm32, native, wasm32,
     };
 
     fn package() -> SourceContract {
@@ -331,12 +331,6 @@ mod tests {
     fn ref_param(param_name: &str, type_expr: TypeExpr) -> ParameterDef {
         let mut parameter = value_param(param_name, type_expr);
         parameter.passing = ParameterPassing::Ref;
-        parameter
-    }
-
-    fn impl_trait_param(param_name: &str, type_expr: TypeExpr) -> ParameterDef {
-        let mut parameter = value_param(param_name, type_expr);
-        parameter.passing = ParameterPassing::ImplTrait;
         parameter
     }
 
@@ -908,28 +902,6 @@ mod tests {
     }
 
     #[test]
-    fn enum_method_rejects_impl_trait_parameter() {
-        let error = lower_enum_result::<Native>(enum_with_methods(
-            direction_enum(),
-            vec![method_with(
-                "apply",
-                Receiver::Shared,
-                vec![impl_trait_param(
-                    "callback",
-                    closure(Vec::new(), ReturnDef::Void),
-                )],
-                ReturnDef::Void,
-            )],
-        ))
-        .expect_err("impl Trait should reject");
-
-        match error.kind() {
-            LowerErrorKind::UnsupportedType(UnsupportedType::ImplTraitParameter) => {}
-            other => panic!("expected ImplTraitParameter, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn enum_method_string_param_lowers_encoded_with_native_slice_shape() {
         let bindings = lower_enum::<Native>(enum_with_methods(
             direction_enum(),
@@ -1000,6 +972,7 @@ mod tests {
                 target: HandleTarget::Closure(closure),
                 carrier: native::HandleCarrier::CallbackHandle,
                 receive: Receive::ByValue,
+                presence: HandlePresence::Required,
             } => {
                 assert_eq!(
                     closure.parameters(),
@@ -1083,6 +1056,7 @@ mod tests {
                 target: HandleTarget::Closure(closure),
                 carrier: wasm32::HandleCarrier::U32,
                 receive: Receive::ByValue,
+                presence: HandlePresence::Required,
             } => {
                 assert_eq!(
                     closure.parameters(),

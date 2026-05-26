@@ -53,6 +53,10 @@ impl LowerError {
         Self::new(LowerErrorKind::UnknownCustom(id.to_string()))
     }
 
+    pub(crate) fn unknown_function(id: impl fmt::Display) -> Self {
+        Self::new(LowerErrorKind::UnknownFunction(id.to_string()))
+    }
+
     pub(crate) fn invalid_alignment(bytes: u64) -> Self {
         Self::new(LowerErrorKind::InvalidAlignment(bytes))
     }
@@ -88,6 +92,9 @@ impl fmt::Display for LowerError {
                     unsupported
                 )
             }
+            LowerErrorKind::InvalidFunctionForm => {
+                formatter.write_str("function declaration has non-function callable form")
+            }
             LowerErrorKind::DuplicateSourceId { family, id } => {
                 write!(formatter, "duplicate {} source id `{id}`", family)
             }
@@ -105,6 +112,9 @@ impl fmt::Display for LowerError {
             }
             LowerErrorKind::UnknownCustom(custom) => {
                 write!(formatter, "unknown custom type id `{custom}`")
+            }
+            LowerErrorKind::UnknownFunction(function) => {
+                write!(formatter, "unknown function id `{function}`")
             }
             LowerErrorKind::InvalidAlignment(alignment) => {
                 write!(formatter, "invalid record alignment {alignment}")
@@ -140,6 +150,8 @@ pub enum LowerErrorKind {
     UnsupportedDeclaration(DeclarationFamily),
     /// A source type has no binding-IR representation yet.
     UnsupportedType(UnsupportedType),
+    /// A function declaration carried a non-function source placement.
+    InvalidFunctionForm,
     /// Two declarations in the same family share one source id.
     DuplicateSourceId {
         /// Declaration family where the duplicate was found.
@@ -157,6 +169,8 @@ pub enum LowerErrorKind {
     UnknownCallback(String),
     /// A custom type reference could not be resolved inside the source contract.
     UnknownCustom(String),
+    /// A free function reference could not be resolved inside the source contract.
+    UnknownFunction(String),
     /// A computed record alignment was not a valid ABI alignment.
     InvalidAlignment(u64),
     /// An enum discriminant sequence overflowed `i128`.
@@ -184,8 +198,8 @@ pub enum DeclarationFamily {
     Functions,
     /// Class-style object declarations.
     Classes,
-    /// Callback trait declarations.
-    CallbackTraits,
+    /// Trait declarations.
+    Traits,
     /// Stream declarations.
     Streams,
     /// Constant declarations.
@@ -205,7 +219,7 @@ impl fmt::Display for DeclarationFamily {
             Self::Enums => "enums",
             Self::Functions => "functions",
             Self::Classes => "classes",
-            Self::CallbackTraits => "callback traits",
+            Self::Traits => "traits",
             Self::Streams => "streams",
             Self::Constants => "constants",
             Self::CustomTypes => "custom types",
@@ -235,10 +249,21 @@ pub enum UnsupportedType {
     DefaultValue,
     /// An `async` callable cannot be lowered yet.
     AsyncCallable,
-    /// An `impl Trait` parameter has no IR slice yet.
-    ImplTraitParameter,
-    /// A `Box<dyn Trait>` parameter has no IR slice yet.
-    BoxedDynParameter,
+    /// `()` appeared in a position that requires a value-shaped type (a field
+    /// or parameter). Unit is only meaningful as a callable result; carrying
+    /// it as a value would force every consumer to special-case empty data.
+    UnitInValuePosition,
+    /// `Self` appeared in a callback trait signature where the trait object
+    /// has no concrete implementer type to substitute.
+    SelfInCallbackTrait,
+    /// A callback method snake-cases to a name already taken by the vtable
+    /// lifecycle slot (`free` or `clone`) or by another callback method.
+    CallbackMethodSlotCollision,
+    /// A callback method declared a static or owned receiver, neither of
+    /// which the callback handle protocol can dispatch.
+    InvalidCallbackReceiver,
+    /// A callback handle parameter was borrowed instead of passed by value.
+    BorrowedCallbackParameter,
     /// An owned class receiver has no handle-transfer protocol yet.
     OwnedClassReceiver,
 }
@@ -253,8 +278,11 @@ impl fmt::Display for UnsupportedType {
             Self::FallibleClosureReturn => "fallible closure return",
             Self::DefaultValue => "default value",
             Self::AsyncCallable => "async callable",
-            Self::ImplTraitParameter => "impl Trait parameter",
-            Self::BoxedDynParameter => "Box<dyn Trait> parameter",
+            Self::UnitInValuePosition => "unit type `()` in a value position",
+            Self::SelfInCallbackTrait => "Self in callback trait method",
+            Self::CallbackMethodSlotCollision => "callback method name collides with vtable slot",
+            Self::InvalidCallbackReceiver => "callback method receiver",
+            Self::BorrowedCallbackParameter => "borrowed callback parameter",
             Self::OwnedClassReceiver => "owned class receiver",
         })
     }

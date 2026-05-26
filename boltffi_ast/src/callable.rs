@@ -76,9 +76,11 @@ impl ParameterDef {
 
 /// The Rust passing form used by a parameter.
 ///
-/// The variants mirror the forms BoltFFI accepts in exported signatures. A
-/// consumer can distinguish `&T`, `&mut T`, `impl Trait`, and `Box<dyn Trait>`
-/// without inspecting raw Rust syntax.
+/// Records only the reference flavor (`T`, `&T`, `&mut T`). The trait use
+/// form (`impl Trait`, `Box<dyn Trait>`, `Arc<dyn Trait>`) is a fact of the
+/// type, not of the parameter slot, so it lives on
+/// [`TypeExpr::Trait`](crate::TypeExpr::Trait) instead. See
+/// [`TraitUseForm`](crate::TraitUseForm).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum ParameterPassing {
     /// A value parameter such as `value: T`.
@@ -87,10 +89,6 @@ pub enum ParameterPassing {
     Ref,
     /// A mutable reference parameter such as `value: &mut T`.
     RefMut,
-    /// An `impl Trait` callback parameter.
-    ImplTrait,
-    /// A boxed trait object callback parameter.
-    BoxedDyn,
 }
 
 /// The outermost return type of a callable.
