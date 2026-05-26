@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use boltffi_bindgen::KotlinOptions;
+use boltffi_bindgen::render::kmp::KmpAppleTarget;
 use boltffi_bindgen::render::kmp::{KMPEmitter, KMPOptions};
 use boltffi_bindgen::render::kotlin::{
     FactoryStyle as BindgenFactoryStyle, KotlinApiStyle, KotlinDesktopLoader,
@@ -10,6 +11,7 @@ use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::SourceCrate;
 use crate::commands::generate::generator::{GenerateRequest, LanguageGenerator, ScanPointerWidth};
 use crate::config::{FactoryStyle as ConfigFactoryStyle, Target};
+use crate::target::RustTarget;
 
 pub struct KMPGenerator;
 
@@ -92,6 +94,8 @@ impl KMPGenerator {
                     &module_name,
                     desktop_fallback_library_name,
                 ),
+                native_library_name: request.config().library_name().to_string(),
+                apple_targets: Self::apple_targets(request),
             },
         );
 
@@ -104,6 +108,22 @@ impl KMPGenerator {
 
             request.write_output(&output_path, &output_file.contents)
         })
+    }
+
+    fn apple_targets(request: &GenerateRequest<'_>) -> Vec<KmpAppleTarget> {
+        request
+            .config()
+            .kotlin_multiplatform_apple_targets()
+            .into_iter()
+            .filter_map(|target| match target {
+                RustTarget::IOS_ARM64 => Some(KmpAppleTarget::IosArm64),
+                RustTarget::IOS_SIM_ARM64 => Some(KmpAppleTarget::IosSimulatorArm64),
+                RustTarget::IOS_SIM_X86_64 => Some(KmpAppleTarget::IosSimulatorX64),
+                RustTarget::MACOS_ARM64 => Some(KmpAppleTarget::MacosArm64),
+                RustTarget::MACOS_X86_64 => Some(KmpAppleTarget::MacosX64),
+                _ => None,
+            })
+            .collect()
     }
 }
 
