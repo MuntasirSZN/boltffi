@@ -176,6 +176,58 @@ pub(super) fn callback_wasm_import_clone_name(callback_id: &str) -> String {
     wasm_callback_import_name("lifecycle", &symbol_path(callback_id), "clone")
 }
 
+/// Names one symbol in the consumer-side stream protocol.
+///
+/// Every stream the contract exposes mints one symbol per action below.
+/// The action suffix is appended to the stream's snake-cased canonical
+/// id so the six symbols attached to one stream group together when
+/// grepped: a stream `demo::events` mints
+/// `boltffi_stream_demo_events_subscribe`, `..._pop_batch`, and so on.
+#[derive(Clone, Copy)]
+pub(super) enum StreamLifecycle {
+    /// Opens a subscription and returns the session handle.
+    Subscribe,
+    /// Drains a batch of buffered items into the foreign side.
+    PopBatch,
+    /// Blocks the foreign caller until at least one item is ready.
+    Wait,
+    /// Reports readiness without blocking.
+    Poll,
+    /// Closes a subscription.
+    Unsubscribe,
+    /// Drops the stream itself.
+    Free,
+}
+
+impl StreamLifecycle {
+    const fn suffix(self) -> &'static str {
+        match self {
+            Self::Subscribe => "subscribe",
+            Self::PopBatch => "pop_batch",
+            Self::Wait => "wait",
+            Self::Poll => "poll",
+            Self::Unsubscribe => "unsubscribe",
+            Self::Free => "free",
+        }
+    }
+}
+
+/// Builds the symbol foreign code links to invoke one stream-protocol
+/// action.
+///
+/// `stream_id` is the canonical Rust path of the source declaration.
+/// Class-owned streams already carry the class path in their id, so the
+/// resulting symbol distinguishes them from standalone streams without
+/// a separate lane.
+pub(super) fn stream_symbol_name(stream_id: &str, action: StreamLifecycle) -> String {
+    format!(
+        "{}_stream_{}_{}",
+        FFI_PREFIX,
+        symbol_path(stream_id),
+        action.suffix()
+    )
+}
+
 /// Names one symbol in the async lifecycle protocol of a single callable.
 ///
 /// The lifecycle symbols share the start callable's symbol name as a

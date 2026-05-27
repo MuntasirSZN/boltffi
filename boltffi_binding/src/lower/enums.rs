@@ -46,6 +46,12 @@ pub(super) fn is_c_style(enumeration: &SourceEnum) -> bool {
         && effective_integer_repr(enumeration).is_some()
 }
 
+pub(super) fn c_style_repr(enumeration: &SourceEnum) -> Option<IntegerRepr> {
+    is_c_style(enumeration)
+        .then(|| effective_integer_repr(enumeration))
+        .flatten()
+}
+
 fn lower_one<S: SurfaceLower>(
     idx: &Index<'_>,
     ids: &DeclarationIds,

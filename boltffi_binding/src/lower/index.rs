@@ -82,6 +82,10 @@ impl<'src> Index<'src> {
         &self.source.customs
     }
 
+    pub(super) fn streams(&self) -> &'src [boltffi_ast::StreamDef] {
+        &self.source.streams
+    }
+
     pub(super) fn record(&self, id: &SourceRecordId) -> Option<&'src SourceRecord> {
         self.records.get(id.as_str()).copied()
     }

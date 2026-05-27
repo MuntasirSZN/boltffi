@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use boltffi_ast::{
     ClassId as SourceClassId, ConstantId as SourceConstantId, CustomTypeId as SourceCustomTypeId,
     EnumId as SourceEnumId, FunctionId as SourceFunctionId, RecordId as SourceRecordId,
-    SourceContract, TraitId as SourceTraitId,
+    SourceContract, StreamId as SourceStreamId, TraitId as SourceTraitId,
 };
 
-use crate::{CallbackId, ClassId, ConstantId, CustomTypeId, EnumId, FunctionId, RecordId};
+use crate::{
+    CallbackId, ClassId, ConstantId, CustomTypeId, EnumId, FunctionId, RecordId, StreamId,
+};
 
 use super::{LowerError, error::DeclarationFamily};
 
@@ -24,6 +26,7 @@ pub(super) struct DeclarationIds {
     callbacks: HashMap<String, CallbackId>,
     customs: HashMap<String, CustomTypeId>,
     constants: HashMap<String, ConstantId>,
+    streams: HashMap<String, StreamId>,
     functions: HashMap<String, FunctionId>,
 }
 
@@ -65,6 +68,12 @@ impl DeclarationIds {
                 DeclarationFamily::Constants,
                 |constant| constant.id.as_str(),
                 ConstantId::from_raw,
+            )?,
+            streams: collect_ids(
+                source.streams.iter(),
+                DeclarationFamily::Streams,
+                |stream| stream.id.as_str(),
+                StreamId::from_raw,
             )?,
             functions: collect_ids(
                 source.functions.iter(),
@@ -115,6 +124,13 @@ impl DeclarationIds {
             .get(id.as_str())
             .copied()
             .ok_or_else(|| LowerError::unknown_constant(id))
+    }
+
+    pub(super) fn stream(&self, id: &SourceStreamId) -> Result<StreamId, LowerError> {
+        self.streams
+            .get(id.as_str())
+            .copied()
+            .ok_or_else(|| LowerError::unknown_stream(id))
     }
 
     pub(super) fn function(&self, id: &SourceFunctionId) -> Result<FunctionId, LowerError> {
