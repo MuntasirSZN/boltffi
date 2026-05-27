@@ -12,15 +12,16 @@
 //!
 //! 1. Build [`DeclarationIds`] from the source. Duplicate ids in the
 //!    same family fail here, before any walk.
-//! 2. Reject declaration families that have no IR slice yet (streams,
-//!    constants, custom types). Records, enums, classes, traits, and
-//!    free functions all lower below.
+//! 2. Reject declaration families that still have no IR slice (streams
+//!    today). Every other family lowers below.
 //! 3. Build an [`Index`] of the source for cross-decl lookups during
 //!    type and codec lowering.
 //! 4. Lower every record into [`RecordDecl<S>`], every enum into
 //!    [`EnumDecl<S>`], every class into [`ClassDecl<S>`], every trait
 //!    into [`CallbackDecl<S>`] (the trait's per-surface dispatch
-//!    protocol), and every free function into [`FunctionDecl<S>`].
+//!    protocol), every free function into [`FunctionDecl<S>`], every
+//!    custom type into [`CustomTypeDecl`], and every constant into
+//!    [`ConstantDecl<S>`].
 //! 5. Hand the collected decls to [`Bindings::from_decls`], which
 //!    derives the native symbol table from the symbols the decls
 //!    reference and validates the result.
@@ -43,6 +44,8 @@ mod callable;
 mod callbacks;
 mod classes;
 mod codecs;
+mod constants;
+mod customs;
 mod enums;
 mod error;
 mod functions;
@@ -83,6 +86,8 @@ pub fn lower<S: SurfaceLower>(source: &SourceContract) -> Result<Bindings<S>, Lo
     let classes = classes::lower::<S>(&index, &ids, &mut allocator)?;
     let callbacks = callbacks::lower::<S>(&index, &ids, &mut allocator)?;
     let functions = functions::lower::<S>(&index, &ids, &mut allocator)?;
+    let constants = constants::lower::<S>(&index, &ids)?;
+    let customs = customs::lower(&index, &ids)?;
 
     let decls = records
         .into_iter()
@@ -107,6 +112,16 @@ pub fn lower<S: SurfaceLower>(source: &SourceContract) -> Result<Bindings<S>, Lo
                 .into_iter()
                 .map(|function| Decl::Function(Box::new(function))),
         )
+        .chain(
+            customs
+                .into_iter()
+                .map(|custom| Decl::CustomType(Box::new(custom))),
+        )
+        .chain(
+            constants
+                .into_iter()
+                .map(|constant| Decl::Constant(Box::new(constant))),
+        )
         .collect::<Vec<_>>();
 
     let package = PackageInfo::new(
@@ -118,16 +133,12 @@ pub fn lower<S: SurfaceLower>(source: &SourceContract) -> Result<Bindings<S>, Lo
 }
 
 fn reject_unsupported(source: &SourceContract) -> Result<(), LowerError> {
-    [
-        (!source.streams.is_empty(), DeclarationFamily::Streams),
-        (!source.constants.is_empty(), DeclarationFamily::Constants),
-        (!source.customs.is_empty(), DeclarationFamily::CustomTypes),
-    ]
-    .into_iter()
-    .find_map(|(present, declaration)| present.then_some(declaration))
-    .map_or(Ok(()), |declaration| {
-        Err(LowerError::unsupported_declaration(declaration))
-    })
+    [(!source.streams.is_empty(), DeclarationFamily::Streams)]
+        .into_iter()
+        .find_map(|(present, declaration)| present.then_some(declaration))
+        .map_or(Ok(()), |declaration| {
+            Err(LowerError::unsupported_declaration(declaration))
+        })
 }
 
 impl From<BindingError> for LowerError {
