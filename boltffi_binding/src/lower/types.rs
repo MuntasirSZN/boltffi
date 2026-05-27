@@ -19,7 +19,7 @@ pub(super) fn lower(ids: &DeclarationIds, type_expr: &TypeExpr) -> Result<TypeRe
         TypeExpr::Bytes => TypeRef::Bytes,
         TypeExpr::Record(id) => TypeRef::Record(ids.record(id)?),
         TypeExpr::Enum(id) => TypeRef::Enum(ids.enumeration(id)?),
-        TypeExpr::Class(id) => TypeRef::Class(ids.class(id)?),
+        TypeExpr::Class { id, .. } => TypeRef::Class(ids.class(id)?),
         TypeExpr::Trait { id, .. } => TypeRef::Callback(ids.callback(id)?),
         TypeExpr::Closure(closure) => TypeRef::Closure(Box::new(lower_closure(ids, closure)?)),
         TypeExpr::Custom(id) => TypeRef::Custom(ids.custom(id)?),

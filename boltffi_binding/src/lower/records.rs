@@ -799,20 +799,17 @@ mod tests {
     }
 
     #[test]
-    fn vec_parameter_writeplan_value_uses_parameter_name() {
+    fn encoded_vec_parameter_writeplan_value_uses_parameter_name() {
         let bindings = lower_point_method::<Native>(method_with(
             "collect",
             Receiver::Shared,
-            vec![value_param(
-                "items",
-                TypeExpr::vec(TypeExpr::Primitive(Primitive::I32)),
-            )],
+            vec![value_param("items", TypeExpr::vec(TypeExpr::String))],
             ReturnDef::Void,
         ));
         let methods = first_record_methods(&bindings);
 
         let LowerPlan::Encoded { write, .. } = methods[0].callable().params()[0].lower() else {
-            panic!("expected encoded Vec param");
+            panic!("expected encoded Vec<String> param");
         };
         assert_eq!(
             write.value(),

@@ -169,6 +169,22 @@ mod tests {
             .collect()
     }
 
+    fn returning(id: &str, function_name: &str, type_expr: TypeExpr) -> FunctionDef {
+        let mut decl = function(id, function_name);
+        decl.returns = ReturnDef::Value(type_expr);
+        decl
+    }
+
+    fn taking(id: &str, function_name: &str, param_name: &str, type_expr: TypeExpr) -> FunctionDef {
+        let mut decl = function(id, function_name);
+        decl.parameters = vec![value_param(param_name, type_expr)];
+        decl
+    }
+
+    fn first_param_lower<S: SurfaceLower>(bindings: &Bindings<S>) -> &LowerPlan<S> {
+        first_function(bindings).callable().params()[0].lower()
+    }
+
     fn assert_native_string_error(error: &ErrorDecl<Native>) {
         match error {
             ErrorDecl::EncodedReturn { ty, read, shape } => {
@@ -485,12 +501,6 @@ mod tests {
         );
     }
 
-    fn returning(id: &str, function_name: &str, type_expr: TypeExpr) -> FunctionDef {
-        let mut decl = function(id, function_name);
-        decl.returns = ReturnDef::Value(type_expr);
-        decl
-    }
-
     #[test]
     fn option_primitive_return_lowers_to_scalar_option() {
         let bindings = TestContract::new()
@@ -686,5 +696,172 @@ mod tests {
             LiftPlan::EncodedOut { .. }
         ));
         assert_native_string_error(callable.error());
+    }
+
+    #[test]
+    fn option_primitive_param_lowers_to_scalar_option() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_count",
+                "set_count",
+                "count",
+                TypeExpr::option(TypeExpr::Primitive(Primitive::I32)),
+            ))
+            .lower_ok::<Native>();
+
+        assert_eq!(
+            first_param_lower(&bindings),
+            &LowerPlan::ScalarOption {
+                primitive: BindingPrimitive::I32,
+            }
+        );
+    }
+
+    #[test]
+    fn option_primitive_param_lowers_to_scalar_option_on_wasm32() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_count",
+                "set_count",
+                "count",
+                TypeExpr::option(TypeExpr::Primitive(Primitive::I32)),
+            ))
+            .lower_ok::<Wasm32>();
+
+        assert_eq!(
+            first_param_lower(&bindings),
+            &LowerPlan::ScalarOption {
+                primitive: BindingPrimitive::I32,
+            }
+        );
+    }
+
+    #[test]
+    fn option_string_param_stays_encoded() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_name",
+                "set_name",
+                "name",
+                TypeExpr::option(TypeExpr::String),
+            ))
+            .lower_ok::<Native>();
+
+        assert!(matches!(
+            first_param_lower(&bindings),
+            LowerPlan::Encoded { .. }
+        ));
+    }
+
+    #[test]
+    fn vec_primitive_param_lowers_to_direct_vec() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_counts",
+                "set_counts",
+                "counts",
+                TypeExpr::vec(TypeExpr::Primitive(Primitive::U32)),
+            ))
+            .lower_ok::<Native>();
+
+        assert_eq!(
+            first_param_lower(&bindings),
+            &LowerPlan::DirectVec {
+                element: TypeRef::Primitive(BindingPrimitive::U32),
+            }
+        );
+    }
+
+    #[test]
+    fn vec_primitive_param_lowers_to_direct_vec_on_wasm32() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_counts",
+                "set_counts",
+                "counts",
+                TypeExpr::vec(TypeExpr::Primitive(Primitive::U32)),
+            ))
+            .lower_ok::<Wasm32>();
+
+        assert_eq!(
+            first_param_lower(&bindings),
+            &LowerPlan::DirectVec {
+                element: TypeRef::Primitive(BindingPrimitive::U32),
+            }
+        );
+    }
+
+    #[test]
+    fn vec_direct_record_param_lowers_to_direct_vec() {
+        let bindings = TestContract::new()
+            .with_record(point_record())
+            .with_function(taking(
+                "demo::set_points",
+                "set_points",
+                "points",
+                TypeExpr::vec(TypeExpr::Record("demo::Point".into())),
+            ))
+            .lower_ok::<Native>();
+
+        match first_param_lower(&bindings) {
+            LowerPlan::DirectVec {
+                element: TypeRef::Record(_),
+            } => {}
+            other => panic!("expected DirectVec of direct record, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vec_string_param_stays_encoded() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_lines",
+                "set_lines",
+                "lines",
+                TypeExpr::vec(TypeExpr::String),
+            ))
+            .lower_ok::<Native>();
+
+        assert!(matches!(
+            first_param_lower(&bindings),
+            LowerPlan::Encoded { .. }
+        ));
+    }
+
+    #[test]
+    fn nested_vec_param_stays_encoded() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_matrix",
+                "set_matrix",
+                "rows",
+                TypeExpr::vec(TypeExpr::vec(TypeExpr::Primitive(Primitive::F64))),
+            ))
+            .lower_ok::<Native>();
+
+        assert!(matches!(
+            first_param_lower(&bindings),
+            LowerPlan::Encoded { .. }
+        ));
+    }
+
+    #[test]
+    fn ref_vec_primitive_param_stays_encoded() {
+        let mut decl = function("demo::peek", "peek");
+        decl.parameters = vec![ParameterDef {
+            name: name("values"),
+            type_expr: TypeExpr::vec(TypeExpr::Primitive(Primitive::U32)),
+            passing: boltffi_ast::ParameterPassing::Ref,
+            doc: None,
+            default: None,
+            user_attrs: Vec::new(),
+            source: boltffi_ast::Source::exported(),
+        }];
+        let bindings = TestContract::new().with_function(decl).lower_ok::<Native>();
+
+        assert!(matches!(
+            first_param_lower(&bindings),
+            LowerPlan::Encoded { .. }
+        ));
     }
 }

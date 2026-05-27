@@ -228,6 +228,29 @@ pub enum LowerPlan<S: Surface> {
         /// Whether the slot is required or may be null.
         presence: HandlePresence,
     },
+    /// `Option<P>` for a primitive `P`, received through the surface's
+    /// scalar-option path.
+    ///
+    /// Mirror of [`LiftPlan::ScalarOption`] on the receive side. Native
+    /// decodes the value through the wire buffer; wasm32 reads a single
+    /// `f64` parameter slot where `f64::NAN` decodes as `None`. The IR
+    /// records only the inner primitive; the renderer dispatches per
+    /// surface.
+    ScalarOption {
+        /// Primitive carried inside the `Option`.
+        primitive: Primitive,
+    },
+    /// `Vec<T>` received through the surface's direct-vector path.
+    ///
+    /// Mirror of [`LiftPlan::DirectVec`] on the receive side. Native
+    /// reconstructs the vector through `VecTransport::unpack_vec` (zero
+    /// copy from a buffer descriptor); wasm32 reconstructs from a
+    /// `(ptr, len, cap, align)` quadruple supplied by the host. The IR
+    /// records the element type; the renderer dispatches per surface.
+    DirectVec {
+        /// Element type stored in the vector.
+        element: TypeRef,
+    },
 }
 
 impl<S: Surface> LowerPlan<S> {
