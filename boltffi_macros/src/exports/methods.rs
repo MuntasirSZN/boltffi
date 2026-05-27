@@ -1453,7 +1453,7 @@ mod tests {
     use super::*;
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
-    use crate::index::data_types::DataTypeRegistry;
+    use crate::index::data_types::{DataTypeCategory, DataTypeRegistry};
     use crate::lowering::returns::model::ReturnLoweringContext;
 
     fn parse_impl(code: &str) -> syn::ItemImpl {
@@ -1462,7 +1462,10 @@ mod tests {
 
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
-        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::with_entries(&[
+            ("UserProfile", DataTypeCategory::WireEncoded),
+            ("Filter", DataTypeCategory::WireEncoded),
+        ])));
         ReturnLoweringContext::new(custom_types, data_types)
     }
 

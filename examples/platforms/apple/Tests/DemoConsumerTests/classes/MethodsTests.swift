@@ -1,7 +1,7 @@
 import Demo
 import XCTest
 
-final class MethodsTests: XCTestCase {
+final class MethodsTests: DemoTestCase {
     func testCounterValueAndErrorMethods() throws {
         let counter = Counter(initial: 2)
         XCTAssertEqual(counter.get(), 2)
@@ -12,9 +12,12 @@ final class MethodsTests: XCTestCase {
         XCTAssertEqual(try counter.tryGetPositive(), 10)
         XCTAssertEqual(counter.maybeDouble(), 20)
         XCTAssertEqual(counter.asPoint(), Point(x: 10.0, y: 0.0))
+        try counter.tryResetIfPositive()
+        XCTAssertEqual(counter.get(), 0)
         counter.reset()
         XCTAssertEqual(counter.get(), 0)
         XCTAssertNil(counter.maybeDouble())
+        assertThrowsMessageContains("count is not positive", try counter.tryResetIfPositive())
         assertThrowsMessageContains("count is not positive", try counter.tryGetPositive())
     }
 

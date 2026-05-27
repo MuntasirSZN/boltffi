@@ -20,7 +20,17 @@ impl<'a> CSharpLowerer<'a> {
             if let TypeExpr::Callback(id) = &param.type_expr {
                 return self.lower_callback_param(param, id);
             }
-            return None;
+            // `&mut [T]` is only safe when T uses an in-place array
+            // representation. Wire-encoded element types would mutate a
+            // temporary buffer with no writeback to the managed caller
+            // (#345).
+            if !matches!(
+                (&param.passing, &param.type_expr),
+                (ParamPassing::RefMut, TypeExpr::Vec(inner))
+                    if self.is_blittable_vec_element(inner)
+            ) {
+                return None;
+            }
         }
 
         let csharp_type = self.lower_type(&param.type_expr)?;
@@ -60,6 +70,7 @@ impl<'a> CSharpLowerer<'a> {
         let normalized = self.normalize_custom_type_expr(&param.type_expr);
         let kind = match &normalized {
             TypeExpr::String => CSharpParamKind::Utf8Bytes,
+            TypeExpr::Builtin(_) => wire_encoded_kind(wire_writers, &param.name)?,
             TypeExpr::Record(id) if !self.is_blittable_record(id) => {
                 wire_encoded_kind(wire_writers, &param.name)?
             }
@@ -153,6 +164,7 @@ impl<'a> CSharpLowerer<'a> {
             TypeExpr::Void => Some(CSharpType::Void),
             TypeExpr::Primitive(primitive) => Some(CSharpType::from(*primitive)),
             TypeExpr::String => Some(CSharpType::String),
+            TypeExpr::Builtin(id) => Some(CSharpType::Builtin(id.clone())),
             TypeExpr::Record(id) if self.supported_records.contains(id) => {
                 let class_name: CSharpClassName = id.into();
                 Some(CSharpType::Record(class_name.into()))

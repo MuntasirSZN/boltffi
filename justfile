@@ -40,7 +40,7 @@ build:
 
 # Build boltffi CLI (release)
 build-release:
-    cargo build -p boltffi_cli --release
+    cargo build -p boltffi_cli --profile release-lto
 
 # Build entire workspace (debug)
 build-all:
@@ -60,6 +60,14 @@ test:
 
 demo-verify:
     ./examples/demo/verify-platform-demos.sh
+
+# Audit semantic demo test cases against platform test markers
+demo-test-audit:
+    cargo run --manifest-path examples/demo/Cargo.toml --bin demo-tests -- audit
+
+# Report semantic demo test cases and platform support
+demo-test-report:
+    cargo run --manifest-path examples/demo/Cargo.toml --bin demo-tests -- report
 
 # Run tests with cargo-nextest (parallel, faster)
 test-nextest:

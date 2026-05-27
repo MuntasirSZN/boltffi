@@ -40,6 +40,7 @@ experimental = ["typescript.async_streams"]
 Experimental targets:
 - `dart`
 - `python`
+- `kotlin_multiplatform`
 
 Experimental features:
 - `typescript.async_streams`
@@ -230,6 +231,25 @@ Companion archive output for Android JNI libraries collected by `boltffi pack an
   - Default: `zip`
 - `bundle` (`unstripped`): Bundle kind for the archived payloads.
   - Default: `unstripped`
+
+## Kotlin Multiplatform
+
+### `[targets.kotlin_multiplatform]` (optional, experimental)
+
+Generates a Kotlin Multiplatform module with `commonMain` declarations and JVM/Android actuals backed by the existing Kotlin/JNI generator. This target currently covers the same JVM-compatible binding surface that can be represented in common Kotlin. Kotlin/Native `cinterop` actuals for iOS/macOS are not generated yet.
+
+- `enabled` (bool): Whether this target is active.
+  - Default: `false`
+- `output` (path): Kotlin Multiplatform module output directory.
+  - Default: `dist/kotlin-multiplatform`
+- `package` (string, optional): Kotlin package for generated common and platform sources.
+  - Default: same as `[targets.android.kotlin].package`
+- `module_name` (string, optional): Kotlin source/module class name.
+  - Default: same as `[targets.android.kotlin].module_name`
+
+Desktop JVM native resources for `boltffi pack kmp` use `[targets.java.jvm].host_targets`.
+`targets.java.jvm.enabled` does not need to be true for KMP packaging to read this shared JVM
+host matrix. When omitted, the host matrix defaults to `["current"]`.
 
 ## Java
 
