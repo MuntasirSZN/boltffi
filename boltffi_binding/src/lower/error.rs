@@ -300,12 +300,6 @@ pub enum UnsupportedType {
     ClosureInValuePosition,
     /// A stream item type was not wire-encodable.
     StreamItem,
-    /// A `Result<closure, E>` return: the success channel and the
-    /// error channel would both claim the return slot. The IR has no
-    /// closure-out-pointer return shape yet, so the fallible case is
-    /// rejected with a precise diagnostic instead of falling through
-    /// to the generic return-slot conflict.
-    FallibleClosureReturn,
 }
 
 impl fmt::Display for UnsupportedType {
@@ -324,7 +318,6 @@ impl fmt::Display for UnsupportedType {
             Self::OwnedClassReceiver => "owned class receiver",
             Self::ClosureInValuePosition => "closure in a value-shaped position",
             Self::StreamItem => "stream item type",
-            Self::FallibleClosureReturn => "fallible closure return (Result<closure, E>)",
         })
     }
 }

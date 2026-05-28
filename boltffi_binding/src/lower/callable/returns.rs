@@ -51,11 +51,6 @@ where
             if let TypeExpr::Result { ok, err } = type_expr {
                 let ok_type_expr = substitute_self_type(owner, ok)?;
                 let err_type_expr = substitute_self_type(owner, err)?;
-                if matches!(ok_type_expr, TypeExpr::Closure(_)) {
-                    return Err(LowerError::unsupported_type(
-                        UnsupportedType::FallibleClosureReturn,
-                    ));
-                }
                 let success =
                     lower_return_plan::<S, D>(idx, ids, allocator, &ok_type_expr)?.into_out();
                 let error = lower_error::<S, D>(idx, ids, &err_type_expr)?;
@@ -151,15 +146,6 @@ where
     })
 }
 
-/// Picks the [`ReturnPlan<S, D>`] for one return value.
-///
-/// Emits `*ViaReturnSlot` variants by default. Result returns rewrite
-/// the plan with [`ReturnPlan::into_out`] so the success value spills
-/// to an out-pointer and the error channel can claim the return slot.
-///
-/// [`TypeExpr::Unit`] lowers to [`ReturnPlan::Void`] so that
-/// `Result<(), E>` produces a void success channel paired with the
-/// error channel without routing an empty value through the codec lane.
 fn lower_return_plan<S: SurfaceLower, D: Direction + LowerClosure<S>>(
     idx: &Index<'_>,
     ids: &DeclarationIds,
@@ -204,7 +190,7 @@ where
         }
         TypeExpr::Closure(closure) => {
             let closure_return = D::lower_closure_return(idx, ids, allocator, closure)?;
-            Ok(ReturnPlan::ClosureViaReturnSlot(closure_return))
+            Ok(ReturnPlan::ClosureViaOutPointer(closure_return))
         }
         TypeExpr::Class { id, presence } => Ok(ReturnPlan::HandleViaReturnSlot {
             target: HandleTarget::Class(ids.class(id)?),

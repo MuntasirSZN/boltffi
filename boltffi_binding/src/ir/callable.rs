@@ -497,17 +497,14 @@ where
         }
     }
 
-    /// Returns the source spelling.
     pub fn form(&self) -> ClosureForm {
         self.form
     }
 
-    /// Returns the handle registration.
     pub fn registration(&self) -> &ClosureRegistration<S, D> {
         &self.registration
     }
 
-    /// Returns the invocation contract.
     pub fn invoke(&self) -> &CallableDecl<S, D::InvokeScope> {
         &self.invoke
     }
@@ -747,8 +744,6 @@ where
         /// Element type.
         element: TypeRef,
     },
-    /// Closure handle in the return slot.
-    ClosureViaReturnSlot(ClosureReturn<S, D>),
     /// Direct value through an out-pointer (return slot carries the
     /// error status).
     DirectViaOutPointer {
@@ -773,6 +768,21 @@ where
         /// Whether the slot may be null.
         presence: HandlePresence,
     },
+    /// Closure handle written through a caller-supplied out-pointer.
+    ///
+    /// Closure returns always cross via out-pointer on every surface.
+    /// The rendered ABI is uniform:
+    /// `extern "C" fn(..., out: *mut ClosureReturnStorage)` — the
+    /// caller allocates space for the closure registration value and
+    /// the callee writes through the pointer. The return slot is
+    /// free for an error status, so `Result<closure, E>` lowers
+    /// naturally with the closure success going through the
+    /// out-pointer and the error status taking the return slot.
+    ///
+    /// One ABI for every surface, including platforms whose C ABI
+    /// (Win64) would otherwise force a hidden sret pointer on wide
+    /// struct returns. No backend guessing, no platform split.
+    ClosureViaOutPointer(ClosureReturn<S, D>),
 }
 
 impl<S: Surface, D: Direction> ReturnPlan<S, D>
@@ -781,7 +791,7 @@ where
 {
     pub(crate) fn native_symbols(&self) -> Box<dyn Iterator<Item = &NativeSymbol> + '_> {
         match self {
-            Self::ClosureViaReturnSlot(closure) => closure.native_symbols(),
+            Self::ClosureViaOutPointer(closure) => closure.native_symbols(),
             Self::Void
             | Self::DirectViaReturnSlot { .. }
             | Self::EncodedViaReturnSlot { .. }
@@ -802,7 +812,6 @@ where
                 | Self::HandleViaReturnSlot { .. }
                 | Self::ScalarOptionViaReturnSlot { .. }
                 | Self::DirectVecViaReturnSlot { .. }
-                | Self::ClosureViaReturnSlot(_)
         )
     }
 

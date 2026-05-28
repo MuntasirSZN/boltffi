@@ -590,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn wasm32_callback_method_returning_closure_lowers_to_closure_via_return_slot() {
+    fn wasm32_callback_method_returning_closure_lowers_to_closure_via_out_pointer() {
         use boltffi_ast::{ClosureKind, ClosureType, ReturnDef};
 
         let mut callback = listener_callback();
@@ -611,8 +611,8 @@ mod tests {
         // the invoke contract is an `ImportedCallable` and the registration
         // uses wasm32's `IncomingClosureRegistration` (import-side metadata).
         let closure_crossing = match plan {
-            ReturnPlan::ClosureViaReturnSlot(crossing) => crossing,
-            other => panic!("expected ClosureViaReturnSlot, got {other:?}"),
+            ReturnPlan::ClosureViaOutPointer(crossing) => crossing,
+            other => panic!("expected ClosureViaOutPointer, got {other:?}"),
         };
         assert_eq!(closure_crossing.form(), crate::ClosureForm::Fn);
         let invoke = closure_crossing.invoke();
@@ -644,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn native_callback_method_returning_closure_lowers_to_closure_via_return_slot() {
+    fn native_callback_method_returning_closure_lowers_to_closure_via_out_pointer() {
         use boltffi_ast::{ClosureKind, ClosureType, ReturnDef};
 
         let mut callback = listener_callback();
@@ -661,15 +661,13 @@ mod tests {
         let plan = methods[0].callable().returns().plan();
 
         let closure_crossing = match plan {
-            ReturnPlan::ClosureViaReturnSlot(crossing) => crossing,
-            other => panic!("expected ClosureViaReturnSlot, got {other:?}"),
+            ReturnPlan::ClosureViaOutPointer(crossing) => crossing,
+            other => panic!("expected ClosureViaOutPointer, got {other:?}"),
         };
-        // Callback method's return direction is `IntoRust` (foreign
-        // returns to Rust); the closure body lives on the foreign
-        // side. Native's incoming registration is the same logical
-        // pair (invoke + context); at return position it crosses as a
-        // returned struct, per the position-dependent wire shape
-        // documented on `native::ClosureRegistration::InvokeContext`.
+        // Callback method's return direction is IntoRust: foreign returns to
+        // Rust, and the closure body lives on the foreign side. The return
+        // plan forces out-pointer carriage; parameter closure handling cannot
+        // accidentally cover this case.
         assert_eq!(closure_crossing.form(), crate::ClosureForm::Fn);
         assert_eq!(
             closure_crossing.registration().shape(),

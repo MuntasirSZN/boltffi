@@ -333,12 +333,6 @@ type ClosureInvokeParts<S, K> = (
     crate::ErrorDecl<S, <K as crate::CallableScope>::ReturnDirection>,
 );
 
-/// Shared closure-invoke argument lowering used by both directions.
-///
-/// Synthesises positional names for the parameter list and routes both
-/// the parameters and the return through the scope `K`'s directions, so
-/// the invoke's params and returns flow correctly for the closure's
-/// body location.
 fn lower_closure_invoke_parts<S: SurfaceLower, K: crate::CallableScope>(
     idx: &Index<'_>,
     ids: &DeclarationIds,
@@ -392,13 +386,6 @@ pub(super) fn lower_function<S: SurfaceLower>(
     )?)
 }
 
-/// Builds the [`ExecutionDecl<S>`] for an exported callable.
-///
-/// Sync callables yield [`ExecutionDecl::synchronous`] without touching
-/// the allocator. Async callables defer to the surface's
-/// [`AsyncProtocolBuilder`] to mint the lifecycle symbols from the
-/// start symbol prefix and wrap them in
-/// [`ExecutionDecl::asynchronous`].
 fn lower_execution<S: SurfaceLower>(
     allocator: &mut SymbolAllocator,
     execution: ExecutionKind,

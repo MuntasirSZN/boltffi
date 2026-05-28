@@ -233,7 +233,6 @@ pub(crate) trait LowerClosure<S: SurfaceLower>: ParamDirection<S> + Sized
 where
     Self::Opposite: ParamDirection<S>,
 {
-    /// Lowers the closure into its direction-specific IR shape.
     fn lower_closure_parameter(
         idx: &Index<'_>,
         ids: &DeclarationIds,
@@ -248,7 +247,6 @@ where
         closure: &ClosureType,
     ) -> Result<ClosureReturn<S, Self>, LowerError>;
 
-    /// Wraps the closure crossing as a parameter slot payload.
     fn lower_closure_param(
         idx: &Index<'_>,
         ids: &DeclarationIds,

@@ -240,19 +240,24 @@ pub mod native {
     ///   ([`crate::IncomingParam::Closure`],
     ///   [`crate::OutgoingParam::Closure`]): two adjacent native
     ///   parameter slots — one function-pointer slot followed by one
-    ///   pointer slot.
-    /// - At the return slot
-    ///   ([`crate::ReturnPlan::ClosureViaReturnSlot`]): a returned
-    ///   struct `{ invoke: fn pointer, context: *mut () }` by value.
-    ///   System V x86_64, Win64, and AArch64 each return a 16-byte
-    ///   two-field struct through registers, so this is portable on
-    ///   every native target.
+    ///   pointer slot. The C ABI of every native target passes two
+    ///   pointer-sized arguments uniformly.
+    /// - At a return position
+    ///   ([`crate::ReturnPlan::ClosureViaOutPointer`]): an explicit
+    ///   out-pointer. The caller allocates storage for
+    ///   `#[repr(C)] struct ClosureReturnStorage { invoke: fn pointer, context: *mut () }`
+    ///   and passes its address as a trailing parameter; the callee
+    ///   writes the pair through that pointer. The native return
+    ///   slot stays free for an error status, so
+    ///   `Result<closure, E>` composes without conflict. One ABI
+    ///   across every native target — no register/sret variation,
+    ///   no toolchain-handled struct-return guesswork.
     ///
     /// Both layouts describe the same logical pair, so one
     /// [`InvokeContext`](Self::InvokeContext) marker covers them.
     /// Distinct *wire* shapes are still distinct *variants* at the
-    /// wrapper level (param vs return) — the same convention strings
-    /// use (`Slice` at param, `Buffer` at return).
+    /// wrapper level — `ParamPlan`-side carriage versus
+    /// `ClosureViaOutPointer` at return position.
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
     #[non_exhaustive]
     pub enum ClosureRegistration {

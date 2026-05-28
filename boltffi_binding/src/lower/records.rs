@@ -1328,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn closure_return_lowers_to_closure_via_return_slot_on_native() {
+    fn closure_return_lowers_to_closure_via_out_pointer_on_native() {
         let mut record = point_record();
         record.methods.push(method_with(
             "project",
@@ -1346,15 +1346,14 @@ mod tests {
         let plan = methods[0].callable().returns().plan();
 
         let closure_crossing = match plan {
-            ReturnPlan::ClosureViaReturnSlot(crossing) => crossing,
-            other => panic!("expected ClosureViaReturnSlot, got {other:?}"),
+            ReturnPlan::ClosureViaOutPointer(crossing) => crossing,
+            other => panic!("expected ClosureViaOutPointer, got {other:?}"),
         };
         assert_eq!(closure_crossing.form(), crate::ClosureForm::Fn);
-        // The wire layout for native closure returns is a returned
-        // struct `{ invoke, context }`; the IR records the logical
-        // pair as `InvokeContext`. The position-specific layout is
-        // the responsibility of the renderer, signalled by the
-        // wrapping `ReturnPlan::ClosureViaReturnSlot(_)` variant.
+        // Native closure params and returns share the same logical invoke/context
+        // marker, but the parent enum keeps the wire positions separate.
+        // Parameter closures can only appear through IncomingParam/OutgoingParam;
+        // closure returns can only appear through ClosureViaOutPointer.
         assert_eq!(
             closure_crossing.registration().shape(),
             &native::ClosureRegistration::InvokeContext
@@ -1377,7 +1376,7 @@ mod tests {
     }
 
     #[test]
-    fn closure_return_lowers_to_closure_via_return_slot_on_wasm32() {
+    fn closure_return_lowers_to_closure_via_out_pointer_on_wasm32() {
         let mut record = point_record();
         record.methods.push(method_with(
             "project",
@@ -1406,8 +1405,8 @@ mod tests {
         let plan = methods[0].callable().returns().plan();
 
         let closure_param = match plan {
-            ReturnPlan::ClosureViaReturnSlot(closure_param) => closure_param,
-            other => panic!("expected ClosureViaReturnSlot, got {other:?}"),
+            ReturnPlan::ClosureViaOutPointer(closure_param) => closure_param,
+            other => panic!("expected ClosureViaOutPointer, got {other:?}"),
         };
 
         assert_eq!(closure_param.form(), crate::ClosureForm::Fn);
@@ -1446,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn result_closure_return_is_rejected_with_precise_diagnostic() {
+    fn result_closure_return_uses_out_pointer_success_and_encoded_error() {
         let mut record = point_record();
         record.methods.push(method_with(
             "try_project",
@@ -1461,14 +1460,39 @@ mod tests {
             }),
         ));
 
-        let error = lower_record_result::<Wasm32>(record).expect_err(
-            "Result<closure, E> must reject because both channels claim the return slot",
-        );
+        let bindings =
+            lower_record_result::<Wasm32>(record).expect("Result<closure, E> should lower");
+        let record_decl = bindings
+            .decls()
+            .iter()
+            .find_map(|decl| match decl {
+                crate::Decl::Record(record) => Some(record.as_ref()),
+                _ => None,
+            })
+            .expect("expected record");
+        let methods = match record_decl {
+            crate::RecordDecl::Direct(direct) => direct.methods(),
+            crate::RecordDecl::Encoded(encoded) => encoded.methods(),
+        };
+        let callable = methods[0].callable();
 
-        assert!(matches!(
-            error.kind(),
-            LowerErrorKind::UnsupportedType(UnsupportedType::FallibleClosureReturn)
-        ));
+        assert!(
+            matches!(
+                callable.returns().plan(),
+                ReturnPlan::ClosureViaOutPointer(_)
+            ),
+            "closure success must use an out-pointer so the error can own the return slot"
+        );
+        match callable.error() {
+            ErrorDecl::EncodedViaReturnSlot {
+                ty: TypeRef::String,
+                codec,
+                shape: wasm32::BufferShape::Packed,
+            } => {
+                assert_eq!(codec.root(), &CodecNode::String);
+            }
+            other => panic!("expected encoded string error in return slot, got {other:?}"),
+        }
     }
 
     #[test]
