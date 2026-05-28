@@ -105,4 +105,16 @@ mod tests {
             ScanError::UnsupportedType { spelling } if spelling == "Point"
         ));
     }
+
+    #[test]
+    fn scans_string_and_collection_fields() {
+        let record =
+            scan("pub struct Person { pub name: String, pub scores: Vec<i32> }").expect("scan");
+
+        assert_eq!(record.fields[0].type_expr, TypeExpr::String);
+        assert_eq!(
+            record.fields[1].type_expr,
+            TypeExpr::vec(TypeExpr::Primitive(Primitive::I32))
+        );
+    }
 }

@@ -2,15 +2,28 @@ use boltffi_ast::{ClosureKind, ClosureType, Primitive, ReturnDef, TypeExpr};
 
 use crate::ScanError;
 
+/// Scans a source type into a [`TypeExpr`].
+///
+/// Handles primitives, `String`, the standard containers (`Vec`,
+/// `Option`, `Result`, `HashMap`/`BTreeMap`), tuples, and inline
+/// `impl Fn`-family closures. Named user types still reject until the
+/// type registry lands; references, bare function pointers, and smart
+/// pointers arrive in later slices. An unrecognized type is rejected with
+/// its verbatim spelling rather than dropped.
 pub(crate) fn scan_type(ty: &syn::Type) -> Result<TypeExpr, ScanError> {
     match ty {
         syn::Type::ImplTrait(impl_trait) => closure(impl_trait, ty),
-        _ => primitive(ty)
-            .map(TypeExpr::Primitive)
-            .ok_or_else(|| ScanError::unsupported_type(ty)),
+        syn::Type::Tuple(tuple) => tuple_type(tuple),
+        syn::Type::Path(type_path) => path_type(type_path, ty),
+        _ => Err(ScanError::unsupported_type(ty)),
     }
 }
 
+/// Scans a callable return position into a [`ReturnDef`].
+///
+/// Free functions and inline closure signatures share this, so the
+/// void-versus-value decision lives in one place. An explicit `-> ()`
+/// records as [`ReturnDef::Void`], the same as a missing return.
 pub(crate) fn scan_return(output: &syn::ReturnType) -> Result<ReturnDef, ScanError> {
     match output {
         syn::ReturnType::Default => Ok(ReturnDef::Void),
@@ -21,6 +34,76 @@ pub(crate) fn scan_return(output: &syn::ReturnType) -> Result<ReturnDef, ScanErr
 
 fn is_unit(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Tuple(tuple) if tuple.elems.is_empty())
+}
+
+fn path_type(type_path: &syn::TypePath, source: &syn::Type) -> Result<TypeExpr, ScanError> {
+    if type_path.qself.is_some() {
+        return Err(ScanError::unsupported_type(source));
+    }
+    let segment = type_path
+        .path
+        .segments
+        .last()
+        .ok_or_else(|| ScanError::unsupported_type(source))?;
+    match segment.ident.to_string().as_str() {
+        "String" => Ok(TypeExpr::String),
+        "Vec" => Ok(TypeExpr::vec(single_argument(segment, source)?)),
+        "Option" => Ok(TypeExpr::option(single_argument(segment, source)?)),
+        "Result" => {
+            let (ok, err) = two_arguments(segment, source)?;
+            Ok(TypeExpr::result(ok, err))
+        }
+        "HashMap" | "BTreeMap" => {
+            let (key, value) = two_arguments(segment, source)?;
+            Ok(TypeExpr::map(key, value))
+        }
+        name => Primitive::from_rust_name(name)
+            .map(TypeExpr::Primitive)
+            .ok_or_else(|| ScanError::unsupported_type(source)),
+    }
+}
+
+fn tuple_type(tuple: &syn::TypeTuple) -> Result<TypeExpr, ScanError> {
+    if tuple.elems.is_empty() {
+        return Ok(TypeExpr::Unit);
+    }
+    let elements = tuple
+        .elems
+        .iter()
+        .map(scan_type)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(TypeExpr::tuple(elements))
+}
+
+fn type_arguments(segment: &syn::PathSegment) -> Vec<&syn::Type> {
+    match &segment.arguments {
+        syn::PathArguments::AngleBracketed(bracketed) => bracketed
+            .args
+            .iter()
+            .filter_map(|argument| match argument {
+                syn::GenericArgument::Type(ty) => Some(ty),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn single_argument(segment: &syn::PathSegment, source: &syn::Type) -> Result<TypeExpr, ScanError> {
+    match type_arguments(segment).as_slice() {
+        [argument] => scan_type(argument),
+        _ => Err(ScanError::unsupported_type(source)),
+    }
+}
+
+fn two_arguments(
+    segment: &syn::PathSegment,
+    source: &syn::Type,
+) -> Result<(TypeExpr, TypeExpr), ScanError> {
+    match type_arguments(segment).as_slice() {
+        [first, second] => Ok((scan_type(first)?, scan_type(second)?)),
+        _ => Err(ScanError::unsupported_type(source)),
+    }
 }
 
 fn closure(impl_trait: &syn::TypeImplTrait, source: &syn::Type) -> Result<TypeExpr, ScanError> {
@@ -63,17 +146,6 @@ fn closure_kind(name: &str) -> Option<ClosureKind> {
     })
 }
 
-fn primitive(ty: &syn::Type) -> Option<Primitive> {
-    let syn::Type::Path(type_path) = ty else {
-        return None;
-    };
-    if type_path.qself.is_some() {
-        return None;
-    }
-    let ident = type_path.path.get_ident()?;
-    Primitive::from_rust_name(&ident.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +179,76 @@ mod tests {
                 "primitive {source} should scan exactly"
             );
         });
+    }
+
+    #[test]
+    fn scans_string_and_sequence_containers() {
+        assert_eq!(scan_type(&ty("String")), Ok(TypeExpr::String));
+        assert_eq!(
+            scan_type(&ty("Vec<i32>")),
+            Ok(TypeExpr::vec(TypeExpr::Primitive(Primitive::I32)))
+        );
+        assert_eq!(
+            scan_type(&ty("Option<String>")),
+            Ok(TypeExpr::option(TypeExpr::String))
+        );
+    }
+
+    #[test]
+    fn scans_result_and_map_containers() {
+        assert_eq!(
+            scan_type(&ty("Result<i32, String>")),
+            Ok(TypeExpr::result(
+                TypeExpr::Primitive(Primitive::I32),
+                TypeExpr::String
+            ))
+        );
+        assert_eq!(
+            scan_type(&ty("HashMap<String, i32>")),
+            Ok(TypeExpr::map(
+                TypeExpr::String,
+                TypeExpr::Primitive(Primitive::I32)
+            ))
+        );
+    }
+
+    #[test]
+    fn scans_tuples_and_unit() {
+        assert_eq!(
+            scan_type(&ty("(i32, String)")),
+            Ok(TypeExpr::tuple(vec![
+                TypeExpr::Primitive(Primitive::I32),
+                TypeExpr::String
+            ]))
+        );
+        assert_eq!(scan_type(&ty("()")), Ok(TypeExpr::Unit));
+    }
+
+    #[test]
+    fn scans_nested_containers() {
+        assert_eq!(
+            scan_type(&ty("Option<Vec<i32>>")),
+            Ok(TypeExpr::option(TypeExpr::vec(TypeExpr::Primitive(
+                Primitive::I32
+            ))))
+        );
+    }
+
+    #[test]
+    fn resolves_qualified_std_paths_by_last_segment() {
+        assert_eq!(scan_type(&ty("std::string::String")), Ok(TypeExpr::String));
+        assert_eq!(
+            scan_type(&ty("std::vec::Vec<u8>")),
+            Ok(TypeExpr::vec(TypeExpr::Primitive(Primitive::U8)))
+        );
+    }
+
+    #[test]
+    fn named_user_type_rejects_until_registry_lands() {
+        assert!(matches!(
+            scan_type(&ty("Point")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Point"
+        ));
     }
 
     #[test]
