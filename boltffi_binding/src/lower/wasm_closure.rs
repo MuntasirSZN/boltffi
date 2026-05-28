@@ -2,18 +2,32 @@ use std::fmt;
 
 use boltffi_ast::{ClosureType, Primitive as AstPrimitive, ReturnDef, TypeExpr};
 
-use crate::{ImportModule, ImportSymbol, SymbolName, wasm32};
+use crate::{ImportModule, ImportSymbol, NativeSymbol, SymbolName, wasm32};
 
-use super::{LowerError, symbol};
+use super::{
+    LowerError,
+    symbol::{self, SymbolAllocator},
+};
 
-pub(super) fn registration(
+pub(super) fn incoming_registration(
     closure: &ClosureType,
-) -> Result<wasm32::ClosureRegistration, LowerError> {
+) -> Result<wasm32::IncomingClosureRegistration, LowerError> {
     let module = ImportModule::parse(symbol::WASM_CALLBACK_IMPORT_MODULE.to_owned())?;
     let signature = ClosureSignature::from_closure(closure).symbol_part();
     let call = import_symbol(module.clone(), &signature, "call")?;
     let free = import_symbol(module, &signature, "free")?;
-    Ok(wasm32::ClosureRegistration::new(call, free))
+    Ok(wasm32::IncomingClosureRegistration::new(call, free))
+}
+
+pub(super) fn outgoing_registration(
+    allocator: &mut SymbolAllocator,
+    closure: &ClosureType,
+) -> Result<wasm32::OutgoingClosureRegistration, LowerError> {
+    let signature = ClosureSignature::from_closure(closure).symbol_part();
+    let group_id = allocator.next_group_id();
+    let call = export_symbol(allocator, group_id, &signature, "call")?;
+    let free = export_symbol(allocator, group_id, &signature, "free")?;
+    Ok(wasm32::OutgoingClosureRegistration::new(call, free))
 }
 
 fn import_symbol(
@@ -23,6 +37,17 @@ fn import_symbol(
 ) -> Result<ImportSymbol, LowerError> {
     let name = symbol::wasm_callback_import_name("closure", signature, action);
     Ok(ImportSymbol::new(module, SymbolName::parse(name)?))
+}
+
+fn export_symbol(
+    allocator: &mut SymbolAllocator,
+    group_id: u32,
+    signature: &str,
+    action: &str,
+) -> Result<NativeSymbol, LowerError> {
+    allocator.mint(symbol::wasm_closure_export_name(
+        group_id, signature, action,
+    ))
 }
 
 struct ClosureSignature<'a> {
@@ -82,12 +107,12 @@ impl fmt::Display for ClosureTypeSignature<'_> {
         match self.0 {
             TypeExpr::Primitive(primitive) => formatter.write_str(&primitive_signature(*primitive)),
             TypeExpr::Unit => formatter.write_str("Void"),
-            TypeExpr::Record(id) => formatter.write_str(&source_type_name(id.as_str())),
-            TypeExpr::Enum(id) => formatter.write_str(&source_type_name(id.as_str())),
-            TypeExpr::Class { id, .. } => formatter.write_str(&source_type_name(id.as_str())),
-            TypeExpr::Trait { id, .. } => formatter.write_str(&source_type_name(id.as_str())),
+            TypeExpr::Record(id) => formatter.write_str(&source_type_signature(id.as_str())),
+            TypeExpr::Enum(id) => formatter.write_str(&source_type_signature(id.as_str())),
+            TypeExpr::Class { id, .. } => formatter.write_str(&source_type_signature(id.as_str())),
+            TypeExpr::Trait { id, .. } => formatter.write_str(&source_type_signature(id.as_str())),
             TypeExpr::Closure(_) => formatter.write_str("Closure"),
-            TypeExpr::Custom(id) => formatter.write_str(&source_type_name(id.as_str())),
+            TypeExpr::Custom(id) => formatter.write_str(&source_type_signature(id.as_str())),
             TypeExpr::SelfType => formatter.write_str("Self"),
             TypeExpr::Vec(inner) => write!(formatter, "Vec{}", ClosureTypeSignature(inner)),
             TypeExpr::Option(inner) => write!(formatter, "Opt{}", ClosureTypeSignature(inner)),
@@ -124,11 +149,12 @@ fn write_signature_types(formatter: &mut fmt::Formatter<'_>, types: &[TypeExpr])
     Ok(())
 }
 
-fn source_type_name(source_id: &str) -> String {
+fn source_type_signature(source_id: &str) -> String {
     source_id
-        .rsplit("::")
-        .find(|segment| !segment.is_empty())
-        .map_or_else(|| source_id.to_owned(), ToOwned::to_owned)
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .map(capitalize)
+        .collect()
 }
 
 fn primitive_signature(primitive: AstPrimitive) -> String {
@@ -179,7 +205,7 @@ mod tests {
             vec![TypeExpr::Primitive(AstPrimitive::F64)],
             ReturnDef::Void,
         );
-        let registration = registration(&closure).expect("valid closure registration");
+        let registration = incoming_registration(&closure).expect("valid closure registration");
 
         assert_eq!(
             registration.call().module().as_str(),
@@ -192,6 +218,27 @@ mod tests {
         assert_eq!(
             registration.free().name().as_str(),
             "__boltffi_callback_closure____closure__f64_free"
+        );
+    }
+
+    #[test]
+    fn outgoing_registration_uses_closure_signature_export_names() {
+        let closure = ClosureType::new(
+            ClosureKind::Fn,
+            vec![TypeExpr::Primitive(AstPrimitive::F64)],
+            ReturnDef::Void,
+        );
+        let mut allocator = SymbolAllocator::new();
+        let registration =
+            outgoing_registration(&mut allocator, &closure).expect("valid closure registration");
+
+        assert_eq!(
+            registration.call().name().as_str(),
+            "boltffi_closure_0____closure__f64_call"
+        );
+        assert_eq!(
+            registration.free().name().as_str(),
+            "boltffi_closure_0____closure__f64_free"
         );
     }
 
@@ -210,7 +257,30 @@ mod tests {
 
         assert_eq!(
             ClosureSignature::from_closure(&closure).symbol_part(),
-            "___closure__opt_point_to_result_i32_err_math_error"
+            "___closure__opt_demo_point_to_result_i32_err_demo_math_error"
+        );
+    }
+
+    #[test]
+    fn signature_includes_named_type_namespace() {
+        let first = ClosureType::new(
+            ClosureKind::Fn,
+            vec![TypeExpr::Record(RecordId::new("a::Point"))],
+            ReturnDef::Void,
+        );
+        let second = ClosureType::new(
+            ClosureKind::Fn,
+            vec![TypeExpr::Record(RecordId::new("b::Point"))],
+            ReturnDef::Void,
+        );
+
+        assert_eq!(
+            ClosureSignature::from_closure(&first).symbol_part(),
+            "___closure__a_point"
+        );
+        assert_eq!(
+            ClosureSignature::from_closure(&second).symbol_part(),
+            "___closure__b_point"
         );
     }
 

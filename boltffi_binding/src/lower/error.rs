@@ -273,8 +273,6 @@ pub enum UnsupportedType {
     SelfType,
     /// A generic type parameter appeared in exported source.
     TypeParameter,
-    /// A closure returned `Result<T, E>`.
-    FallibleClosureReturn,
     /// A default value cannot be emitted as binding metadata yet.
     DefaultValue,
     /// `()` appeared in a position that requires a value-shaped type (a field
@@ -295,19 +293,11 @@ pub enum UnsupportedType {
     /// An owned class receiver has no handle-transfer protocol yet.
     OwnedClassReceiver,
     /// An inline closure appeared inside a value-shaped position
-    /// (record field, vec element, tuple element, ...). Closures cross
-    /// only as direct callable parameters.
+    /// (record field, vec element, tuple element, map key or value,
+    /// `Option` inner, ...). Closures cross at callable parameter
+    /// slots and at the return slot of a callable that returns one,
+    /// not as elements embedded in encoded values.
     ClosureInValuePosition,
-    /// An exported callable returned a closure (`-> impl Fn`,
-    /// `-> Box<dyn Fn>`, etc.). The macro does not generate code for
-    /// returning closures; the lower pass refuses to plan one until
-    /// that capability lands.
-    ClosureReturn,
-    /// A closure appeared as a parameter of a callable whose body
-    /// lives on the foreign side (a callback trait method or a nested
-    /// closure invocation). The macro does not generate code for
-    /// closures leaving Rust; the lower pass refuses to plan one.
-    ClosureInForeignBodyCallable,
     /// A stream item type was not wire-encodable.
     StreamItem,
 }
@@ -319,7 +309,6 @@ impl fmt::Display for UnsupportedType {
             Self::EnumRepr => "enum repr",
             Self::SelfType => "Self",
             Self::TypeParameter => "type parameter",
-            Self::FallibleClosureReturn => "fallible closure return",
             Self::DefaultValue => "default value",
             Self::UnitInValuePosition => "unit type `()` in a value position",
             Self::SelfInCallbackTrait => "Self in callback trait method",
@@ -328,10 +317,6 @@ impl fmt::Display for UnsupportedType {
             Self::BorrowedCallbackParameter => "borrowed callback parameter",
             Self::OwnedClassReceiver => "owned class receiver",
             Self::ClosureInValuePosition => "closure in a value-shaped position",
-            Self::ClosureReturn => "closure return from an exported callable",
-            Self::ClosureInForeignBodyCallable => {
-                "closure parameter inside a foreign-body callable"
-            }
             Self::StreamItem => "stream item type",
         })
     }

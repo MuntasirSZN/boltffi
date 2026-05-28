@@ -89,9 +89,9 @@ mod symbol;
 mod types;
 
 pub use callable::{
-    CallableDecl, ClosureForm, ClosureParam, ClosureRegistration, ErrorDecl, ExecutionDecl,
-    ExportedCallable, ImportedCallable, IncomingParam, OutgoingParam, ParamDecl, ParamDirection,
-    ParamPlan, Receive, ReturnDecl, ReturnPlan,
+    CallableDecl, ClosureForm, ClosureParameter, ClosureRegistration, ClosureReturn, ErrorDecl,
+    ExecutionDecl, ExportedCallable, ImportedCallable, IncomingParam, OutgoingParam, ParamDecl,
+    ParamDirection, ParamPlan, Receive, ReturnDecl, ReturnPlan,
 };
 pub use codec::{CodecNode, CodecPlan, ReadPlan, WritePlan};
 pub use contract::{Bindings, ContractVersion, PackageInfo, SerializedBindings};
@@ -120,8 +120,8 @@ pub use op::{
 };
 pub use primitive::{IntegerRepr, Primitive};
 pub use surface::{
-    AsyncProtocolIntrospect, BufferShapeRules, CallbackProtocolIntrospect, Native, Surface, Wasm32,
-    native, wasm32,
+    AsyncProtocolIntrospect, BufferShapeRules, CallbackProtocolIntrospect,
+    ClosureRegistrationIntrospect, Native, Surface, Wasm32, native, wasm32,
 };
 pub use symbol::{
     ImportModule, ImportSymbol, NativeSymbol, NativeSymbolTable, SymbolName, VTableSlot,

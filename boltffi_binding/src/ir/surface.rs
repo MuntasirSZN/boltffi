@@ -81,20 +81,26 @@ pub trait Surface:
         + PartialEq
         + Serialize
         + for<'de> Deserialize<'de>;
-    /// Wire shape used when a closure registers across the boundary.
-    ///
-    /// Distinct from [`HandleCarrier`](Self::HandleCarrier) because
-    /// closure registration is not the same contract as a class or
-    /// callback-trait handle. Native carries an invoke function and a
-    /// context pointer; wasm32 carries a handle plus the imports Rust
-    /// calls to invoke and release it.
-    type ClosureRegistration: Clone
+    /// Wire shape used when a foreign-provided closure registers with
+    /// Rust.
+    type IncomingClosureRegistration: Clone
         + Debug
         + Eq
         + Hash
         + PartialEq
         + Serialize
-        + for<'de> Deserialize<'de>;
+        + for<'de> Deserialize<'de>
+        + ClosureRegistrationIntrospect;
+    /// Wire shape used when a Rust-provided closure registers with
+    /// foreign code.
+    type OutgoingClosureRegistration: Clone
+        + Debug
+        + Eq
+        + Hash
+        + PartialEq
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + ClosureRegistrationIntrospect;
     /// Protocol used to drive an asynchronous callable to completion.
     type AsyncProtocol: Clone
         + Debug
@@ -132,6 +138,13 @@ pub trait AsyncProtocolIntrospect {
     fn native_symbols(&self) -> Box<dyn Iterator<Item = &NativeSymbol> + '_>;
 }
 
+/// Introspection a closure-registration shape exposes for symbol
+/// collection.
+pub trait ClosureRegistrationIntrospect {
+    /// Iterates over every native symbol the registration references.
+    fn native_symbols(&self) -> Box<dyn Iterator<Item = &NativeSymbol> + '_>;
+}
+
 /// The native call surface (host CPU, system linker, full C ABI).
 ///
 /// Buffer descriptors cross by value or by pointer, handles cross as
@@ -146,7 +159,8 @@ impl Surface for Native {
     type CallbackProtocol = native::CallbackProtocol;
     type BufferShape = native::BufferShape;
     type HandleCarrier = native::HandleCarrier;
-    type ClosureRegistration = native::ClosureRegistration;
+    type IncomingClosureRegistration = native::ClosureRegistration;
+    type OutgoingClosureRegistration = native::ClosureRegistration;
     type AsyncProtocol = native::AsyncProtocol;
 }
 
@@ -165,7 +179,8 @@ impl Surface for Wasm32 {
     type CallbackProtocol = wasm32::CallbackProtocol;
     type BufferShape = wasm32::BufferShape;
     type HandleCarrier = wasm32::HandleCarrier;
-    type ClosureRegistration = wasm32::ClosureRegistration;
+    type IncomingClosureRegistration = wasm32::IncomingClosureRegistration;
+    type OutgoingClosureRegistration = wasm32::OutgoingClosureRegistration;
     type AsyncProtocol = wasm32::AsyncProtocol;
 }
 
@@ -173,7 +188,9 @@ impl Surface for Wasm32 {
 pub mod native {
     use serde::{Deserialize, Serialize};
 
-    use super::{AsyncProtocolIntrospect, CallbackProtocolIntrospect, Native};
+    use super::{
+        AsyncProtocolIntrospect, CallbackProtocolIntrospect, ClosureRegistrationIntrospect, Native,
+    };
     use crate::{ImportedCallable, ImportedMethodDecl, NativeSymbol, VTableSlot};
 
     /// How an encoded payload occupies native call slots.
@@ -215,12 +232,43 @@ pub mod native {
     /// boundary.
     ///
     /// Closures cross as an invoke function pointer paired with a
-    /// context pointer.
+    /// context pointer. The IR records the logical pair here; the
+    /// position-specific layout is fixed by the wrapper variant that
+    /// holds the closure payload:
+    ///
+    /// - At a parameter slot
+    ///   ([`crate::IncomingParam::Closure`],
+    ///   [`crate::OutgoingParam::Closure`]): two adjacent native
+    ///   parameter slots — one function-pointer slot followed by one
+    ///   pointer slot. The C ABI of every native target passes two
+    ///   pointer-sized arguments uniformly.
+    /// - At a return position
+    ///   ([`crate::ReturnPlan::ClosureViaOutPointer`]): an explicit
+    ///   out-pointer. The caller allocates storage for
+    ///   `#[repr(C)] struct ClosureReturnStorage { invoke: fn pointer, context: *mut () }`
+    ///   and passes its address as a trailing parameter; the callee
+    ///   writes the pair through that pointer. The native return
+    ///   slot stays free for an error status, so
+    ///   `Result<closure, E>` composes without conflict. One ABI
+    ///   across every native target — no register/sret variation,
+    ///   no toolchain-handled struct-return guesswork.
+    ///
+    /// Both layouts describe the same logical pair, so one
+    /// [`InvokeContext`](Self::InvokeContext) marker covers them.
+    /// Distinct *wire* shapes are still distinct *variants* at the
+    /// wrapper level — `ParamPlan`-side carriage versus
+    /// `ClosureViaOutPointer` at return position.
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
     #[non_exhaustive]
     pub enum ClosureRegistration {
         /// Invoke function plus context pointer.
         InvokeContext,
+    }
+
+    impl ClosureRegistrationIntrospect for ClosureRegistration {
+        fn native_symbols(&self) -> Box<dyn Iterator<Item = &NativeSymbol> + '_> {
+            Box::new(std::iter::empty())
+        }
     }
 
     /// Protocol foreign code uses to install and dispatch a callback
@@ -386,7 +434,9 @@ pub mod native {
 pub mod wasm32 {
     use serde::{Deserialize, Serialize};
 
-    use super::{AsyncProtocolIntrospect, CallbackProtocolIntrospect, Wasm32};
+    use super::{
+        AsyncProtocolIntrospect, CallbackProtocolIntrospect, ClosureRegistrationIntrospect, Wasm32,
+    };
     use crate::{ImportSymbol, ImportedCallable, ImportedMethodDecl, NativeSymbol};
 
     /// How an encoded payload occupies wasm call slots.
@@ -422,12 +472,12 @@ pub mod wasm32 {
     /// Closures cross as a handle backed by imported invoke and release
     /// functions.
     #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-    pub struct ClosureRegistration {
+    pub struct IncomingClosureRegistration {
         call: ImportSymbol,
         free: ImportSymbol,
     }
 
-    impl ClosureRegistration {
+    impl IncomingClosureRegistration {
         pub(crate) fn new(call: ImportSymbol, free: ImportSymbol) -> Self {
             Self { call, free }
         }
@@ -440,6 +490,43 @@ pub mod wasm32 {
         /// Returns the import Rust calls when the closure handle is released.
         pub fn free(&self) -> &ImportSymbol {
             &self.free
+        }
+    }
+
+    impl ClosureRegistrationIntrospect for IncomingClosureRegistration {
+        fn native_symbols(&self) -> Box<dyn Iterator<Item = &NativeSymbol> + '_> {
+            Box::new(std::iter::empty())
+        }
+    }
+
+    /// Wire shape used when a Rust-provided closure registers across
+    /// the wasm boundary.
+    #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+    pub struct OutgoingClosureRegistration {
+        call: NativeSymbol,
+        free: NativeSymbol,
+    }
+
+    impl OutgoingClosureRegistration {
+        pub(crate) fn new(call: NativeSymbol, free: NativeSymbol) -> Self {
+            Self { call, free }
+        }
+
+        /// Returns the export foreign code calls to invoke the closure.
+        pub fn call(&self) -> &NativeSymbol {
+            &self.call
+        }
+
+        /// Returns the export foreign code calls when releasing the
+        /// closure handle.
+        pub fn free(&self) -> &NativeSymbol {
+            &self.free
+        }
+    }
+
+    impl ClosureRegistrationIntrospect for OutgoingClosureRegistration {
+        fn native_symbols(&self) -> Box<dyn Iterator<Item = &NativeSymbol> + '_> {
+            Box::new([&self.call, &self.free].into_iter())
         }
     }
 
