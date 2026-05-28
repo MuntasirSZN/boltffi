@@ -9,6 +9,7 @@ use crate::{
 };
 
 mod callback;
+mod class;
 mod custom_type;
 mod enumeration;
 mod native_function;
@@ -54,8 +55,10 @@ impl<'a> DartLowerer<'a> {
     fn lower_constructor(&self, ctor: &ConstructorDef, id: CallId) -> DartConstructor {
         let abi_call = self.abi_call_for_call_id(&id);
 
+        let native = self.lower_one_native_function(abi_call);
+
         DartConstructor {
-            ffi_name: abi_call.symbol.to_string(),
+            native,
             params: ctor
                 .params()
                 .iter()
@@ -89,6 +92,7 @@ impl<'a> DartLowerer<'a> {
         let native_functions = self.lower_native_functions();
         let enums = self.lower_enums();
         let callbacks = self.lower_callbacks();
+        let classes = self.lower_classes();
 
         DartLibrary {
             custom_types,
@@ -98,6 +102,7 @@ impl<'a> DartLowerer<'a> {
             records,
             enums,
             callbacks,
+            classes,
         }
     }
 }

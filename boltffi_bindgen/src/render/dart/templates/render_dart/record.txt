@@ -102,5 +102,5 @@ final class {{ record.name }}{% if record.is_error %} implements Exception{% end
     {{ param.ty.dart_type() }} {{ param.name }},
 {%- endfor %}
   ) {}
-{%- endfor %}
+{% endfor -%}
 }
