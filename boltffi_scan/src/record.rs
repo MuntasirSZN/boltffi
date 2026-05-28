@@ -1,26 +1,39 @@
 use boltffi_ast::{FieldDef, RecordDef, RecordId};
 
-use crate::{ModulePath, ScanError, name, repr, ty, visibility};
+use crate::registry::TypeRegistry;
+use crate::ty::TypeScanner;
+use crate::{ModulePath, ScanError, name, repr, visibility};
 
-pub fn scan_struct(item: &syn::ItemStruct, module: &ModulePath) -> Result<RecordDef, ScanError> {
+pub(crate) fn scan_struct(
+    item: &syn::ItemStruct,
+    module: &ModulePath,
+    registry: &TypeRegistry,
+) -> Result<RecordDef, ScanError> {
     let id = RecordId::new(module.qualified(&item.ident.to_string()));
     let mut record = RecordDef::new(id, name::canonical(&item.ident));
     record.repr = repr::scan(&item.attrs);
     record.source = visibility::scan(&item.vis);
-    record.fields = record_fields(&item.fields)?;
+    record.fields = record_fields(&item.fields, &TypeScanner::new(registry))?;
     Ok(record)
 }
 
-fn record_fields(fields: &syn::Fields) -> Result<Vec<FieldDef>, ScanError> {
+fn record_fields(
+    fields: &syn::Fields,
+    scanner: &TypeScanner<'_>,
+) -> Result<Vec<FieldDef>, ScanError> {
     match fields {
-        syn::Fields::Named(named) => named.named.iter().map(record_field).collect(),
+        syn::Fields::Named(named) => named
+            .named
+            .iter()
+            .map(|field| record_field(field, scanner))
+            .collect(),
         syn::Fields::Unnamed(_) | syn::Fields::Unit => Err(ScanError::TupleOrUnitStruct),
     }
 }
 
-fn record_field(field: &syn::Field) -> Result<FieldDef, ScanError> {
+fn record_field(field: &syn::Field, scanner: &TypeScanner<'_>) -> Result<FieldDef, ScanError> {
     let ident = field.ident.as_ref().ok_or(ScanError::TupleOrUnitStruct)?;
-    let mut scanned = FieldDef::new(name::canonical(ident), ty::scan_type(&field.ty)?);
+    let mut scanned = FieldDef::new(name::canonical(ident), scanner.scan(&field.ty)?);
     scanned.source = visibility::scan(&field.vis);
     Ok(scanned)
 }
@@ -37,7 +50,11 @@ mod tests {
     }
 
     fn scan(source: &str) -> Result<RecordDef, ScanError> {
-        scan_struct(&parse(source), &ModulePath::root("demo"))
+        scan_struct(
+            &parse(source),
+            &ModulePath::root("demo"),
+            &TypeRegistry::new(),
+        )
     }
 
     fn name(parts: &[&str]) -> CanonicalName {
@@ -115,6 +132,23 @@ mod tests {
         assert_eq!(
             record.fields[1].type_expr,
             TypeExpr::vec(TypeExpr::Primitive(Primitive::I32))
+        );
+    }
+
+    #[test]
+    fn resolves_record_typed_field_against_registry() {
+        let mut registry = TypeRegistry::new();
+        registry.register_record("Point", RecordId::new("demo::Point"));
+        let record = scan_struct(
+            &parse("pub struct Shape { pub center: Point }"),
+            &ModulePath::root("demo"),
+            &registry,
+        )
+        .expect("scan");
+
+        assert_eq!(
+            record.fields[0].type_expr,
+            TypeExpr::Record(RecordId::new("demo::Point"))
         );
     }
 }

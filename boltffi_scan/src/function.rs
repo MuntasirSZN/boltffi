@@ -1,53 +1,46 @@
-use boltffi_ast::{CanonicalName, ExecutionKind, FunctionDef, FunctionId, ParameterDef};
+use boltffi_ast::{FunctionDef, FunctionId, ParameterDef};
 
-use crate::{ModulePath, ScanError, name, ty, visibility};
+use crate::registry::TypeRegistry;
+use crate::ty::TypeScanner;
+use crate::{ModulePath, ScanError, name, signature, visibility};
 
-pub fn scan_function(item: &syn::ItemFn, module: &ModulePath) -> Result<FunctionDef, ScanError> {
+pub(crate) fn scan_function(
+    item: &syn::ItemFn,
+    module: &ModulePath,
+    registry: &TypeRegistry,
+) -> Result<FunctionDef, ScanError> {
     let ident = &item.sig.ident;
     let mut function = FunctionDef::new(
         FunctionId::new(module.qualified(&ident.to_string())),
         name::canonical(ident),
     );
+    let scanner = TypeScanner::new(registry);
     function.source = visibility::scan(&item.vis);
-    function.execution = execution(&item.sig);
-    function.parameters = parameters(&item.sig)?;
-    function.returns = ty::scan_return(&item.sig.output)?;
+    function.execution = signature::execution(&item.sig);
+    function.parameters = parameters(&item.sig, &scanner)?;
+    function.returns = scanner.scan_return(&item.sig.output)?;
     Ok(function)
 }
 
-fn execution(signature: &syn::Signature) -> ExecutionKind {
-    match signature.asyncness {
-        Some(_) => ExecutionKind::Async,
-        None => ExecutionKind::Sync,
-    }
-}
-
-fn parameters(signature: &syn::Signature) -> Result<Vec<ParameterDef>, ScanError> {
-    signature.inputs.iter().map(parameter).collect()
-}
-
-fn parameter(arg: &syn::FnArg) -> Result<ParameterDef, ScanError> {
-    let syn::FnArg::Typed(typed) = arg else {
-        return Err(ScanError::ReceiverOnFreeFunction);
-    };
-    let binding_name = parameter_name(&typed.pat)?;
-    let type_expr = ty::scan_type(&typed.ty)?;
-    Ok(ParameterDef::value(binding_name, type_expr))
-}
-
-fn parameter_name(pat: &syn::Pat) -> Result<CanonicalName, ScanError> {
-    match pat {
-        syn::Pat::Ident(binding) => Ok(name::canonical(&binding.ident)),
-        _ => Err(ScanError::UnnamedParameter),
-    }
+fn parameters(
+    sig: &syn::Signature,
+    scanner: &TypeScanner<'_>,
+) -> Result<Vec<ParameterDef>, ScanError> {
+    sig.inputs
+        .iter()
+        .map(|argument| match argument {
+            syn::FnArg::Typed(typed) => signature::parameter(typed, scanner),
+            syn::FnArg::Receiver(_) => Err(ScanError::ReceiverOnFreeFunction),
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use boltffi_ast::{
-        CallableForm, ClosureKind, HandlePresence, NamePart, ParameterPassing, Primitive,
-        ReturnDef, Source, TypeExpr, Visibility,
+        CallableForm, CanonicalName, ClosureKind, ExecutionKind, HandlePresence, NamePart,
+        ParameterPassing, Primitive, RecordId, ReturnDef, Source, TypeExpr, Visibility,
     };
 
     fn parse(source: &str) -> syn::ItemFn {
@@ -55,7 +48,11 @@ mod tests {
     }
 
     fn scan(source: &str) -> Result<FunctionDef, ScanError> {
-        scan_function(&parse(source), &ModulePath::root("demo"))
+        scan_function(
+            &parse(source),
+            &ModulePath::root("demo"),
+            &TypeRegistry::new(),
+        )
     }
 
     fn name(parts: &[&str]) -> CanonicalName {
@@ -142,13 +139,34 @@ mod tests {
     }
 
     #[test]
-    fn non_primitive_parameter_is_rejected_until_records_land() {
-        let error = scan("pub fn make(point: Point) {}").expect_err("non-primitive must reject");
+    fn non_primitive_parameter_is_rejected_without_registration() {
+        let error = scan("pub fn make(point: Point) {}").expect_err("unregistered type rejects");
 
         assert!(matches!(
             error,
             ScanError::UnsupportedType { spelling } if spelling == "Point"
         ));
+    }
+
+    #[test]
+    fn resolves_record_typed_parameter_and_return_against_registry() {
+        let mut registry = TypeRegistry::new();
+        registry.register_record("Point", RecordId::new("demo::Point"));
+        let function = scan_function(
+            &parse("pub fn translate(point: Point, dx: f64) -> Point { point }"),
+            &ModulePath::root("demo"),
+            &registry,
+        )
+        .expect("scan");
+
+        assert_eq!(
+            function.parameters[0].type_expr,
+            TypeExpr::Record(RecordId::new("demo::Point"))
+        );
+        assert_eq!(
+            function.returns,
+            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::Point")))
+        );
     }
 
     #[test]

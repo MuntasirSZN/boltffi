@@ -1,78 +1,145 @@
 use boltffi_ast::{ClosureKind, ClosureType, Primitive, ReturnDef, TypeExpr};
 
 use crate::ScanError;
+use crate::registry::{DeclaredType, TypeRegistry};
 
-/// Scans a source type into a [`TypeExpr`].
+/// Scans source types against a [`TypeRegistry`].
 ///
-/// Handles primitives, `String`, the standard containers (`Vec`,
-/// `Option`, `Result`, `HashMap`/`BTreeMap`), tuples, and inline
-/// `impl Fn`-family closures. Named user types still reject until the
-/// type registry lands; references, bare function pointers, and smart
-/// pointers arrive in later slices. An unrecognized type is rejected with
-/// its verbatim spelling rather than dropped.
-pub(crate) fn scan_type(ty: &syn::Type) -> Result<TypeExpr, ScanError> {
-    match ty {
-        syn::Type::ImplTrait(impl_trait) => closure(impl_trait, ty),
-        syn::Type::Tuple(tuple) => tuple_type(tuple),
-        syn::Type::Path(type_path) => path_type(type_path, ty),
-        _ => Err(ScanError::unsupported_type(ty)),
-    }
+/// Holds the registry so resolution threads through the type recursion
+/// without passing it to every helper. Handles primitives, `String`, the
+/// standard containers (`Vec`, `Option`, `Result`, `HashMap`/`BTreeMap`),
+/// tuples, inline `impl Fn`-family closures, and references to declared
+/// types. References, bare function pointers, and smart pointers arrive
+/// in later slices; an unrecognized type is rejected with its verbatim
+/// spelling rather than dropped.
+pub(crate) struct TypeScanner<'a> {
+    registry: &'a TypeRegistry,
 }
 
-/// Scans a callable return position into a [`ReturnDef`].
-///
-/// Free functions and inline closure signatures share this, so the
-/// void-versus-value decision lives in one place. An explicit `-> ()`
-/// records as [`ReturnDef::Void`], the same as a missing return.
-pub(crate) fn scan_return(output: &syn::ReturnType) -> Result<ReturnDef, ScanError> {
-    match output {
-        syn::ReturnType::Default => Ok(ReturnDef::Void),
-        syn::ReturnType::Type(_, ty) if is_unit(ty) => Ok(ReturnDef::Void),
-        syn::ReturnType::Type(_, ty) => Ok(ReturnDef::Value(scan_type(ty)?)),
+impl<'a> TypeScanner<'a> {
+    pub(crate) fn new(registry: &'a TypeRegistry) -> Self {
+        Self { registry }
+    }
+
+    pub(crate) fn scan(&self, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
+        match ty {
+            syn::Type::ImplTrait(impl_trait) => self.closure(impl_trait, ty),
+            syn::Type::Tuple(tuple) => self.tuple(tuple),
+            syn::Type::Path(type_path) => self.path(type_path, ty),
+            _ => Err(ScanError::unsupported_type(ty)),
+        }
+    }
+
+    /// Scans a callable return position into a [`ReturnDef`].
+    ///
+    /// Free functions and inline closure signatures share this, so the
+    /// void-versus-value decision lives in one place. An explicit `-> ()`
+    /// records as [`ReturnDef::Void`], the same as a missing return.
+    pub(crate) fn scan_return(&self, output: &syn::ReturnType) -> Result<ReturnDef, ScanError> {
+        match output {
+            syn::ReturnType::Default => Ok(ReturnDef::Void),
+            syn::ReturnType::Type(_, ty) if is_unit(ty) => Ok(ReturnDef::Void),
+            syn::ReturnType::Type(_, ty) => Ok(ReturnDef::Value(self.scan(ty)?)),
+        }
+    }
+
+    fn path(&self, type_path: &syn::TypePath, source: &syn::Type) -> Result<TypeExpr, ScanError> {
+        if type_path.qself.is_some() {
+            return Err(ScanError::unsupported_type(source));
+        }
+        let segment = type_path
+            .path
+            .segments
+            .last()
+            .ok_or_else(|| ScanError::unsupported_type(source))?;
+        match segment.ident.to_string().as_str() {
+            "Self" => Ok(TypeExpr::SelfType),
+            "String" => Ok(TypeExpr::String),
+            "Vec" => Ok(TypeExpr::vec(self.single_argument(segment, source)?)),
+            "Option" => Ok(TypeExpr::option(self.single_argument(segment, source)?)),
+            "Result" => {
+                let (ok, err) = self.two_arguments(segment, source)?;
+                Ok(TypeExpr::result(ok, err))
+            }
+            "HashMap" | "BTreeMap" => {
+                let (key, value) = self.two_arguments(segment, source)?;
+                Ok(TypeExpr::map(key, value))
+            }
+            name => self.named(name, source),
+        }
+    }
+
+    fn named(&self, name: &str, source: &syn::Type) -> Result<TypeExpr, ScanError> {
+        if let Some(primitive) = Primitive::from_rust_name(name) {
+            return Ok(TypeExpr::Primitive(primitive));
+        }
+        match self.registry.resolve(name) {
+            Some(DeclaredType::Record(id)) => Ok(TypeExpr::Record(id.clone())),
+            None => Err(ScanError::unsupported_type(source)),
+        }
+    }
+
+    fn tuple(&self, tuple: &syn::TypeTuple) -> Result<TypeExpr, ScanError> {
+        if tuple.elems.is_empty() {
+            return Ok(TypeExpr::Unit);
+        }
+        let elements = tuple
+            .elems
+            .iter()
+            .map(|element| self.scan(element))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(TypeExpr::tuple(elements))
+    }
+
+    fn single_argument(
+        &self,
+        segment: &syn::PathSegment,
+        source: &syn::Type,
+    ) -> Result<TypeExpr, ScanError> {
+        match type_arguments(segment).as_slice() {
+            [argument] => self.scan(argument),
+            _ => Err(ScanError::unsupported_type(source)),
+        }
+    }
+
+    fn two_arguments(
+        &self,
+        segment: &syn::PathSegment,
+        source: &syn::Type,
+    ) -> Result<(TypeExpr, TypeExpr), ScanError> {
+        match type_arguments(segment).as_slice() {
+            [first, second] => Ok((self.scan(first)?, self.scan(second)?)),
+            _ => Err(ScanError::unsupported_type(source)),
+        }
+    }
+
+    fn closure(
+        &self,
+        impl_trait: &syn::TypeImplTrait,
+        source: &syn::Type,
+    ) -> Result<TypeExpr, ScanError> {
+        let (kind, arguments) = impl_trait
+            .bounds
+            .iter()
+            .find_map(|bound| match bound {
+                syn::TypeParamBound::Trait(trait_bound) => closure_bound(trait_bound),
+                _ => None,
+            })
+            .ok_or_else(|| ScanError::unsupported_type(source))?;
+        let parameters = arguments
+            .inputs
+            .iter()
+            .map(|input| self.scan(input))
+            .collect::<Result<Vec<_>, _>>()?;
+        let returns = self.scan_return(&arguments.output)?;
+        Ok(TypeExpr::closure(ClosureType::new(
+            kind, parameters, returns,
+        )))
     }
 }
 
 fn is_unit(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Tuple(tuple) if tuple.elems.is_empty())
-}
-
-fn path_type(type_path: &syn::TypePath, source: &syn::Type) -> Result<TypeExpr, ScanError> {
-    if type_path.qself.is_some() {
-        return Err(ScanError::unsupported_type(source));
-    }
-    let segment = type_path
-        .path
-        .segments
-        .last()
-        .ok_or_else(|| ScanError::unsupported_type(source))?;
-    match segment.ident.to_string().as_str() {
-        "String" => Ok(TypeExpr::String),
-        "Vec" => Ok(TypeExpr::vec(single_argument(segment, source)?)),
-        "Option" => Ok(TypeExpr::option(single_argument(segment, source)?)),
-        "Result" => {
-            let (ok, err) = two_arguments(segment, source)?;
-            Ok(TypeExpr::result(ok, err))
-        }
-        "HashMap" | "BTreeMap" => {
-            let (key, value) = two_arguments(segment, source)?;
-            Ok(TypeExpr::map(key, value))
-        }
-        name => Primitive::from_rust_name(name)
-            .map(TypeExpr::Primitive)
-            .ok_or_else(|| ScanError::unsupported_type(source)),
-    }
-}
-
-fn tuple_type(tuple: &syn::TypeTuple) -> Result<TypeExpr, ScanError> {
-    if tuple.elems.is_empty() {
-        return Ok(TypeExpr::Unit);
-    }
-    let elements = tuple
-        .elems
-        .iter()
-        .map(scan_type)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(TypeExpr::tuple(elements))
 }
 
 fn type_arguments(segment: &syn::PathSegment) -> Vec<&syn::Type> {
@@ -87,43 +154,6 @@ fn type_arguments(segment: &syn::PathSegment) -> Vec<&syn::Type> {
             .collect(),
         _ => Vec::new(),
     }
-}
-
-fn single_argument(segment: &syn::PathSegment, source: &syn::Type) -> Result<TypeExpr, ScanError> {
-    match type_arguments(segment).as_slice() {
-        [argument] => scan_type(argument),
-        _ => Err(ScanError::unsupported_type(source)),
-    }
-}
-
-fn two_arguments(
-    segment: &syn::PathSegment,
-    source: &syn::Type,
-) -> Result<(TypeExpr, TypeExpr), ScanError> {
-    match type_arguments(segment).as_slice() {
-        [first, second] => Ok((scan_type(first)?, scan_type(second)?)),
-        _ => Err(ScanError::unsupported_type(source)),
-    }
-}
-
-fn closure(impl_trait: &syn::TypeImplTrait, source: &syn::Type) -> Result<TypeExpr, ScanError> {
-    let (kind, arguments) = impl_trait
-        .bounds
-        .iter()
-        .find_map(|bound| match bound {
-            syn::TypeParamBound::Trait(trait_bound) => closure_bound(trait_bound),
-            _ => None,
-        })
-        .ok_or_else(|| ScanError::unsupported_type(source))?;
-    let parameters = arguments
-        .inputs
-        .iter()
-        .map(scan_type)
-        .collect::<Result<Vec<_>, _>>()?;
-    let returns = scan_return(&arguments.output)?;
-    Ok(TypeExpr::closure(ClosureType::new(
-        kind, parameters, returns,
-    )))
 }
 
 fn closure_bound(
@@ -149,9 +179,14 @@ fn closure_kind(name: &str) -> Option<ClosureKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boltffi_ast::RecordId;
 
     fn ty(source: &str) -> syn::Type {
         syn::parse_str(source).expect("valid type")
+    }
+
+    fn scan(source: &str) -> Result<TypeExpr, ScanError> {
+        TypeScanner::new(&TypeRegistry::new()).scan(&ty(source))
     }
 
     #[test]
@@ -173,23 +208,19 @@ mod tests {
         ]
         .into_iter()
         .for_each(|(source, primitive)| {
-            assert_eq!(
-                scan_type(&ty(source)),
-                Ok(TypeExpr::Primitive(primitive)),
-                "primitive {source} should scan exactly"
-            );
+            assert_eq!(scan(source), Ok(TypeExpr::Primitive(primitive)));
         });
     }
 
     #[test]
     fn scans_string_and_sequence_containers() {
-        assert_eq!(scan_type(&ty("String")), Ok(TypeExpr::String));
+        assert_eq!(scan("String"), Ok(TypeExpr::String));
         assert_eq!(
-            scan_type(&ty("Vec<i32>")),
+            scan("Vec<i32>"),
             Ok(TypeExpr::vec(TypeExpr::Primitive(Primitive::I32)))
         );
         assert_eq!(
-            scan_type(&ty("Option<String>")),
+            scan("Option<String>"),
             Ok(TypeExpr::option(TypeExpr::String))
         );
     }
@@ -197,14 +228,14 @@ mod tests {
     #[test]
     fn scans_result_and_map_containers() {
         assert_eq!(
-            scan_type(&ty("Result<i32, String>")),
+            scan("Result<i32, String>"),
             Ok(TypeExpr::result(
                 TypeExpr::Primitive(Primitive::I32),
                 TypeExpr::String
             ))
         );
         assert_eq!(
-            scan_type(&ty("HashMap<String, i32>")),
+            scan("HashMap<String, i32>"),
             Ok(TypeExpr::map(
                 TypeExpr::String,
                 TypeExpr::Primitive(Primitive::I32)
@@ -215,19 +246,19 @@ mod tests {
     #[test]
     fn scans_tuples_and_unit() {
         assert_eq!(
-            scan_type(&ty("(i32, String)")),
+            scan("(i32, String)"),
             Ok(TypeExpr::tuple(vec![
                 TypeExpr::Primitive(Primitive::I32),
                 TypeExpr::String
             ]))
         );
-        assert_eq!(scan_type(&ty("()")), Ok(TypeExpr::Unit));
+        assert_eq!(scan("()"), Ok(TypeExpr::Unit));
     }
 
     #[test]
     fn scans_nested_containers() {
         assert_eq!(
-            scan_type(&ty("Option<Vec<i32>>")),
+            scan("Option<Vec<i32>>"),
             Ok(TypeExpr::option(TypeExpr::vec(TypeExpr::Primitive(
                 Primitive::I32
             ))))
@@ -236,19 +267,42 @@ mod tests {
 
     #[test]
     fn resolves_qualified_std_paths_by_last_segment() {
-        assert_eq!(scan_type(&ty("std::string::String")), Ok(TypeExpr::String));
+        assert_eq!(scan("std::string::String"), Ok(TypeExpr::String));
         assert_eq!(
-            scan_type(&ty("std::vec::Vec<u8>")),
+            scan("std::vec::Vec<u8>"),
             Ok(TypeExpr::vec(TypeExpr::Primitive(Primitive::U8)))
         );
     }
 
     #[test]
-    fn named_user_type_rejects_until_registry_lands() {
+    fn resolves_registered_record_reference_including_nested() {
+        let mut registry = TypeRegistry::new();
+        registry.register_record("Point", RecordId::new("demo::Point"));
+        let scanner = TypeScanner::new(&registry);
+
+        assert_eq!(
+            scanner.scan(&ty("Point")),
+            Ok(TypeExpr::Record(RecordId::new("demo::Point")))
+        );
+        assert_eq!(
+            scanner.scan(&ty("Vec<Point>")),
+            Ok(TypeExpr::vec(TypeExpr::Record(RecordId::new(
+                "demo::Point"
+            ))))
+        );
+    }
+
+    #[test]
+    fn unregistered_named_type_rejects_with_spelling() {
         assert!(matches!(
-            scan_type(&ty("Point")),
+            scan("Point"),
             Err(ScanError::UnsupportedType { spelling }) if spelling == "Point"
         ));
+    }
+
+    #[test]
+    fn self_type_is_captured_verbatim() {
+        assert_eq!(scan("Self"), Ok(TypeExpr::SelfType));
     }
 
     #[test]
@@ -256,7 +310,7 @@ mod tests {
         let TypeExpr::Closure {
             signature,
             presence,
-        } = scan_type(&ty("impl Send + Fn(u32) -> u32")).expect("scan")
+        } = scan("impl Send + Fn(u32) -> u32").expect("scan")
         else {
             panic!("expected closure");
         };
@@ -276,7 +330,7 @@ mod tests {
     #[test]
     fn impl_trait_without_fn_bound_is_rejected() {
         assert!(matches!(
-            scan_type(&ty("impl Iterator<Item = u32>")),
+            scan("impl Iterator<Item = u32>"),
             Err(ScanError::UnsupportedType { spelling }) if spelling == "unrecognized type"
         ));
     }
@@ -284,7 +338,7 @@ mod tests {
     #[test]
     fn closure_with_unsupported_argument_reports_that_argument() {
         assert!(matches!(
-            scan_type(&ty("impl Fn(Point)")),
+            scan("impl Fn(Point)"),
             Err(ScanError::UnsupportedType { spelling }) if spelling == "Point"
         ));
     }
