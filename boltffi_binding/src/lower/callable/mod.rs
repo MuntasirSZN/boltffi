@@ -63,7 +63,8 @@ use boltffi_ast::{
 
 use crate::{
     ClosureForm, ClosureParameter, ClosureRegistration, ClosureReturn, Direction, ExecutionDecl,
-    ExportedCallable, ForeignBody, ImportedCallable, IntoRust, OutOfRust, Receive, RustBody,
+    ExportedCallable, ForeignBody, HandlePresence, ImportedCallable, IntoRust, OutOfRust, Receive,
+    RustBody,
 };
 
 use super::{
@@ -202,10 +203,12 @@ pub(super) fn lower_closure_param_into_rust<S: SurfaceLower>(
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     closure: &ClosureType,
+    presence: boltffi_ast::HandlePresence,
 ) -> Result<ClosureParameter<S, IntoRust>, LowerError> {
-    let parts = lower_closure_into_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_into_rust_parts(idx, ids, allocator, closure, presence)?;
     Ok(ClosureParameter::new(
         parts.form,
+        parts.presence,
         parts.registration,
         parts.invoke,
     ))
@@ -216,10 +219,12 @@ pub(super) fn lower_closure_return_into_rust<S: SurfaceLower>(
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     closure: &ClosureType,
+    presence: boltffi_ast::HandlePresence,
 ) -> Result<ClosureReturn<S, IntoRust>, LowerError> {
-    let parts = lower_closure_into_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_into_rust_parts(idx, ids, allocator, closure, presence)?;
     Ok(ClosureReturn::new(
         parts.form,
+        parts.presence,
         parts.registration,
         parts.invoke,
     ))
@@ -227,6 +232,7 @@ pub(super) fn lower_closure_return_into_rust<S: SurfaceLower>(
 
 struct ClosureIntoRustParts<S: crate::Surface> {
     form: ClosureForm,
+    presence: HandlePresence,
     registration: ClosureRegistration<S, IntoRust>,
     invoke: ImportedCallable<S>,
 }
@@ -236,6 +242,7 @@ fn lower_closure_into_rust_parts<S: SurfaceLower>(
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     closure: &ClosureType,
+    presence: boltffi_ast::HandlePresence,
 ) -> Result<ClosureIntoRustParts<S>, LowerError> {
     let (parameters, returns, error) =
         lower_closure_invoke_parts::<S, ForeignBody>(idx, ids, allocator, closure)?;
@@ -252,6 +259,7 @@ fn lower_closure_into_rust_parts<S: SurfaceLower>(
     );
     Ok(ClosureIntoRustParts {
         form: ClosureForm::from(closure.kind),
+        presence: lower_handle_presence(presence),
         registration,
         invoke,
     })
@@ -272,10 +280,12 @@ pub(super) fn lower_closure_param_out_of_rust<S: SurfaceLower>(
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     closure: &ClosureType,
+    presence: boltffi_ast::HandlePresence,
 ) -> Result<ClosureParameter<S, OutOfRust>, LowerError> {
-    let parts = lower_closure_out_of_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_out_of_rust_parts(idx, ids, allocator, closure, presence)?;
     Ok(ClosureParameter::new(
         parts.form,
+        parts.presence,
         parts.registration,
         parts.invoke,
     ))
@@ -286,10 +296,12 @@ pub(super) fn lower_closure_return_out_of_rust<S: SurfaceLower>(
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     closure: &ClosureType,
+    presence: boltffi_ast::HandlePresence,
 ) -> Result<ClosureReturn<S, OutOfRust>, LowerError> {
-    let parts = lower_closure_out_of_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_out_of_rust_parts(idx, ids, allocator, closure, presence)?;
     Ok(ClosureReturn::new(
         parts.form,
+        parts.presence,
         parts.registration,
         parts.invoke,
     ))
@@ -297,6 +309,7 @@ pub(super) fn lower_closure_return_out_of_rust<S: SurfaceLower>(
 
 struct ClosureOutOfRustParts<S: crate::Surface> {
     form: ClosureForm,
+    presence: HandlePresence,
     registration: ClosureRegistration<S, OutOfRust>,
     invoke: ExportedCallable<S>,
 }
@@ -306,6 +319,7 @@ fn lower_closure_out_of_rust_parts<S: SurfaceLower>(
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     closure: &ClosureType,
+    presence: boltffi_ast::HandlePresence,
 ) -> Result<ClosureOutOfRustParts<S>, LowerError> {
     let (parameters, returns, error) =
         lower_closure_invoke_parts::<S, RustBody>(idx, ids, allocator, closure)?;
@@ -322,6 +336,7 @@ fn lower_closure_out_of_rust_parts<S: SurfaceLower>(
     let registration = ClosureRegistration::<S, OutOfRust>::new(shape, receive);
     Ok(ClosureOutOfRustParts {
         form: ClosureForm::from(closure.kind),
+        presence: lower_handle_presence(presence),
         registration,
         invoke,
     })
@@ -386,6 +401,34 @@ pub(super) fn lower_function<S: SurfaceLower>(
     )?)
 }
 
+/// Lowers a zero-argument getter for a constant whose value cannot be
+/// delivered as an inline literal.
+///
+/// The accessor is a synchronous [`ExportedCallable<S>`] (Rust
+/// implements, foreign calls in) with no receiver, no parameters, and no
+/// error channel, returning the constant's declared type. Foreign code
+/// reads the value by calling it once. The owner context is
+/// [`CallableOwner::Function`], so any `Self` in the constant type is
+/// rejected; top-level constants do not carry `Self`.
+pub(super) fn lower_constant_accessor<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    type_expr: &boltffi_ast::TypeExpr,
+) -> Result<ExportedCallable<S>, LowerError> {
+    let owner = CallableOwner::Function;
+    let return_def = boltffi_ast::ReturnDef::Value(type_expr.clone());
+    let (returns, error) = returns::lower::<S, _>(idx, ids, allocator, owner, &return_def)?;
+
+    Ok(ExportedCallable::<S>::new(
+        None,
+        Vec::new(),
+        returns,
+        error,
+        ExecutionDecl::synchronous(),
+    )?)
+}
+
 fn lower_execution<S: SurfaceLower>(
     allocator: &mut SymbolAllocator,
     execution: ExecutionKind,
@@ -446,8 +489,11 @@ pub(super) fn substitute_self_type(
             ok: Box::new(substitute_self_type(owner, ok)?),
             err: Box::new(substitute_self_type(owner, err)?),
         },
-        TypeExpr::Closure(closure) => {
-            let mut closure = (**closure).clone();
+        TypeExpr::Closure {
+            signature,
+            presence,
+        } => {
+            let mut closure = (**signature).clone();
             closure.parameters = closure
                 .parameters
                 .iter()
@@ -459,7 +505,10 @@ pub(super) fn substitute_self_type(
                     boltffi_ast::ReturnDef::Value(substitute_self_type(owner, &value)?)
                 }
             };
-            TypeExpr::Closure(Box::new(closure))
+            TypeExpr::Closure {
+                signature: Box::new(closure),
+                presence: *presence,
+            }
         }
         TypeExpr::Primitive(_)
         | TypeExpr::Unit
@@ -472,4 +521,11 @@ pub(super) fn substitute_self_type(
         | TypeExpr::Custom(_)
         | TypeExpr::Parameter(_) => type_expr.clone(),
     })
+}
+
+fn lower_handle_presence(presence: boltffi_ast::HandlePresence) -> HandlePresence {
+    match presence {
+        boltffi_ast::HandlePresence::Required => HandlePresence::Required,
+        boltffi_ast::HandlePresence::Nullable => HandlePresence::Nullable,
+    }
 }

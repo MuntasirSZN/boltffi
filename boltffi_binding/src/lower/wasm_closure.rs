@@ -111,7 +111,7 @@ impl fmt::Display for ClosureTypeSignature<'_> {
             TypeExpr::Enum(id) => formatter.write_str(&source_type_signature(id.as_str())),
             TypeExpr::Class { id, .. } => formatter.write_str(&source_type_signature(id.as_str())),
             TypeExpr::Trait { id, .. } => formatter.write_str(&source_type_signature(id.as_str())),
-            TypeExpr::Closure(_) => formatter.write_str("Closure"),
+            TypeExpr::Closure { .. } => formatter.write_str("Closure"),
             TypeExpr::Custom(id) => formatter.write_str(&source_type_signature(id.as_str())),
             TypeExpr::SelfType => formatter.write_str("Self"),
             TypeExpr::Vec(inner) => write!(formatter, "Vec{}", ClosureTypeSignature(inner)),

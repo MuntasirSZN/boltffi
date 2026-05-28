@@ -133,20 +133,20 @@ mod tests {
     use boltffi_ast::{
         CanonicalName as SourceName, ClosureKind, ClosureType, DefaultValue as SourceDefaultValue,
         DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, EnumDef,
-        ExecutionKind, FieldDef, IntegerLiteral, MethodDef, MethodId as SourceMethodId,
-        PackageInfo as SourcePackage, ParameterDef, ParameterPassing, Primitive, Receiver,
-        RecordDef, ReprAttr, ReprItem, ReturnDef, Source, SourceContract, TypeExpr, VariantDef,
-        VariantPayload,
+        ExecutionKind, FieldDef, HandlePresence as SourcePresence, IntegerLiteral, MethodDef,
+        MethodId as SourceMethodId, PackageInfo as SourcePackage, ParameterDef, ParameterPassing,
+        Path as SourcePath, Primitive, Receiver, RecordDef, ReprAttr, ReprItem, ReturnDef, Source,
+        SourceContract, TypeExpr, VariantDef, VariantPayload,
     };
 
     use crate::lower::lower;
     use crate::{
         BindingErrorKind, Bindings, ByteSize, CanonicalName, CodecNode, Decl, DefaultValue,
         DirectRecordDecl, EncodedRecordDecl, EnumId, ErrorDecl, ExecutionDecl, ExportedMethodDecl,
-        FieldKey, InitializerDecl, IntegerValue, IntrinsicOp, LowerError, LowerErrorKind, Native,
-        NativeSymbol, OpNode, OutOfRust, ParamPlan, Primitive as BindingPrimitive, ReadPlan,
-        Receive, RecordDecl, RecordId, ReturnPlan, SurfaceLower, TypeRef, UnsupportedType,
-        ValueRef, Wasm32, native, wasm32,
+        FieldKey, HandlePresence, InitializerDecl, IntegerValue, IntrinsicOp, LowerError,
+        LowerErrorKind, Native, NativeSymbol, OpNode, OutOfRust, ParamPlan,
+        Primitive as BindingPrimitive, ReadPlan, Receive, RecordDecl, RecordId, ReturnPlan,
+        SurfaceLower, TypeRef, UnsupportedType, ValueRef, Wasm32, native, wasm32,
     };
 
     fn package() -> SourceContract {
@@ -851,6 +851,17 @@ mod tests {
         TypeExpr::closure(ClosureType::new(kind, parameters, returns))
     }
 
+    fn closure_with_presence(
+        parameters: Vec<TypeExpr>,
+        returns: ReturnDef,
+        presence: SourcePresence,
+    ) -> TypeExpr {
+        TypeExpr::closure_with_presence(
+            ClosureType::new(ClosureKind::Fn, parameters, returns),
+            presence,
+        )
+    }
+
     fn data_enum(id: &str, enum_name: &str) -> EnumDef {
         let mut enumeration = EnumDef::new(id.into(), name(enum_name));
         enumeration.variants = vec![
@@ -1269,6 +1280,7 @@ mod tests {
         let closure = methods[0].callable().params()[0]
             .as_closure()
             .expect("expected ParamPlan::Closure");
+        assert_eq!(closure.presence(), HandlePresence::Required);
         assert!(matches!(
             closure.registration().shape(),
             native::ClosureRegistration::InvokeContext
@@ -1284,6 +1296,38 @@ mod tests {
             }
         ));
         assert!(matches!(callable.returns().plan(), ReturnPlan::Void));
+    }
+
+    #[test]
+    fn nullable_closure_parameter_lowers_to_nullable_crossing() {
+        let bindings = lower_point_method::<Native>(method_with(
+            "maybe_each",
+            Receiver::Shared,
+            vec![value_param(
+                "callback",
+                closure_with_presence(
+                    vec![TypeExpr::Primitive(Primitive::F64)],
+                    ReturnDef::Void,
+                    SourcePresence::Nullable,
+                ),
+            )],
+            ReturnDef::Void,
+        ));
+        let methods = first_record_methods(&bindings);
+
+        let closure = methods[0].callable().params()[0]
+            .as_closure()
+            .expect("expected nullable closure param");
+        assert_eq!(closure.presence(), HandlePresence::Nullable);
+        assert_eq!(closure.form(), crate::ClosureForm::Fn);
+        assert!(matches!(
+            closure.registration().shape(),
+            native::ClosureRegistration::InvokeContext
+        ));
+        assert!(matches!(
+            closure.invoke().returns().plan(),
+            ReturnPlan::Void
+        ));
     }
 
     #[test]
@@ -1350,6 +1394,7 @@ mod tests {
             other => panic!("expected ClosureViaOutPointer, got {other:?}"),
         };
         assert_eq!(closure_crossing.form(), crate::ClosureForm::Fn);
+        assert_eq!(closure_crossing.presence(), HandlePresence::Required);
         // Native closure params and returns share the same logical invoke/context
         // marker, but the parent enum keeps the wire positions separate.
         // Parameter closures can only appear through IncomingParam/OutgoingParam;
@@ -1372,6 +1417,33 @@ mod tests {
                 ty: TypeRef::Primitive(BindingPrimitive::F64),
             } => {}
             other => panic!("expected f64 direct invoke return, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nullable_closure_return_lowers_to_nullable_closure_via_out_pointer() {
+        let mut record = point_record();
+        record.methods.push(method_with(
+            "maybe_project",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::Value(closure_with_presence(
+                vec![TypeExpr::Primitive(Primitive::F64)],
+                ReturnDef::Value(TypeExpr::Primitive(Primitive::F64)),
+                SourcePresence::Nullable,
+            )),
+        ));
+
+        let bindings =
+            lower_record_result::<Native>(record).expect("nullable closure return should lower");
+        let methods = direct_record(&bindings).methods();
+
+        match methods[0].callable().returns().plan() {
+            ReturnPlan::ClosureViaOutPointer(closure) => {
+                assert_eq!(closure.presence(), HandlePresence::Nullable);
+                assert_eq!(closure.form(), crate::ClosureForm::Fn);
+            }
+            other => panic!("expected nullable ClosureViaOutPointer, got {other:?}"),
         }
     }
 
@@ -1603,10 +1675,11 @@ mod tests {
         ));
         let methods = first_record_methods(&bindings);
 
-        let callable = methods[0].callable().params()[0]
+        let closure = methods[0].callable().params()[0]
             .as_closure()
-            .expect("expected ParamPlan::Closure for {kind:?}")
-            .invoke();
+            .expect("expected ParamPlan::Closure for {kind:?}");
+        assert_eq!(closure.presence(), HandlePresence::Required);
+        let callable = closure.invoke();
         assert_eq!(callable.params().len(), 1);
         assert!(matches!(callable.returns().plan(), ReturnPlan::Void));
     }
@@ -1906,6 +1979,7 @@ mod tests {
         let closure = methods[0].callable().params()[0]
             .as_closure()
             .expect("expected ParamPlan::Closure on wasm32");
+        assert_eq!(closure.presence(), HandlePresence::Required);
         assert_eq!(
             closure.registration().shape().call().name().as_str(),
             "__boltffi_callback_closure____closure__f64_call"
@@ -1925,6 +1999,37 @@ mod tests {
             }
         ));
         assert!(matches!(callable.returns().plan(), ReturnPlan::Void));
+    }
+
+    #[test]
+    fn wasm32_nullable_closure_parameter_lowers_to_nullable_crossing() {
+        let bindings = lower_point_method::<Wasm32>(method_with(
+            "maybe_each",
+            Receiver::Shared,
+            vec![value_param(
+                "callback",
+                closure_with_presence(
+                    vec![TypeExpr::Primitive(Primitive::F64)],
+                    ReturnDef::Void,
+                    SourcePresence::Nullable,
+                ),
+            )],
+            ReturnDef::Void,
+        ));
+        let methods = first_record_methods(&bindings);
+
+        let closure = methods[0].callable().params()[0]
+            .as_closure()
+            .expect("expected nullable wasm32 closure param");
+        assert_eq!(closure.presence(), HandlePresence::Nullable);
+        assert_eq!(
+            closure.registration().shape().call().name().as_str(),
+            "__boltffi_callback_closure____closure__f64_call"
+        );
+        assert!(matches!(
+            closure.invoke().returns().plan(),
+            ReturnPlan::Void
+        ));
     }
 
     #[test]
@@ -2118,6 +2223,25 @@ mod tests {
             Some(DefaultValue::Integer(value)) => assert_eq!(value, &IntegerValue::new(1)),
             other => panic!("expected integer default, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parameter_path_default_is_rejected_without_type_context() {
+        let mut factor = value_param("factor", TypeExpr::Primitive(Primitive::I32));
+        factor.default = Some(SourceDefaultValue::Path(SourcePath::single("Mode")));
+
+        let error = lower_record_result::<Native>(point_record_with_methods(vec![method_with(
+            "scale",
+            Receiver::Mutable,
+            vec![factor],
+            ReturnDef::Void,
+        )]))
+        .expect_err("path defaults need declared-type validation and must reject here");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::UnsupportedType(UnsupportedType::DefaultValue)
+        ));
     }
 
     #[test]

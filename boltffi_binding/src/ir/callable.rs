@@ -392,17 +392,23 @@ where
 {
     pub(crate) fn new(
         form: ClosureForm,
+        presence: HandlePresence,
         registration: ClosureRegistration<S, D>,
         invoke: CallableDecl<S, D::InvokeScope>,
     ) -> Self {
         Self {
-            crossing: ClosureCrossing::new(form, registration, invoke),
+            crossing: ClosureCrossing::new(form, presence, registration, invoke),
         }
     }
 
     /// Returns the source spelling.
     pub fn form(&self) -> ClosureForm {
         self.crossing.form()
+    }
+
+    /// Returns whether the closure crossing may be absent.
+    pub fn presence(&self) -> HandlePresence {
+        self.crossing.presence()
     }
 
     /// Returns the handle registration.
@@ -439,17 +445,23 @@ where
 {
     pub(crate) fn new(
         form: ClosureForm,
+        presence: HandlePresence,
         registration: ClosureRegistration<S, D>,
         invoke: CallableDecl<S, D::InvokeScope>,
     ) -> Self {
         Self {
-            crossing: ClosureCrossing::new(form, registration, invoke),
+            crossing: ClosureCrossing::new(form, presence, registration, invoke),
         }
     }
 
     /// Returns the source spelling.
     pub fn form(&self) -> ClosureForm {
         self.crossing.form()
+    }
+
+    /// Returns whether the closure crossing may be absent.
+    pub fn presence(&self) -> HandlePresence {
+        self.crossing.presence()
     }
 
     /// Returns the handle registration.
@@ -477,6 +489,7 @@ where
     D::Opposite: ParamDirection<S>,
 {
     form: ClosureForm,
+    presence: HandlePresence,
     registration: ClosureRegistration<S, D>,
     invoke: Box<CallableDecl<S, D::InvokeScope>>,
 }
@@ -487,11 +500,13 @@ where
 {
     fn new(
         form: ClosureForm,
+        presence: HandlePresence,
         registration: ClosureRegistration<S, D>,
         invoke: CallableDecl<S, D::InvokeScope>,
     ) -> Self {
         Self {
             form,
+            presence,
             registration,
             invoke: Box::new(invoke),
         }
@@ -499,6 +514,10 @@ where
 
     pub fn form(&self) -> ClosureForm {
         self.form
+    }
+
+    pub fn presence(&self) -> HandlePresence {
+        self.presence
     }
 
     pub fn registration(&self) -> &ClosureRegistration<S, D> {
