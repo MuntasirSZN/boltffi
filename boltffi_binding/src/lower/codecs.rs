@@ -46,7 +46,7 @@ pub(super) fn node(
         }
         TypeExpr::Class { id, .. } => CodecNode::ClassHandle(ids.class(id)?),
         TypeExpr::Trait { id, .. } => CodecNode::CallbackHandle(ids.callback(id)?),
-        TypeExpr::Closure(_) => {
+        TypeExpr::Closure { .. } => {
             return Err(LowerError::unsupported_type(
                 super::error::UnsupportedType::ClosureInValuePosition,
             ));

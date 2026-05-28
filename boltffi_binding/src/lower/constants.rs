@@ -5,13 +5,15 @@
 //! [`TypeRef`] foreign code observes, and carries the literal value as
 //! [`ConstantValueDecl::Inline`].
 //!
-//! Only inline literals are produced today. Constants whose source
-//! expression cannot be expressed as a binding [`DefaultValue`] (paths,
-//! tuples, arrays, floating-point or byte-string literals, raw
-//! expressions) are rejected with [`UnsupportedType::DefaultValue`]
-//! because the value-emission machinery does not yet model them and
-//! [`ConstantValueDecl::Accessor`] needs a Rust-side reader symbol the
-//! source AST does not carry.
+//! Only inline literals are produced today. Bool, integer (range-
+//! checked against the declared primitive width), float, string, and
+//! enum-variant (via `ConstExpr::Path(...)` on an enum-typed constant)
+//! all lower to the matching [`DefaultValue`] variant. Byte-string,
+//! array, tuple, and raw constant expressions remain rejected with
+//! [`UnsupportedType::DefaultValue`]: their values are not expressible
+//! as a single literal in every target language, and supporting them
+//! requires the [`ConstantValueDecl::Accessor`] path (a Rust-side
+//! reader symbol the source AST does not carry yet).
 //!
 //! [`ConstantDef`]: boltffi_ast::ConstantDef
 //! [`ConstantDecl<S>`]: crate::ConstantDecl
@@ -22,7 +24,8 @@
 //! [`UnsupportedType::DefaultValue`]: super::error::UnsupportedType::DefaultValue
 
 use boltffi_ast::{
-    ConstExpr, ConstantDef as SourceConstant, Literal, Primitive as SourcePrimitive, TypeExpr,
+    CanonicalName as SourceName, ConstExpr, ConstantDef as SourceConstant, EnumDef as SourceEnum,
+    Literal, Path as SourcePath, Primitive as SourcePrimitive, TypeExpr, VariantPayload,
 };
 
 use crate::{CanonicalName, ConstantDecl, ConstantValueDecl, DefaultValue, IntegerValue};
@@ -38,17 +41,18 @@ pub(super) fn lower<S: SurfaceLower>(
 ) -> Result<Vec<ConstantDecl<S>>, LowerError> {
     idx.constants()
         .iter()
-        .map(|constant| lower_one::<S>(ids, constant))
+        .map(|constant| lower_one::<S>(idx, ids, constant))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
+    idx: &Index<'_>,
     ids: &DeclarationIds,
     constant: &SourceConstant,
 ) -> Result<ConstantDecl<S>, LowerError> {
     let constant_id = ids.constant(&constant.id)?;
     let ty = types::lower(ids, &constant.type_expr)?;
-    let value = inline_value(constant)?;
+    let value = inline_value(idx, constant)?;
     Ok(ConstantDecl::new(
         constant_id,
         CanonicalName::from(&constant.name),
@@ -57,28 +61,32 @@ fn lower_one<S: SurfaceLower>(
     ))
 }
 
-fn inline_value(constant: &SourceConstant) -> Result<DefaultValue, LowerError> {
-    let Some(expected) = InlineConstantType::from_type_expr(&constant.type_expr) else {
+fn inline_value(idx: &Index<'_>, constant: &SourceConstant) -> Result<DefaultValue, LowerError> {
+    let Some(expected) = InlineConstantType::from_type_expr(idx, &constant.type_expr) else {
         return Err(LowerError::unsupported_type(UnsupportedType::DefaultValue));
     };
     expected.lower_value(constant)
 }
 
 #[derive(Clone, Copy)]
-enum InlineConstantType {
+enum InlineConstantType<'src> {
     Bool,
     Integer(IntegerBounds),
+    Float,
     String,
+    Enum(&'src SourceEnum),
 }
 
-impl InlineConstantType {
-    fn from_type_expr(type_expr: &TypeExpr) -> Option<Self> {
+impl<'src> InlineConstantType<'src> {
+    fn from_type_expr(idx: &Index<'src>, type_expr: &TypeExpr) -> Option<Self> {
         match type_expr {
             TypeExpr::Primitive(SourcePrimitive::Bool) => Some(Self::Bool),
+            TypeExpr::Primitive(SourcePrimitive::F32 | SourcePrimitive::F64) => Some(Self::Float),
             TypeExpr::Primitive(primitive) => {
                 IntegerBounds::for_primitive(*primitive).map(Self::Integer)
             }
             TypeExpr::String => Some(Self::String),
+            TypeExpr::Enum(id) => idx.enumeration(id).map(Self::Enum),
             _ => None,
         }
     }
@@ -93,11 +101,19 @@ impl InlineConstantType {
             {
                 Ok(DefaultValue::Integer(IntegerValue::new(value.value)))
             }
+            (Self::Float, ConstExpr::Literal(Literal::Float(literal))) => {
+                metadata::parse_float_literal(literal)
+                    .map(DefaultValue::Float)
+                    .ok_or_else(|| LowerError::invalid_constant_value(&constant.id))
+            }
             (Self::String, ConstExpr::Literal(Literal::String(value))) => {
                 Ok(DefaultValue::String(value.clone()))
             }
-            (_, ConstExpr::Literal(Literal::Float(_) | Literal::Bytes(_)))
-            | (_, ConstExpr::Path(_))
+            (Self::Enum(enumeration), ConstExpr::Path(path)) => {
+                enum_variant_from_path(enumeration, path)
+                    .ok_or_else(|| LowerError::invalid_constant_value(&constant.id))
+            }
+            (_, ConstExpr::Literal(Literal::Bytes(_)))
             | (_, ConstExpr::Array(_))
             | (_, ConstExpr::Tuple(_))
             | (_, ConstExpr::Raw(_)) => {
@@ -106,6 +122,34 @@ impl InlineConstantType {
             _ => Err(LowerError::invalid_constant_value(&constant.id)),
         }
     }
+}
+
+fn enum_variant_from_path(enumeration: &SourceEnum, path: &SourcePath) -> Option<DefaultValue> {
+    let (enum_segment, variant_segment) = enum_variant_path_segments(path)?;
+    if !canonical_name_matches_segment(&enumeration.name, enum_segment.name.as_str()) {
+        return None;
+    }
+    let variant = enumeration.variants.iter().find(|variant| {
+        matches!(variant.payload, VariantPayload::Unit)
+            && canonical_name_matches_segment(&variant.name, variant_segment.name.as_str())
+    })?;
+    Some(DefaultValue::EnumVariant {
+        enum_name: CanonicalName::from(&enumeration.name),
+        variant_name: CanonicalName::from(&variant.name),
+    })
+}
+
+fn enum_variant_path_segments(
+    path: &SourcePath,
+) -> Option<(&boltffi_ast::PathSegment, &boltffi_ast::PathSegment)> {
+    let variant = path.segments.last()?;
+    let enum_name = path.segments.get(path.segments.len().checked_sub(2)?)?;
+    Some((enum_name, variant))
+}
+
+fn canonical_name_matches_segment(name: &SourceName, segment: &str) -> bool {
+    let mut parts = name.parts();
+    matches!(parts.next(), Some(part) if part.as_str() == segment) && parts.next().is_none()
 }
 
 #[derive(Clone, Copy)]
@@ -315,18 +359,62 @@ mod tests {
     }
 
     #[test]
-    fn float_constant_is_rejected_until_inline_floats_land() {
-        let error = lower_constants::<Native>(vec![constant(
-            "demo::PI",
-            "PI",
+    fn float_constant_lowers_inline_with_float_default() {
+        let bindings = lower_constants_ok::<Native>(vec![constant(
+            "demo::HALF",
+            "HALF",
             TypeExpr::Primitive(Primitive::F64),
-            ConstExpr::Literal(Literal::Float(FloatLiteral::new("3.14"))),
+            ConstExpr::Literal(Literal::Float(FloatLiteral::new("0.5"))),
+        )]);
+        let decl = only_constant(&bindings);
+
+        match decl.value() {
+            ConstantValueDecl::Inline { ty, value, .. } => {
+                assert_eq!(ty, &TypeRef::Primitive(BindingPrimitive::F64));
+                match value {
+                    DefaultValue::Float(float) => {
+                        assert!((float.to_f64() - 0.5).abs() < 1e-12);
+                    }
+                    other => panic!("expected DefaultValue::Float, got {other:?}"),
+                }
+            }
+            other => panic!("expected inline float constant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn float_constant_strips_type_suffix_and_underscores() {
+        let bindings = lower_constants_ok::<Native>(vec![constant(
+            "demo::HZ",
+            "HZ",
+            TypeExpr::Primitive(Primitive::F64),
+            ConstExpr::Literal(Literal::Float(FloatLiteral::new("1_000.5f64"))),
+        )]);
+
+        match only_constant(&bindings).value() {
+            ConstantValueDecl::Inline {
+                value: DefaultValue::Float(float),
+                ..
+            } => {
+                assert!((float.to_f64() - 1000.5).abs() < 1e-12);
+            }
+            other => panic!("expected inline float constant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn float_constant_with_garbled_source_is_rejected_with_invalid_value() {
+        let error = lower_constants::<Native>(vec![constant(
+            "demo::BAD",
+            "BAD",
+            TypeExpr::Primitive(Primitive::F64),
+            ConstExpr::Literal(Literal::Float(FloatLiteral::new("not_a_number"))),
         )])
-        .expect_err("float constant must reject");
+        .expect_err("unparseable float literal must reject");
 
         assert!(matches!(
             error.kind(),
-            LowerErrorKind::UnsupportedType(UnsupportedType::DefaultValue)
+            LowerErrorKind::InvalidConstantValue(constant) if constant == "demo::BAD"
         ));
     }
 
@@ -347,18 +435,224 @@ mod tests {
     }
 
     #[test]
-    fn path_constant_is_rejected_until_accessor_or_enum_variant_lands() {
+    fn path_constant_on_non_enum_type_is_rejected_with_invalid_value() {
         let error = lower_constants::<Native>(vec![constant(
             "demo::ALIAS",
             "ALIAS",
             TypeExpr::String,
             ConstExpr::Path(SourcePath::single("OTHER")),
         )])
-        .expect_err("path constant must reject");
+        .expect_err("path value on a String-typed constant must reject");
 
         assert!(matches!(
             error.kind(),
-            LowerErrorKind::UnsupportedType(UnsupportedType::DefaultValue)
+            LowerErrorKind::InvalidConstantValue(constant) if constant == "demo::ALIAS"
+        ));
+    }
+
+    #[test]
+    fn enum_constant_lowers_inline_with_enum_variant_default() {
+        use boltffi_ast::{EnumDef, EnumId as SourceEnumId, PathRoot, PathSegment, VariantDef};
+
+        // Set up an enum `demo::Mode` with variants Fast/Slow, then a
+        // constant `DEFAULT_MODE: Mode = Mode::Fast`.
+        let mut contract = package();
+        let mut mode = EnumDef::new(SourceEnumId::new("demo::Mode"), name("Mode"));
+        mode.variants.push(VariantDef::unit(name("Fast")));
+        mode.variants.push(VariantDef::unit(name("Slow")));
+        contract.enums.push(mode);
+        contract.constants.push(constant(
+            "demo::DEFAULT_MODE",
+            "DEFAULT_MODE",
+            TypeExpr::Enum(SourceEnumId::new("demo::Mode")),
+            ConstExpr::Path(SourcePath::new(
+                PathRoot::Relative,
+                vec![PathSegment::new("Mode"), PathSegment::new("Fast")],
+            )),
+        ));
+
+        let bindings = lower::<Native>(&contract).expect("enum constant should lower");
+        let decl = only_constant(&bindings);
+
+        match decl.value() {
+            ConstantValueDecl::Inline {
+                value:
+                    DefaultValue::EnumVariant {
+                        enum_name,
+                        variant_name,
+                    },
+                ..
+            } => {
+                assert_eq!(enum_name, &CanonicalName::single("Mode"));
+                assert_eq!(variant_name, &CanonicalName::single("Fast"));
+            }
+            other => panic!("expected inline enum-variant constant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_constant_accepts_qualified_path() {
+        use boltffi_ast::{EnumDef, EnumId as SourceEnumId, PathRoot, PathSegment, VariantDef};
+
+        let mut contract = package();
+        let mut mode = EnumDef::new(SourceEnumId::new("demo::Mode"), name("Mode"));
+        mode.variants.push(VariantDef::unit(name("Fast")));
+        contract.enums.push(mode);
+        contract.constants.push(constant(
+            "demo::DEFAULT_MODE",
+            "DEFAULT_MODE",
+            TypeExpr::Enum(SourceEnumId::new("demo::Mode")),
+            ConstExpr::Path(SourcePath::new(
+                PathRoot::Crate,
+                vec![
+                    PathSegment::new("demo"),
+                    PathSegment::new("Mode"),
+                    PathSegment::new("Fast"),
+                ],
+            )),
+        ));
+
+        let bindings =
+            lower::<Native>(&contract).expect("qualified enum-path constant should lower");
+
+        match only_constant(&bindings).value() {
+            ConstantValueDecl::Inline {
+                value:
+                    DefaultValue::EnumVariant {
+                        enum_name,
+                        variant_name,
+                    },
+                ..
+            } => {
+                assert_eq!(enum_name, &CanonicalName::single("Mode"));
+                assert_eq!(variant_name, &CanonicalName::single("Fast"));
+            }
+            other => panic!("expected enum-variant default, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_constant_rejects_path_for_another_enum() {
+        use boltffi_ast::{EnumDef, EnumId as SourceEnumId, PathSegment, VariantDef};
+
+        let mut contract = package();
+        let mut mode = EnumDef::new(SourceEnumId::new("demo::Mode"), name("Mode"));
+        mode.variants.push(VariantDef::unit(name("Fast")));
+        contract.enums.push(mode);
+        contract.constants.push(constant(
+            "demo::DEFAULT_MODE",
+            "DEFAULT_MODE",
+            TypeExpr::Enum(SourceEnumId::new("demo::Mode")),
+            ConstExpr::Path(SourcePath::new(
+                boltffi_ast::PathRoot::Relative,
+                vec![PathSegment::new("Other"), PathSegment::new("Fast")],
+            )),
+        ));
+
+        let error = lower::<Native>(&contract).expect_err("wrong enum path must reject");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::InvalidConstantValue(constant) if constant == "demo::DEFAULT_MODE"
+        ));
+    }
+
+    #[test]
+    fn enum_constant_rejects_unknown_variant_path() {
+        use boltffi_ast::{EnumDef, EnumId as SourceEnumId, PathSegment, VariantDef};
+
+        let mut contract = package();
+        let mut mode = EnumDef::new(SourceEnumId::new("demo::Mode"), name("Mode"));
+        mode.variants.push(VariantDef::unit(name("Fast")));
+        contract.enums.push(mode);
+        contract.constants.push(constant(
+            "demo::DEFAULT_MODE",
+            "DEFAULT_MODE",
+            TypeExpr::Enum(SourceEnumId::new("demo::Mode")),
+            ConstExpr::Path(SourcePath::new(
+                boltffi_ast::PathRoot::Relative,
+                vec![PathSegment::new("Mode"), PathSegment::new("Slow")],
+            )),
+        ));
+
+        let error = lower::<Native>(&contract).expect_err("unknown enum variant must reject");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::InvalidConstantValue(constant) if constant == "demo::DEFAULT_MODE"
+        ));
+    }
+
+    #[test]
+    fn enum_constant_rejects_payload_variant_path() {
+        use boltffi_ast::{
+            EnumDef, EnumId as SourceEnumId, FieldDef, PathSegment, VariantDef, VariantPayload,
+        };
+
+        let mut contract = package();
+        let mut mode = EnumDef::new(SourceEnumId::new("demo::Mode"), name("Mode"));
+        mode.variants.push(VariantDef {
+            name: name("Fast"),
+            discriminant: None,
+            payload: VariantPayload::Tuple(vec![TypeExpr::Primitive(Primitive::U32)]),
+            doc: None,
+            user_attrs: Vec::new(),
+            source: boltffi_ast::Source::exported(),
+            source_span: None,
+        });
+        mode.variants.push(VariantDef {
+            name: name("Slow"),
+            discriminant: None,
+            payload: VariantPayload::Struct(vec![FieldDef::new(
+                name("value"),
+                TypeExpr::Primitive(Primitive::U32),
+            )]),
+            doc: None,
+            user_attrs: Vec::new(),
+            source: boltffi_ast::Source::exported(),
+            source_span: None,
+        });
+        contract.enums.push(mode);
+        contract.constants.push(constant(
+            "demo::DEFAULT_MODE",
+            "DEFAULT_MODE",
+            TypeExpr::Enum(SourceEnumId::new("demo::Mode")),
+            ConstExpr::Path(SourcePath::new(
+                boltffi_ast::PathRoot::Relative,
+                vec![PathSegment::new("Mode"), PathSegment::new("Fast")],
+            )),
+        ));
+
+        let error = lower::<Native>(&contract).expect_err("payload enum variant must reject");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::InvalidConstantValue(constant) if constant == "demo::DEFAULT_MODE"
+        ));
+    }
+
+    #[test]
+    fn enum_constant_with_bare_variant_path_is_rejected() {
+        use boltffi_ast::{EnumDef, EnumId as SourceEnumId};
+
+        let mut contract = package();
+        let mut mode = EnumDef::new(SourceEnumId::new("demo::Mode"), name("Mode"));
+        mode.variants
+            .push(boltffi_ast::VariantDef::unit(name("Fast")));
+        contract.enums.push(mode);
+        contract.constants.push(constant(
+            "demo::DEFAULT_MODE",
+            "DEFAULT_MODE",
+            TypeExpr::Enum(SourceEnumId::new("demo::Mode")),
+            ConstExpr::Path(SourcePath::single("Fast")),
+        ));
+
+        let error =
+            lower::<Native>(&contract).expect_err("bare-variant path must reject (enum unknown)");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::InvalidConstantValue(constant) if constant == "demo::DEFAULT_MODE"
         ));
     }
 

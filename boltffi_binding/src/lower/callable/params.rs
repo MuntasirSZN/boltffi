@@ -60,13 +60,25 @@ where
     let receive = receive_for_passing(parameter.passing);
     let canonical_name = CanonicalName::from(&parameter.name);
     let meta = metadata::element_meta(parameter.doc.as_ref(), None, parameter.default.as_ref())?;
-    if let TypeExpr::Closure(closure) = &type_expr {
+    if let TypeExpr::Closure {
+        signature,
+        presence,
+    } = &type_expr
+    {
         if !matches!(receive, Receive::ByValue) {
             return Err(LowerError::unsupported_type(
                 UnsupportedType::BorrowedCallbackParameter,
             ));
         }
-        return D::lower_closure_param(idx, ids, allocator, canonical_name, meta, closure);
+        return D::lower_closure_param(
+            idx,
+            ids,
+            allocator,
+            canonical_name,
+            meta,
+            signature,
+            *presence,
+        );
     }
     let value = ValueRef::named(canonical_name.clone());
     let plan = lower_plain_plan::<S, D>(idx, ids, &type_expr, value, receive)?;
@@ -179,7 +191,7 @@ fn lower_plan<S: SurfaceLower, D: Direction>(
                 receive: D::receive_from(receive),
             })
         }
-        TypeExpr::Closure(_) => unreachable!("closures are handled before lower_plan"),
+        TypeExpr::Closure { .. } => unreachable!("closures are handled before lower_plan"),
         TypeExpr::Class { id, presence } => Ok(ParamPlan::Handle {
             target: HandleTarget::Class(ids.class(id)?),
             carrier: S::class_handle_carrier(),
@@ -238,6 +250,7 @@ where
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ClosureParameter<S, Self>, LowerError>;
 
     fn lower_closure_return(
@@ -245,6 +258,7 @@ where
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ClosureReturn<S, Self>, LowerError>;
 
     fn lower_closure_param(
@@ -254,6 +268,7 @@ where
         name: CanonicalName,
         meta: ElementMeta,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ParamDecl<S, Self>, LowerError>;
 }
 
@@ -263,8 +278,9 @@ impl<S: SurfaceLower> LowerClosure<S> for IntoRust {
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ClosureParameter<S, IntoRust>, LowerError> {
-        super::lower_closure_param_into_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_param_into_rust::<S>(idx, ids, allocator, closure, presence)
     }
 
     fn lower_closure_return(
@@ -272,8 +288,9 @@ impl<S: SurfaceLower> LowerClosure<S> for IntoRust {
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ClosureReturn<S, IntoRust>, LowerError> {
-        super::lower_closure_return_into_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_return_into_rust::<S>(idx, ids, allocator, closure, presence)
     }
 
     fn lower_closure_param(
@@ -283,8 +300,9 @@ impl<S: SurfaceLower> LowerClosure<S> for IntoRust {
         name: CanonicalName,
         meta: ElementMeta,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ParamDecl<S, IntoRust>, LowerError> {
-        let param = Self::lower_closure_parameter(idx, ids, allocator, closure)?;
+        let param = Self::lower_closure_parameter(idx, ids, allocator, closure, presence)?;
         Ok(<ParamDecl<S, IntoRust>>::closure(name, meta, param))
     }
 }
@@ -295,8 +313,9 @@ impl<S: SurfaceLower> LowerClosure<S> for OutOfRust {
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ClosureParameter<S, OutOfRust>, LowerError> {
-        super::lower_closure_param_out_of_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_param_out_of_rust::<S>(idx, ids, allocator, closure, presence)
     }
 
     fn lower_closure_return(
@@ -304,8 +323,9 @@ impl<S: SurfaceLower> LowerClosure<S> for OutOfRust {
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ClosureReturn<S, OutOfRust>, LowerError> {
-        super::lower_closure_return_out_of_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_return_out_of_rust::<S>(idx, ids, allocator, closure, presence)
     }
 
     fn lower_closure_param(
@@ -315,8 +335,9 @@ impl<S: SurfaceLower> LowerClosure<S> for OutOfRust {
         name: CanonicalName,
         meta: ElementMeta,
         closure: &ClosureType,
+        presence: boltffi_ast::HandlePresence,
     ) -> Result<ParamDecl<S, OutOfRust>, LowerError> {
-        let param = Self::lower_closure_parameter(idx, ids, allocator, closure)?;
+        let param = Self::lower_closure_parameter(idx, ids, allocator, closure, presence)?;
         Ok(<ParamDecl<S, OutOfRust>>::closure(name, meta, param))
     }
 }

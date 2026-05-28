@@ -124,7 +124,7 @@ fn validate_item_type(type_expr: &TypeExpr) -> Result<(), LowerError> {
     match type_expr {
         TypeExpr::Class { .. }
         | TypeExpr::Trait { .. }
-        | TypeExpr::Closure(_)
+        | TypeExpr::Closure { .. }
         | TypeExpr::Unit
         | TypeExpr::SelfType
         | TypeExpr::Parameter(_) => Err(LowerError::unsupported_type(UnsupportedType::StreamItem)),

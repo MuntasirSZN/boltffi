@@ -227,11 +227,11 @@ fn wasm_callback_method_surface(
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{
-        CanonicalName as SourceName, ClassDef, DeprecationInfo as SourceDeprecationInfo,
-        DocComment as SourceDocComment, FieldDef, HandlePresence as SourcePresence, MethodDef,
-        MethodId as SourceMethodId, PackageInfo as SourcePackage, ParameterDef, ParameterPassing,
-        Primitive, Receiver, RecordDef, ReturnDef, SourceContract, TraitDef, TraitUseForm,
-        TypeExpr,
+        CanonicalName as SourceName, ClassDef, ClosureKind, ClosureType,
+        DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, FieldDef,
+        HandlePresence as SourcePresence, MethodDef, MethodId as SourceMethodId,
+        PackageInfo as SourcePackage, ParameterDef, ParameterPassing, Primitive, Receiver,
+        RecordDef, ReturnDef, SourceContract, TraitDef, TraitUseForm, TypeExpr,
     };
 
     use crate::lower::lower;
@@ -256,6 +256,17 @@ mod tests {
 
     fn listener_type(form: TraitUseForm, presence: SourcePresence) -> TypeExpr {
         TypeExpr::r#trait("demo::Listener".into(), form, presence)
+    }
+
+    fn closure_type(presence: SourcePresence) -> TypeExpr {
+        TypeExpr::closure_with_presence(
+            ClosureType::new(
+                ClosureKind::Fn,
+                vec![TypeExpr::Primitive(Primitive::U32)],
+                ReturnDef::Void,
+            ),
+            presence,
+        )
     }
 
     fn method(method_name: &str, receiver: Receiver) -> MethodDef {
@@ -520,6 +531,7 @@ mod tests {
             .as_closure()
             .expect("expected outgoing closure param");
         assert_eq!(outgoing.form(), crate::ClosureForm::Fn);
+        assert_eq!(outgoing.presence(), HandlePresence::Required);
         assert_eq!(outgoing.invoke().params().len(), 1);
         match outgoing.invoke().params()[0].as_value().unwrap() {
             ParamPlan::Direct {
@@ -528,6 +540,35 @@ mod tests {
             } => {}
             other => panic!("expected u32 direct param on invoke, got {other:?}"),
         }
+        assert!(matches!(
+            outgoing.invoke().returns().plan(),
+            ReturnPlan::Void
+        ));
+    }
+
+    #[test]
+    fn callback_method_with_nullable_closure_param_lowers_to_nullable_outgoing_closure() {
+        let mut callback = listener_callback();
+        let mut handle = method("on_event", Receiver::Shared);
+        handle.parameters = vec![value_param(
+            "callback",
+            closure_type(SourcePresence::Nullable),
+        )];
+        callback.methods.push(handle);
+
+        let bindings = lower_callback::<Native>(callback);
+        let methods = first_callback(&bindings).protocol().vtable().methods();
+        let params = methods[0].callable().params();
+
+        let outgoing = params[0]
+            .as_closure()
+            .expect("expected nullable outgoing closure param");
+        assert_eq!(outgoing.presence(), HandlePresence::Nullable);
+        assert_eq!(outgoing.form(), crate::ClosureForm::Fn);
+        assert!(matches!(
+            outgoing.registration().shape(),
+            native::ClosureRegistration::InvokeContext
+        ));
         assert!(matches!(
             outgoing.invoke().returns().plan(),
             ReturnPlan::Void
@@ -559,6 +600,7 @@ mod tests {
             .as_closure()
             .expect("expected outgoing closure param");
         assert_eq!(outgoing.form(), crate::ClosureForm::Fn);
+        assert_eq!(outgoing.presence(), HandlePresence::Required);
         assert_eq!(
             outgoing.registration().shape().call().name().as_str(),
             "boltffi_closure_1____closure__u32_call"
@@ -615,6 +657,7 @@ mod tests {
             other => panic!("expected ClosureViaOutPointer, got {other:?}"),
         };
         assert_eq!(closure_crossing.form(), crate::ClosureForm::Fn);
+        assert_eq!(closure_crossing.presence(), HandlePresence::Required);
         let invoke = closure_crossing.invoke();
         assert_eq!(invoke.params().len(), 1);
         match invoke.params()[0].as_value().unwrap() {
@@ -644,6 +687,36 @@ mod tests {
     }
 
     #[test]
+    fn callback_method_returning_nullable_closure_lowers_to_nullable_crossing() {
+        let mut callback = listener_callback();
+        let mut handler_factory = method("handler", Receiver::Shared);
+        handler_factory.returns = ReturnDef::Value(TypeExpr::closure_with_presence(
+            ClosureType::new(
+                ClosureKind::Fn,
+                vec![TypeExpr::Primitive(Primitive::U32)],
+                ReturnDef::Value(TypeExpr::Primitive(Primitive::U32)),
+            ),
+            SourcePresence::Nullable,
+        ));
+        callback.methods.push(handler_factory);
+
+        let bindings = lower_callback::<Wasm32>(callback);
+        let methods = first_callback(&bindings).protocol().methods();
+
+        match methods[0].callable().returns().plan() {
+            ReturnPlan::ClosureViaOutPointer(closure) => {
+                assert_eq!(closure.presence(), HandlePresence::Nullable);
+                assert_eq!(closure.form(), crate::ClosureForm::Fn);
+                assert_eq!(
+                    closure.registration().shape().call().module().as_str(),
+                    "env"
+                );
+            }
+            other => panic!("expected nullable closure return, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn native_callback_method_returning_closure_lowers_to_closure_via_out_pointer() {
         use boltffi_ast::{ClosureKind, ClosureType, ReturnDef};
 
@@ -669,6 +742,7 @@ mod tests {
         // plan forces out-pointer carriage; parameter closure handling cannot
         // accidentally cover this case.
         assert_eq!(closure_crossing.form(), crate::ClosureForm::Fn);
+        assert_eq!(closure_crossing.presence(), HandlePresence::Required);
         assert_eq!(
             closure_crossing.registration().shape(),
             &native::ClosureRegistration::InvokeContext

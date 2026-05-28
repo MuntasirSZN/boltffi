@@ -77,8 +77,13 @@ pub enum TypeExpr {
         /// Whether the source value is nullable.
         presence: HandlePresence,
     },
-    /// An inline closure signature such as `impl Fn(u32) -> String`.
-    Closure(Box<ClosureType>),
+    /// An inline closure value such as `impl Fn(u32) -> String`.
+    Closure {
+        /// Closure signature written by the source.
+        signature: Box<ClosureType>,
+        /// Whether the closure value is nullable.
+        presence: HandlePresence,
+    },
     /// A custom type declaration by ID.
     Custom(CustomTypeId),
     /// The Rust `Self` type inside an impl, trait, or callback context.
@@ -164,7 +169,20 @@ impl TypeExpr {
     ///
     /// Returns a closure type expression.
     pub fn closure(closure: ClosureType) -> Self {
-        Self::Closure(Box::new(closure))
+        Self::closure_with_presence(closure, HandlePresence::Required)
+    }
+
+    /// Builds an inline closure type expression with explicit nullability.
+    ///
+    /// The `closure` parameter contains the source signature. The `presence`
+    /// parameter records whether the closure value may be absent.
+    ///
+    /// Returns a closure type expression.
+    pub fn closure_with_presence(closure: ClosureType, presence: HandlePresence) -> Self {
+        Self::Closure {
+            signature: Box::new(closure),
+            presence,
+        }
     }
 
     /// Builds a trait-reference type expression.

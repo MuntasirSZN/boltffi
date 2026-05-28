@@ -38,7 +38,7 @@ pub(super) fn lower(ids: &DeclarationIds, type_expr: &TypeExpr) -> Result<TypeRe
             key: Box::new(lower(ids, key)?),
             value: Box::new(lower(ids, value)?),
         },
-        TypeExpr::Closure(_) => {
+        TypeExpr::Closure { .. } => {
             return Err(LowerError::unsupported_type(
                 UnsupportedType::ClosureInValuePosition,
             ));

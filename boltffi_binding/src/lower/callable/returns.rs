@@ -188,8 +188,12 @@ where
                 shape: S::encoded_return_shape(),
             })
         }
-        TypeExpr::Closure(closure) => {
-            let closure_return = D::lower_closure_return(idx, ids, allocator, closure)?;
+        TypeExpr::Closure {
+            signature,
+            presence,
+        } => {
+            let closure_return =
+                D::lower_closure_return(idx, ids, allocator, signature, *presence)?;
             Ok(ReturnPlan::ClosureViaOutPointer(closure_return))
         }
         TypeExpr::Class { id, presence } => Ok(ReturnPlan::HandleViaReturnSlot {

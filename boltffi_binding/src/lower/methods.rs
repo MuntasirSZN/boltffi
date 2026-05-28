@@ -386,6 +386,27 @@ fn symbol_owner(owner: callable::CallableOwner<'_>) -> SymbolOwner<'_> {
 
 fn reject_owned_class_receiver(method: &MethodDef) -> Result<(), LowerError> {
     if matches!(method.receiver, Receiver::Owned) {
+        // A class crosses FFI as a handle: an opaque integer or pointer
+        // that names a Rust-side instance. The handle's lifetime is
+        // managed by reference counts or explicit drops; the foreign
+        // side calls `release_class_<class_id>(handle)` to dispose of
+        // it.
+        //
+        // `&self` and `&mut self` are borrows. The method runs with
+        // temporary access to the handle's target. The handle stays
+        // valid on the foreign side afterward. No lifecycle change.
+        //
+        // `self` (owned) means the method consumes the instance. After
+        // it returns, the handle on the foreign side must be invalid.
+        // Calling any other method on it (including the release
+        // function) would be use-after-free.
+        //
+        // The IR does not model handle consumption today. There is no
+        // protocol that tells the foreign side "this method invalidated
+        // your handle, do not release it." Until that protocol exists
+        // (handle poisoning, foreign-language move semantics, or an
+        // explicit consumed flag on the method decl), this rejection
+        // prevents the unsound case from reaching renderers.
         Err(LowerError::unsupported_type(
             UnsupportedType::OwnedClassReceiver,
         ))
