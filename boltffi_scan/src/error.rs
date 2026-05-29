@@ -28,7 +28,18 @@ pub enum ScanError {
         first: String,
         second: String,
     },
+    ConflictingDeclarations {
+        path: String,
+        first: String,
+        second: String,
+    },
     UnsupportedMarkedImpl {
+        target: String,
+    },
+    UnsupportedClassImpl {
+        target: String,
+    },
+    UnsupportedClassImplShape {
         target: String,
     },
     UnsupportedGenerics {
@@ -44,6 +55,9 @@ pub enum ScanError {
         item: String,
     },
     UnsupportedTraitItem {
+        item: String,
+    },
+    UnsupportedImplItem {
         item: String,
     },
     UnsupportedTraitMethodBody {
@@ -111,10 +125,32 @@ impl fmt::Display for ScanError {
                     "conflicting BoltFFI markers `{first}` and `{second}`"
                 )
             }
+            Self::ConflictingDeclarations {
+                path,
+                first,
+                second,
+            } => {
+                write!(
+                    formatter,
+                    "conflicting BoltFFI declarations `{first}` and `{second}` for `{path}`"
+                )
+            }
             Self::UnsupportedMarkedImpl { target } => {
                 write!(
                     formatter,
                     "marked impl target `{target}` is not a supported value type"
+                )
+            }
+            Self::UnsupportedClassImpl { target } => {
+                write!(
+                    formatter,
+                    "exported class impl target `{target}` is not a supported class type"
+                )
+            }
+            Self::UnsupportedClassImplShape { target } => {
+                write!(
+                    formatter,
+                    "exported class impl `{target}` cannot implement a trait"
                 )
             }
             Self::UnsupportedGenerics { item } => {
@@ -131,6 +167,12 @@ impl fmt::Display for ScanError {
             }
             Self::UnsupportedTraitItem { item } => {
                 write!(formatter, "`{item}` is not supported in exported traits")
+            }
+            Self::UnsupportedImplItem { item } => {
+                write!(
+                    formatter,
+                    "`{item}` is not supported in exported impl blocks"
+                )
             }
             Self::UnsupportedTraitMethodBody { item } => {
                 write!(formatter, "`{item}` cannot define a default body")
@@ -224,11 +266,34 @@ mod tests {
             "conflicting BoltFFI markers `data` and `error`"
         );
         assert_eq!(
+            ScanError::ConflictingDeclarations {
+                path: "demo::Engine".to_owned(),
+                first: "record".to_owned(),
+                second: "class".to_owned()
+            }
+            .to_string(),
+            "conflicting BoltFFI declarations `record` and `class` for `demo::Engine`"
+        );
+        assert_eq!(
             ScanError::UnsupportedMarkedImpl {
                 target: "Missing".to_owned()
             }
             .to_string(),
             "marked impl target `Missing` is not a supported value type"
+        );
+        assert_eq!(
+            ScanError::UnsupportedClassImpl {
+                target: "Missing".to_owned()
+            }
+            .to_string(),
+            "exported class impl target `Missing` is not a supported class type"
+        );
+        assert_eq!(
+            ScanError::UnsupportedClassImplShape {
+                target: "Engine".to_owned()
+            }
+            .to_string(),
+            "exported class impl `Engine` cannot implement a trait"
         );
         assert_eq!(
             ScanError::UnsupportedGenerics {
@@ -264,6 +329,13 @@ mod tests {
             }
             .to_string(),
             "`trait Listener::Item` is not supported in exported traits"
+        );
+        assert_eq!(
+            ScanError::UnsupportedImplItem {
+                item: "demo::Engine::VERSION".to_owned()
+            }
+            .to_string(),
+            "`demo::Engine::VERSION` is not supported in exported impl blocks"
         );
         assert_eq!(
             ScanError::UnsupportedTraitMethodBody {

@@ -80,6 +80,14 @@ impl<'a> Scanner<'a> {
             .segments
             .last()
             .ok_or_else(|| ScanError::unsupported_type(source))?;
+        if type_path
+            .path
+            .segments
+            .iter()
+            .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+        {
+            return Err(ScanError::unsupported_type(source));
+        }
         let name = segment.ident.to_string();
         if let Some(primitive) = Primitive::from_rust_name(&name) {
             return Ok(TypeExpr::Primitive(primitive));
@@ -90,6 +98,9 @@ impl<'a> Scanner<'a> {
         match self.declared_types.resolve(&resolved_path) {
             Some(DeclaredType::Record(id)) => Ok(TypeExpr::Record(id.clone())),
             Some(DeclaredType::Enum(id)) => Ok(TypeExpr::Enum(id.clone())),
+            Some(DeclaredType::Class(id)) => {
+                Ok(TypeExpr::class(id.clone(), HandlePresence::Required))
+            }
             Some(DeclaredType::Trait(_)) => Err(ScanError::unsupported_type(source)),
             None => Err(ScanError::unsupported_type(source)),
         }
@@ -144,11 +155,11 @@ impl<'a> Scanner<'a> {
         source: &syn::Type,
     ) -> Result<TypeExpr, ScanError> {
         let inner = self.single_type_argument(segment, source)?;
-        self.nullable_trait(inner)
+        self.nullable_handle(inner)
             .unwrap_or_else(|| self.scan(inner).map(TypeExpr::option))
     }
 
-    fn nullable_trait(&self, ty: &syn::Type) -> Option<Result<TypeExpr, ScanError>> {
+    fn nullable_handle(&self, ty: &syn::Type) -> Option<Result<TypeExpr, ScanError>> {
         let syn::Type::Path(type_path) = unwrapped(ty) else {
             return None;
         };
@@ -166,6 +177,24 @@ impl<'a> Scanner<'a> {
                 TraitUseForm::ArcDyn,
                 HandlePresence::Nullable,
             )),
+            _ => self.nullable_class(type_path),
+        }
+    }
+
+    fn nullable_class(&self, type_path: &syn::TypePath) -> Option<Result<TypeExpr, ScanError>> {
+        if type_path
+            .path
+            .segments
+            .iter()
+            .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+        {
+            return None;
+        }
+        let resolved_path = self.module.resolve(&type_path.path)?;
+        match self.declared_types.resolve(&resolved_path) {
+            Some(DeclaredType::Class(id)) => {
+                Some(Ok(TypeExpr::class(id.clone(), HandlePresence::Nullable)))
+            }
             _ => None,
         }
     }
@@ -303,7 +332,7 @@ fn closure_kind(name: &str) -> Option<ClosureKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boltffi_ast::{EnumId, RecordId, TraitId};
+    use boltffi_ast::{ClassId, EnumId, RecordId, TraitId};
 
     fn ty(source: &str) -> syn::Type {
         syn::parse_str(source).expect("valid type")
@@ -428,6 +457,29 @@ mod tests {
     }
 
     #[test]
+    fn resolves_registered_class_references_and_nullable_handles() {
+        let mut declared_types = DeclaredTypes::new();
+        declared_types.register_class(ClassId::new("demo::Engine"));
+        let module = ModulePath::root("demo");
+        let scanner = Scanner::new(&declared_types, &module);
+
+        assert_eq!(
+            scanner.scan(&ty("Engine")),
+            Ok(TypeExpr::class(
+                ClassId::new("demo::Engine"),
+                HandlePresence::Required
+            ))
+        );
+        assert_eq!(
+            scanner.scan(&ty("Option<Engine>")),
+            Ok(TypeExpr::class(
+                ClassId::new("demo::Engine"),
+                HandlePresence::Nullable
+            ))
+        );
+    }
+
+    #[test]
     fn resolves_qualified_records_without_leaf_name_guessing() {
         let mut declared_types = DeclaredTypes::new();
         declared_types.register_record(RecordId::new("demo::geometry::Point"));
@@ -455,6 +507,28 @@ mod tests {
         assert!(matches!(
             scan("Point"),
             Err(ScanError::UnsupportedType { spelling }) if spelling == "Point"
+        ));
+    }
+
+    #[test]
+    fn rejects_named_type_arguments_before_erasing_them() {
+        let mut declared_types = DeclaredTypes::new();
+        declared_types.register_record(RecordId::new("demo::Point"));
+        declared_types.register_class(ClassId::new("demo::Engine"));
+        let module = ModulePath::root("demo");
+        let scanner = Scanner::new(&declared_types, &module);
+
+        assert!(matches!(
+            scanner.scan(&ty("Point<u32>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Point<u32>"
+        ));
+        assert!(matches!(
+            scanner.scan(&ty("Option<Engine<u32>>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Engine<u32>"
+        ));
+        assert!(matches!(
+            scanner.scan(&ty("i32<u32>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "i32<u32>"
         ));
     }
 
@@ -538,7 +612,7 @@ mod tests {
         ));
         assert!(matches!(
             scanner.scan(&ty("Box<dyn Listener + Send>")),
-            Err(ScanError::UnsupportedType { spelling }) if spelling == "Box"
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Box<dyn Listener + Send>"
         ));
         assert!(matches!(
             scanner.scan(&ty("impl Listener<i32>")),
@@ -546,7 +620,7 @@ mod tests {
         ));
         assert!(matches!(
             scanner.scan(&ty("Box<dyn Listener<Item = i32>>")),
-            Err(ScanError::UnsupportedType { spelling }) if spelling == "Box"
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Box<dyn Listener<Item = i32>>"
         ));
     }
 

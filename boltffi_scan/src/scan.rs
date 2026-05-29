@@ -1,6 +1,8 @@
 use std::path::Path as FsPath;
 
-use boltffi_ast::{EnumDef, FunctionDef, PackageInfo, RecordDef, SourceContract, TraitDef};
+use boltffi_ast::{
+    ClassDef, EnumDef, FunctionDef, PackageInfo, RecordDef, SourceContract, TraitDef,
+};
 
 use crate::declared_types::DeclaredTypes;
 use crate::marked::MarkedItems;
@@ -22,7 +24,8 @@ pub fn scan_file(file: syn::File, package: PackageInfo) -> Result<SourceContract
 
 fn scan_tree(source_tree: SourceTree, package: PackageInfo) -> Result<SourceContract, ScanError> {
     let marked = MarkedItems::collect(&source_tree)?;
-    let declared_types = DeclaredTypes::index(&marked);
+    let declared_types = DeclaredTypes::index(&marked)?;
+    let classes = scan_classes(&marked, &declared_types)?;
     let mut records = scan_records(&marked, &declared_types)?;
     let mut enums = scan_enums(&marked, &declared_types)?;
     let traits = scan_traits(&marked, &declared_types)?;
@@ -32,9 +35,17 @@ fn scan_tree(source_tree: SourceTree, package: PackageInfo) -> Result<SourceCont
     let mut contract = SourceContract::new(package);
     contract.records = records;
     contract.enums = enums;
+    contract.classes = classes;
     contract.traits = traits;
     contract.functions = functions;
     Ok(contract)
+}
+
+fn scan_classes(
+    marked: &MarkedItems<'_>,
+    declared_types: &DeclaredTypes,
+) -> Result<Vec<ClassDef>, ScanError> {
+    items::class::scan(marked.classes(), declared_types)
 }
 
 fn scan_records(
@@ -85,8 +96,8 @@ fn scan_traits(
 mod tests {
     use super::*;
     use boltffi_ast::{
-        EnumId, HandlePresence, Primitive, Receiver, RecordId, ReturnDef, TraitId, TraitUseForm,
-        TypeExpr,
+        ClassId, EnumId, HandlePresence, Primitive, Receiver, RecordId, ReturnDef, TraitId,
+        TraitUseForm, TypeExpr,
     };
 
     fn parse(source: &str) -> syn::File {
@@ -262,6 +273,102 @@ mod tests {
                 TraitUseForm::BoxedDyn,
                 HandlePresence::Nullable,
             )
+        );
+    }
+
+    #[test]
+    fn scans_exported_classes_and_resolves_class_references() {
+        let contract = scan(
+            "#[export] impl Engine { \
+                 pub fn new(seed: u64) -> Self { todo!() } \
+                 pub fn start(&mut self) {} \
+                 pub fn peer(&self, other: Option<Engine>) -> Engine { todo!() } \
+             } \
+             #[export] pub fn open(engine: Engine) -> Option<Engine> { todo!() }",
+        );
+
+        assert_eq!(contract.classes.len(), 1);
+        assert_eq!(contract.classes[0].id, ClassId::new("demo::Engine"));
+        assert_eq!(contract.classes[0].methods.len(), 3);
+        assert_eq!(contract.classes[0].methods[0].receiver, Receiver::None);
+        assert_eq!(
+            contract.classes[0].methods[0].returns,
+            ReturnDef::Value(TypeExpr::SelfType)
+        );
+        assert_eq!(contract.classes[0].methods[1].receiver, Receiver::Mutable);
+        assert_eq!(
+            contract.classes[0].methods[2].parameters[0].type_expr,
+            TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Nullable)
+        );
+        assert_eq!(
+            contract.classes[0].methods[2].returns,
+            ReturnDef::Value(TypeExpr::class(
+                ClassId::new("demo::Engine"),
+                HandlePresence::Required
+            ))
+        );
+        assert_eq!(
+            contract.functions[0].parameters[0].type_expr,
+            TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Required)
+        );
+        assert_eq!(
+            contract.functions[0].returns,
+            ReturnDef::Value(TypeExpr::class(
+                ClassId::new("demo::Engine"),
+                HandlePresence::Nullable
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_class_and_value_type_with_the_same_source_path() {
+        let error = try_scan(
+            "#[data] pub struct Engine { pub id: u32 } \
+             #[export] impl Engine { pub fn new() -> Self { todo!() } }",
+        )
+        .expect_err("same path cannot declare two exported domains");
+
+        assert_eq!(
+            error,
+            ScanError::ConflictingDeclarations {
+                path: "demo::Engine".to_owned(),
+                first: "record".to_owned(),
+                second: "class".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_value_type_declarations_with_the_same_source_path() {
+        let error = try_scan(
+            "#[data] pub struct Point { pub x: f64 } \
+             #[data] pub struct Point { pub y: f64 }",
+        )
+        .expect_err("duplicate value declaration rejected");
+
+        assert_eq!(
+            error,
+            ScanError::ConflictingDeclarations {
+                path: "demo::Point".to_owned(),
+                first: "record".to_owned(),
+                second: "record".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_exported_trait_impl_before_registering_a_class() {
+        let error = try_scan(
+            "#[data] pub struct Engine { pub id: u32 } \
+             #[export] impl Display for Engine {}",
+        )
+        .expect_err("trait impl cannot declare a class");
+
+        assert_eq!(
+            error,
+            ScanError::UnsupportedClassImplShape {
+                target: "Engine".to_owned(),
+            }
         );
     }
 

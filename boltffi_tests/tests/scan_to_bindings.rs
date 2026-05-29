@@ -1,5 +1,5 @@
 use boltffi_ast::PackageInfo;
-use boltffi_binding::{Decl, Native, RecordDecl, lower};
+use boltffi_binding::{ClassDecl, Decl, Native, Receive, RecordDecl, lower};
 use boltffi_scan::scan_file;
 
 const SOURCE: &str = "
@@ -21,6 +21,15 @@ const SOURCE: &str = "
             let dy = self.y - other.y;
             (dx * dx + dy * dy).sqrt()
         }
+    }
+
+    #[export]
+    impl Engine {
+        pub fn new(seed: u64) -> Self {
+            todo!()
+        }
+
+        pub fn start(&mut self) {}
     }
 
     #[export]
@@ -47,6 +56,10 @@ fn record_method_counts(record: &RecordDecl<Native>) -> (usize, usize) {
     }
 }
 
+fn class_method_counts(class: &ClassDecl<Native>) -> (usize, usize) {
+    (class.initializers().len(), class.methods().len())
+}
+
 #[test]
 fn scans_and_lowers_point_contract_to_bindings() {
     let file = syn::parse_str(SOURCE).expect("parse source fixture");
@@ -68,9 +81,15 @@ fn scans_and_lowers_point_contract_to_bindings() {
         .iter()
         .filter(|decl| matches!(decl, Decl::Callback(_)))
         .count();
+    let classes = bindings
+        .decls()
+        .iter()
+        .filter(|decl| matches!(decl, Decl::Class(_)))
+        .count();
     assert_eq!(records, 1, "Point lowers to one record");
     assert_eq!(functions, 2, "functions lower from scanned exports");
     assert_eq!(callbacks, 1, "ValueCallback lowers to one callback");
+    assert_eq!(classes, 1, "Engine lowers to one class");
 
     let record = bindings
         .decls()
@@ -82,4 +101,21 @@ fn scans_and_lowers_point_contract_to_bindings() {
         .expect("record declaration");
 
     assert_eq!(record_method_counts(record), (1, 1));
+
+    let class = bindings
+        .decls()
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Class(class) => Some(class.as_ref()),
+            _ => None,
+        })
+        .expect("class declaration");
+
+    assert_eq!(class_method_counts(class), (1, 1));
+    assert_eq!(class.initializers()[0].name().as_path_string(), "new");
+    assert_eq!(class.methods()[0].name().as_path_string(), "start");
+    assert_eq!(
+        class.methods()[0].callable().receiver(),
+        Some(Receive::ByMutRef)
+    );
 }
