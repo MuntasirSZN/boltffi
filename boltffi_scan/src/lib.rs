@@ -1,3 +1,4 @@
+mod const_expr;
 mod declared_types;
 mod error;
 mod impl_target;

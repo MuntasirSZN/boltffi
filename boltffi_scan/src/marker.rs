@@ -131,6 +131,12 @@ mod tests {
             .attrs
     }
 
+    fn const_attrs(source: &str) -> Vec<syn::Attribute> {
+        syn::parse_str::<syn::ItemConst>(source)
+            .expect("valid const")
+            .attrs
+    }
+
     #[test]
     fn detects_data_on_value_types() {
         assert_eq!(
@@ -212,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn detects_export_on_functions() {
+    fn detects_export_on_exported_items() {
         assert_eq!(
             Marker::detect(&fn_attrs("#[export] fn f() {}")),
             Ok(Some(Marker::Export))
@@ -222,6 +228,10 @@ mod tests {
             Ok(Some(Marker::Export))
         );
         assert_eq!(Marker::detect(&fn_attrs("fn f() {}")), Ok(None));
+        assert_eq!(
+            Marker::detect(&const_attrs("#[export] const ANSWER: u32 = 42;")),
+            Ok(Some(Marker::Export))
+        );
     }
 
     #[test]

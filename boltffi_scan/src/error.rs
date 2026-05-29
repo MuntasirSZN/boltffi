@@ -63,6 +63,7 @@ pub enum ScanError {
     UnsupportedTraitMethodBody {
         item: String,
     },
+    AnonymousConstant,
     UnnamedParameter,
     ReceiverOnFreeFunction,
     TupleOrUnitStruct,
@@ -177,6 +178,7 @@ impl fmt::Display for ScanError {
             Self::UnsupportedTraitMethodBody { item } => {
                 write!(formatter, "`{item}` cannot define a default body")
             }
+            Self::AnonymousConstant => formatter.write_str("exported constant cannot be anonymous"),
             Self::UnnamedParameter => formatter.write_str("parameter pattern is not a plain name"),
             Self::ReceiverOnFreeFunction => {
                 formatter.write_str("free function cannot have a receiver")
@@ -343,6 +345,10 @@ mod tests {
             }
             .to_string(),
             "`trait Listener::call` cannot define a default body"
+        );
+        assert_eq!(
+            ScanError::AnonymousConstant.to_string(),
+            "exported constant cannot be anonymous"
         );
     }
 }

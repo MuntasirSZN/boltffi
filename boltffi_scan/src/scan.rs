@@ -1,7 +1,7 @@
 use std::path::Path as FsPath;
 
 use boltffi_ast::{
-    ClassDef, EnumDef, FunctionDef, PackageInfo, RecordDef, SourceContract, TraitDef,
+    ClassDef, ConstantDef, EnumDef, FunctionDef, PackageInfo, RecordDef, SourceContract, TraitDef,
 };
 
 use crate::declared_types::DeclaredTypes;
@@ -31,6 +31,7 @@ fn scan_tree(source_tree: SourceTree, package: PackageInfo) -> Result<SourceCont
     let traits = scan_traits(&marked, &declared_types)?;
     items::impl_block::attach_methods(marked.impls(), &declared_types, &mut records, &mut enums)?;
     let functions = scan_functions(&marked, &declared_types)?;
+    let constants = scan_constants(&marked, &declared_types)?;
 
     let mut contract = SourceContract::new(package);
     contract.records = records;
@@ -38,6 +39,7 @@ fn scan_tree(source_tree: SourceTree, package: PackageInfo) -> Result<SourceCont
     contract.classes = classes;
     contract.traits = traits;
     contract.functions = functions;
+    contract.constants = constants;
     Ok(contract)
 }
 
@@ -81,6 +83,17 @@ fn scan_functions(
         .collect()
 }
 
+fn scan_constants(
+    marked: &MarkedItems<'_>,
+    declared_types: &DeclaredTypes,
+) -> Result<Vec<ConstantDef>, ScanError> {
+    marked
+        .constants()
+        .iter()
+        .map(|constant| items::constant::scan(constant, declared_types))
+        .collect()
+}
+
 fn scan_traits(
     marked: &MarkedItems<'_>,
     declared_types: &DeclaredTypes,
@@ -96,8 +109,8 @@ fn scan_traits(
 mod tests {
     use super::*;
     use boltffi_ast::{
-        ClassId, EnumId, HandlePresence, Primitive, Receiver, RecordId, ReturnDef, TraitId,
-        TraitUseForm, TypeExpr,
+        ClassId, ConstExpr, ConstantId, EnumId, HandlePresence, IntegerLiteral, Literal, Primitive,
+        Receiver, RecordId, ReturnDef, TraitId, TraitUseForm, TypeExpr,
     };
 
     fn parse(source: &str) -> syn::File {
@@ -393,6 +406,29 @@ mod tests {
     }
 
     #[test]
+    fn scans_exported_constants_and_resolves_declared_types() {
+        let contract = scan(
+            "#[data] pub enum Mode { Fast, Slow } \
+             #[export] pub const DEFAULT_MODE: Mode = Mode::Fast; \
+             #[export] pub const ANSWER: u32 = 42;",
+        );
+
+        assert_eq!(contract.constants.len(), 2);
+        assert_eq!(
+            contract.constants[0].id,
+            ConstantId::new("demo::DEFAULT_MODE")
+        );
+        assert_eq!(
+            contract.constants[0].type_expr,
+            TypeExpr::Enum(EnumId::new("demo::Mode"))
+        );
+        assert_eq!(
+            contract.constants[1].value,
+            ConstExpr::Literal(Literal::Integer(IntegerLiteral::new(42, "42")))
+        );
+    }
+
+    #[test]
     fn attaches_impl_methods_to_their_record() {
         let contract = scan(
             "#[data] pub struct Point { pub x: f64, pub y: f64 } \
@@ -503,11 +539,13 @@ mod tests {
     fn qualified_markers_are_scanned() {
         let contract = scan(
             "#[boltffi::data] pub struct Point { pub x: f64 } \
-             #[boltffi::export] pub fn origin() -> Point { todo!() }",
+             #[boltffi::export] pub fn origin() -> Point { todo!() } \
+             #[boltffi::export] pub const ANSWER: u32 = 42;",
         );
 
         assert_eq!(contract.records.len(), 1);
         assert_eq!(contract.functions.len(), 1);
+        assert_eq!(contract.constants.len(), 1);
     }
 
     #[test]

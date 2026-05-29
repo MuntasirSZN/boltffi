@@ -8,6 +8,7 @@ pub(super) struct MarkedItems<'source> {
     functions: Vec<Marked<'source, syn::ItemFn>>,
     traits: Vec<Marked<'source, syn::ItemTrait>>,
     classes: Vec<Marked<'source, syn::ItemImpl>>,
+    constants: Vec<Marked<'source, syn::ItemConst>>,
     impls: Vec<Marked<'source, syn::ItemImpl>>,
 }
 
@@ -29,6 +30,7 @@ impl<'source> MarkedItems<'source> {
             functions: Vec::new(),
             traits: Vec::new(),
             classes: Vec::new(),
+            constants: Vec::new(),
             impls: Vec::new(),
         }
     }
@@ -51,6 +53,10 @@ impl<'source> MarkedItems<'source> {
 
     pub(super) fn classes(&self) -> &[Marked<'source, syn::ItemImpl>] {
         &self.classes
+    }
+
+    pub(super) fn constants(&self) -> &[Marked<'source, syn::ItemConst>] {
+        &self.constants
     }
 
     pub(super) fn impls(&self) -> &[Marked<'source, syn::ItemImpl>] {
@@ -88,6 +94,10 @@ impl<'source> MarkedItems<'source> {
             }
             (Marker::Export, syn::Item::Impl(item)) => {
                 self.classes.push(Marked::new(module, marker, item));
+                Ok(())
+            }
+            (Marker::Export, syn::Item::Const(item)) => {
+                self.constants.push(Marked::new(module, marker, item));
                 Ok(())
             }
             _ => Err(ScanError::InvalidMarkerPlacement {
@@ -186,6 +196,7 @@ mod tests {
              #[export] fn origin() {} \
              #[export] trait Listener { fn call(&self); } \
              #[export] impl Engine {} \
+             #[export] const ANSWER: u32 = 42; \
              #[data(impl)] impl Point {}",
         );
 
@@ -198,6 +209,7 @@ mod tests {
         assert_eq!(marked.functions().len(), 1);
         assert_eq!(marked.traits().len(), 1);
         assert_eq!(marked.classes().len(), 1);
+        assert_eq!(marked.constants().len(), 1);
         assert_eq!(marked.impls().len(), 1);
     }
 

@@ -1,5 +1,8 @@
 use boltffi_ast::PackageInfo;
-use boltffi_binding::{ClassDecl, Decl, Native, Receive, RecordDecl, lower};
+use boltffi_binding::{
+    Bindings, ClassDecl, ConstantDecl, ConstantValueDecl, Decl, DefaultValue, IntegerValue, Native,
+    Primitive, Receive, RecordDecl, TypeRef, lower,
+};
 use boltffi_scan::scan_file;
 
 const SOURCE: &str = "
@@ -9,6 +12,18 @@ const SOURCE: &str = "
         pub x: f64,
         pub y: f64,
     }
+
+    #[data]
+    pub enum Mode {
+        VeryFast,
+        Slow,
+    }
+
+    #[export]
+    pub const DEFAULT_LIMIT: u32 = 42;
+
+    #[export]
+    pub const DEFAULT_MODE: Mode = Mode::VeryFast;
 
     #[data(impl)]
     impl Point {
@@ -60,6 +75,19 @@ fn class_method_counts(class: &ClassDecl<Native>) -> (usize, usize) {
     (class.initializers().len(), class.methods().len())
 }
 
+fn constant<'a>(bindings: &'a Bindings<Native>, name: &str) -> &'a ConstantDecl<Native> {
+    bindings
+        .decls()
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Constant(constant) if constant.name().as_path_string() == name => {
+                Some(constant.as_ref())
+            }
+            _ => None,
+        })
+        .expect("constant declaration")
+}
+
 #[test]
 fn scans_and_lowers_point_contract_to_bindings() {
     let file = syn::parse_str(SOURCE).expect("parse source fixture");
@@ -86,10 +114,16 @@ fn scans_and_lowers_point_contract_to_bindings() {
         .iter()
         .filter(|decl| matches!(decl, Decl::Class(_)))
         .count();
+    let constants = bindings
+        .decls()
+        .iter()
+        .filter(|decl| matches!(decl, Decl::Constant(_)))
+        .count();
     assert_eq!(records, 1, "Point lowers to one record");
     assert_eq!(functions, 2, "functions lower from scanned exports");
     assert_eq!(callbacks, 1, "ValueCallback lowers to one callback");
     assert_eq!(classes, 1, "Engine lowers to one class");
+    assert_eq!(constants, 2, "exported constants lower to constants");
 
     let record = bindings
         .decls()
@@ -118,4 +152,27 @@ fn scans_and_lowers_point_contract_to_bindings() {
         class.methods()[0].callable().receiver(),
         Some(Receive::ByMutRef)
     );
+
+    match constant(&bindings, "default::limit").value() {
+        ConstantValueDecl::Inline { ty, value, .. } => {
+            assert_eq!(ty, &TypeRef::Primitive(Primitive::U32));
+            assert_eq!(value, &DefaultValue::Integer(IntegerValue::new(42)));
+        }
+        other => panic!("expected inline integer constant, got {other:?}"),
+    }
+
+    match constant(&bindings, "default::mode").value() {
+        ConstantValueDecl::Inline {
+            value:
+                DefaultValue::EnumVariant {
+                    enum_name,
+                    variant_name,
+                },
+            ..
+        } => {
+            assert_eq!(enum_name.as_path_string(), "mode");
+            assert_eq!(variant_name.as_path_string(), "very::fast");
+        }
+        other => panic!("expected inline enum constant, got {other:?}"),
+    }
 }
