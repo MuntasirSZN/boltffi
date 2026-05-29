@@ -83,6 +83,7 @@ impl<'a> DartLowerer<'a> {
             ffi_name: abi_call.symbol.to_string(),
             params: meth.params.iter().map(|p| self.lower_param(p)).collect(),
             ret_ty: DartType::from_return_def(&meth.returns),
+            receiver: meth.receiver,
         }
     }
 
