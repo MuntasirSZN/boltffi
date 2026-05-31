@@ -1,12 +1,9 @@
-use boltffi_ffi_rules::callable::ExecutionKind;
-
 use crate::{
     ir::{
         AbiParam, AbiType, BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, ErrorTransport,
-        ParamRole, PrimitiveType, ReadSeq, RecordId, ReturnDef, ReturnShape, SizeExpr, Transport,
-        TypeExpr, WriteSeq,
+        ParamRole, PrimitiveType, RecordId, ReturnDef, ReturnShape, Transport, TypeExpr,
     },
-    render::dart::NamingConvention,
+    render::dart::{NamingConvention, emit},
 };
 
 #[derive(Clone, Debug)]
@@ -71,7 +68,7 @@ impl DartNativeType {
         match self {
             DartNativeType::Void => "$$ffi.Void".to_string(),
             DartNativeType::Primitive(primitive) => {
-                super::emit::primitive_native_type(*primitive).to_string()
+                emit::primitive_native_type(*primitive).to_string()
             }
             DartNativeType::Function {
                 params,
@@ -103,7 +100,7 @@ impl DartNativeType {
     pub fn dart_sub_type(&self) -> String {
         match self {
             DartNativeType::Void => "void".to_string(),
-            DartNativeType::Primitive(primitive) => super::emit::primitive_dart_type(*primitive),
+            DartNativeType::Primitive(primitive) => emit::primitive_dart_type(*primitive),
             o @ (DartNativeType::Function { .. }
             | DartNativeType::Pointer(..)
             | DartNativeType::OwnedBuffer
@@ -174,79 +171,6 @@ impl DartNativeType {
             | DartNativeType::Custom(_) => String::new(),
             primitive @ DartNativeType::Primitive(_) => format!("@{}()", primitive.native_type()),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DartNativeFunctionParam {
-    pub name: String,
-    pub native_type: DartNativeType,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartNativeFunction {
-    pub symbol: String,
-    pub params: Vec<DartNativeFunctionParam>,
-    pub return_type: DartNativeType,
-    pub is_leaf: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartNative {
-    pub functions: Vec<DartNativeFunction>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartRecordField {
-    pub name: String,
-    pub offset: usize,
-    pub dart_type: String,
-    pub read_seq: ReadSeq,
-    pub write_seq: WriteSeq,
-}
-
-impl DartRecordField {
-    pub fn wire_decode_expr(&self, reader_name: &str) -> String {
-        super::emit_reader_read(&self.read_seq, reader_name)
-    }
-
-    pub fn wire_encode_expr(&self, writer_name: &str) -> String {
-        super::emit_writer_write(&self.write_seq, writer_name, &self.name)
-    }
-
-    pub fn wire_encoded_size_expr(&self) -> String {
-        super::emit_size_expr(&self.write_seq.size)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DartBlittableLayout {
-    pub struct_name: String,
-    pub struct_size: usize,
-    pub fields: Vec<DartBlittableField>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartBlittableField {
-    pub name: String,
-    pub primitive: PrimitiveType,
-    pub native_type: DartNativeType,
-    pub offset_const_name: String,
-    pub offset: usize,
-}
-
-impl DartBlittableField {
-    pub fn blittable_decode_expr(&self, bytes_name: &str) -> String {
-        super::emit_read_blittable_value(&self.offset_const_name, self.primitive, bytes_name)
-    }
-
-    pub fn blittable_encode_expr(&self, bytes_name: &str) -> String {
-        super::emit_write_blittable_value(
-            &self.offset_const_name,
-            self.primitive,
-            &self.name,
-            bytes_name,
-        )
     }
 }
 
@@ -352,177 +276,4 @@ impl DartType {
             DartType::Builtin(builtin_id) => builtin_id.to_string(),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct DartFunctionParam {
-    pub name: String,
-    pub ty: DartType,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartFunction {
-    pub name: String,
-    pub ffi_name: String,
-    pub params: Vec<DartFunctionParam>,
-    pub ret_ty: DartType,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartRecord {
-    pub name: String,
-    pub is_error: bool,
-    pub fields: Vec<DartRecordField>,
-    pub blittable_layout: Option<DartBlittableLayout>,
-    pub constructors: Vec<DartConstructor>,
-    pub methods: Vec<DartFunction>,
-}
-
-#[derive(Debug, Clone)]
-pub enum DartConstructorKind {
-    Default,
-    Named { name: String },
-}
-
-#[derive(Debug, Clone)]
-pub struct DartConstructor {
-    pub ffi_name: String,
-    pub kind: DartConstructorKind,
-    pub params: Vec<DartFunctionParam>,
-    pub is_fallible: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartCustomType {
-    pub name: String,
-    pub ty: DartType,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartLibrary {
-    pub custom_types: Vec<DartCustomType>,
-    pub native: DartNative,
-    pub records: Vec<DartRecord>,
-    pub enums: Vec<DartEnum>,
-    pub callbacks: Vec<DartCallback>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum DartEnumKind {
-    Enhanced,
-    SealedClass,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartEnumField {
-    pub name: String,
-    pub dart_type: DartType,
-    pub read_seq: ReadSeq,
-    pub write_seq: WriteSeq,
-}
-
-impl DartEnumField {
-    pub fn wire_decode_expr(&self, reader_name: &str) -> String {
-        super::emit_reader_read(&self.read_seq, reader_name)
-    }
-
-    pub fn wire_encode_expr(&self, writer_name: &str) -> String {
-        super::emit_writer_write(&self.write_seq, writer_name, &self.name)
-    }
-
-    pub fn wire_encoded_size_expr(&self) -> String {
-        super::emit_size_expr(&self.write_seq.size)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DartEnumVariant {
-    pub name: String,
-    pub class_name: String,
-    pub tag: i128,
-    pub fields: Vec<DartEnumField>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartEnum {
-    pub name: String,
-    pub kind: DartEnumKind,
-    pub tag_type: PrimitiveType,
-    pub variants: Vec<DartEnumVariant>,
-    pub size_expr: SizeExpr,
-    pub is_error: bool,
-    pub constructors: Vec<DartConstructor>,
-    pub methods: Vec<DartFunction>,
-}
-
-impl DartEnum {
-    pub fn tag_reader_read(&self, reader_name: &str) -> String {
-        format!(
-            "{reader_name}.{}()",
-            super::emit::primitive_read_method(self.tag_type)
-        )
-    }
-
-    pub fn tag_writer_write(&self, variant: &DartEnumVariant, writer_name: &str) -> String {
-        format!(
-            "{writer_name}.{}({});",
-            super::emit::primitive_write_method(self.tag_type),
-            variant.tag
-        )
-    }
-
-    pub fn tag_dart_type(&self) -> String {
-        super::emit::primitive_dart_type(self.tag_type)
-    }
-
-    pub fn wire_encoded_size_expr(&self) -> String {
-        super::emit_size_expr(&self.size_expr)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DartNativeCallbackMethod {
-    pub vtable_field_name: String,
-    pub params: Vec<DartNativeFunctionParam>,
-    pub return_type: DartNativeType,
-    pub kind: ExecutionKind,
-}
-
-impl DartNativeCallbackMethod {
-    pub fn is_async(&self) -> bool {
-        matches!(self.kind, ExecutionKind::Async)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DartNativeCallback {
-    pub native_decls_class_name: String,
-    pub create_handle_fn_name: String,
-    pub vtable_struct_name: String,
-    pub vtable_register_fn_name: String,
-    pub methods: Vec<DartNativeCallbackMethod>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartCallbackMethod {
-    pub name: String,
-    pub params: Vec<DartFunctionParam>,
-    pub ret_ty: DartType,
-    pub kind: ExecutionKind,
-}
-
-impl DartCallbackMethod {
-    pub fn is_async(&self) -> bool {
-        matches!(self.kind, ExecutionKind::Async)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DartCallback {
-    pub class_name: String,
-    pub impl_class_name: String,
-    pub handle_map_class_name: String,
-    pub handle_map_instance_name: String,
-    pub methods: Vec<DartCallbackMethod>,
-    pub native: DartNativeCallback,
 }

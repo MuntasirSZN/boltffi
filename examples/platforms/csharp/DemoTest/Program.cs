@@ -1789,6 +1789,24 @@ public static class DemoTest
             Require(!inv.Add("third"), "Add past capacity returns false");
         }
 
+        DemoCase("case:classes.constructors.inventory.try_new.should_return_inventory_for_positive_capacity");
+        using (var inv = Inventory.TryNew(1))
+        {
+            Require(inv.Capacity() == 1u, "Inventory.TryNew(1).Capacity()");
+            Require(inv.Count() == 0u, "Inventory.TryNew(1).Count() starts at 0");
+        }
+
+        DemoCase("case:classes.constructors.inventory.try_new.should_reject_zero_capacity");
+        try
+        {
+            using var unexpected = Inventory.TryNew(0);
+            Require(false, "Inventory.TryNew(0) should throw");
+        }
+        catch (BoltException e)
+        {
+            Require(e.Message.Contains("capacity must be greater than zero"), "Inventory.TryNew(0) error message");
+        }
+
         // Counter exercises every method-return shape that lands in
         // this PR: primitive direct, void mutator, Option<primitive>
         // through FfiBuf, and a blittable record return.
@@ -2183,6 +2201,11 @@ public static class DemoTest
             Require(e.Message.Contains("boom"), "AlwaysErr error message");
         }
 
+        DemoCase("case:results.basic.result_to_string.should_render_ok");
+        Require(ResultToString(BoltFFIResult<int, string>.Ok(7)) == "ok: 7", "ResultToString Ok");
+        DemoCase("case:results.basic.result_to_string.should_render_err");
+        Require(ResultToString(BoltFFIResult<int, string>.Err("bad")) == "err: bad", "ResultToString Err");
+
         // Result<Point, String> with Ok carrying a record.
         DemoCase("case:results.basic.parse_point.should_parse_coordinates");
         Point p = ParsePoint("3.0,4.0");
@@ -2397,6 +2420,33 @@ public static class DemoTest
         {
             Require(e.Error is ComputeError.Overflow, "TryCompute(-1) Overflow variant");
         }
+
+        DataPoint benchmarkPoint = new DataPoint(1.0, 2.0, 123L);
+        DemoCase("case:results.error_enums.benchmark_response.should_make_success_response");
+        BenchmarkResponse successResponse = CreateSuccessResponse(42L, benchmarkPoint);
+        Require(successResponse.RequestId == 42L, "BenchmarkResponse success RequestId");
+        Require(successResponse.Result.IsOk, "BenchmarkResponse success Result is Ok");
+        Require(successResponse.Result.OkValue == benchmarkPoint, "BenchmarkResponse success DataPoint");
+
+        ComputeError.Overflow benchmarkError = new ComputeError.Overflow(-5, 0);
+        DemoCase("case:results.error_enums.benchmark_response.should_make_error_response");
+        BenchmarkResponse errorResponse = CreateErrorResponse(43L, benchmarkError);
+        Require(errorResponse.RequestId == 43L, "BenchmarkResponse error RequestId");
+        Require(!errorResponse.Result.IsOk, "BenchmarkResponse error Result is Err");
+        Require(errorResponse.Result.ErrValue == benchmarkError, "BenchmarkResponse error payload");
+
+        DemoCase("case:results.error_enums.benchmark_response.should_report_success_response");
+        Require(IsResponseSuccess(successResponse), "IsResponseSuccess should report Ok");
+        DemoCase("case:results.error_enums.benchmark_response.should_report_error_response");
+        Require(!IsResponseSuccess(errorResponse), "IsResponseSuccess should report Err");
+
+        DemoCase("case:results.error_enums.benchmark_response.should_return_value_for_success_response");
+        DataPoint? responseValue = GetResponseValue(successResponse);
+        Require(responseValue.HasValue && responseValue.Value == benchmarkPoint,
+            "GetResponseValue should return success payload");
+
+        DemoCase("case:results.error_enums.benchmark_response.should_return_none_for_error_response");
+        Require(GetResponseValue(errorResponse) == null, "GetResponseValue should return null for Err payload");
 
         Console.WriteLine("  PASS\n");
     }

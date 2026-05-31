@@ -35,6 +35,7 @@ pub(crate) fn pack_csharp(
         config,
         options.execution.release,
         &options.execution.cargo_args,
+        options.execution.no_build,
     )?;
     step.finish_success();
 
@@ -105,7 +106,7 @@ struct CSharpPackagingTarget {
     runtime_identifier: CSharpRuntimeIdentifier,
     host_target: NativeHostPlatform,
     cargo_context: CSharpCargoContext,
-    toolchain: NativeHostToolchain,
+    toolchain: Option<NativeHostToolchain>,
 }
 
 #[derive(Debug)]
@@ -128,7 +129,12 @@ impl CSharpCargoContext {
 }
 
 impl CSharpPackagingPlan {
-    fn from_config(config: &Config, release: bool, cargo_args: &[String]) -> Result<Self> {
+    fn from_config(
+        config: &Config,
+        release: bool,
+        cargo_args: &[String],
+        no_build: bool,
+    ) -> Result<Self> {
         let build_cargo_args = resolve_build_cargo_args(config, cargo_args);
         let cargo = Cargo::current(&build_cargo_args)?;
         ensure_csharp_pack_cargo_args_supported(&cargo)?;
@@ -176,20 +182,34 @@ impl CSharpPackagingPlan {
         let build_profile = resolve_build_profile(release, &build_cargo_args);
         let toolchain_selector = cargo.toolchain_selector().map(str::to_owned);
         let cargo_command_args = cargo.probe_command_arguments();
+        let no_build_config_args = csharp_no_build_config_args(&cargo);
 
         let packaging_targets = runtime_identifiers
             .iter()
             .copied()
             .map(|runtime_identifier| {
                 let host_target = runtime_identifier.native_host_platform();
-                let toolchain = NativeHostToolchain::discover_csharp(
-                    toolchain_selector.as_deref(),
-                    &cargo_command_args,
-                    host_target,
-                    current_host,
-                )?;
+                let (rust_target_triple, toolchain) = if no_build {
+                    (
+                        NativeHostToolchain::resolve_csharp_no_build_rust_target_triple(
+                            toolchain_selector.as_deref(),
+                            &no_build_config_args,
+                            host_target,
+                            current_host,
+                        )?,
+                        None,
+                    )
+                } else {
+                    let toolchain = NativeHostToolchain::discover_csharp(
+                        toolchain_selector.as_deref(),
+                        &cargo_command_args,
+                        host_target,
+                        current_host,
+                    )?;
+                    (toolchain.rust_target_triple().to_string(), Some(toolchain))
+                };
                 let cargo_context = CSharpCargoContext {
-                    rust_target_triple: toolchain.rust_target_triple().to_string(),
+                    rust_target_triple,
                     release,
                     build_profile: build_profile.clone(),
                     artifact_name: artifact_name.clone(),
@@ -228,6 +248,10 @@ impl CSharpPackagingPlan {
             packaging_targets,
         })
     }
+}
+
+fn csharp_no_build_config_args(cargo: &Cargo) -> Vec<String> {
+    cargo.command_arguments_without_target_selector()
 }
 
 fn ensure_csharp_pack_cargo_args_supported(cargo: &Cargo) -> Result<()> {
@@ -282,6 +306,12 @@ fn build_csharp_native_library(
     command.args(&cargo_context.cargo_command_args);
     packaging_target
         .toolchain
+        .as_ref()
+        .ok_or_else(|| CliError::CommandFailed {
+            command: "internal error: C# build requested without a discovered native toolchain"
+                .to_string(),
+            status: None,
+        })?
         .configure_cargo_build(&mut command);
 
     if step.is_verbose() {
@@ -412,45 +442,208 @@ fn sync_csharp_project(config: &Config, plan: &CSharpPackagingPlan) -> Result<()
 #[template(path = "BoltFFI.CSharp.csproj.xml", escape = "html")]
 struct CSharpProjectTemplate<'a> {
     target_framework: &'a str,
-    runtime_identifiers: &'a str,
+    runtime_identifiers: &'a [CSharpRuntimeIdentifier],
     package_id: &'a str,
     package_version: &'a str,
-    has_description: bool,
-    description: &'a str,
-    has_license: bool,
-    license: &'a str,
-    has_repository: bool,
-    repository: &'a str,
+    nuget: &'a CSharpNugetProjectMetadata,
+}
+
+#[derive(Default)]
+struct CSharpNugetProjectMetadata {
+    title: Option<String>,
+    authors: Option<Vec<String>>,
+    owners: Option<Vec<String>>,
+    description: Option<String>,
+    package_project_url: Option<String>,
+    repository_url: Option<String>,
+    repository_type: Option<String>,
+    package_license_expression: Option<String>,
+    package_icon: Option<CSharpPackageFile>,
+    package_readme_file: Option<CSharpPackageFile>,
+    package_tags: Option<Vec<String>>,
+    package_release_notes: Option<String>,
+    package_require_license_acceptance: Option<bool>,
+}
+
+struct CSharpPackageFile {
+    include_path: PathBuf,
+    package_path: PathBuf,
+}
+
+impl CSharpNugetProjectMetadata {
+    fn from_config(config: &Config, plan: &CSharpPackagingPlan) -> Result<Self> {
+        let nuget = &config.targets.csharp.nuget;
+
+        Ok(Self {
+            title: nuget.title.clone(),
+            authors: nuget.authors.clone(),
+            owners: nuget.owners.clone(),
+            description: config.package.description.clone(),
+            package_project_url: nuget.project_url.clone(),
+            repository_url: nuget
+                .repository_url
+                .clone()
+                .or_else(|| config.package_repository()),
+            repository_type: nuget.repository_type.clone(),
+            package_license_expression: nuget
+                .license_expression
+                .clone()
+                .or_else(|| config.package_license()),
+            package_icon: nuget
+                .icon
+                .as_deref()
+                .map(|path| CSharpPackageFile::from_config_path(&plan.layout.root_directory, path))
+                .transpose()?,
+            package_readme_file: nuget
+                .readme
+                .as_deref()
+                .map(|path| CSharpPackageFile::from_config_path(&plan.layout.root_directory, path))
+                .transpose()?,
+            package_tags: nuget.tags.clone(),
+            package_release_notes: nuget.release_notes.clone(),
+            package_require_license_acceptance: nuget.require_license_acceptance,
+        })
+    }
+
+    fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    fn authors(&self) -> Option<&[String]> {
+        self.authors.as_deref()
+    }
+
+    fn owners(&self) -> Option<&[String]> {
+        self.owners.as_deref()
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    fn package_project_url(&self) -> Option<&str> {
+        self.package_project_url.as_deref()
+    }
+
+    fn repository_url(&self) -> Option<&str> {
+        self.repository_url.as_deref()
+    }
+
+    fn repository_type(&self) -> Option<&str> {
+        self.repository_type.as_deref()
+    }
+
+    fn package_license_expression(&self) -> Option<&str> {
+        self.package_license_expression.as_deref()
+    }
+
+    fn package_icon(&self) -> Option<&CSharpPackageFile> {
+        self.package_icon.as_ref()
+    }
+
+    fn package_readme_file(&self) -> Option<&CSharpPackageFile> {
+        self.package_readme_file.as_ref()
+    }
+
+    fn package_tags(&self) -> Option<&[String]> {
+        self.package_tags.as_deref()
+    }
+
+    fn package_release_notes(&self) -> Option<&str> {
+        self.package_release_notes.as_deref()
+    }
+
+    fn package_require_license_acceptance(&self) -> Option<bool> {
+        self.package_require_license_acceptance
+    }
+}
+
+impl CSharpPackageFile {
+    fn from_config_path(project_root: &Path, configured_path: &Path) -> Result<Self> {
+        Ok(Self {
+            include_path: project_relative_config_path(project_root, configured_path)?,
+            package_path: package_file_name(configured_path)?,
+        })
+    }
+
+    fn include_path(&self) -> std::path::Display<'_> {
+        self.include_path.display()
+    }
+
+    fn package_path(&self) -> std::path::Display<'_> {
+        self.package_path.display()
+    }
 }
 
 fn render_csharp_project(config: &Config, plan: &CSharpPackagingPlan) -> Result<String> {
     let runtime_identifiers = plan
         .packaging_targets
         .iter()
-        .map(|target| target.runtime_identifier.canonical_name())
-        .collect::<Vec<_>>()
-        .join(";");
-    let description = config.package.description.as_deref().unwrap_or_default();
-    let license = config.package_license();
-    let repository = config.package_repository();
+        .map(|target| target.runtime_identifier)
+        .collect::<Vec<_>>();
+    let nuget = CSharpNugetProjectMetadata::from_config(config, plan)?;
 
     CSharpProjectTemplate {
         target_framework: &plan.target_framework,
         runtime_identifiers: &runtime_identifiers,
         package_id: &plan.package_id,
         package_version: &plan.package_version,
-        has_description: config.package.description.is_some(),
-        description,
-        has_license: license.is_some(),
-        license: license.as_deref().unwrap_or_default(),
-        has_repository: repository.is_some(),
-        repository: repository.as_deref().unwrap_or_default(),
+        nuget: &nuget,
     }
     .render()
     .map_err(|source| CliError::CommandFailed {
         command: format!("render C# project template: {source}"),
         status: None,
     })
+}
+
+fn package_file_name(path: &Path) -> Result<PathBuf> {
+    path.file_name()
+        .map(PathBuf::from)
+        .ok_or_else(|| CliError::CommandFailed {
+            command: "C# NuGet package files must include a file name".to_string(),
+            status: None,
+        })
+}
+
+fn project_relative_config_path(project_root: &Path, configured_path: &Path) -> Result<PathBuf> {
+    let current_dir = std::env::current_dir().map_err(|source| CliError::CommandFailed {
+        command: format!("current_dir: {source}"),
+        status: None,
+    })?;
+    let from_dir = absolute_from_current_dir(&current_dir, project_root);
+    let to_path = absolute_from_current_dir(&current_dir, configured_path);
+
+    Ok(relative_path(&from_dir, &to_path))
+}
+
+fn absolute_from_current_dir(current_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_dir.join(path)
+    }
+}
+
+fn relative_path(from_dir: &Path, to_path: &Path) -> PathBuf {
+    if from_dir == Path::new(".") || from_dir == Path::new("") {
+        return to_path.to_path_buf();
+    }
+
+    let from_components = from_dir.components().collect::<Vec<_>>();
+    let to_components = to_path.components().collect::<Vec<_>>();
+
+    let common_len = from_components
+        .iter()
+        .zip(to_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let parent_count = from_components.len().saturating_sub(common_len);
+    let parent_prefix = (0..parent_count).map(|_| std::path::Component::ParentDir);
+    let suffix = to_components.iter().skip(common_len).copied();
+
+    parent_prefix.chain(suffix).collect()
 }
 
 fn dotnet_pack(plan: &CSharpPackagingPlan, step: &Step) -> Result<PathBuf> {
@@ -507,13 +700,73 @@ fn dotnet_pack(plan: &CSharpPackagingPlan, step: &Step) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CSharpPackageLayout, CSharpPackagingPlan, pack_csharp, render_csharp_project};
+    use super::{
+        CSharpPackageLayout, CSharpPackagingPlan, csharp_no_build_config_args, pack_csharp,
+        render_csharp_project,
+    };
+    use crate::cargo::{Cargo, CargoCrateType};
     use crate::cli::CliError;
     use crate::commands::pack::{PackCSharpOptions, PackExecutionOptions};
-    use crate::config::{CSharpConfig, CargoConfig, Config, PackageConfig, TargetsConfig};
+    use crate::config::{
+        CSharpConfig, CSharpNugetConfig, CargoConfig, Config, PackageConfig, TargetsConfig,
+    };
     use crate::reporter::{Reporter, Verbosity};
-    use crate::target::CSharpRuntimeIdentifier;
-    use std::path::PathBuf;
+    use crate::target::{CSharpRuntimeIdentifier, NativeHostPlatform};
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct CargoManifestBuilder {
+        package_name: String,
+        package_version: String,
+        edition: String,
+        crate_types: Vec<CargoCrateType>,
+    }
+
+    impl CargoManifestBuilder {
+        fn cdylib_package(package_name: impl Into<String>) -> Self {
+            Self {
+                package_name: package_name.into(),
+                package_version: "0.1.0".to_string(),
+                edition: "2021".to_string(),
+                crate_types: vec![CargoCrateType::Cdylib],
+            }
+        }
+
+        fn render(&self) -> String {
+            let mut manifest = toml::Table::new();
+
+            let mut package = toml::Table::new();
+            package.insert(
+                "name".to_string(),
+                toml::Value::String(self.package_name.clone()),
+            );
+            package.insert(
+                "version".to_string(),
+                toml::Value::String(self.package_version.clone()),
+            );
+            package.insert(
+                "edition".to_string(),
+                toml::Value::String(self.edition.clone()),
+            );
+            manifest.insert("package".to_string(), toml::Value::Table(package));
+
+            let mut lib = toml::Table::new();
+            lib.insert(
+                "crate-type".to_string(),
+                toml::Value::Array(
+                    self.crate_types
+                        .iter()
+                        .cloned()
+                        .map(String::from)
+                        .map(toml::Value::String)
+                        .collect(),
+                ),
+            );
+            manifest.insert("lib".to_string(), toml::Value::Table(lib));
+
+            toml::to_string(&toml::Value::Table(manifest)).expect("temp Cargo manifest TOML")
+        }
+    }
 
     fn config() -> Config {
         Config {
@@ -552,6 +805,106 @@ mod tests {
         }
     }
 
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique}"))
+    }
+
+    fn temp_cdylib_project() -> PathBuf {
+        let root = unique_temp_dir("boltffi-csharp-plan-test");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create temp cdylib source dir");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            CargoManifestBuilder::cdylib_package("demo").render(),
+        )
+        .expect("write temp cdylib manifest");
+        std::fs::write(src.join("lib.rs"), "pub extern \"C\" fn demo_noop() {}\n")
+            .expect("write temp cdylib lib");
+        root
+    }
+
+    fn cargo_args_for_manifest(manifest_path: &Path) -> Vec<String> {
+        vec![
+            "--manifest-path".to_string(),
+            manifest_path.display().to_string(),
+        ]
+    }
+
+    fn csharp_packaging_plan(root_directory: PathBuf) -> CSharpPackagingPlan {
+        CSharpPackagingPlan {
+            package_id: "Demo.Runtime".to_string(),
+            package_version: "1.2.3".to_string(),
+            target_framework: "net10.0".to_string(),
+            artifact_name: "demo".to_string(),
+            source_directory: PathBuf::from("/tmp/demo"),
+            layout: CSharpPackageLayout {
+                source_directory: root_directory.join("src"),
+                package_output: root_directory.join("packages"),
+                project_path: root_directory.join("BoltFFI.CSharp.csproj"),
+                root_directory,
+            },
+            packaging_targets: Vec::new(),
+        }
+    }
+
+    fn unsupported_csharp_runtime_identifier() -> CSharpRuntimeIdentifier {
+        match NativeHostPlatform::current().expect("supported host for C# packaging tests") {
+            NativeHostPlatform::WindowsX86_64 => CSharpRuntimeIdentifier::OsxArm64,
+            _ => CSharpRuntimeIdentifier::WinX64,
+        }
+    }
+
+    fn expected_no_build_rust_target_triple(
+        runtime_identifier: CSharpRuntimeIdentifier,
+    ) -> &'static str {
+        match runtime_identifier {
+            CSharpRuntimeIdentifier::Current => {
+                unreachable!("resolved runtime identifier required")
+            }
+            CSharpRuntimeIdentifier::OsxArm64 => "aarch64-apple-darwin",
+            CSharpRuntimeIdentifier::OsxX64 => "x86_64-apple-darwin",
+            CSharpRuntimeIdentifier::LinuxX64 => "x86_64-unknown-linux-gnu",
+            CSharpRuntimeIdentifier::LinuxArm64 => "aarch64-unknown-linux-gnu",
+            CSharpRuntimeIdentifier::WinX64 => "x86_64-pc-windows-msvc",
+        }
+    }
+
+    #[test]
+    fn csharp_no_build_config_args_preserve_manifest_path_when_probe_args_strip_it() {
+        let cargo_args = vec![
+            "--manifest-path".to_string(),
+            "/tmp/demo/Cargo.toml".to_string(),
+            "--target".to_string(),
+            "x86_64-unknown-linux-gnu".to_string(),
+            "--config=build.target='x86_64-pc-windows-gnu'".to_string(),
+        ];
+        let cargo = Cargo::in_working_directory(PathBuf::from("/workspace"), &cargo_args);
+
+        let config_args = csharp_no_build_config_args(&cargo);
+        let probe_args = cargo.probe_command_arguments();
+
+        assert!(
+            config_args
+                .windows(2)
+                .any(|args| { args[0] == "--manifest-path" && args[1] == "/tmp/demo/Cargo.toml" })
+        );
+        assert!(
+            config_args
+                .iter()
+                .all(|arg| arg != "--target" && !arg.starts_with("--target="))
+        );
+        assert!(config_args.contains(&"--config=build.target='x86_64-pc-windows-gnu'".to_string()));
+        assert!(
+            probe_args
+                .iter()
+                .all(|arg| arg != "--manifest-path" && !arg.starts_with("--manifest-path="))
+        );
+    }
+
     #[test]
     fn csharp_runtime_identifier_maps_native_assets() {
         assert_eq!(
@@ -570,20 +923,7 @@ mod tests {
 
     #[test]
     fn csharp_project_includes_packable_native_assets() {
-        let plan = CSharpPackagingPlan {
-            package_id: "Demo.Runtime".to_string(),
-            package_version: "1.2.3".to_string(),
-            target_framework: "net10.0".to_string(),
-            artifact_name: "demo".to_string(),
-            source_directory: PathBuf::from("/tmp/demo"),
-            layout: CSharpPackageLayout {
-                root_directory: PathBuf::from("/tmp/dist/csharp"),
-                source_directory: PathBuf::from("/tmp/dist/csharp/src"),
-                package_output: PathBuf::from("/tmp/dist/csharp/packages"),
-                project_path: PathBuf::from("/tmp/dist/csharp/BoltFFI.CSharp.csproj"),
-            },
-            packaging_targets: Vec::new(),
-        };
+        let plan = csharp_packaging_plan(PathBuf::from("/tmp/dist/csharp"));
 
         let project = render_csharp_project(&config(), &plan).expect("C# project should render");
 
@@ -599,7 +939,75 @@ mod tests {
             )
         );
         assert!(project.contains("<Description>Demo &#60;runtime&#62;</Description>"));
+        assert!(project.contains("<PackageLicenseExpression>MIT</PackageLicenseExpression>"));
         assert!(project.contains("<RepositoryUrl>https://example.com/demo</RepositoryUrl>"));
+    }
+
+    #[test]
+    fn csharp_project_renders_configured_nuget_metadata() {
+        let mut config = config();
+        config.package.license = Some("Apache-2.0".to_string());
+        config.package.repository = Some("https://example.com/default".to_string());
+        config.targets.csharp.nuget = CSharpNugetConfig {
+            title: Some("Company MyLib".to_string()),
+            authors: Some(vec!["Company Name".to_string(), "Runtime Team".to_string()]),
+            owners: Some(vec!["Company Name".to_string()]),
+            project_url: Some("https://company.example/my-lib".to_string()),
+            repository_url: Some("https://github.com/company/my-lib".to_string()),
+            repository_type: Some("git".to_string()),
+            license_expression: Some("MIT".to_string()),
+            icon: Some(PathBuf::from("assets/icon.png")),
+            readme: Some(PathBuf::from("docs/README.md")),
+            tags: Some(vec![
+                "ffi".to_string(),
+                "rust".to_string(),
+                "native".to_string(),
+            ]),
+            release_notes: Some("Initial C# bindings package.".to_string()),
+            require_license_acceptance: Some(false),
+        };
+        let plan = csharp_packaging_plan(PathBuf::from("dist/csharp"));
+
+        let project = render_csharp_project(&config, &plan).expect("C# project should render");
+
+        assert!(project.contains("<Title>Company MyLib</Title>"));
+        assert!(project.contains("<Authors>Company Name;Runtime Team</Authors>"));
+        assert!(project.contains("<Owners>Company Name</Owners>"));
+        assert!(project.contains("<Description>Demo &#60;runtime&#62;</Description>"));
+        assert!(
+            project
+                .contains("<PackageProjectUrl>https://company.example/my-lib</PackageProjectUrl>")
+        );
+        assert!(
+            project.contains("<RepositoryUrl>https://github.com/company/my-lib</RepositoryUrl>")
+        );
+        assert!(project.contains("<RepositoryType>git</RepositoryType>"));
+        assert!(project.contains("<PackageLicenseExpression>MIT</PackageLicenseExpression>"));
+        assert!(project.contains("<PackageIcon>icon.png</PackageIcon>"));
+        assert!(project.contains("<PackageReadmeFile>README.md</PackageReadmeFile>"));
+        assert!(project.contains("<PackageTags>ffi;rust;native</PackageTags>"));
+        assert!(
+            project.contains(
+                "<PackageReleaseNotes>Initial C# bindings package.</PackageReleaseNotes>"
+            )
+        );
+        assert!(
+            project.contains(
+                "<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>"
+            )
+        );
+        assert!(
+            project
+                .contains(r#"<None Include="../../assets/icon.png" Pack="true" PackagePath="" />"#)
+        );
+        assert!(
+            project
+                .contains(r#"<None Include="../../docs/README.md" Pack="true" PackagePath="" />"#)
+        );
+        assert!(!project.contains("https://example.com/default"));
+        assert!(
+            !project.contains("<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>")
+        );
     }
 
     #[test]
@@ -615,5 +1023,61 @@ mod tests {
             CliError::CommandFailed { command, .. }
                 if command.contains("targets.csharp.enabled = false")
         ));
+    }
+
+    #[test]
+    fn csharp_no_build_plan_allows_cross_host_runtime_identifiers() {
+        let project = temp_cdylib_project();
+        let manifest_path = project.join("Cargo.toml");
+        let mut config = config();
+        let runtime_identifier = unsupported_csharp_runtime_identifier();
+        config.targets.csharp.runtime_identifiers = Some(vec![runtime_identifier]);
+
+        let plan = CSharpPackagingPlan::from_config(
+            &config,
+            false,
+            &cargo_args_for_manifest(&manifest_path),
+            true,
+        )
+        .expect("no-build C# packaging should not validate cross-host build toolchains");
+
+        let packaging_target = plan
+            .packaging_targets
+            .first()
+            .expect("expected one C# packaging target");
+        assert_eq!(plan.packaging_targets.len(), 1);
+        assert_eq!(packaging_target.runtime_identifier, runtime_identifier);
+        assert!(packaging_target.toolchain.is_none());
+        assert_eq!(
+            packaging_target.cargo_context.rust_target_triple,
+            expected_no_build_rust_target_triple(runtime_identifier)
+        );
+
+        std::fs::remove_dir_all(project).expect("cleanup temp cdylib project");
+    }
+
+    #[test]
+    fn csharp_build_plan_rejects_unsupported_cross_host_runtime_identifiers() {
+        let project = temp_cdylib_project();
+        let manifest_path = project.join("Cargo.toml");
+        let mut config = config();
+        config.targets.csharp.runtime_identifiers =
+            Some(vec![unsupported_csharp_runtime_identifier()]);
+
+        let error = CSharpPackagingPlan::from_config(
+            &config,
+            false,
+            &cargo_args_for_manifest(&manifest_path),
+            false,
+        )
+        .expect_err("building C# packaging should still reject unsupported cross-host targets");
+
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { command, .. }
+                if command.contains("is not supported from current host")
+        ));
+
+        std::fs::remove_dir_all(project).expect("cleanup temp cdylib project");
     }
 }

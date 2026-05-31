@@ -388,6 +388,9 @@ Controls npm package generation in `boltffi pack wasm`.
   - Default: `dist/csharp`
   - `boltffi generate csharp` writes `.cs` files directly here.
   - `boltffi pack csharp` writes generated sources under `{output}/src`, native assets under `{output}/runtimes/<rid>/native`, and a generated project file at `{output}/BoltFFI.CSharp.csproj`.
+- `namespace` (string, optional): C# namespace for generated sources.
+  - Default: PascalCase of `{package.crate}` (or `{package.name}` when `package.crate` is unset).
+  - Must be dot-separated C# identifiers, for example `CounterApp.Shared`.
 - `package_id` (string, optional): NuGet package ID.
   - Default: `{package.name}`
 - `target_framework` (string, optional): Target framework for the generated NuGet package project.
@@ -399,8 +402,33 @@ Controls npm package generation in `boltffi pack wasm`.
   - Supported aliases: `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, `windows-x86_64`
   - Default: `["current"]`
   - Behavior: `current` resolves to the active host RID, repeated values are deduped after resolution, and native libraries are packaged under NuGet `runtimes/{rid}/native/`.
+  - `--no-build`: skips cross-host build toolchain validation and reuses existing artifacts from `target/{rust-target-triple}/{profile}/`.
+  - For `win-x64` with `--no-build`, `{rust-target-triple}` defaults to `x86_64-pc-windows-msvc`; configure Cargo `build.target` to use another compatible Windows Rust target.
 
-`boltffi pack csharp` rejects explicit Cargo `--target` passthrough args because the native asset matrix is controlled by `targets.csharp.runtime_identifiers`. Current-host packaging works on `osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`, and `win-x64`. Cross-host support follows the shared desktop toolchain support used by JVM packaging; unsupported host/target pairs fail during preflight.
+### `[targets.csharp.nuget]` (optional)
+
+Controls NuGet metadata rendered into the generated `BoltFFI.CSharp.csproj` during `boltffi pack csharp`.
+
+- `title` (string, optional): NuGet `Title`.
+- `authors` (array of strings, optional): NuGet `Authors`, rendered as a semicolon-separated MSBuild value.
+- `owners` (array of strings, optional): MSBuild `Owners`, rendered as a semicolon-separated value.
+- `project_url` (string, optional): NuGet `PackageProjectUrl`.
+- `repository_url` (string, optional): NuGet `RepositoryUrl`.
+  - Default: `{package.repository}` or from `Cargo.toml`.
+- `repository_type` (string, optional): NuGet `RepositoryType`, for example `git`.
+- `license_expression` (string, optional): NuGet `PackageLicenseExpression`.
+  - Default: `{package.license}` or from `Cargo.toml`.
+- `icon` (path, optional): Source path to a package icon file.
+  - Renders `PackageIcon` using the file name and includes the file at the NuGet package root.
+- `readme` (path, optional): Source path to a package readme file.
+  - Renders `PackageReadmeFile` using the file name and includes the file at the NuGet package root.
+- `tags` (array of strings, optional): NuGet `PackageTags`, rendered as a semicolon-separated MSBuild value.
+- `release_notes` (string, optional): NuGet `PackageReleaseNotes`.
+- `require_license_acceptance` (bool, optional): NuGet `PackageRequireLicenseAcceptance`.
+
+`[package].description` continues to render as NuGet `Description` when set, and `targets.csharp.package_id` continues to render as NuGet `PackageId`.
+
+`boltffi pack csharp` rejects explicit Cargo `--target` passthrough args because the native asset matrix is controlled by `targets.csharp.runtime_identifiers`. Current-host packaging works on `osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`, and `win-x64`. When building native libraries, cross-host support follows the shared desktop toolchain support used by JVM packaging and unsupported host/target pairs fail during preflight.
 
 ## Apple SwiftPM layouts
 
