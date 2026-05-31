@@ -6,7 +6,6 @@ use crate::ScanError;
 pub enum UnsupportedFeature {
     TupleStruct,
     UnitStruct,
-    PayloadEnumVariantConstant,
     NonLiteralEnumDiscriminant,
     UnsafeFunctionPointer,
     ExternFunctionPointer,
@@ -25,7 +24,6 @@ impl UnsupportedFeature {
     pub const ALL: &'static [Self] = &[
         Self::TupleStruct,
         Self::UnitStruct,
-        Self::PayloadEnumVariantConstant,
         Self::NonLiteralEnumDiscriminant,
         Self::UnsafeFunctionPointer,
         Self::ExternFunctionPointer,
@@ -44,11 +42,6 @@ impl UnsupportedFeature {
                 error: "unit_struct",
                 example: "#[data] pub struct Marker;",
                 message: "unit structs are not represented by the record AST",
-            },
-            Self::PayloadEnumVariantConstant => UnsupportedInfo {
-                error: "payload_enum_variant_constant",
-                example: "#[export] pub const DEFAULT: Shape = Shape::Circle { radius: 1.0 };",
-                message: "enum constants must name a unit variant path",
             },
             Self::NonLiteralEnumDiscriminant => UnsupportedInfo {
                 error: "non_literal_enum_discriminant",
@@ -157,11 +150,11 @@ mod tests {
             }
         );
         assert_eq!(
-            UnsupportedFeature::PayloadEnumVariantConstant.info(),
+            UnsupportedFeature::NonLiteralEnumDiscriminant.info(),
             UnsupportedInfo {
-                error: "payload_enum_variant_constant",
-                example: "#[export] pub const DEFAULT: Shape = Shape::Circle { radius: 1.0 };",
-                message: "enum constants must name a unit variant path",
+                error: "non_literal_enum_discriminant",
+                example: "#[data] pub enum Status { Ok = BASE + 1 }",
+                message: "enum discriminants must be integer literals",
             }
         );
     }

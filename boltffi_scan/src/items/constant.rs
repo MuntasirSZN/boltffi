@@ -1,4 +1,4 @@
-use boltffi_ast::{ConstExpr, ConstantDef, ConstantId, TypeExpr};
+use boltffi_ast::{ConstantDef, ConstantId, TypeExpr};
 use syn::spanned::Spanned;
 
 use crate::attributes::Attributes;
@@ -6,7 +6,6 @@ use crate::const_expr;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::type_expr;
-use crate::unsupported::UnsupportedFeature;
 use crate::{ModuleScope, ScanError, attributes, name};
 
 pub fn scan(
@@ -28,7 +27,6 @@ fn build(
     let types = type_expr::Scanner::new(declared_types, scope);
     let type_expr = constant_type(&types, &item.ty)?;
     let value = const_expr::Scanner::new(&types).scan(&item.expr);
-    validate_value(&type_expr, &value)?;
     let mut constant = ConstantDef::new(
         ConstantId::new(scope.path().qualified(&ident.to_string())),
         name::canonical(ident),
@@ -42,15 +40,6 @@ fn build(
     constant.deprecated = attrs.deprecated()?;
     constant.user_attrs = attrs.user_attrs();
     Ok(constant)
-}
-
-fn validate_value(type_expr: &TypeExpr, value: &ConstExpr) -> Result<(), ScanError> {
-    if matches!(type_expr, TypeExpr::Enum(_)) && !matches!(value, ConstExpr::Path(_)) {
-        return Err(crate::unsupported::feature(
-            UnsupportedFeature::PayloadEnumVariantConstant,
-        ));
-    }
-    Ok(())
 }
 
 fn constant_type(types: &type_expr::Scanner<'_>, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
@@ -217,19 +206,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_payload_enum_variant_constants_before_raw_fallback() {
+    fn scans_accessor_backed_enum_constant_expressions() {
         let mut declared_types = DeclaredTypes::new();
         declared_types.register_enum(EnumId::new("demo::Shape"));
-        let error = super::build(
-            &parse("pub const DEFAULT: Shape = Shape::Circle { radius: 1.0 };"),
+        let accessor = super::build(
+            &parse("pub const DEFAULT: Shape = make_default_shape();"),
             &ModuleScope::root("demo"),
             &declared_types,
         )
-        .expect_err("payload enum constant rejects");
+        .expect("scan accessor-backed enum constant");
 
         assert_eq!(
-            error,
-            crate::unsupported::feature(UnsupportedFeature::PayloadEnumVariantConstant)
+            accessor.type_expr,
+            TypeExpr::Enum(EnumId::new("demo::Shape"))
+        );
+        assert_eq!(
+            accessor.value,
+            ConstExpr::Raw("make_default_shape ()".to_owned())
+        );
+
+        let payload_literal = super::build(
+            &parse("pub const CIRCLE: Shape = Shape::Circle { radius: 1.0 };"),
+            &ModuleScope::root("demo"),
+            &declared_types,
+        )
+        .expect("scan payload enum constant as accessor-backed raw");
+
+        assert_eq!(
+            payload_literal.value,
+            ConstExpr::Raw("Shape :: Circle { radius : 1.0 }".to_owned())
         );
     }
 
