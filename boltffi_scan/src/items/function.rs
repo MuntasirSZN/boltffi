@@ -1,9 +1,11 @@
 use boltffi_ast::{FunctionDef, FunctionId, ParameterDef};
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::type_expr::Scanner;
-use crate::{ModuleScope, ScanError, name, visibility};
+use crate::{ModuleScope, ScanError, attributes, name};
 
 use super::signature;
 
@@ -26,10 +28,15 @@ fn build(
         name::canonical(ident),
     );
     let scanner = Scanner::new(declared_types, scope);
-    function.source = visibility::scan(&item.vis);
+    let attrs = Attributes::new(&item.attrs, &scanner);
+    function.source = attributes::source(&item.vis, scope, item.span());
+    function.source_span = function.source.span.clone();
     function.execution = signature::execution(&item.sig);
     function.parameters = parameters(&item.sig, &scanner)?;
     function.returns = scanner.scan_return(&item.sig.output)?;
+    function.doc = attrs.doc();
+    function.deprecated = attrs.deprecated()?;
+    function.user_attrs = attrs.user_attrs();
     Ok(function)
 }
 

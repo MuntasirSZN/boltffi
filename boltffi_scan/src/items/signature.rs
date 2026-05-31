@@ -1,9 +1,12 @@
 use boltffi_ast::{
     CanonicalName, ExecutionKind, MethodDef, MethodId, ParameterDef, ParameterPassing, Receiver,
+    Source,
 };
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::type_expr::Scanner;
-use crate::{ScanError, name, unsupported};
+use crate::{ScanError, attributes, name, unsupported};
 
 pub(super) fn validate(signature: &syn::Signature, item: String) -> Result<(), ScanError> {
     unsupported::generics(&signature.generics, &item)?;
@@ -21,6 +24,8 @@ pub(super) fn execution(signature: &syn::Signature) -> ExecutionKind {
 
 pub(super) fn method(
     signature: &syn::Signature,
+    attrs: &[syn::Attribute],
+    source: Source,
     parent: &str,
     scanner: &Scanner<'_>,
 ) -> Result<MethodDef, ScanError> {
@@ -31,9 +36,15 @@ pub(super) fn method(
         name::canonical(ident),
         receiver(signature),
     );
+    let metadata = Attributes::new(attrs, scanner);
     method.execution = execution(signature);
     method.parameters = parameters(signature, scanner)?;
     method.returns = scanner.scan_return(&signature.output)?;
+    method.source = source;
+    method.source_span = method.source.span.clone();
+    method.doc = metadata.doc();
+    method.deprecated = metadata.deprecated()?;
+    method.user_attrs = metadata.user_attrs();
     Ok(method)
 }
 
@@ -44,7 +55,12 @@ pub(super) fn parameter(
     let binding_name = parameter_name(&typed.pat)?;
     let (source_type, passing) = parameter_type(&typed.ty);
     let mut parameter = ParameterDef::value(binding_name, scanner.scan(source_type)?);
+    let metadata = Attributes::new(&typed.attrs, scanner);
     parameter.passing = passing;
+    parameter.source = attributes::public_source(scanner.scope(), typed.span());
+    parameter.doc = metadata.doc();
+    parameter.default = metadata.default()?;
+    parameter.user_attrs = metadata.user_attrs();
     Ok(parameter)
 }
 

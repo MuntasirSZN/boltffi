@@ -1,10 +1,12 @@
 use boltffi_ast::{ConstantDef, ConstantId};
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::const_expr;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::type_expr;
-use crate::{ModuleScope, ScanError, name, visibility};
+use crate::{ModuleScope, ScanError, attributes, name};
 
 pub fn scan(
     marked: &Marked<'_, syn::ItemConst>,
@@ -30,7 +32,12 @@ fn build(
         types.scan(&item.ty)?,
         value,
     );
-    constant.source = visibility::scan(&item.vis);
+    let attrs = Attributes::new(&item.attrs, &types);
+    constant.source = attributes::source(&item.vis, scope, item.span());
+    constant.source_span = constant.source.span.clone();
+    constant.doc = attrs.doc();
+    constant.deprecated = attrs.deprecated()?;
+    constant.user_attrs = attrs.user_attrs();
     Ok(constant)
 }
 

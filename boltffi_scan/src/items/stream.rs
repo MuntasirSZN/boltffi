@@ -1,10 +1,12 @@
 use boltffi_ast::{ClassId, StreamDef, StreamId, StreamMode};
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::path::PathExpansion;
 use crate::type_expr::Scanner;
-use crate::{ModuleScope, ScanError, name, spelling, unsupported, visibility};
+use crate::{ModuleScope, ScanError, attributes, name, spelling, unsupported};
 
 use super::{class, impl_methods};
 
@@ -152,9 +154,14 @@ fn method_stream(
         name::canonical(&method.sig.ident),
         item_type,
     );
+    let attrs = Attributes::new(&method.attrs, scanner);
     stream.owner = Some(owner.clone());
     stream.mode = attribute.mode();
-    stream.source = visibility::scan(&method.vis);
+    stream.source = attributes::source(&method.vis, scope, method.span());
+    stream.source_span = stream.source.span.clone();
+    stream.doc = attrs.doc();
+    stream.deprecated = attrs.deprecated()?;
+    stream.user_attrs = attrs.user_attrs();
     Ok(Some(stream))
 }
 

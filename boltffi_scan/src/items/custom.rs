@@ -6,12 +6,14 @@ use boltffi_ast::{
     Literal, NamePart, Path, PathRoot, PathSegment,
 };
 use syn::parse::Parse;
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::MarkedCustom;
 use crate::path::{ImportLookup, ModuleScope};
 use crate::type_expr::Scanner;
-use crate::{ScanError, name, visibility};
+use crate::{ScanError, attributes, name};
 
 pub fn scan(
     marked: &MarkedCustom<'_>,
@@ -21,6 +23,7 @@ pub fn scan(
     let custom_name = name::canonical(spec.name());
     let custom_id = CustomTypeId::new(marked.module().qualified(&spec.name().to_string()));
     let scanner = Scanner::new(declared_types, marked.scope());
+    let attrs = Attributes::new(&marked.item().attrs, &scanner);
     let mut custom = CustomTypeDef::new(
         custom_id,
         custom_name,
@@ -29,7 +32,11 @@ pub fn scan(
         spec.error().cloned(),
         spec.converters().clone(),
     );
-    custom.source = visibility::scan(spec.visibility());
+    custom.source = attributes::source(spec.visibility(), marked.scope(), marked.item().span());
+    custom.source_span = custom.source.span.clone();
+    custom.doc = attrs.doc();
+    custom.deprecated = attrs.deprecated()?;
+    custom.user_attrs = attrs.user_attrs();
     Ok(custom)
 }
 

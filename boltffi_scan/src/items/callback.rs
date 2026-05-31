@@ -1,10 +1,12 @@
 use boltffi_ast::{MethodDef, TraitDef, TraitId};
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::marker::{self, Disposition};
 use crate::type_expr::Scanner;
-use crate::{ModuleScope, ScanError, name, unsupported, visibility};
+use crate::{ModuleScope, ScanError, attributes, name, unsupported};
 
 use super::{signature, stream};
 
@@ -27,12 +29,14 @@ fn build(
 
     let id = TraitId::new(scope.path().qualified(&item.ident.to_string()));
     let mut callback = TraitDef::new(id, name::canonical(&item.ident));
-    callback.source = visibility::scan(&item.vis);
-    callback.methods = methods(
-        item,
-        callback.id.as_str(),
-        &Scanner::new(declared_types, scope),
-    )?;
+    let scanner = Scanner::new(declared_types, scope);
+    let attrs = Attributes::new(&item.attrs, &scanner);
+    callback.source = attributes::source(&item.vis, scope, item.span());
+    callback.source_span = callback.source.span.clone();
+    callback.doc = attrs.doc();
+    callback.deprecated = attrs.deprecated()?;
+    callback.user_attrs = attrs.user_attrs();
+    callback.methods = methods(item, callback.id.as_str(), &scanner)?;
     Ok(callback)
 }
 
@@ -77,7 +81,13 @@ fn method_from_signature(
             item: format!("trait {trait_name}::{}", method.sig.ident),
         });
     }
-    signature::method(&method.sig, parent, scanner)
+    signature::method(
+        &method.sig,
+        &method.attrs,
+        attributes::public_source(scanner.scope(), method.span()),
+        parent,
+        scanner,
+    )
 }
 
 fn unsupported_trait_item(item: &syn::TraitItem, parent: &str) -> ScanError {

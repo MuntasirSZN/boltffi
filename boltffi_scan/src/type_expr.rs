@@ -18,6 +18,10 @@ impl<'a> Scanner<'a> {
         }
     }
 
+    pub(super) fn scope(&self) -> &'a ModuleScope {
+        self.scope
+    }
+
     pub(super) fn scan(&self, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
         let unwrapped = unwrapped(ty);
         if let syn::Type::Path(type_path) = unwrapped

@@ -1,9 +1,11 @@
 use boltffi_ast::{EnumDef, EnumId, FieldDef, VariantDef, VariantPayload};
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::type_expr::Scanner;
-use crate::{ModuleScope, ScanError, name, repr, unsupported, visibility};
+use crate::{ModuleScope, ScanError, attributes, name, repr, unsupported};
 
 pub fn scan(
     marked: &Marked<'_, syn::ItemEnum>,
@@ -24,9 +26,14 @@ fn build(
     unsupported::generics(&item.generics, &format!("enum {}", item.ident))?;
     let id = EnumId::new(scope.path().qualified(&item.ident.to_string()));
     let mut enumeration = EnumDef::new(id, name::canonical(&item.ident));
-    enumeration.repr = repr::scan(&item.attrs);
-    enumeration.source = visibility::scan(&item.vis);
     let scanner = Scanner::new(declared_types, scope);
+    let attrs = Attributes::new(&item.attrs, &scanner);
+    enumeration.repr = repr::scan(&item.attrs);
+    enumeration.source = attributes::source(&item.vis, scope, item.span());
+    enumeration.source_span = enumeration.source.span.clone();
+    enumeration.doc = attrs.doc();
+    enumeration.deprecated = attrs.deprecated()?;
+    enumeration.user_attrs = attrs.user_attrs();
     enumeration.variants = item
         .variants
         .iter()
@@ -37,8 +44,13 @@ fn build(
 
 fn variant_def(variant: &syn::Variant, scanner: &Scanner<'_>) -> Result<VariantDef, ScanError> {
     let mut declaration = VariantDef::unit(name::canonical(&variant.ident));
+    let attrs = Attributes::new(&variant.attrs, scanner);
     declaration.discriminant = discriminant(variant)?;
     declaration.payload = payload(&variant.fields, scanner)?;
+    declaration.source = attributes::public_source(scanner.scope(), variant.span());
+    declaration.source_span = declaration.source.span.clone();
+    declaration.doc = attrs.doc();
+    declaration.user_attrs = attrs.user_attrs();
     Ok(declaration)
 }
 
@@ -65,10 +77,14 @@ fn named_field(field: &syn::Field, scanner: &Scanner<'_>) -> Result<FieldDef, Sc
         .ident
         .as_ref()
         .expect("named variant field carries an identifier");
-    Ok(FieldDef::new(
-        name::canonical(ident),
-        scanner.scan(&field.ty)?,
-    ))
+    let mut field_def = FieldDef::new(name::canonical(ident), scanner.scan(&field.ty)?);
+    let attrs = Attributes::new(&field.attrs, scanner);
+    field_def.source = attributes::source(&field.vis, scanner.scope(), field.span());
+    field_def.source_span = field_def.source.span.clone();
+    field_def.doc = attrs.doc();
+    field_def.default = attrs.default()?;
+    field_def.user_attrs = attrs.user_attrs();
+    Ok(field_def)
 }
 
 fn discriminant(variant: &syn::Variant) -> Result<Option<i128>, ScanError> {

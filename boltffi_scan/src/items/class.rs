@@ -1,9 +1,12 @@
 use boltffi_ast::{ClassDef, ClassId};
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::impl_target;
 use crate::marked::Marked;
-use crate::{ModuleScope, ScanError, name};
+use crate::type_expr::Scanner;
+use crate::{ModuleScope, ScanError, attributes, name};
 
 use super::impl_methods;
 
@@ -35,6 +38,13 @@ fn build(
     let path = id.as_str();
     let name = name::canonical_segment(path.rsplit("::").next().unwrap_or(path));
     let mut class = ClassDef::new(id, name);
+    let scanner = Scanner::new(declared_types, scope);
+    let attrs = Attributes::new(&item.attrs, &scanner);
+    class.source = attributes::public_source(scope, item.span());
+    class.source_span = class.source.span.clone();
+    class.doc = attrs.doc();
+    class.deprecated = attrs.deprecated()?;
+    class.user_attrs = attrs.user_attrs();
     class.methods = impl_methods::class_methods(item, class.id.as_str(), scope, declared_types)?;
     Ok(class)
 }

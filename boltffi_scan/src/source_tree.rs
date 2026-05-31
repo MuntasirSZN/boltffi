@@ -73,7 +73,7 @@ fn walk(
     source_mode: SourceMode,
 ) -> Result<Vec<SourceModule>, ScanError> {
     let spans = file.spans;
-    let (own_items, mut child_modules) = items.into_iter().try_fold(
+    let (own_items, mut child_modules) = file.items.into_iter().try_fold(
         (Vec::new(), Vec::new()),
         |(mut own_items, mut child_modules), item| {
             match item {

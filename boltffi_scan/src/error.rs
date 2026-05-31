@@ -282,6 +282,20 @@ mod tests {
             "invalid BoltFFI marker `data(foo)`"
         );
         assert_eq!(
+            ScanError::InvalidAttribute {
+                attribute: "deprecated(because = \"old\")".to_owned()
+            }
+            .to_string(),
+            "invalid source attribute `deprecated(because = \"old\")`"
+        );
+        assert_eq!(
+            ScanError::InvalidDefault {
+                attribute: "default([1 , 2])".to_owned()
+            }
+            .to_string(),
+            "invalid default attribute `default([1 , 2])`"
+        );
+        assert_eq!(
             ScanError::InvalidMarkerPlacement {
                 marker: "export".to_owned(),
                 item: "struct".to_owned()

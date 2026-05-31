@@ -1,9 +1,11 @@
 use boltffi_ast::{FieldDef, RecordDef, RecordId};
+use syn::spanned::Spanned;
 
+use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::type_expr::Scanner;
-use crate::{ModuleScope, ScanError, name, repr, unsupported, visibility};
+use crate::{ModuleScope, ScanError, attributes, name, repr, unsupported};
 
 pub fn scan(
     marked: &Marked<'_, syn::ItemStruct>,
@@ -22,9 +24,15 @@ fn build(
     unsupported::generics(&item.generics, &format!("record {}", item.ident))?;
     let id = RecordId::new(scope.path().qualified(&item.ident.to_string()));
     let mut record = RecordDef::new(id, name::canonical(&item.ident));
+    let scanner = Scanner::new(declared_types, scope);
+    let attrs = Attributes::new(&item.attrs, &scanner);
     record.repr = repr::scan(&item.attrs);
-    record.source = visibility::scan(&item.vis);
-    record.fields = record_fields(&item.fields, &Scanner::new(declared_types, scope))?;
+    record.source = attributes::source(&item.vis, scope, item.span());
+    record.source_span = record.source.span.clone();
+    record.doc = attrs.doc();
+    record.deprecated = attrs.deprecated()?;
+    record.user_attrs = attrs.user_attrs();
+    record.fields = record_fields(&item.fields, &scanner)?;
     Ok(record)
 }
 
@@ -42,7 +50,12 @@ fn record_fields(fields: &syn::Fields, scanner: &Scanner<'_>) -> Result<Vec<Fiel
 fn record_field(field: &syn::Field, scanner: &Scanner<'_>) -> Result<FieldDef, ScanError> {
     let ident = field.ident.as_ref().ok_or(ScanError::TupleOrUnitStruct)?;
     let mut scanned = FieldDef::new(name::canonical(ident), scanner.scan(&field.ty)?);
-    scanned.source = visibility::scan(&field.vis);
+    let attrs = Attributes::new(&field.attrs, scanner);
+    scanned.source = attributes::source(&field.vis, scanner.scope(), field.span());
+    scanned.source_span = scanned.source.span.clone();
+    scanned.doc = attrs.doc();
+    scanned.default = attrs.default()?;
+    scanned.user_attrs = attrs.user_attrs();
     Ok(scanned)
 }
 

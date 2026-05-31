@@ -67,6 +67,7 @@ impl PathExpansion {
 }
 
 impl ModuleScope {
+    #[cfg(test)]
     pub(super) fn new(path: ModulePath, items: &[syn::Item]) -> Self {
         Self::with_spans(path, items, None)
     }

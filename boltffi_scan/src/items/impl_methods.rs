@@ -1,9 +1,10 @@
 use boltffi_ast::MethodDef;
+use syn::spanned::Spanned;
 
 use crate::declared_types::DeclaredTypes;
 use crate::marker::{self, Disposition};
 use crate::type_expr::Scanner;
-use crate::{ModuleScope, ScanError};
+use crate::{ModuleScope, ScanError, attributes};
 
 use super::{signature, stream};
 
@@ -75,7 +76,13 @@ fn scan_item(
     match item {
         syn::ImplItem::Fn(method) => match stream_methods.classify(method) {
             Ok(MethodKind::Normal) => match exported_method(&method.attrs, &method.vis, "method") {
-                Ok(true) => Some(signature::method(&method.sig, parent, scanner)),
+                Ok(true) => Some(signature::method(
+                    &method.sig,
+                    &method.attrs,
+                    attributes::source(&method.vis, scanner.scope(), method.span()),
+                    parent,
+                    scanner,
+                )),
                 Ok(false) => None,
                 Err(error) => Some(Err(error)),
             },

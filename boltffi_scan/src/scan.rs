@@ -60,10 +60,11 @@ fn scan_each<I, T>(
 mod tests {
     use super::*;
     use boltffi_ast::{
-        ClassId, ConstExpr, ConstantId, CustomRemoteGenericArgument, CustomRemotePath,
-        CustomRemotePathSegment, CustomRemoteType, CustomTypeConverter, CustomTypeId, EnumId,
-        HandlePresence, IntegerLiteral, Literal, PathRoot, Primitive, Receiver, RecordDef,
-        RecordId, ReturnDef, StreamId, StreamMode, TraitId, TraitUseForm, TypeExpr,
+        AttributeInput, ClassId, ConstExpr, ConstantId, CustomRemoteGenericArgument,
+        CustomRemotePath, CustomRemotePathSegment, CustomRemoteType, CustomTypeConverter,
+        CustomTypeId, DefaultValue, DeprecationInfo, EnumId, HandlePresence, IntegerLiteral,
+        Literal, Path, PathRoot, Primitive, Receiver, RecordDef, RecordId, ReturnDef, StreamId,
+        StreamMode, TraitId, TraitUseForm, TypeExpr,
     };
 
     fn parse(source: &str) -> syn::File {
@@ -119,6 +120,88 @@ mod tests {
 
         std::fs::remove_file(&path).ok();
         assert!(matches!(error, ScanError::Parse { .. }));
+    }
+
+    #[test]
+    fn scan_source_populates_metadata_defaults_user_attrs_and_spans() {
+        let source = "\
+            #[data]\n\
+            #[serde(rename = \"point\")]\n\
+            #[deprecated(since = \"2.0\", note = \"use Vector\")]\n\
+            /// Point docs\n\
+            pub struct Point {\n\
+                #[serde(rename = \"xValue\")]\n\
+                #[default(7)]\n\
+                /// x docs\n\
+                pub x: i32,\n\
+            }\n\
+            #[export]\n\
+            #[serde(rename = \"add\")]\n\
+            #[deprecated = \"use sum\"]\n\
+            /// Adds values\n\
+            pub fn add(#[default(1)] #[serde(rename = \"left\")] a: i32) -> i32 { a }\n\
+        ";
+        let path = std::env::temp_dir().join("boltffi_scan_metadata.rs");
+        std::fs::write(&path, source).expect("write source");
+
+        let contract = scan_source(&path, PackageInfo::new("demo", None)).expect("scan");
+
+        std::fs::remove_file(&path).ok();
+        let record = &contract.records[0];
+        let field = &record.fields[0];
+        let function = &contract.functions[0];
+        let parameter = &function.parameters[0];
+        let record_span = record.source_span.as_ref().expect("record span");
+        let field_span = field.source_span.as_ref().expect("field span");
+        let function_span = function.source_span.as_ref().expect("function span");
+
+        assert_eq!(
+            record.doc.as_ref().map(|doc| doc.as_str()),
+            Some("Point docs")
+        );
+        assert_eq!(
+            record.deprecated,
+            Some(DeprecationInfo::new(
+                Some("use Vector".to_owned()),
+                Some("2.0".to_owned())
+            ))
+        );
+        assert_eq!(record.user_attrs.len(), 1);
+        assert_eq!(record.user_attrs[0].path, Path::single("serde"));
+        assert_eq!(
+            record.user_attrs[0].input,
+            AttributeInput::Tokens("rename = \"point\"".to_owned())
+        );
+        assert_eq!(field.doc.as_ref().map(|doc| doc.as_str()), Some("x docs"));
+        assert_eq!(
+            field.default,
+            Some(DefaultValue::Integer(IntegerLiteral::new(7, "7")))
+        );
+        assert_eq!(field.user_attrs[0].path, Path::single("serde"));
+        assert_eq!(
+            function.doc.as_ref().map(|doc| doc.as_str()),
+            Some("Adds values")
+        );
+        assert_eq!(
+            function.deprecated,
+            Some(DeprecationInfo::new(Some("use sum".to_owned()), None))
+        );
+        assert_eq!(function.user_attrs[0].path, Path::single("serde"));
+        assert_eq!(
+            parameter.default,
+            Some(DefaultValue::Integer(IntegerLiteral::new(1, "1")))
+        );
+        assert_eq!(
+            parameter.user_attrs[0].input,
+            AttributeInput::Tokens("rename = \"left\"".to_owned())
+        );
+        assert_eq!(record.source.span, record.source_span);
+        assert_eq!(field.source.span, field.source_span);
+        assert_eq!(function.source.span, function.source_span);
+        assert_eq!(record_span.file.as_str(), path.display().to_string());
+        assert!(source[record_span.start..record_span.end].contains("pub struct Point"));
+        assert!(source[field_span.start..field_span.end].contains("pub x: i32"));
+        assert!(source[function_span.start..function_span.end].contains("pub fn add"));
     }
 
     #[test]
