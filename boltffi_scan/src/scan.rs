@@ -384,6 +384,23 @@ mod tests {
     }
 
     #[test]
+    fn unmarked_local_source_type_blocks_custom_remote_resolution() {
+        let error = try_scan(
+            "custom_type!(pub TimestampWire, remote = Timestamp, repr = i64, into_ffi = to_millis, try_from_ffi = from_millis); \
+             pub mod api { \
+                 pub struct Timestamp; \
+                 #[export] pub fn keep(value: Timestamp) {} \
+             }",
+        )
+        .expect_err("unmarked local source type must reject");
+
+        assert!(matches!(
+            error,
+            ScanError::UnsupportedType { spelling } if spelling == "Timestamp"
+        ));
+    }
+
+    #[test]
     fn qualified_custom_remote_resolution_is_available_across_modules() {
         let contract = scan(
             "pub mod custom { \

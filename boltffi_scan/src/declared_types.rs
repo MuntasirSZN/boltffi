@@ -20,6 +20,14 @@ pub(super) enum DeclaredType {
     Custom(CustomTypeId),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum SourceType<'a> {
+    Declared(&'a DeclaredType),
+    Unregistered,
+    External(String),
+    Unknown,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct DeclaredTypes {
     by_path: HashMap<String, DeclaredType>,
@@ -123,14 +131,19 @@ impl DeclaredTypes {
         self.by_path.get(path)
     }
 
-    pub(super) fn resolve_in_scope(
+    pub(super) fn resolve_type_in_scope(
         &self,
         scope: &ModuleScope,
         path: &syn::Path,
-    ) -> Result<Option<&DeclaredType>, ScanError> {
-        Ok(self
-            .resolve_source_path(scope, path, || spelling::path(path))?
-            .and_then(|path| self.by_path.get(&path)))
+    ) -> Result<SourceType<'_>, ScanError> {
+        let Some(path) = self.resolve_source_path(scope, path, || spelling::path(path))? else {
+            return Ok(SourceType::Unknown);
+        };
+        Ok(match self.by_path.get(&path) {
+            Some(declared_type) => SourceType::Declared(declared_type),
+            None if self.source_types.contains_path(&path) => SourceType::Unregistered,
+            None => SourceType::External(path),
+        })
     }
 
     pub(super) fn resolve_impl_target(
@@ -367,6 +380,10 @@ impl TypeNamespace {
         self.by_path
             .entry(path.to_owned())
             .or_insert_with(|| TypeBinding::Unique(path.to_owned()));
+    }
+
+    fn contains_path(&self, path: &str) -> bool {
+        self.by_path.contains_key(path)
     }
 
     fn resolve(&self, scope: &ModuleScope, path: &syn::Path) -> TypeResolution {

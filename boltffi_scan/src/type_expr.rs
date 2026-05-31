@@ -2,7 +2,7 @@ use boltffi_ast::{
     ClosureKind, ClosureType, HandlePresence, Primitive, ReturnDef, TraitId, TraitUseForm, TypeExpr,
 };
 
-use crate::declared_types::{DeclaredType, DeclaredTypes};
+use crate::declared_types::{DeclaredType, DeclaredTypes, SourceType};
 use crate::{ModuleScope, ScanError};
 
 pub(super) struct Scanner<'a> {
@@ -24,10 +24,11 @@ impl<'a> Scanner<'a> {
 
     pub(super) fn scan(&self, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
         let unwrapped = unwrapped(ty);
-        if let syn::Type::Path(type_path) = unwrapped
-            && let Some(named) = self.exact_named(type_path)?
-        {
-            return Ok(named);
+        if let syn::Type::Path(type_path) = unwrapped {
+            if let Some(named) = self.exact_named(type_path, ty)? {
+                return Ok(named);
+            }
+            self.reject_source_path(type_path, ty)?;
         }
         if let Some(custom) = self
             .declared_types
@@ -43,7 +44,11 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn exact_named(&self, type_path: &syn::TypePath) -> Result<Option<TypeExpr>, ScanError> {
+    fn exact_named(
+        &self,
+        type_path: &syn::TypePath,
+        source: &syn::Type,
+    ) -> Result<Option<TypeExpr>, ScanError> {
         if type_path.qself.is_some()
             || type_path
                 .path
@@ -62,14 +67,42 @@ impl<'a> Scanner<'a> {
         }
         match self
             .declared_types
-            .resolve_in_scope(self.scope, &type_path.path)?
+            .resolve_type_in_scope(self.scope, &type_path.path)?
         {
-            Some(DeclaredType::Record(id)) => Ok(Some(TypeExpr::Record(id.clone()))),
-            Some(DeclaredType::Enum(id)) => Ok(Some(TypeExpr::Enum(id.clone()))),
-            Some(DeclaredType::Class(id)) => {
+            SourceType::Declared(DeclaredType::Record(id)) => {
+                Ok(Some(TypeExpr::Record(id.clone())))
+            }
+            SourceType::Declared(DeclaredType::Enum(id)) => Ok(Some(TypeExpr::Enum(id.clone()))),
+            SourceType::Declared(DeclaredType::Class(id)) => {
                 Ok(Some(TypeExpr::class(id.clone(), HandlePresence::Required)))
             }
-            Some(DeclaredType::Custom(_) | DeclaredType::Trait(_)) | None => Ok(None),
+            SourceType::Declared(DeclaredType::Custom(_) | DeclaredType::Trait(_))
+            | SourceType::External(_)
+            | SourceType::Unknown => Ok(None),
+            SourceType::Unregistered => Err(ScanError::unsupported_type(source)),
+        }
+    }
+
+    fn reject_source_path(
+        &self,
+        type_path: &syn::TypePath,
+        source: &syn::Type,
+    ) -> Result<(), ScanError> {
+        if type_path.qself.is_some() {
+            return Ok(());
+        }
+        match self
+            .declared_types
+            .resolve_type_in_scope(self.scope, &type_path.path)?
+        {
+            SourceType::Declared(DeclaredType::Record(_))
+            | SourceType::Declared(DeclaredType::Enum(_))
+            | SourceType::Declared(DeclaredType::Trait(_))
+            | SourceType::Declared(DeclaredType::Class(_))
+            | SourceType::Unregistered => Err(ScanError::unsupported_type(source)),
+            SourceType::Declared(DeclaredType::Custom(_))
+            | SourceType::External(_)
+            | SourceType::Unknown => Ok(()),
         }
     }
 
@@ -90,32 +123,71 @@ impl<'a> Scanner<'a> {
             .segments
             .last()
             .ok_or_else(|| ScanError::unsupported_type(source))?;
+        match self.standard_type(type_path, source)? {
+            Some(StandardType::String) => return Ok(TypeExpr::String),
+            Some(StandardType::Vec) => {
+                return Ok(TypeExpr::vec(self.single_argument(segment, source)?));
+            }
+            Some(StandardType::Option) => return self.option(segment, source),
+            Some(StandardType::Result) => {
+                let (ok, err) = self.two_arguments(segment, source)?;
+                return Ok(TypeExpr::result(ok, err));
+            }
+            Some(StandardType::HashMap | StandardType::BTreeMap) => {
+                let (key, value) = self.two_arguments(segment, source)?;
+                return Ok(TypeExpr::map(key, value));
+            }
+            Some(StandardType::Box) => {
+                return self.trait_object_argument(
+                    segment,
+                    source,
+                    TraitUseForm::BoxedDyn,
+                    HandlePresence::Required,
+                );
+            }
+            Some(StandardType::Arc) => {
+                return self.trait_object_argument(
+                    segment,
+                    source,
+                    TraitUseForm::ArcDyn,
+                    HandlePresence::Required,
+                );
+            }
+            None => {}
+        }
         match segment.ident.to_string().as_str() {
             "Self" => Ok(TypeExpr::SelfType),
-            "String" => Ok(TypeExpr::String),
-            "Vec" => Ok(TypeExpr::vec(self.single_argument(segment, source)?)),
-            "Option" => self.option(segment, source),
-            "Result" => {
-                let (ok, err) = self.two_arguments(segment, source)?;
-                Ok(TypeExpr::result(ok, err))
-            }
-            "HashMap" | "BTreeMap" => {
-                let (key, value) = self.two_arguments(segment, source)?;
-                Ok(TypeExpr::map(key, value))
-            }
-            "Box" => self.trait_object_argument(
-                segment,
-                source,
-                TraitUseForm::BoxedDyn,
-                HandlePresence::Required,
-            ),
-            "Arc" => self.trait_object_argument(
-                segment,
-                source,
-                TraitUseForm::ArcDyn,
-                HandlePresence::Required,
-            ),
             _ => self.named(type_path, source),
+        }
+    }
+
+    fn standard_type(
+        &self,
+        type_path: &syn::TypePath,
+        source: &syn::Type,
+    ) -> Result<Option<StandardType>, ScanError> {
+        let Some(segment) = type_path.path.segments.last() else {
+            return Ok(None);
+        };
+        let Some(standard_type) = StandardType::from_leaf(&segment.ident.to_string()) else {
+            return Ok(None);
+        };
+        match self
+            .declared_types
+            .resolve_type_in_scope(self.scope, &type_path.path)?
+        {
+            SourceType::Declared(DeclaredType::Record(_))
+            | SourceType::Declared(DeclaredType::Enum(_))
+            | SourceType::Declared(DeclaredType::Trait(_))
+            | SourceType::Declared(DeclaredType::Class(_))
+            | SourceType::Unregistered => Err(ScanError::unsupported_type(source)),
+            SourceType::Declared(DeclaredType::Custom(_)) => Ok(None),
+            SourceType::External(path) => {
+                Ok(standard_type.accepts_path(&path).then_some(standard_type))
+            }
+            SourceType::Unknown => Ok(standard_type
+                .accepts_path(&path_without_arguments(&type_path.path))
+                .then_some(standard_type)),
         }
     }
 
@@ -139,16 +211,18 @@ impl<'a> Scanner<'a> {
         }
         match self
             .declared_types
-            .resolve_in_scope(self.scope, &type_path.path)?
+            .resolve_type_in_scope(self.scope, &type_path.path)?
         {
-            Some(DeclaredType::Record(id)) => Ok(TypeExpr::Record(id.clone())),
-            Some(DeclaredType::Enum(id)) => Ok(TypeExpr::Enum(id.clone())),
-            Some(DeclaredType::Class(id)) => {
+            SourceType::Declared(DeclaredType::Record(id)) => Ok(TypeExpr::Record(id.clone())),
+            SourceType::Declared(DeclaredType::Enum(id)) => Ok(TypeExpr::Enum(id.clone())),
+            SourceType::Declared(DeclaredType::Class(id)) => {
                 Ok(TypeExpr::class(id.clone(), HandlePresence::Required))
             }
-            Some(DeclaredType::Custom(_)) => Err(ScanError::unsupported_type(source)),
-            Some(DeclaredType::Trait(_)) => Err(ScanError::unsupported_type(source)),
-            None => Err(ScanError::unsupported_type(source)),
+            SourceType::Declared(DeclaredType::Custom(_))
+            | SourceType::Declared(DeclaredType::Trait(_))
+            | SourceType::Unregistered
+            | SourceType::External(_)
+            | SourceType::Unknown => Err(ScanError::unsupported_type(source)),
         }
     }
 
@@ -210,20 +284,21 @@ impl<'a> Scanner<'a> {
             return None;
         };
         let segment = type_path.path.segments.last()?;
-        match segment.ident.to_string().as_str() {
-            "Box" => Some(self.trait_object_argument(
+        match self.standard_type(type_path, ty) {
+            Ok(Some(StandardType::Box)) => Some(self.trait_object_argument(
                 segment,
                 ty,
                 TraitUseForm::BoxedDyn,
                 HandlePresence::Nullable,
             )),
-            "Arc" => Some(self.trait_object_argument(
+            Ok(Some(StandardType::Arc)) => Some(self.trait_object_argument(
                 segment,
                 ty,
                 TraitUseForm::ArcDyn,
                 HandlePresence::Nullable,
             )),
-            _ => self.nullable_class(type_path),
+            Ok(_) => self.nullable_class(type_path),
+            Err(error) => Some(Err(error)),
         }
     }
 
@@ -238,9 +313,9 @@ impl<'a> Scanner<'a> {
         }
         match self
             .declared_types
-            .resolve_in_scope(self.scope, &type_path.path)
+            .resolve_type_in_scope(self.scope, &type_path.path)
         {
-            Ok(Some(DeclaredType::Class(id))) => {
+            Ok(SourceType::Declared(DeclaredType::Class(id))) => {
                 Some(Ok(TypeExpr::class(id.clone(), HandlePresence::Nullable)))
             }
             Ok(_) => None,
@@ -249,8 +324,11 @@ impl<'a> Scanner<'a> {
     }
 
     fn declared_trait(&self, path: &syn::Path, source: &syn::Type) -> Result<TraitId, ScanError> {
-        match self.declared_types.resolve_in_scope(self.scope, path)? {
-            Some(DeclaredType::Trait(id)) => Ok(id.clone()),
+        match self
+            .declared_types
+            .resolve_type_in_scope(self.scope, path)?
+        {
+            SourceType::Declared(DeclaredType::Trait(id)) => Ok(id.clone()),
             _ => Err(ScanError::unsupported_type(source)),
         }
     }
@@ -338,12 +416,69 @@ fn is_unit(ty: &syn::Type) -> bool {
     matches!(unwrapped(ty), syn::Type::Tuple(tuple) if tuple.elems.is_empty())
 }
 
-fn unwrapped(ty: &syn::Type) -> &syn::Type {
+pub(super) fn unwrapped(ty: &syn::Type) -> &syn::Type {
     match ty {
         syn::Type::Paren(paren) => unwrapped(&paren.elem),
         syn::Type::Group(group) => unwrapped(&group.elem),
         _ => ty,
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StandardType {
+    String,
+    Vec,
+    Option,
+    Result,
+    HashMap,
+    BTreeMap,
+    Box,
+    Arc,
+}
+
+impl StandardType {
+    fn from_leaf(leaf: &str) -> Option<Self> {
+        Some(match leaf {
+            "String" => Self::String,
+            "Vec" => Self::Vec,
+            "Option" => Self::Option,
+            "Result" => Self::Result,
+            "HashMap" => Self::HashMap,
+            "BTreeMap" => Self::BTreeMap,
+            "Box" => Self::Box,
+            "Arc" => Self::Arc,
+            _ => return None,
+        })
+    }
+
+    fn accepts_path(self, path: &str) -> bool {
+        self.paths().contains(&path)
+    }
+
+    fn paths(self) -> &'static [&'static str] {
+        match self {
+            Self::String => &["String", "std::string::String", "alloc::string::String"],
+            Self::Vec => &["Vec", "std::vec::Vec", "alloc::vec::Vec"],
+            Self::Option => &["Option", "std::option::Option", "core::option::Option"],
+            Self::Result => &["Result", "std::result::Result", "core::result::Result"],
+            Self::HashMap => &["HashMap", "std::collections::HashMap"],
+            Self::BTreeMap => &[
+                "BTreeMap",
+                "std::collections::BTreeMap",
+                "alloc::collections::BTreeMap",
+            ],
+            Self::Box => &["Box", "std::boxed::Box", "alloc::boxed::Box"],
+            Self::Arc => &["std::sync::Arc", "alloc::sync::Arc"],
+        }
+    }
+}
+
+fn path_without_arguments(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 fn type_arguments(segment: &syn::PathSegment) -> Vec<&syn::Type> {
@@ -384,7 +519,13 @@ fn closure_kind(name: &str) -> Option<ClosureKind> {
 mod tests {
     use super::*;
     use crate::ModulePath;
+    use crate::marked::MarkedItems;
+    use crate::source_tree::SourceTree;
     use boltffi_ast::{ClassId, CustomTypeId, EnumId, RecordId, TraitId};
+
+    fn file(source: &str) -> syn::File {
+        syn::parse_str(source).expect("valid file")
+    }
 
     fn ty(source: &str) -> syn::Type {
         syn::parse_str(source).expect("valid type")
@@ -392,6 +533,16 @@ mod tests {
 
     fn scan(source: &str) -> Result<TypeExpr, ScanError> {
         Scanner::new(&DeclaredTypes::new(), &ModuleScope::root("demo")).scan(&ty(source))
+    }
+
+    fn scope(source: &str) -> ModuleScope {
+        ModuleScope::new(ModulePath::root("demo"), &file(source).items)
+    }
+
+    fn declared_types(source: &str) -> DeclaredTypes {
+        let source_tree = SourceTree::in_memory("demo", file(source).items).expect("source tree");
+        let marked = MarkedItems::collect(&source_tree).expect("marked items");
+        DeclaredTypes::index(&source_tree, &marked).expect("declared types")
     }
 
     #[test]
@@ -714,6 +865,19 @@ mod tests {
     }
 
     #[test]
+    fn unregistered_source_type_blocks_custom_remote_fallback() {
+        let mut declared_types = declared_types("pub struct Timestamp;");
+        declared_types.register_custom(CustomTypeId::new("demo::TimestampWire"), &ty("Timestamp"));
+        let module = ModuleScope::root("demo");
+        let scanner = Scanner::new(&declared_types, &module);
+
+        assert!(matches!(
+            scanner.scan(&ty("Timestamp")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Timestamp"
+        ));
+    }
+
+    #[test]
     fn relative_custom_remote_resolution_uses_module_context() {
         let mut declared_types = DeclaredTypes::new();
         let custom_module = ModulePath::root("demo").child("custom");
@@ -857,6 +1021,14 @@ mod tests {
             ))
         );
         assert_eq!(
+            scanner.scan(&ty("std::boxed::Box<dyn Listener>")),
+            Ok(TypeExpr::r#trait(
+                TraitId::new("demo::Listener"),
+                TraitUseForm::BoxedDyn,
+                HandlePresence::Required,
+            ))
+        );
+        assert_eq!(
             scanner.scan(&ty("std::sync::Arc<dyn Listener>")),
             Ok(TypeExpr::r#trait(
                 TraitId::new("demo::Listener"),
@@ -864,6 +1036,72 @@ mod tests {
                 HandlePresence::Required,
             ))
         );
+    }
+
+    #[test]
+    fn resolves_callback_trait_containers_through_valid_imports_only() {
+        let declared_types = declared_types("#[export] trait Listener { fn call(&self); }");
+        let box_scope = scope("use std::boxed::Box;");
+        let arc_scope = scope("use std::sync::Arc;");
+        let box_scanner = Scanner::new(&declared_types, &box_scope);
+        let arc_scanner = Scanner::new(&declared_types, &arc_scope);
+
+        assert_eq!(
+            box_scanner.scan(&ty("Box<dyn Listener>")),
+            Ok(TypeExpr::r#trait(
+                TraitId::new("demo::Listener"),
+                TraitUseForm::BoxedDyn,
+                HandlePresence::Required,
+            ))
+        );
+        assert_eq!(
+            arc_scanner.scan(&ty("Arc<dyn Listener>")),
+            Ok(TypeExpr::r#trait(
+                TraitId::new("demo::Listener"),
+                TraitUseForm::ArcDyn,
+                HandlePresence::Required,
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_callback_trait_containers_shadowed_by_source_types() {
+        let declared_types = declared_types(
+            "struct Box<T: ?Sized>(std::marker::PhantomData<T>); \
+             pub mod other { pub struct Box<T: ?Sized>(std::marker::PhantomData<T>); } \
+             #[export] trait Listener { fn call(&self); }",
+        );
+        let module = ModuleScope::root("demo");
+        let scanner = Scanner::new(&declared_types, &module);
+
+        assert!(matches!(
+            scanner.scan(&ty("Box<dyn Listener>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Box<dyn Listener>"
+        ));
+        assert!(matches!(
+            scanner.scan(&ty("other::Box<dyn Listener>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "other::Box<dyn Listener>"
+        ));
+        assert!(matches!(
+            scanner.scan(&ty("Option<other::Box<dyn Listener>>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "other::Box<dyn Listener>"
+        ));
+    }
+
+    #[test]
+    fn rejects_callback_trait_containers_imported_from_nonstandard_paths() {
+        let declared_types = declared_types("#[export] trait Listener { fn call(&self); }");
+        let module = scope("use other::Box; use other::Arc;");
+        let scanner = Scanner::new(&declared_types, &module);
+
+        assert!(matches!(
+            scanner.scan(&ty("Box<dyn Listener>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Box<dyn Listener>"
+        ));
+        assert!(matches!(
+            scanner.scan(&ty("Arc<dyn Listener>")),
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "Arc<dyn Listener>"
+        ));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use boltffi_ast::{ConstantDef, ConstantId};
+use boltffi_ast::{ConstantDef, ConstantId, TypeExpr};
 use syn::spanned::Spanned;
 
 use crate::attributes::Attributes;
@@ -29,7 +29,7 @@ fn build(
     let mut constant = ConstantDef::new(
         ConstantId::new(scope.path().qualified(&ident.to_string())),
         name::canonical(ident),
-        types.scan(&item.ty)?,
+        constant_type(&types, &item.ty)?,
         value,
     );
     let attrs = Attributes::new(&item.attrs, &types);
@@ -39,6 +39,29 @@ fn build(
     constant.deprecated = attrs.deprecated()?;
     constant.user_attrs = attrs.user_attrs();
     Ok(constant)
+}
+
+fn constant_type(types: &type_expr::Scanner<'_>, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
+    match type_expr::unwrapped(ty) {
+        syn::Type::Reference(reference)
+            if reference.mutability.is_none() && is_str(&reference.elem) =>
+        {
+            Ok(TypeExpr::String)
+        }
+        _ => types.scan(ty),
+    }
+}
+
+fn is_str(ty: &syn::Type) -> bool {
+    matches!(
+        type_expr::unwrapped(ty),
+        syn::Type::Path(type_path)
+            if type_path.qself.is_none()
+                && type_path.path.leading_colon.is_none()
+                && type_path.path.segments.len() == 1
+                && type_path.path.segments[0].ident == "str"
+                && matches!(type_path.path.segments[0].arguments, syn::PathArguments::None)
+    )
 }
 
 #[cfg(test)]
@@ -81,11 +104,17 @@ mod tests {
 
     #[test]
     fn scans_string_float_bytes_array_tuple_and_raw_values() {
+        let borrowed_string = scan("pub const NAME: &str = \"bolt\";").expect("scan");
+        assert_eq!(borrowed_string.type_expr, TypeExpr::String);
         assert_eq!(
-            scan("pub const NAME: String = \"bolt\";")
-                .expect("scan")
-                .value,
+            borrowed_string.value,
             ConstExpr::Literal(Literal::String("bolt".to_owned()))
+        );
+        assert_eq!(
+            scan("pub const STATIC_NAME: &'static str = \"bolt\";")
+                .expect("scan")
+                .type_expr,
+            TypeExpr::String
         );
         assert_eq!(
             scan("pub const RATIO: f64 = -1.5f64;").expect("scan").value,
@@ -164,6 +193,16 @@ mod tests {
         assert!(matches!(
             error,
             ScanError::UnsupportedType { spelling } if spelling == "Point"
+        ));
+    }
+
+    #[test]
+    fn rejects_mutable_borrowed_string_constant_type() {
+        let error = scan("pub const NAME: &mut str = todo!();").expect_err("type rejects");
+
+        assert!(matches!(
+            error,
+            ScanError::UnsupportedType { spelling } if spelling == "&mut str"
         ));
     }
 
