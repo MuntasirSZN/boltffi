@@ -25,11 +25,12 @@ fn build(
         return Err(ScanError::AnonymousConstant);
     }
     let types = type_expr::Scanner::new(declared_types, scope);
+    let type_expr = constant_type(&types, &item.ty)?;
     let value = const_expr::Scanner::new(&types).scan(&item.expr);
     let mut constant = ConstantDef::new(
         ConstantId::new(scope.path().qualified(&ident.to_string())),
         name::canonical(ident),
-        constant_type(&types, &item.ty)?,
+        type_expr,
         value,
     );
     let attrs = Attributes::new(&item.attrs, &types);
@@ -48,6 +49,11 @@ fn constant_type(types: &type_expr::Scanner<'_>, ty: &syn::Type) -> Result<TypeE
         {
             Ok(TypeExpr::String)
         }
+        syn::Type::Reference(reference)
+            if reference.mutability.is_none() && is_bytes(&reference.elem) =>
+        {
+            Ok(TypeExpr::Bytes)
+        }
         _ => types.scan(ty),
     }
 }
@@ -60,6 +66,25 @@ fn is_str(ty: &syn::Type) -> bool {
                 && type_path.path.leading_colon.is_none()
                 && type_path.path.segments.len() == 1
                 && type_path.path.segments[0].ident == "str"
+                && matches!(type_path.path.segments[0].arguments, syn::PathArguments::None)
+    )
+}
+
+fn is_bytes(ty: &syn::Type) -> bool {
+    matches!(
+        type_expr::unwrapped(ty),
+        syn::Type::Slice(slice) if is_u8(&slice.elem)
+    )
+}
+
+fn is_u8(ty: &syn::Type) -> bool {
+    matches!(
+        type_expr::unwrapped(ty),
+        syn::Type::Path(type_path)
+            if type_path.qself.is_none()
+                && type_path.path.leading_colon.is_none()
+                && type_path.path.segments.len() == 1
+                && type_path.path.segments[0].ident == "u8"
                 && matches!(type_path.path.segments[0].arguments, syn::PathArguments::None)
     )
 }
@@ -126,6 +151,12 @@ mod tests {
                 .value,
             ConstExpr::Literal(Literal::Bytes(b"ffi".to_vec()))
         );
+        let bytes = scan("pub const BYTES: &'static [u8] = b\"ffi\";").expect("scan");
+        assert_eq!(bytes.type_expr, TypeExpr::Bytes);
+        assert_eq!(
+            bytes.value,
+            ConstExpr::Literal(Literal::Bytes(b"ffi".to_vec()))
+        );
         assert_eq!(
             scan("pub const PAIR: (bool, u8) = (true, 7);")
                 .expect("scan")
@@ -171,6 +202,39 @@ mod tests {
                 PathRoot::Relative,
                 vec![PathSegment::new("Mode"), PathSegment::new("Fast")]
             ))
+        );
+    }
+
+    #[test]
+    fn scans_accessor_backed_enum_constant_expressions() {
+        let mut declared_types = DeclaredTypes::new();
+        declared_types.register_enum(EnumId::new("demo::Shape"));
+        let accessor = super::build(
+            &parse("pub const DEFAULT: Shape = make_default_shape();"),
+            &ModuleScope::root("demo"),
+            &declared_types,
+        )
+        .expect("scan accessor-backed enum constant");
+
+        assert_eq!(
+            accessor.type_expr,
+            TypeExpr::Enum(EnumId::new("demo::Shape"))
+        );
+        assert_eq!(
+            accessor.value,
+            ConstExpr::Raw("make_default_shape ()".to_owned())
+        );
+
+        let payload_literal = super::build(
+            &parse("pub const CIRCLE: Shape = Shape::Circle { radius: 1.0 };"),
+            &ModuleScope::root("demo"),
+            &declared_types,
+        )
+        .expect("scan payload enum constant as accessor-backed raw");
+
+        assert_eq!(
+            payload_literal.value,
+            ConstExpr::Raw("Shape :: Circle { radius : 1.0 }".to_owned())
         );
     }
 
