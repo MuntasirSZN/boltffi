@@ -390,6 +390,7 @@ impl<'a> SwiftLowerer<'a> {
                 ..
             } => SwiftConstructor::Designated {
                 ffi_symbol: call.symbol.as_str().to_string(),
+                closure_return_type: self.value_type_constructor_closure_return_type(call),
                 params: ctor
                     .params()
                     .into_iter()
@@ -430,6 +431,7 @@ impl<'a> SwiftLowerer<'a> {
                 SwiftConstructor::Convenience {
                     name: label,
                     ffi_symbol: call.symbol.as_str().to_string(),
+                    closure_return_type: self.value_type_constructor_closure_return_type(call),
                     params: std::iter::once(first).chain(rest).collect(),
                     is_fallible: *is_fallible,
                     is_optional: *is_optional,
@@ -437,6 +439,21 @@ impl<'a> SwiftLowerer<'a> {
                     doc: doc.clone(),
                 }
             }
+        }
+    }
+
+    fn value_type_constructor_closure_return_type(&self, call: &AbiCall) -> String {
+        match (&call.error, &call.returns.transport) {
+            (ErrorTransport::Encoded { .. }, _) => "FfiBuf_u8".to_string(),
+            (ErrorTransport::StatusCode, None) => "FfiStatus".to_string(),
+            (_, None) => "Void".to_string(),
+            (_, Some(Transport::Scalar(origin))) => {
+                self.abi_to_swift(&AbiType::from(origin.primitive()))
+            }
+            (_, Some(Transport::Composite(layout))) => format!("___{}", layout.record_id.as_str()),
+            (_, Some(Transport::Span(_))) => "FfiBuf_u8".to_string(),
+            (_, Some(Transport::Handle { .. })) => "OpaquePointer?".to_string(),
+            (_, Some(Transport::Callback { .. })) => "BoltFFICallbackHandle".to_string(),
         }
     }
 
@@ -700,6 +717,7 @@ impl<'a> SwiftLowerer<'a> {
                                 ..
                             } => SwiftConstructor::Designated {
                                 ffi_symbol: call.symbol.as_str().to_string(),
+                                closure_return_type: "OpaquePointer?".to_string(),
                                 params: ctor
                                     .params()
                                     .into_iter()
@@ -740,6 +758,7 @@ impl<'a> SwiftLowerer<'a> {
                                 SwiftConstructor::Convenience {
                                     name: label,
                                     ffi_symbol: call.symbol.as_str().to_string(),
+                                    closure_return_type: "OpaquePointer?".to_string(),
                                     params: std::iter::once(first).chain(rest).collect(),
                                     is_fallible: *is_fallible,
                                     is_optional: *is_optional,
