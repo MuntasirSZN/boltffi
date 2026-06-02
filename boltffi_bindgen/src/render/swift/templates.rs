@@ -616,6 +616,49 @@ mod tests {
     }
 
     #[test]
+    fn record_constructor_with_string_param_annotates_wire_buffer_return() {
+        let record = SwiftRecord {
+            class_name: "ServiceConfig".to_string(),
+            fields: vec![field(
+                "name",
+                "String",
+                read_string(offset("pos")),
+                write_string("name"),
+                None,
+                None,
+            )],
+            is_blittable: false,
+            is_error: false,
+            blittable_size: None,
+            constructors: vec![SwiftConstructor::Convenience {
+                name: "fromName".to_string(),
+                ffi_symbol: "boltffi_service_config_from_name".to_string(),
+                closure_return_type: "FfiBuf_u8".to_string(),
+                params: vec![SwiftParam {
+                    label: Some("fromName".to_string()),
+                    name: "name".to_string(),
+                    swift_type: "String".to_string(),
+                    conversion: SwiftConversion::ToString,
+                }],
+                is_fallible: false,
+                is_optional: false,
+                throw_decode_expr: None,
+                doc: None,
+            }],
+            methods: vec![],
+            doc: None,
+        };
+
+        let rendered = render_record(&record, "boltffi");
+        assert!(
+            rendered.contains(
+                "name.withUTF8 { nameBuf -> FfiBuf_u8 in boltffi_service_config_from_name"
+            )
+        );
+        assert!(!rendered.contains("-> OpaquePointer? in boltffi_service_config_from_name"));
+    }
+
+    #[test]
     fn snapshot_record_with_default_value() {
         let record = SwiftRecord {
             class_name: "Config".to_string(),
@@ -1140,6 +1183,7 @@ mod tests {
             constructors: vec![
                 SwiftConstructor::Designated {
                     ffi_symbol: "boltffi_data_store_new".to_string(),
+                    closure_return_type: "OpaquePointer?".to_string(),
                     params: vec![SwiftParam {
                         label: None,
                         name: "capacity".to_string(),
@@ -1190,6 +1234,7 @@ mod tests {
             ffi_free: "boltffi_database_free".to_string(),
             constructors: vec![SwiftConstructor::Designated {
                 ffi_symbol: "boltffi_database_open".to_string(),
+                closure_return_type: "OpaquePointer?".to_string(),
                 params: vec![SwiftParam {
                     label: None,
                     name: "path".to_string(),
@@ -1304,6 +1349,7 @@ mod tests {
             ffi_free: "boltffi_connection_free".to_string(),
             constructors: vec![SwiftConstructor::Designated {
                 ffi_symbol: "boltffi_connection_open".to_string(),
+                closure_return_type: "OpaquePointer?".to_string(),
                 params: vec![SwiftParam {
                     label: None,
                     name: "url".to_string(),
@@ -1330,6 +1376,7 @@ mod tests {
             constructors: vec![SwiftConstructor::Convenience {
                 name: "tryOpen".to_string(),
                 ffi_symbol: "boltffi_connection_open".to_string(),
+                closure_return_type: "OpaquePointer?".to_string(),
                 params: vec![
                     SwiftParam {
                         label: None,

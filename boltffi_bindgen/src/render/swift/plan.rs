@@ -634,6 +634,7 @@ pub enum SwiftStreamMode {
 pub enum SwiftConstructor {
     Designated {
         ffi_symbol: String,
+        closure_return_type: String,
         params: Vec<SwiftParam>,
         is_fallible: bool,
         is_optional: bool,
@@ -651,6 +652,7 @@ pub enum SwiftConstructor {
     Convenience {
         name: String,
         ffi_symbol: String,
+        closure_return_type: String,
         params: Vec<SwiftParam>,
         is_fallible: bool,
         is_optional: bool,
@@ -677,6 +679,20 @@ impl SwiftConstructor {
             Self::Designated { ffi_symbol, .. }
             | Self::Factory { ffi_symbol, .. }
             | Self::Convenience { ffi_symbol, .. } => ffi_symbol,
+        }
+    }
+
+    fn closure_return_type(&self) -> &str {
+        match self {
+            Self::Designated {
+                closure_return_type,
+                ..
+            }
+            | Self::Convenience {
+                closure_return_type,
+                ..
+            } => closure_return_type,
+            Self::Factory { .. } => "Void",
         }
     }
 
@@ -741,7 +757,7 @@ impl SwiftConstructor {
         if let Some(first) = wrappers.first_mut()
             && let Some(in_pos) = first.rfind(" in")
         {
-            first.replace_range(in_pos.., " -> OpaquePointer? in");
+            first.replace_range(in_pos.., &format!(" -> {} in", self.closure_return_type()));
         }
         wrappers
     }
