@@ -1,7 +1,8 @@
 use crate::{
     ir::{
         AbiParam, AbiType, BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, ErrorTransport,
-        ParamRole, PrimitiveType, RecordId, ReturnDef, ReturnShape, Transport, TypeExpr,
+        ParamRole, PrimitiveType, RecordId, ReturnDef, ReturnShape, SpanContent, Transport,
+        TypeExpr,
     },
     render::dart::{NamingConvention, emit},
 };
@@ -16,6 +17,7 @@ pub enum DartNativeFunctionKind {
 pub enum DartNativeType {
     Void,
     Primitive(PrimitiveType),
+    Composite(RecordId),
     Function {
         kind: DartNativeFunctionKind,
         params: Vec<DartNativeType>,
@@ -70,6 +72,9 @@ impl DartNativeType {
             DartNativeType::Primitive(primitive) => {
                 emit::primitive_native_type(*primitive).to_string()
             }
+            DartNativeType::Composite(record) => {
+                NamingConvention::record_struct_name(record.as_str())
+            }
             DartNativeType::Function {
                 params,
                 return_ty,
@@ -101,6 +106,7 @@ impl DartNativeType {
         match self {
             DartNativeType::Void => "void".to_string(),
             DartNativeType::Primitive(primitive) => emit::primitive_dart_type(*primitive),
+            DartNativeType::Composite(record) => record.to_string(),
             o @ (DartNativeType::Function { .. }
             | DartNativeType::Pointer(..)
             | DartNativeType::OwnedBuffer
@@ -163,6 +169,7 @@ impl DartNativeType {
     pub fn field_annot(&self) -> String {
         match self {
             DartNativeType::Void
+            | DartNativeType::Composite(_)
             | DartNativeType::Function { .. }
             | DartNativeType::Pointer(_)
             | DartNativeType::OwnedBuffer
@@ -170,6 +177,20 @@ impl DartNativeType {
             | DartNativeType::Status
             | DartNativeType::Custom(_) => String::new(),
             primitive @ DartNativeType::Primitive(_) => format!("@{}()", primitive.native_type()),
+        }
+    }
+
+    pub fn from_transport(transport: &Transport) -> Self {
+        match transport {
+            Transport::Scalar(origin) => Self::Primitive(origin.primitive()),
+            Transport::Composite(layout) => Self::Composite(layout.record_id.clone()),
+            Transport::Span(content) => match content {
+                SpanContent::Scalar(origin) => Self::Primitive(origin.primitive()),
+                SpanContent::Composite(layout) => Self::Composite(layout.record_id.clone()),
+                SpanContent::Utf8 | SpanContent::Encoded(..) => Self::OwnedBuffer,
+            },
+            Transport::Handle { .. } => Self::Pointer(Box::new(Self::Void)),
+            Transport::Callback { .. } => Self::CallbackHandle,
         }
     }
 }
@@ -201,23 +222,26 @@ pub enum DartType {
 }
 
 impl DartType {
+    pub fn from_primitive(primitive: PrimitiveType) -> Self {
+        match primitive {
+            PrimitiveType::Bool => DartType::Bool,
+            PrimitiveType::I8
+            | PrimitiveType::U8
+            | PrimitiveType::I16
+            | PrimitiveType::U16
+            | PrimitiveType::I32
+            | PrimitiveType::U32
+            | PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::ISize
+            | PrimitiveType::USize => DartType::Int,
+            PrimitiveType::F32 | PrimitiveType::F64 => DartType::Double,
+        }
+    }
     pub fn from_type_expr(type_expr: &TypeExpr) -> Self {
         match type_expr {
             TypeExpr::Void => DartType::Void,
-            TypeExpr::Primitive(primitive) => match primitive {
-                PrimitiveType::Bool => DartType::Bool,
-                PrimitiveType::I8
-                | PrimitiveType::U8
-                | PrimitiveType::I16
-                | PrimitiveType::U16
-                | PrimitiveType::I32
-                | PrimitiveType::U32
-                | PrimitiveType::I64
-                | PrimitiveType::U64
-                | PrimitiveType::ISize
-                | PrimitiveType::USize => DartType::Int,
-                PrimitiveType::F32 | PrimitiveType::F64 => DartType::Double,
-            },
+            TypeExpr::Primitive(primitive) => Self::from_primitive(*primitive),
             TypeExpr::String => DartType::String,
             TypeExpr::Bytes => DartType::Bytes,
             TypeExpr::Vec(inner) => DartType::List(Box::new(Self::from_type_expr(inner))),
@@ -243,6 +267,21 @@ impl DartType {
                 ok: Box::new(DartType::from_type_expr(ok)),
                 err: Box::new(DartType::from_type_expr(err)),
             },
+        }
+    }
+
+    pub fn from_transport(transport: &Transport) -> Self {
+        match transport {
+            Transport::Scalar(origin) => Self::from_primitive(origin.primitive()),
+            Transport::Composite(layout) => Self::Record(layout.record_id.clone()),
+            Transport::Span(content) => match content {
+                SpanContent::Scalar(origin) => Self::from_primitive(origin.primitive()),
+                SpanContent::Composite(layout) => Self::Record(layout.record_id.clone()),
+                SpanContent::Utf8 => Self::String,
+                SpanContent::Encoded(..) => Self::Bytes,
+            },
+            Transport::Handle { class_id, .. } => Self::Class(class_id.clone()),
+            Transport::Callback { callback_id, .. } => Self::Callback(callback_id.clone()),
         }
     }
 

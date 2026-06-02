@@ -15,7 +15,21 @@ external {{ ctor.native.return_type.dart_sub_type() }} _f${{ ctor.native.symbol 
   {{ param.native_type.dart_sub_type() }} {{ param.name }},
 {%- endfor %}
 );
-{% endfor %}
+{%- endfor %}
+{%- for stream in class.streams %}
+{% let cfunc = stream.subscribe_fn %}
+{% include "native_function.txt" %}
+{% let cfunc = stream.poll_fn %}
+{% include "native_function.txt" %}
+{% let cfunc = stream.pop_batch_fn %}
+{% include "native_function.txt" %}
+{% let cfunc = stream.wait_fn %}
+{% include "native_function.txt" %}
+{% let cfunc = stream.unsubscribe_fn %}
+{% include "native_function.txt" %}
+{% let cfunc = stream.free_fn %}
+{% include "native_function.txt" %}
+{%- endfor %}
 final class {{ class.name }} implements $$ffi.Finalizable {
   static final _finalizer = $$ffi.NativeFinalizer(
     $$ffi.Native.addressOf(_f${{ class.free_symbol }})
@@ -48,5 +62,76 @@ final class {{ class.name }} implements $$ffi.Finalizable {
     {{ param.ty.dart_type() }} {{ param.name }},
 {%- endfor %}
   ) {}
+{% endfor -%}
+{% for stream in class.streams %}
+{%- match stream.mode %}
+{% when crate::ir::StreamMode::Async %}
+  Stream<{{ stream.item_ty.dart_type() }}> {{ stream.name }}() {
+    final ctx = _$$BoltFFIStreamCtx(
+      subscribe: () => _f${{ stream.subscribe_fn.symbol }}(_handle),
+      pollFn: _f${{ stream.poll_fn.symbol }},
+      popBatchFn: _f${{ stream.pop_batch_fn.symbol }},
+      waitFn: _f${{ stream.wait_fn.symbol }},
+      unsubscribeFn: _f${{ stream.unsubscribe_fn.symbol }},
+      freeFn: _f${{ stream.free_fn.symbol }},
+      itemSize: {{ stream.ffi_item_size.unwrap_or(0) }}
+    );
+
+    return ctx.stream((handle, buf, controller) {
+      final popped = _f${{ stream.pop_batch_fn.symbol }}(
+        handle,
+        buf.address.cast(),
+        _$$BoltFFIStreamCtx._k$defaultBatchSize,
+      );
+    });
+  }
+{% when crate::ir::StreamMode::Callback %}
+  $$async.StreamSubscription<{{ stream.item_ty.dart_type() }}> {{ stream.name }}(void Function({{ stream.item_ty.dart_type() }}) cb) {
+    final ctx = _$$BoltFFIStreamCtx(
+      subscribe: () => _f${{ stream.subscribe_fn.symbol }}(_handle),
+      pollFn: _f${{ stream.poll_fn.symbol }},
+      popBatchFn: _f${{ stream.pop_batch_fn.symbol }},
+      waitFn: _f${{ stream.wait_fn.symbol }},
+      unsubscribeFn: _f${{ stream.unsubscribe_fn.symbol }},
+      freeFn: _f${{ stream.free_fn.symbol }},
+      itemSize: {{ stream.ffi_item_size.unwrap_or(0) }}
+    );
+
+    final Stream<{{ stream.item_ty.dart_type() }}> stream = ctx.stream((handle, buf, controller) {
+      final popped = _f${{ stream.pop_batch_fn.symbol }}(
+        handle,
+        buf.address.cast(),
+        _$$BoltFFIStreamCtx._k$defaultBatchSize,
+      );
+    });
+
+    return stream.listen(cb);
+  }
+{% when crate::ir::StreamMode::Batch %}
+  $$BoltFFIStreamPopBatchHandle<{{ stream.item_ty.dart_type() }}> {{ stream.name }}() {
+    final ctx = _$$BoltFFIStreamCtx(
+      subscribe: () => _f${{ stream.subscribe_fn.symbol }}(_handle),
+      pollFn: _f${{ stream.poll_fn.symbol }},
+      popBatchFn: _f${{ stream.pop_batch_fn.symbol }},
+      waitFn: _f${{ stream.wait_fn.symbol }},
+      unsubscribeFn: _f${{ stream.unsubscribe_fn.symbol }},
+      freeFn: _f${{ stream.free_fn.symbol }},
+      itemSize: {{ stream.ffi_item_size.unwrap_or(0) }}
+    );
+
+    return ctx.batch((handle, buf, batchSize) {
+      final popped = _f${{ stream.pop_batch_fn.symbol }}(
+        handle,
+        buf.address.cast(),
+        batchSize,
+      );
+      if (popped == 0) {
+        return [];
+      }
+
+      return [];
+    });
+  }
+{% endmatch -%}
 {% endfor -%}
 }

@@ -4,6 +4,7 @@ mod custom_type;
 mod enumeration;
 mod function;
 mod record;
+mod stream;
 mod r#type;
 
 pub use callback::*;
@@ -12,6 +13,7 @@ pub use custom_type::*;
 pub use enumeration::*;
 pub use function::*;
 pub use record::*;
+pub use stream::*;
 pub use r#type::*;
 
 #[derive(Debug, Clone)]
