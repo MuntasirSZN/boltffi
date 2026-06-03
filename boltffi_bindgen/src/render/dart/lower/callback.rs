@@ -2,8 +2,8 @@ use boltffi_ffi_rules::{callable::ExecutionKind, transport::ValueReturnStrategy}
 
 use crate::{
     ir::{
-        AbiCallbackInvocation, AbiCallbackMethod, CallbackId, CallbackMethodDef, CallbackTraitDef,
-        ParamRole, PrimitiveType, Transport,
+        AbiCallbackInvocation, AbiCallbackMethod, CallbackId, CallbackKind, CallbackMethodDef,
+        CallbackTraitDef, ParamRole, PrimitiveType, Transport,
     },
     render::dart::{
         DartCallback, DartCallbackMethod, DartNativeCallback, DartNativeCallbackMethod,
@@ -99,7 +99,7 @@ impl<'a> super::DartLowerer<'a> {
         DartCallbackMethod {
             name: NamingConvention::function_name(cb.id.as_str()),
             params,
-            ret_ty: DartType::from_return_def(&cb.returns),
+            ret_ty: DartType::from_return_def(&cb.returns, &self.ffi.catalog),
             kind: cb.execution_kind,
         }
     }
@@ -145,6 +145,7 @@ impl<'a> super::DartLowerer<'a> {
         self.ffi
             .catalog
             .all_callbacks()
+            .filter(|cb| matches!(cb.kind, CallbackKind::Trait))
             .map(|cb| self.lower_one_callback(cb))
             .collect()
     }

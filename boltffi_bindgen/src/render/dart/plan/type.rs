@@ -1,8 +1,8 @@
 use crate::{
     ir::{
-        AbiParam, AbiType, BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, ErrorTransport,
-        ParamRole, PrimitiveType, RecordId, ReturnDef, ReturnShape, SpanContent, Transport,
-        TypeExpr,
+        AbiParam, AbiType, BuiltinId, CallbackId, CallbackKind, ClassId, CustomTypeId, EnumId,
+        ErrorTransport, ParamRole, PrimitiveType, RecordId, ReturnDef, ReturnShape, SpanContent,
+        Transport, TypeCatalog, TypeExpr,
     },
     render::dart::{NamingConvention, emit},
 };
@@ -238,34 +238,58 @@ impl DartType {
             PrimitiveType::F32 | PrimitiveType::F64 => DartType::Double,
         }
     }
-    pub fn from_type_expr(type_expr: &TypeExpr) -> Self {
+    pub fn from_type_expr(type_expr: &TypeExpr, type_catalog: &TypeCatalog) -> Self {
         match type_expr {
             TypeExpr::Void => DartType::Void,
             TypeExpr::Primitive(primitive) => Self::from_primitive(*primitive),
             TypeExpr::String => DartType::String,
             TypeExpr::Bytes => DartType::Bytes,
-            TypeExpr::Vec(inner) => DartType::List(Box::new(Self::from_type_expr(inner))),
-            TypeExpr::Option(inner) => DartType::Option(Box::new(Self::from_type_expr(inner))),
+            TypeExpr::Vec(inner) => {
+                DartType::List(Box::new(Self::from_type_expr(inner, type_catalog)))
+            }
+            TypeExpr::Option(inner) => {
+                DartType::Option(Box::new(Self::from_type_expr(inner, type_catalog)))
+            }
             TypeExpr::Result { ok, err } => DartType::Result {
-                ok: Box::new(Self::from_type_expr(ok)),
-                err: Box::new(Self::from_type_expr(err)),
+                ok: Box::new(Self::from_type_expr(ok, type_catalog)),
+                err: Box::new(Self::from_type_expr(err, type_catalog)),
             },
             TypeExpr::Record(record_id) => DartType::Record(record_id.clone()),
             TypeExpr::Enum(enum_id) => DartType::Enum(enum_id.clone()),
-            TypeExpr::Callback(callback_id) => DartType::Callback(callback_id.clone()),
+            TypeExpr::Callback(callback_id) => {
+                let callback_def = type_catalog.resolve_callback(callback_id).unwrap();
+                match callback_def.kind {
+                    CallbackKind::Trait => DartType::Callback(callback_id.clone()),
+                    CallbackKind::Closure => {
+                        let call_method = &callback_def.methods[0];
+                        assert!(call_method.id.as_str() == "call");
+                        DartType::Function {
+                            params: call_method
+                                .params
+                                .iter()
+                                .map(|p| Self::from_type_expr(&p.type_expr, type_catalog))
+                                .collect(),
+                            ret_ty: Box::new(Self::from_return_def(
+                                &call_method.returns,
+                                type_catalog,
+                            )),
+                        }
+                    }
+                }
+            }
             TypeExpr::Custom(custom_type_id) => DartType::Custom(custom_type_id.clone()),
             TypeExpr::Builtin(builtin_id) => DartType::Builtin(builtin_id.clone()),
             TypeExpr::Handle(class_id) => DartType::Class(class_id.clone()),
         }
     }
 
-    pub fn from_return_def(return_def: &ReturnDef) -> Self {
+    pub fn from_return_def(return_def: &ReturnDef, type_catalog: &TypeCatalog) -> Self {
         match return_def {
             ReturnDef::Void => DartType::Void,
-            ReturnDef::Value(ty) => DartType::from_type_expr(ty),
+            ReturnDef::Value(ty) => DartType::from_type_expr(ty, type_catalog),
             ReturnDef::Result { ok, err } => DartType::Result {
-                ok: Box::new(DartType::from_type_expr(ok)),
-                err: Box::new(DartType::from_type_expr(err)),
+                ok: Box::new(DartType::from_type_expr(ok, type_catalog)),
+                err: Box::new(DartType::from_type_expr(err, type_catalog)),
             },
         }
     }

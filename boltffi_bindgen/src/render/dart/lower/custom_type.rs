@@ -7,7 +7,7 @@ impl<'a> super::DartLowerer<'a> {
     fn lower_one_custom_type(&self, custom: &CustomTypeDef) -> DartCustomType {
         DartCustomType {
             name: custom.id.to_string(),
-            ty: DartType::from_type_expr(&custom.repr),
+            ty: DartType::from_type_expr(&custom.repr, &self.ffi.catalog),
         }
     }
 
