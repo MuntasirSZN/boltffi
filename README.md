@@ -174,12 +174,15 @@ Want another language? [Open an issue](https://github.com/boltffi/boltffi/issues
 cargo install boltffi_cli
 ```
 
-Add to your `Cargo.toml`:
+Add BoltFFI to your library crate:
+
+```bash
+cargo add boltffi
+```
+
+Configure the crate type in `Cargo.toml`:
 
 ```toml
-[dependencies]
-boltffi = "0.1"
-
 [lib]
 crate-type = ["cdylib", "staticlib"]
 ```
