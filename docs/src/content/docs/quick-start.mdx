@@ -24,12 +24,13 @@ edition = "2021"
 
 [lib]
 crate-type = ["staticlib", "cdylib"]
+```
 
-[dependencies]
-boltffi = "0.1"
+Install BoltFFI:
 
-[build-dependencies]
-boltffi = "0.1"
+```bash
+cargo add boltffi
+cargo add --build boltffi
 ```
 
 ## 3. Create build.rs

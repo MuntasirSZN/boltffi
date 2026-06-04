@@ -21,7 +21,14 @@ cargo install boltffi_cli
 
 ## Add to your project
 
-Add BoltFFI dependencies to your `Cargo.toml`:
+Add BoltFFI to your library crate:
+
+```bash
+cargo add boltffi
+cargo add --build boltffi
+```
+
+Then configure your library crate:
 
 ```toml
 [package]
@@ -31,12 +38,6 @@ edition = "2021"
 
 [lib]
 crate-type = ["staticlib"]
-
-[dependencies]
-boltffi = "0.1"
-
-[build-dependencies]
-boltffi = "0.1"
 ```
 
 Add `cdylib` if you also need a standalone Rust shared library outside BoltFFI packaging, including the current C# generate-and-integrate flow:
