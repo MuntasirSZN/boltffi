@@ -959,15 +959,19 @@ final class _$$BoltFFIStreamCtx<T extends $$ffi.SizedNativeType> {
     List<O> Function($$ffi.Pointer<$$ffi.Void>, $$typed_data.Uint8List, int)
     mapper,
   ) {
-    final handle = subscribe();
+    var handle = subscribe();
 
     return $$BoltFFIStreamPopBatchHandle(
       popBatch: (batchSize) {
+        if (handle == $$ffi.nullptr) {
+          return [];
+        }
         final buf = $$typed_data.Uint8List(batchSize * itemSize);
         return mapper(handle, buf, batchSize);
       },
       cancel: () {
         freeFn(handle);
+        handle = $$ffi.nullptr;
       },
     );
   }
