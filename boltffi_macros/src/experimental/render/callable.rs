@@ -1,4 +1,4 @@
-use boltffi_binding::{ErrorDecl, ExecutionDecl, ExportedCallable};
+use boltffi_binding::{ExecutionDecl, ExportedCallable};
 use proc_macro2::TokenStream;
 use syn::PatType;
 
@@ -9,28 +9,40 @@ use crate::experimental::{
 };
 
 pub struct Rule;
+pub struct Parameters;
 
-pub struct Input<'binding, 'syntax, S: Target> {
+pub struct Input<'binding, 'params, 'syntax, S: Target> {
     callable: &'binding ExportedCallable<S>,
-    params: &'syntax [&'syntax PatType],
+    params: &'params [&'syntax PatType],
+    failure: TokenStream,
 }
 
-impl<'binding, 'syntax, S: Target> Input<'binding, 'syntax, S> {
+impl<'binding, 'params, 'syntax, S: Target> Input<'binding, 'params, 'syntax, S> {
     pub fn new(
         callable: &'binding ExportedCallable<S>,
-        params: &'syntax [&'syntax PatType],
+        params: &'params [&'syntax PatType],
+        failure: TokenStream,
     ) -> Self {
-        Self { callable, params }
+        Self {
+            callable,
+            params,
+            failure,
+        }
     }
 }
 
 pub struct Tokens {
+    items: Vec<TokenStream>,
     ffi_parameters: Vec<TokenStream>,
     conversions: Vec<TokenStream>,
     arguments: Vec<TokenStream>,
 }
 
 impl Tokens {
+    pub fn items(&self) -> &[TokenStream] {
+        &self.items
+    }
+
     pub fn ffi_parameters(&self) -> &[TokenStream] {
         &self.ffi_parameters
     }
@@ -44,7 +56,8 @@ impl Tokens {
     }
 }
 
-impl<'binding, 'syntax, S> RenderRule<S, Input<'binding, 'syntax, S>> for Rule
+impl<'binding, 'params, 'syntax, S> RenderRule<S, Input<'binding, 'params, 'syntax, S>>
+    for Parameters
 where
     S: Target,
     render::param::Rule:
@@ -52,27 +65,8 @@ where
 {
     type Output = Tokens;
 
-    fn apply(self, input: Input<'binding, 'syntax, S>) -> Result<Self::Output, Error> {
+    fn apply(self, input: Input<'binding, 'params, 'syntax, S>) -> Result<Self::Output, Error> {
         let callable = input.callable;
-        match callable.execution() {
-            ExecutionDecl::Synchronous(_) => {}
-            ExecutionDecl::Asynchronous(_) => {
-                return Err(Error::UnsupportedExpansion("async function"));
-            }
-            _ => return Err(Error::UnsupportedExpansion("unknown execution")),
-        }
-
-        match callable.error() {
-            ErrorDecl::None(_) => {}
-            ErrorDecl::StatusViaReturnSlot { .. }
-            | ErrorDecl::StatusViaOutPointer { .. }
-            | ErrorDecl::EncodedViaReturnSlot { .. }
-            | ErrorDecl::EncodedViaOutPointer { .. } => {
-                return Err(Error::UnsupportedExpansion("fallible function"));
-            }
-            _ => return Err(Error::UnsupportedExpansion("unknown error channel")),
-        }
-
         if callable.params().len() != input.params.len() {
             return Err(Error::SourceSyntaxMismatch(
                 "function syntax parameter count does not match binding parameter count",
@@ -86,10 +80,14 @@ where
             .map(|(param, syntax)| {
                 <render::param::Rule as RenderRule<S, _>>::apply(
                     render::param::Rule,
-                    render::param::Input::new(param, syntax),
+                    render::param::Input::new(param, syntax, input.failure.clone()),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let items = params
+            .iter()
+            .flat_map(|param| param.items().iter().cloned())
+            .collect();
         let ffi_parameters = params
             .iter()
             .flat_map(|param| param.ffi_parameters().iter().cloned())
@@ -104,9 +102,30 @@ where
             .collect();
 
         Ok(Tokens {
+            items,
             ffi_parameters,
             conversions,
             arguments,
         })
+    }
+}
+
+impl<'binding, 'params, 'syntax, S> RenderRule<S, Input<'binding, 'params, 'syntax, S>> for Rule
+where
+    S: Target,
+    Parameters: RenderRule<S, Input<'binding, 'params, 'syntax, S>, Output = Tokens>,
+{
+    type Output = Tokens;
+
+    fn apply(self, input: Input<'binding, 'params, 'syntax, S>) -> Result<Self::Output, Error> {
+        match input.callable.execution() {
+            ExecutionDecl::Synchronous(_) => {}
+            ExecutionDecl::Asynchronous(_) => {
+                return Err(Error::UnsupportedExpansion("async function"));
+            }
+            _ => return Err(Error::UnsupportedExpansion("unknown execution")),
+        }
+
+        <Parameters as RenderRule<S, _>>::apply(Parameters, input)
     }
 }
