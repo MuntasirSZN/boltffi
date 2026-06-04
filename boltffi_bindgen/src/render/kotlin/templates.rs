@@ -717,6 +717,7 @@ mod tests {
                     fields: vec![KotlinEnumField {
                         name: "value".to_string(),
                         kotlin_type: "String".to_string(),
+                        overrides_message: false,
                         wire_decode_expr: "reader.readString()".to_string(),
                         wire_size_expr: "reader.sizeString(value)".to_string(),
                         wire_encode: "wire.writeString(value)".to_string(),
@@ -730,6 +731,7 @@ mod tests {
                         KotlinEnumField {
                             name: "code".to_string(),
                             kotlin_type: "Int".to_string(),
+                            overrides_message: false,
                             wire_decode_expr: "reader.readI32()".to_string(),
                             wire_size_expr: "4".to_string(),
                             wire_encode: "wire.writeI32(code)".to_string(),
@@ -737,6 +739,7 @@ mod tests {
                         KotlinEnumField {
                             name: "message".to_string(),
                             kotlin_type: "String".to_string(),
+                            overrides_message: false,
                             wire_decode_expr: "reader.readString()".to_string(),
                             wire_size_expr: "reader.sizeString(message)".to_string(),
                             wire_encode: "wire.writeString(message)".to_string(),
@@ -764,6 +767,7 @@ mod tests {
                     fields: vec![KotlinEnumField {
                         name: "message".to_string(),
                         kotlin_type: "String".to_string(),
+                        overrides_message: true,
                         wire_decode_expr: "reader.readString()".to_string(),
                         wire_size_expr: "reader.sizeString(message)".to_string(),
                         wire_encode: "wire.writeString(message)".to_string(),
@@ -1667,7 +1671,7 @@ mod tests {
         let rendered = template.render().unwrap();
         assert!(rendered.contains("data class AppError("));
         assert!(rendered.contains("override val message: String"));
-        assert!(rendered.contains(": Exception(message)"));
+        assert!(rendered.contains(": kotlin.Exception(message)"));
     }
 
     #[test]
@@ -2009,6 +2013,7 @@ mod tests {
                         KotlinEnumField {
                             name: "x".to_string(),
                             kotlin_type: "Int".to_string(),
+                            overrides_message: false,
                             wire_decode_expr: "reader.readI32()".to_string(),
                             wire_size_expr: "4".to_string(),
                             wire_encode: "wire.writeI32(x)".to_string(),
@@ -2016,6 +2021,7 @@ mod tests {
                         KotlinEnumField {
                             name: "y".to_string(),
                             kotlin_type: "Int".to_string(),
+                            overrides_message: false,
                             wire_decode_expr: "reader.readI32()".to_string(),
                             wire_size_expr: "4".to_string(),
                             wire_encode: "wire.writeI32(y)".to_string(),
@@ -2023,6 +2029,7 @@ mod tests {
                         KotlinEnumField {
                             name: "button".to_string(),
                             kotlin_type: "Int".to_string(),
+                            overrides_message: false,
                             wire_decode_expr: "reader.readI32()".to_string(),
                             wire_size_expr: "4".to_string(),
                             wire_encode: "wire.writeI32(button)".to_string(),
@@ -2036,6 +2043,7 @@ mod tests {
                     fields: vec![KotlinEnumField {
                         name: "code".to_string(),
                         kotlin_type: "Int".to_string(),
+                        overrides_message: false,
                         wire_decode_expr: "reader.readI32()".to_string(),
                         wire_size_expr: "4".to_string(),
                         wire_encode: "wire.writeI32(code)".to_string(),
@@ -2062,6 +2070,7 @@ mod tests {
                     fields: vec![KotlinEnumField {
                         name: "item".to_string(),
                         kotlin_type: "String?".to_string(),
+                        overrides_message: false,
                         wire_decode_expr: "reader.readOption { it.readString() }".to_string(),
                         wire_size_expr: "wire.sizeOption(item) { w, v -> w.sizeString(v) }"
                             .to_string(),

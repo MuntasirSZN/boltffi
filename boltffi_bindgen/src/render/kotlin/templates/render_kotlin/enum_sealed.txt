@@ -1,9 +1,9 @@
-{{ self::kdoc_block(doc, "") }}sealed class {{ class_name }}{% if is_error %} : Exception(){% endif %} {
+{{ self::kdoc_block(doc, "") }}sealed class {{ class_name }}{% if is_error %} : kotlin.Exception(){% endif %} {
 {%- for variant in variants %}
 {{ self::kdoc_block(variant.doc, "    ") }}{%- if variant.fields.is_empty() %}
     data object {{ variant.name }} : {{ class_name }}()
 {%- else %}
-    data class {{ variant.name }}({% for field in variant.fields %}val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : {{ class_name }}()
+    data class {{ variant.name }}({% for field in variant.fields %}{% if field.overrides_message %}override {% endif %}val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : {{ class_name }}()
 {%- endif %}
 {%- endfor %}
 

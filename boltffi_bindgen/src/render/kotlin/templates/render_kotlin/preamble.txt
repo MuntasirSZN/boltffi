@@ -65,9 +65,9 @@ internal fun {{ custom.repr_kotlin_type }}.wireEncodeTo(wire: WireWriter) {
 {%- endif %}
 {%- endfor %}
 
-class FfiException(val code: Int, message: String) : Exception(message)
+class FfiException(val code: kotlin.Int, message: kotlin.String) : kotlin.Exception(message)
 
-private fun takeLastErrorMessage(): String =
+private fun takeLastErrorMessage(): kotlin.String =
     Native.{{ prefix }}_last_error_message().toString(Charsets.UTF_8)
 
 private inline fun <T> useWireBytes(bytes: ByteArray, block: (java.nio.ByteBuffer) -> T): T {
@@ -82,7 +82,7 @@ object BoltFFIScope : CoroutineScope {
         launch(Dispatchers.Default, block = block)
 }
 
-class BoltFFIException(val errorBuffer: ByteBuffer) : Exception("Structured error") {
+class BoltFFIException(val errorBuffer: ByteBuffer) : kotlin.Exception("Structured error") {
     init {
         errorBuffer.order(ByteOrder.nativeOrder())
     }
@@ -481,16 +481,16 @@ class WireReader {
 }
 
 sealed class BoltFFIResult<out T, out E> {
-    data class Ok<T>(val value: T) : BoltFFIResult<T, Nothing>()
-    data class Err<E>(val error: E) : BoltFFIResult<Nothing, E>()
+    data class Ok<T>(val value: T) : BoltFFIResult<T, kotlin.Nothing>()
+    data class Err<E>(val error: E) : BoltFFIResult<kotlin.Nothing, E>()
 
-    val isSuccess: Boolean get() = this is Ok
-    val isFailure: Boolean get() = this is Err
+    val isSuccess: kotlin.Boolean get() = this is Ok
+    val isFailure: kotlin.Boolean get() = this is Err
 
     fun getOrThrow(): T = when (this) {
         is Ok -> value
         is Err -> throw when (error) {
-            is Throwable -> error
+            is kotlin.Throwable -> error
             else -> FfiException(-1, error.toString())
         }
     }
@@ -500,10 +500,10 @@ sealed class BoltFFIResult<out T, out E> {
         is Err -> null
     }
 
-    fun exceptionOrNull(): Throwable? = when (this) {
+    fun exceptionOrNull(): kotlin.Throwable? = when (this) {
         is Ok -> null
         is Err -> when (error) {
-            is Throwable -> error
+            is kotlin.Throwable -> error
             else -> FfiException(-1, error.toString())
         }
     }
