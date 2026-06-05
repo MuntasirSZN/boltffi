@@ -1,4 +1,4 @@
-use boltffi_ast::{ConstantDef, ConstantId, TypeExpr};
+use boltffi_ast::{ConstantDef, ConstantId, RustType, TypeExpr};
 use syn::spanned::Spanned;
 
 use crate::attributes::Attributes;
@@ -6,7 +6,7 @@ use crate::const_expr;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::Marked;
 use crate::type_expr;
-use crate::{ModuleScope, ScanError, attributes, name};
+use crate::{ModuleScope, ScanError, attributes, name, spelling};
 
 pub fn scan(
     marked: &Marked<'_, syn::ItemConst>,
@@ -25,12 +25,12 @@ fn build(
         return Err(ScanError::AnonymousConstant);
     }
     let types = type_expr::Scanner::new(declared_types, scope);
-    let type_expr = constant_type(&types, &item.ty)?;
+    let rust_type = constant_type(&types, &item.ty)?;
     let value = const_expr::Scanner::new(&types).scan(&item.expr);
     let mut constant = ConstantDef::new(
         ConstantId::new(scope.path().qualified(&ident.to_string())),
         name::source(ident),
-        type_expr,
+        rust_type,
         value,
     );
     let attrs = Attributes::new(&item.attrs, &types);
@@ -42,19 +42,19 @@ fn build(
     Ok(constant)
 }
 
-fn constant_type(types: &type_expr::Scanner<'_>, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
+fn constant_type(types: &type_expr::Scanner<'_>, ty: &syn::Type) -> Result<RustType, ScanError> {
     match type_expr::unwrapped(ty) {
         syn::Type::Reference(reference)
             if reference.mutability.is_none() && is_str(&reference.elem) =>
         {
-            Ok(TypeExpr::String)
+            Ok(RustType::new(spelling::ty(ty), TypeExpr::String))
         }
         syn::Type::Reference(reference)
             if reference.mutability.is_none() && is_bytes(&reference.elem) =>
         {
-            Ok(TypeExpr::Bytes)
+            Ok(RustType::new(spelling::ty(ty), TypeExpr::Bytes))
         }
-        _ => types.scan(ty),
+        _ => types.rust_type(ty),
     }
 }
 
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn scans_string_float_bytes_array_tuple_and_raw_values() {
         let borrowed_string = scan("pub const NAME: &str = \"bolt\";").expect("scan");
-        assert_eq!(borrowed_string.type_expr, TypeExpr::String);
+        assert_eq!(borrowed_string.rust_type.expr(), &TypeExpr::String);
         assert_eq!(
             borrowed_string.value,
             ConstExpr::Literal(Literal::String("bolt".to_owned()))
@@ -138,8 +138,9 @@ mod tests {
         assert_eq!(
             scan("pub const STATIC_NAME: &'static str = \"bolt\";")
                 .expect("scan")
-                .type_expr,
-            TypeExpr::String
+                .rust_type
+                .expr(),
+            &TypeExpr::String
         );
         assert_eq!(
             scan("pub const RATIO: f64 = -1.5f64;").expect("scan").value,
@@ -152,7 +153,7 @@ mod tests {
             ConstExpr::Literal(Literal::Bytes(b"ffi".to_vec()))
         );
         let bytes = scan("pub const BYTES: &'static [u8] = b\"ffi\";").expect("scan");
-        assert_eq!(bytes.type_expr, TypeExpr::Bytes);
+        assert_eq!(bytes.rust_type.expr(), &TypeExpr::Bytes);
         assert_eq!(
             bytes.value,
             ConstExpr::Literal(Literal::Bytes(b"ffi".to_vec()))
@@ -193,8 +194,8 @@ mod tests {
         .expect("scan");
 
         assert_eq!(
-            constant.type_expr,
-            TypeExpr::Enum(EnumId::new("demo::Mode"))
+            constant.rust_type.expr(),
+            &TypeExpr::Enum(EnumId::new("demo::Mode"))
         );
         assert_eq!(
             constant.value,
@@ -217,8 +218,8 @@ mod tests {
         .expect("scan accessor-backed enum constant");
 
         assert_eq!(
-            accessor.type_expr,
-            TypeExpr::Enum(EnumId::new("demo::Shape"))
+            accessor.rust_type.expr(),
+            &TypeExpr::Enum(EnumId::new("demo::Shape"))
         );
         assert_eq!(
             accessor.value,

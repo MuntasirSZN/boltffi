@@ -133,12 +133,12 @@ mod tests {
         assert_eq!(records[0].methods.len(), 1);
         assert_eq!(
             records[0].methods[0].returns,
-            ReturnDef::Value(TypeExpr::SelfType)
+            ReturnDef::value(TypeExpr::SelfType)
         );
         assert_eq!(enums[0].methods.len(), 1);
         assert_eq!(
             enums[0].methods[0].returns,
-            ReturnDef::Value(TypeExpr::SelfType)
+            ReturnDef::value(TypeExpr::SelfType)
         );
     }
 

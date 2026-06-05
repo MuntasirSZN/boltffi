@@ -209,7 +209,7 @@ mod tests {
             SourceFunctionId::new("demo::answer"),
             SourceName::single("answer"),
         );
-        function.returns = SourceReturn::Value(SourceType::Primitive(SourcePrimitive::U32));
+        function.returns = SourceReturn::value(SourceType::Primitive(SourcePrimitive::U32));
 
         let mut source = SourceContract::new(SourcePackage::new("demo", None));
         source.functions.push(function);

@@ -68,8 +68,8 @@ mod tests {
         AttributeInput, ClassId, ConstExpr, ConstantId, CustomRemoteGenericArgument,
         CustomRemotePath, CustomRemotePathSegment, CustomRemoteType, CustomTypeConverter,
         CustomTypeId, DefaultValue, DeprecationInfo, EnumId, HandlePresence, IntegerLiteral,
-        Literal, Path, PathRoot, Primitive, Receiver, RecordDef, RecordId, ReturnDef, StreamId,
-        StreamMode, TraitId, TraitUseForm, TypeExpr,
+        Literal, Path, PathRoot, Primitive, Receiver, RecordDef, RecordId, ReturnDef, RustType,
+        StreamId, StreamMode, TraitId, TraitUseForm, TypeExpr,
     };
 
     fn parse(source: &str) -> syn::File {
@@ -90,6 +90,17 @@ mod tests {
             .iter()
             .find(|record| record.id == RecordId::new("demo::Point"))
             .expect("Point record")
+    }
+
+    fn value_return(return_def: &ReturnDef) -> &RustType {
+        match return_def {
+            ReturnDef::Value(rust_type) => rust_type,
+            ReturnDef::Void => panic!("expected value return"),
+        }
+    }
+
+    fn value_return_expr(return_def: &ReturnDef) -> &TypeExpr {
+        value_return(return_def).expr()
     }
 
     #[test]
@@ -228,8 +239,8 @@ mod tests {
             .find(|record| record.id == RecordId::new("demo::Shape"))
             .expect("Shape record");
         assert_eq!(
-            shape.fields[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::geometry::Point"))
+            shape.fields[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::geometry::Point"))
         );
     }
 
@@ -258,8 +269,12 @@ mod tests {
 
         assert_eq!(contract.records[0].id, RecordId::new("demo::a::b::Deep"));
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::a::b::Deep")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Record(RecordId::new("demo::a::b::Deep"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Deep"
         );
     }
 
@@ -277,8 +292,8 @@ mod tests {
             .find(|record| record.id == RecordId::new("demo::Shape"))
             .expect("Shape record");
         assert_eq!(
-            shape.fields[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::Point"))
+            shape.fields[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::Point"))
         );
     }
 
@@ -291,8 +306,12 @@ mod tests {
 
         assert_eq!(contract.functions.len(), 1);
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::Point")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Record(RecordId::new("demo::Point"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Point"
         );
     }
 
@@ -321,8 +340,8 @@ mod tests {
             ))
         );
         assert_eq!(
-            contract.customs[0].repr,
-            TypeExpr::Primitive(Primitive::I64)
+            contract.customs[0].repr.expr(),
+            &TypeExpr::Primitive(Primitive::I64)
         );
         assert_eq!(
             contract.customs[0].error,
@@ -339,12 +358,16 @@ mod tests {
                 if expr.source.replace(' ', "") == "|millis:i64|from_millis(millis)"
         ));
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Custom(CustomTypeId::new("demo::UtcDateTime"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Custom(CustomTypeId::new("demo::UtcDateTime"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Custom(CustomTypeId::new("demo::UtcDateTime")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Custom(CustomTypeId::new("demo::UtcDateTime"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "DateTime<Utc>"
         );
     }
 
@@ -357,12 +380,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::Timestamp"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::Timestamp"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::Timestamp")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Record(RecordId::new("demo::Timestamp"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Timestamp"
         );
     }
 
@@ -379,12 +406,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::data::Timestamp"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::data::Timestamp"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::data::Timestamp")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Record(RecordId::new("demo::data::Timestamp"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Timestamp"
         );
     }
 
@@ -417,14 +448,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Custom(CustomTypeId::new(
-                "demo::custom::UtcDateTime"
-            )))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "chrono::DateTime<chrono::Utc>"
         );
     }
 
@@ -440,14 +473,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Custom(CustomTypeId::new(
-                "demo::custom::UtcDateTime"
-            )))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "DateTime<Utc>"
         );
     }
 
@@ -464,14 +499,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Custom(CustomTypeId::new(
-                "demo::custom::UtcDateTime"
-            )))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Dt<Zone>"
         );
     }
 
@@ -488,14 +525,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Custom(CustomTypeId::new(
-                "demo::custom::UtcDateTime"
-            )))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Custom(CustomTypeId::new("demo::custom::UtcDateTime"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "DateTime<Utc>"
         );
     }
 
@@ -510,13 +549,14 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::geometry::Point"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::geometry::Point"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::geometry::Point")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Record(RecordId::new("demo::geometry::Point"))
         );
+        assert_eq!(value_return(&contract.functions[0].returns).spelling(), "P");
     }
 
     #[test]
@@ -562,7 +602,7 @@ mod tests {
         );
         assert_eq!(
             point.methods[0].returns,
-            ReturnDef::Value(TypeExpr::SelfType)
+            ReturnDef::value(TypeExpr::SelfType)
         );
     }
 
@@ -577,12 +617,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::geometry::Point"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::geometry::Point"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::geometry::Point")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Record(RecordId::new("demo::geometry::Point"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Point"
         );
     }
 
@@ -638,12 +682,16 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::api::Point"))
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::api::Point"))
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::api::Point")))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Record(RecordId::new("demo::api::Point"))
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Point"
         );
     }
 
@@ -798,19 +846,19 @@ mod tests {
         assert_eq!(contract.traits[0].methods[0].receiver, Receiver::Shared);
         assert_eq!(
             contract.traits[0].methods[0].returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::I64))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::I64))
         );
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::r#trait(
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::r#trait(
                 TraitId::new("demo::Listener"),
                 TraitUseForm::ImplTrait,
                 HandlePresence::Required,
             )
         );
         assert_eq!(
-            contract.functions[1].parameters[0].type_expr,
-            TypeExpr::r#trait(
+            contract.functions[1].parameters[0].rust_type.expr(),
+            &TypeExpr::r#trait(
                 TraitId::new("demo::Listener"),
                 TraitUseForm::BoxedDyn,
                 HandlePresence::Nullable,
@@ -836,30 +884,26 @@ mod tests {
         assert_eq!(contract.classes[0].methods[0].receiver, Receiver::None);
         assert_eq!(
             contract.classes[0].methods[0].returns,
-            ReturnDef::Value(TypeExpr::SelfType)
+            ReturnDef::value(TypeExpr::SelfType)
         );
         assert_eq!(contract.classes[0].methods[1].receiver, Receiver::Mutable);
         assert_eq!(
-            contract.classes[0].methods[2].parameters[0].type_expr,
-            TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Nullable)
+            contract.classes[0].methods[2].parameters[0]
+                .rust_type
+                .expr(),
+            &TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Nullable)
         );
         assert_eq!(
-            contract.classes[0].methods[2].returns,
-            ReturnDef::Value(TypeExpr::class(
-                ClassId::new("demo::Engine"),
-                HandlePresence::Required
-            ))
+            value_return_expr(&contract.classes[0].methods[2].returns),
+            &TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Required)
         );
         assert_eq!(
-            contract.functions[0].parameters[0].type_expr,
-            TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Required)
+            contract.functions[0].parameters[0].rust_type.expr(),
+            &TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Required)
         );
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::class(
-                ClassId::new("demo::Engine"),
-                HandlePresence::Nullable
-            ))
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::class(ClassId::new("demo::Engine"), HandlePresence::Nullable)
         );
     }
 
@@ -895,8 +939,8 @@ mod tests {
             Some(ClassId::new("demo::Engine"))
         );
         assert_eq!(
-            contract.streams[0].item_type,
-            TypeExpr::Record(RecordId::new("demo::Point"))
+            contract.streams[0].item_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::Point"))
         );
         assert_eq!(contract.streams[0].mode, StreamMode::Async);
         assert_eq!(
@@ -904,8 +948,8 @@ mod tests {
             StreamId::new("demo::Engine::values")
         );
         assert_eq!(
-            contract.streams[1].item_type,
-            TypeExpr::Primitive(Primitive::I32)
+            contract.streams[1].item_type.expr(),
+            &TypeExpr::Primitive(Primitive::I32)
         );
         assert_eq!(contract.streams[1].mode, StreamMode::Callback);
     }
@@ -977,8 +1021,8 @@ mod tests {
             .find(|record| record.id == RecordId::new("demo::Engine"))
             .expect("Engine record");
         assert_eq!(
-            engine.fields[0].type_expr,
-            TypeExpr::Enum(EnumId::new("demo::Mode"))
+            engine.fields[0].rust_type.expr(),
+            &TypeExpr::Enum(EnumId::new("demo::Mode"))
         );
     }
 
@@ -996,8 +1040,8 @@ mod tests {
             ConstantId::new("demo::DEFAULT_MODE")
         );
         assert_eq!(
-            contract.constants[0].type_expr,
-            TypeExpr::Enum(EnumId::new("demo::Mode"))
+            contract.constants[0].rust_type.expr(),
+            &TypeExpr::Enum(EnumId::new("demo::Mode"))
         );
         assert_eq!(
             contract.constants[1].value,
@@ -1020,16 +1064,16 @@ mod tests {
         assert_eq!(point.methods[0].receiver, Receiver::None);
         assert_eq!(
             point.methods[0].returns,
-            ReturnDef::Value(TypeExpr::SelfType)
+            ReturnDef::value(TypeExpr::SelfType)
         );
         assert_eq!(point.methods[1].receiver, Receiver::Shared);
         assert_eq!(
-            point.methods[1].parameters[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::Point"))
+            point.methods[1].parameters[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::Point"))
         );
         assert_eq!(
             point.methods[1].returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::F64))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::F64))
         );
     }
 
@@ -1045,7 +1089,7 @@ mod tests {
         assert_eq!(contract.enums[0].methods.len(), 1);
         assert_eq!(
             contract.enums[0].methods[0].returns,
-            ReturnDef::Value(TypeExpr::SelfType)
+            ReturnDef::value(TypeExpr::SelfType)
         );
     }
 
@@ -1083,11 +1127,15 @@ mod tests {
         );
 
         assert_eq!(
-            contract.functions[0].returns,
-            ReturnDef::Value(TypeExpr::Result {
+            value_return_expr(&contract.functions[0].returns),
+            &TypeExpr::Result {
                 ok: Box::new(TypeExpr::Primitive(Primitive::I32)),
                 err: Box::new(TypeExpr::Enum(EnumId::new("demo::ParseError"))),
-            })
+            }
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns).spelling(),
+            "Result<i32, ParseError>"
         );
     }
 

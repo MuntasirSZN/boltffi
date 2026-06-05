@@ -55,7 +55,7 @@ mod tests {
     use super::*;
     use boltffi_ast::{
         CallableForm, CanonicalName, ClosureKind, ExecutionKind, HandlePresence, NamePart,
-        ParameterPassing, Primitive, RecordId, ReturnDef, Source, TypeExpr, Visibility,
+        ParameterPassing, Primitive, RecordId, ReturnDef, RustType, Source, TypeExpr, Visibility,
     };
 
     fn parse(source: &str) -> syn::ItemFn {
@@ -74,6 +74,13 @@ mod tests {
         CanonicalName::new(parts.iter().copied().map(NamePart::new).collect())
     }
 
+    fn value_return(return_def: &ReturnDef) -> &RustType {
+        match return_def {
+            ReturnDef::Value(rust_type) => rust_type,
+            ReturnDef::Void => panic!("expected value return"),
+        }
+    }
+
     #[test]
     fn scans_complete_primitive_free_function_contract() {
         let function = scan("pub fn add(a: i32, b: i32) -> i32 { a + b }").expect("scan");
@@ -84,7 +91,7 @@ mod tests {
             ParameterDef::value(name(&["a"]), TypeExpr::Primitive(Primitive::I32)),
             ParameterDef::value(name(&["b"]), TypeExpr::Primitive(Primitive::I32)),
         ];
-        expected.returns = ReturnDef::Value(TypeExpr::Primitive(Primitive::I32));
+        expected.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::I32));
         expected.source = Source::new(Visibility::Public, None);
 
         assert_eq!(function, expected);
@@ -117,12 +124,12 @@ mod tests {
         let function = scan("pub fn id(value: (i32)) -> (i32) { value }").expect("scan");
 
         assert_eq!(
-            function.parameters[0].type_expr,
-            TypeExpr::Primitive(Primitive::I32)
+            function.parameters[0].rust_type.expr(),
+            &TypeExpr::Primitive(Primitive::I32)
         );
         assert_eq!(
             function.returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::I32))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::I32))
         );
     }
 
@@ -142,25 +149,32 @@ mod tests {
             scan("pub fn make_handler() -> impl Send + FnMut(u32, bool) -> i64 { todo!() }")
                 .expect("scan");
 
-        let ReturnDef::Value(TypeExpr::Closure {
+        let ReturnDef::Value(rust_type) = function.returns else {
+            panic!("expected closure return");
+        };
+        let TypeExpr::Closure {
             signature,
             presence,
-        }) = function.returns
+        } = rust_type.into_expr()
         else {
             panic!("expected closure return");
         };
         assert_eq!(presence, HandlePresence::Required);
         assert_eq!(signature.kind, ClosureKind::FnMut);
         assert_eq!(
-            signature.parameters,
+            signature
+                .parameters
+                .iter()
+                .map(|rust_type| rust_type.expr())
+                .collect::<Vec<_>>(),
             vec![
-                TypeExpr::Primitive(Primitive::U32),
-                TypeExpr::Primitive(Primitive::Bool)
+                &TypeExpr::Primitive(Primitive::U32),
+                &TypeExpr::Primitive(Primitive::Bool)
             ]
         );
         assert_eq!(
             signature.returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::I64))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::I64))
         );
     }
 
@@ -168,14 +182,21 @@ mod tests {
     fn closure_return_without_arrow_records_void_invoke_return() {
         let function = scan("pub fn make_handler() -> impl FnOnce(u32) { todo!() }").expect("scan");
 
-        let ReturnDef::Value(TypeExpr::Closure { signature, .. }) = function.returns else {
+        let ReturnDef::Value(rust_type) = function.returns else {
+            panic!("expected closure return");
+        };
+        let TypeExpr::Closure { signature, .. } = rust_type.into_expr() else {
             panic!("expected closure return");
         };
 
         assert_eq!(signature.kind, ClosureKind::FnOnce);
         assert_eq!(
-            signature.parameters,
-            vec![TypeExpr::Primitive(Primitive::U32)]
+            signature
+                .parameters
+                .iter()
+                .map(|rust_type| rust_type.expr())
+                .collect::<Vec<_>>(),
+            vec![&TypeExpr::Primitive(Primitive::U32)]
         );
         assert_eq!(signature.returns, ReturnDef::Void);
     }
@@ -202,13 +223,14 @@ mod tests {
         .expect("scan");
 
         assert_eq!(
-            function.parameters[0].type_expr,
-            TypeExpr::Record(RecordId::new("demo::Point"))
+            function.parameters[0].rust_type.expr(),
+            &TypeExpr::Record(RecordId::new("demo::Point"))
         );
         assert_eq!(
-            function.returns,
-            ReturnDef::Value(TypeExpr::Record(RecordId::new("demo::Point")))
+            value_return(&function.returns).expr(),
+            &TypeExpr::Record(RecordId::new("demo::Point"))
         );
+        assert_eq!(value_return(&function.returns).spelling(), "Point");
     }
 
     #[test]

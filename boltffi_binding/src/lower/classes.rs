@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn lowers_class_with_initializer_method_release_and_metadata() {
-        let mut new = method("new", Receiver::None, ReturnDef::Value(TypeExpr::SelfType));
+        let mut new = method("new", Receiver::None, ReturnDef::value(TypeExpr::SelfType));
         new.parameters
             .push(param("seed", TypeExpr::Primitive(Primitive::U64)));
         let start = method("start", Receiver::Mutable, ReturnDef::Void);
@@ -248,7 +248,7 @@ mod tests {
         let try_new = method(
             "try_new",
             Receiver::None,
-            ReturnDef::Value(TypeExpr::Result {
+            ReturnDef::value(TypeExpr::Result {
                 ok: Box::new(TypeExpr::SelfType),
                 err: Box::new(TypeExpr::String),
             }),
@@ -289,7 +289,7 @@ mod tests {
         let version = method(
             "version",
             Receiver::None,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::I32)),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::I32)),
         );
         let bindings = lower_class::<Native>(class("demo::Engine", "Engine", vec![version]));
         let class = class_by_id(&bindings, ClassId::from_raw(0));
@@ -316,7 +316,7 @@ mod tests {
         let mut merge = method(
             "merge",
             Receiver::Shared,
-            ReturnDef::Value(TypeExpr::SelfType),
+            ReturnDef::value(TypeExpr::SelfType),
         );
         merge.parameters.push(param("other", TypeExpr::SelfType));
         merge.parameters.push(param(
@@ -372,7 +372,7 @@ mod tests {
         let mut clone = method(
             "clone_handle",
             Receiver::Shared,
-            ReturnDef::Value(TypeExpr::SelfType),
+            ReturnDef::value(TypeExpr::SelfType),
         );
         clone.parameters.push(param("other", TypeExpr::SelfType));
         let bindings = lower_class::<Wasm32>(class("demo::Engine", "Engine", vec![clone]));
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn registers_release_initializer_and_method_symbols_in_order() {
-        let new = method("new", Receiver::None, ReturnDef::Value(TypeExpr::SelfType));
+        let new = method("new", Receiver::None, ReturnDef::value(TypeExpr::SelfType));
         let start = method("start", Receiver::Shared, ReturnDef::Void);
         let bindings = lower_class::<Native>(class("demo::Engine", "Engine", vec![new, start]));
 
@@ -526,12 +526,12 @@ mod tests {
         let locate = method(
             "locate",
             Receiver::Shared,
-            ReturnDef::Value(TypeExpr::Record("demo::Point".into())),
+            ReturnDef::value(TypeExpr::Record("demo::Point".into())),
         );
         let direction_method = method(
             "direction",
             Receiver::Shared,
-            ReturnDef::Value(TypeExpr::Enum("demo::Direction".into())),
+            ReturnDef::value(TypeExpr::Enum("demo::Direction".into())),
         );
         let mut contract = package();
         contract.records.push(point);
@@ -638,7 +638,7 @@ mod tests {
         let mut method = method(
             "maybe_driver",
             Receiver::Shared,
-            ReturnDef::Value(TypeExpr::class(
+            ReturnDef::value(TypeExpr::class(
                 "demo::Driver".into(),
                 SourcePresence::Nullable,
             )),
@@ -671,7 +671,7 @@ mod tests {
         let method = method(
             "maybe_new",
             Receiver::None,
-            ReturnDef::Value(TypeExpr::class(
+            ReturnDef::value(TypeExpr::class(
                 "demo::Engine".into(),
                 SourcePresence::Nullable,
             )),
@@ -697,7 +697,7 @@ mod tests {
         let method = method(
             "maybe_self",
             Receiver::Shared,
-            ReturnDef::Value(TypeExpr::option(TypeExpr::SelfType)),
+            ReturnDef::value(TypeExpr::option(TypeExpr::SelfType)),
         );
         let bindings = lower_class::<Native>(class("demo::Engine", "Engine", vec![method]));
         let class_method = class_by_id(&bindings, ClassId::from_raw(0))
@@ -835,7 +835,7 @@ mod tests {
         let mut new_engine = method(
             "new",
             Receiver::None,
-            ReturnDef::Value(TypeExpr::class(
+            ReturnDef::value(TypeExpr::class(
                 "demo::Engine".into(),
                 SourcePresence::Required,
             )),

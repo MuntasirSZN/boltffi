@@ -78,7 +78,7 @@ fn named_field(field: &syn::Field, scanner: &Scanner<'_>) -> Result<FieldDef, Sc
         .ident
         .as_ref()
         .expect("named variant field carries an identifier");
-    let mut field_def = FieldDef::new(name::source(ident), scanner.scan(&field.ty)?);
+    let mut field_def = FieldDef::new(name::source(ident), scanner.rust_type(&field.ty)?);
     let attrs = Attributes::new(&field.attrs, scanner);
     field_def.source = attributes::source(&field.vis, scanner.scope(), field.span());
     field_def.source_span = field_def.source.span.clone();
@@ -170,7 +170,10 @@ mod tests {
         match &enumeration.variants[1].payload {
             VariantPayload::Struct(fields) => {
                 assert_eq!(fields[0].name.canonical(), &name(&["width"]));
-                assert_eq!(fields[0].type_expr, TypeExpr::Primitive(Primitive::F64));
+                assert_eq!(
+                    fields[0].rust_type.expr(),
+                    &TypeExpr::Primitive(Primitive::F64)
+                );
             }
             other => panic!("expected struct payload, got {other:?}"),
         }

@@ -38,7 +38,7 @@ pub(super) fn lower(
 
 fn lower_one(ids: &DeclarationIds, custom: &SourceCustom) -> Result<CustomTypeDecl, LowerError> {
     let custom_id = ids.custom(&custom.id)?;
-    let representation = types::lower(ids, &custom.repr)?;
+    let representation = types::lower(ids, custom.repr.expr())?;
     Ok(CustomTypeDecl::new(
         custom_id,
         CanonicalName::from(&custom.name),
@@ -257,7 +257,7 @@ mod tests {
             name("handle"),
             TypeExpr::Custom("demo::Handle".into()),
         )];
-        function.returns = ReturnDef::Value(TypeExpr::Custom("demo::Handle".into()));
+        function.returns = ReturnDef::value(TypeExpr::Custom("demo::Handle".into()));
         contract.functions.push(function);
 
         let bindings = lower::<Native>(&contract).expect("contract should lower");

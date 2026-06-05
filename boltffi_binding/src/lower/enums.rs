@@ -162,8 +162,8 @@ fn lower_payload(
             .map(|field| {
                 let key = FieldKey::from(field);
                 let value = ValueRef::self_value().field(key.clone());
-                let ty = super::types::lower(ids, &field.type_expr)?;
-                let codec = codecs::plan(idx, ids, &field.type_expr, value)?;
+                let ty = super::types::lower(ids, field.rust_type.expr())?;
+                let codec = codecs::plan(idx, ids, field.rust_type.expr(), value)?;
                 Ok(EncodedFieldDecl::new(
                     key,
                     ty,
@@ -695,7 +695,7 @@ mod tests {
                 "flip",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::SelfType),
+                ReturnDef::value(TypeExpr::SelfType),
             )],
         ));
         let method = only_method(&bindings);
@@ -716,7 +716,7 @@ mod tests {
                 "clone_event",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::SelfType),
+                ReturnDef::value(TypeExpr::SelfType),
             )],
         ));
         let method = only_method(&bindings);
@@ -739,7 +739,7 @@ mod tests {
                 "default_direction",
                 Receiver::None,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::SelfType),
+                ReturnDef::value(TypeExpr::SelfType),
             )],
         ));
         let initializer = only_initializer(&bindings);
@@ -766,7 +766,7 @@ mod tests {
                 "try_default",
                 Receiver::None,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::Result {
+                ReturnDef::value(TypeExpr::Result {
                     ok: Box::new(TypeExpr::SelfType),
                     err: Box::new(TypeExpr::String),
                 }),
@@ -792,7 +792,7 @@ mod tests {
                 "try_event",
                 Receiver::None,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::Result {
+                ReturnDef::value(TypeExpr::Result {
                     ok: Box::new(TypeExpr::SelfType),
                     err: Box::new(TypeExpr::String),
                 }),
@@ -842,7 +842,7 @@ mod tests {
                 "neighbours",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::vec(TypeExpr::SelfType)),
+                ReturnDef::value(TypeExpr::vec(TypeExpr::SelfType)),
             )],
         ));
         let method = only_method(&bindings);
@@ -965,7 +965,7 @@ mod tests {
     fn async_enum_initializer_lowers_to_poll_handle_protocol() {
         let mut parse = method("parse", Receiver::None);
         parse.execution = ExecutionKind::Async;
-        parse.returns = ReturnDef::Value(TypeExpr::SelfType);
+        parse.returns = ReturnDef::value(TypeExpr::SelfType);
         let bindings = lower_enum::<Native>(enum_with_methods(direction_enum(), vec![parse]));
         let initializer = only_initializer(&bindings);
 
@@ -1015,7 +1015,7 @@ mod tests {
                 "try_value",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::Result {
+                ReturnDef::value(TypeExpr::Result {
                     ok: Box::new(TypeExpr::Primitive(Primitive::I32)),
                     err: Box::new(TypeExpr::String),
                 }),
@@ -1150,7 +1150,7 @@ mod tests {
                 "describe",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::String),
+                ReturnDef::value(TypeExpr::String),
             )],
         ));
         let method = only_method(&bindings);
@@ -1258,7 +1258,7 @@ mod tests {
                 "to_point",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::Record("demo::Point".into())),
+                ReturnDef::value(TypeExpr::Record("demo::Point".into())),
             )],
         );
 
@@ -1281,7 +1281,7 @@ mod tests {
                 "heading_for",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::Enum("demo::Direction".into())),
+                ReturnDef::value(TypeExpr::Enum("demo::Direction".into())),
             )],
         );
 

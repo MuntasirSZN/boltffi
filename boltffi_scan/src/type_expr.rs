@@ -1,29 +1,30 @@
 use boltffi_ast::{
-    ClosureKind, ClosureType, HandlePresence, Primitive, ReturnDef, TraitId, TraitUseForm, TypeExpr,
+    ClosureKind, ClosureType, HandlePresence, Primitive, ReturnDef, RustType, TraitId,
+    TraitUseForm, TypeExpr,
 };
 
 use crate::declared_types::{DeclaredType, DeclaredTypes, SourceType};
 use crate::unsupported::UnsupportedFeature;
-use crate::{ModuleScope, ScanError};
+use crate::{ModuleScope, ScanError, spelling};
 
-pub(super) struct Scanner<'a> {
+pub struct Scanner<'a> {
     declared_types: &'a DeclaredTypes,
     scope: &'a ModuleScope,
 }
 
 impl<'a> Scanner<'a> {
-    pub(super) fn new(declared_types: &'a DeclaredTypes, scope: &'a ModuleScope) -> Self {
+    pub fn new(declared_types: &'a DeclaredTypes, scope: &'a ModuleScope) -> Self {
         Self {
             declared_types,
             scope,
         }
     }
 
-    pub(super) fn scope(&self) -> &'a ModuleScope {
+    pub fn scope(&self) -> &'a ModuleScope {
         self.scope
     }
 
-    pub(super) fn scan(&self, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
+    pub fn scan(&self, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
         let unwrapped = unwrapped(ty);
         if let syn::Type::Path(type_path) = unwrapped {
             if let Some(named) = self.exact_named(type_path, ty)? {
@@ -45,6 +46,11 @@ impl<'a> Scanner<'a> {
             syn::Type::Path(type_path) => self.path(type_path, ty),
             _ => Err(ScanError::unsupported_type(ty)),
         }
+    }
+
+    pub fn rust_type(&self, ty: &syn::Type) -> Result<RustType, ScanError> {
+        self.scan(ty)
+            .map(|expr| RustType::new(spelling::ty(ty), expr))
     }
 
     fn exact_named(
@@ -109,11 +115,11 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    pub(super) fn scan_return(&self, output: &syn::ReturnType) -> Result<ReturnDef, ScanError> {
+    pub fn scan_return(&self, output: &syn::ReturnType) -> Result<ReturnDef, ScanError> {
         match output {
             syn::ReturnType::Default => Ok(ReturnDef::Void),
             syn::ReturnType::Type(_, ty) if is_unit(ty) => Ok(ReturnDef::Void),
-            syn::ReturnType::Type(_, ty) => Ok(ReturnDef::Value(self.scan(ty)?)),
+            syn::ReturnType::Type(_, ty) => Ok(ReturnDef::Value(self.rust_type(ty)?)),
         }
     }
 
@@ -414,7 +420,7 @@ impl<'a> Scanner<'a> {
         let parameters = bare_fn
             .inputs
             .iter()
-            .map(|argument| self.scan(&argument.ty))
+            .map(|argument| self.rust_type(&argument.ty))
             .collect::<Result<Vec<_>, _>>()?;
         let returns = self.scan_return(&bare_fn.output)?;
         Ok(TypeExpr::closure_with_presence(
@@ -438,7 +444,7 @@ impl<'a> Scanner<'a> {
         let parameters = arguments
             .inputs
             .iter()
-            .map(|input| self.scan(input))
+            .map(|input| self.rust_type(input))
             .collect::<Result<Vec<_>, _>>()?;
         let returns = self.scan_return(&arguments.output)?;
         Ok(TypeExpr::closure(ClosureType::new(
@@ -455,7 +461,7 @@ impl<'a> Scanner<'a> {
         let parameters = arguments
             .inputs
             .iter()
-            .map(|input| self.scan(input))
+            .map(|input| self.rust_type(input))
             .collect::<Result<Vec<_>, _>>()?;
         let returns = self.scan_return(&arguments.output)?;
         Ok(TypeExpr::closure_with_presence(
@@ -550,7 +556,7 @@ fn is_unit(ty: &syn::Type) -> bool {
     matches!(unwrapped(ty), syn::Type::Tuple(tuple) if tuple.elems.is_empty())
 }
 
-pub(super) fn unwrapped(ty: &syn::Type) -> &syn::Type {
+pub fn unwrapped(ty: &syn::Type) -> &syn::Type {
     match ty {
         syn::Type::Paren(paren) => unwrapped(&paren.elem),
         syn::Type::Group(group) => unwrapped(&group.elem),
@@ -880,7 +886,7 @@ mod tests {
         assert_eq!(
             scanner.scan(&ty("Array<8>")),
             Err(ScanError::UnsupportedType {
-                spelling: "Array<const>".to_owned()
+                spelling: "Array<8>".to_owned()
             })
         );
     }
@@ -1185,15 +1191,19 @@ mod tests {
         assert_eq!(presence, HandlePresence::Required);
         assert_eq!(signature.kind, ClosureKind::FunctionPointer);
         assert_eq!(
-            signature.parameters,
+            signature
+                .parameters
+                .iter()
+                .map(|rust_type| rust_type.expr())
+                .collect::<Vec<_>>(),
             vec![
-                TypeExpr::Primitive(Primitive::U32),
-                TypeExpr::Primitive(Primitive::Bool)
+                &TypeExpr::Primitive(Primitive::U32),
+                &TypeExpr::Primitive(Primitive::Bool)
             ]
         );
         assert_eq!(
             signature.returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::I64))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::I64))
         );
     }
 
@@ -1238,12 +1248,16 @@ mod tests {
         assert_eq!(presence, HandlePresence::Required);
         assert_eq!(signature.kind, ClosureKind::FnMut);
         assert_eq!(
-            signature.parameters,
-            vec![TypeExpr::Primitive(Primitive::U32)]
+            signature
+                .parameters
+                .iter()
+                .map(|rust_type| rust_type.expr())
+                .collect::<Vec<_>>(),
+            vec![&TypeExpr::Primitive(Primitive::U32)]
         );
         assert_eq!(
             signature.returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::Bool))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::Bool))
         );
     }
 
@@ -1270,7 +1284,7 @@ mod tests {
         assert_eq!(signature.kind, ClosureKind::FnOnce);
         assert_eq!(
             signature.returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::I64))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::I64))
         );
     }
 
@@ -1378,7 +1392,7 @@ mod tests {
         ));
         assert!(matches!(
             scanner.scan(&ty("impl Send + Listener")),
-            Err(ScanError::UnsupportedType { spelling }) if spelling == "unrecognized type"
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "impl Send + Listener"
         ));
         assert!(matches!(
             scanner.scan(&ty("Box<dyn Listener + Send>")),
@@ -1386,7 +1400,7 @@ mod tests {
         ));
         assert!(matches!(
             scanner.scan(&ty("impl Listener<i32>")),
-            Err(ScanError::UnsupportedType { spelling }) if spelling == "unrecognized type"
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "impl Listener<i32>"
         ));
         assert!(matches!(
             scanner.scan(&ty("Box<dyn Listener<Item = i32>>")),
@@ -1407,12 +1421,16 @@ mod tests {
         assert_eq!(presence, boltffi_ast::HandlePresence::Required);
         assert_eq!(signature.kind, ClosureKind::Fn);
         assert_eq!(
-            signature.parameters,
-            vec![TypeExpr::Primitive(Primitive::U32)]
+            signature
+                .parameters
+                .iter()
+                .map(|rust_type| rust_type.expr())
+                .collect::<Vec<_>>(),
+            vec![&TypeExpr::Primitive(Primitive::U32)]
         );
         assert_eq!(
             signature.returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::U32))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32))
         );
     }
 
@@ -1420,7 +1438,7 @@ mod tests {
     fn impl_trait_without_fn_bound_is_rejected() {
         assert!(matches!(
             scan("impl Iterator<Item = u32>"),
-            Err(ScanError::UnsupportedType { spelling }) if spelling == "unrecognized type"
+            Err(ScanError::UnsupportedType { spelling }) if spelling == "impl Iterator<Item = u32>"
         ));
     }
 

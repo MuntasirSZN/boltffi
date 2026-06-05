@@ -417,7 +417,7 @@ pub(super) fn lower_constant_accessor<S: SurfaceLower>(
     type_expr: &boltffi_ast::TypeExpr,
 ) -> Result<ExportedCallable<S>, LowerError> {
     let owner = CallableOwner::Function;
-    let return_def = boltffi_ast::ReturnDef::Value(type_expr.clone());
+    let return_def = boltffi_ast::ReturnDef::value(type_expr.clone());
     let (returns, error) = returns::lower::<S, _>(idx, ids, allocator, owner, &return_def)?;
 
     Ok(ExportedCallable::<S>::new(
@@ -497,12 +497,12 @@ pub(super) fn substitute_self_type(
             closure.parameters = closure
                 .parameters
                 .iter()
-                .map(|parameter| substitute_self_type(owner, parameter))
+                .map(|parameter| substitute_self_rust_type(owner, parameter))
                 .collect::<Result<Vec<_>, LowerError>>()?;
             closure.returns = match closure.returns {
                 boltffi_ast::ReturnDef::Void => boltffi_ast::ReturnDef::Void,
                 boltffi_ast::ReturnDef::Value(value) => {
-                    boltffi_ast::ReturnDef::Value(substitute_self_type(owner, &value)?)
+                    boltffi_ast::ReturnDef::Value(substitute_self_rust_type(owner, &value)?)
                 }
             };
             TypeExpr::Closure {
@@ -521,6 +521,16 @@ pub(super) fn substitute_self_type(
         | TypeExpr::Custom(_)
         | TypeExpr::Parameter(_) => type_expr.clone(),
     })
+}
+
+fn substitute_self_rust_type(
+    owner: CallableOwner<'_>,
+    rust_type: &boltffi_ast::RustType,
+) -> Result<boltffi_ast::RustType, LowerError> {
+    Ok(boltffi_ast::RustType::new(
+        rust_type.spelling().to_owned(),
+        substitute_self_type(owner, rust_type.expr())?,
+    ))
 }
 
 fn lower_handle_presence(presence: boltffi_ast::HandlePresence) -> HandlePresence {

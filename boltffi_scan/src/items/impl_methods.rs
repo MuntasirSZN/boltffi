@@ -219,12 +219,12 @@ mod tests {
         assert_eq!(methods[0].name.canonical(), &name(&["distance"]));
         assert_eq!(methods[0].receiver, Receiver::Shared);
         assert_eq!(
-            methods[0].parameters[0].type_expr,
-            TypeExpr::Record(boltffi_ast::RecordId::new("demo::Point"))
+            methods[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Record(boltffi_ast::RecordId::new("demo::Point"))
         );
         assert_eq!(
             methods[0].returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::F64))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::F64))
         );
     }
 
@@ -238,7 +238,7 @@ mod tests {
         .expect("scan");
 
         assert_eq!(methods[0].receiver, Receiver::None);
-        assert_eq!(methods[0].returns, ReturnDef::Value(TypeExpr::SelfType));
+        assert_eq!(methods[0].returns, ReturnDef::value(TypeExpr::SelfType));
     }
 
     #[test]

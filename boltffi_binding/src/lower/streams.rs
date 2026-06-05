@@ -52,7 +52,7 @@ fn lower_one<S: SurfaceLower>(
         .as_ref()
         .map(|owner| ids.class(owner))
         .transpose()?;
-    let item = lower_item::<S>(idx, ids, &stream.item_type)?;
+    let item = lower_item::<S>(idx, ids, stream.item_type.expr())?;
     let protocol = build_protocol(allocator, stream.id.as_str())?;
     Ok(StreamDecl::new(StreamDeclParts {
         id: stream_id,

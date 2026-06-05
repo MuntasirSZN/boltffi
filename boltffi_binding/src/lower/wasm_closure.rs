@@ -1,6 +1,6 @@
 use std::fmt;
 
-use boltffi_ast::{ClosureType, Primitive as AstPrimitive, ReturnDef, TypeExpr};
+use boltffi_ast::{ClosureType, Primitive as AstPrimitive, ReturnDef, RustType, TypeExpr};
 
 use crate::{ImportModule, ImportSymbol, NativeSymbol, SymbolName, wasm32};
 
@@ -51,7 +51,7 @@ fn export_symbol(
 }
 
 struct ClosureSignature<'a> {
-    params: &'a [TypeExpr],
+    params: &'a [RustType],
     returns: &'a ReturnDef,
 }
 
@@ -75,13 +75,13 @@ impl fmt::Display for ClosureSignature<'_> {
             return_signature_is_void(self.returns),
         ) {
             (true, true) => formatter.write_str("Void"),
-            (false, true) => write_signature_types(formatter, self.params),
+            (false, true) => write_parameter_signature_types(formatter, self.params),
             (true, false) => {
                 formatter.write_str("To")?;
                 write_return_signature(formatter, self.returns)
             }
             (false, false) => {
-                write_signature_types(formatter, self.params)?;
+                write_parameter_signature_types(formatter, self.params)?;
                 formatter.write_str("To")?;
                 write_return_signature(formatter, self.returns)
             }
@@ -90,13 +90,16 @@ impl fmt::Display for ClosureSignature<'_> {
 }
 
 fn return_signature_is_void(returns: &ReturnDef) -> bool {
-    matches!(returns, ReturnDef::Void | ReturnDef::Value(TypeExpr::Unit))
+    matches!(returns, ReturnDef::Void)
+        || matches!(returns, ReturnDef::Value(rust_type) if matches!(rust_type.expr(), TypeExpr::Unit))
 }
 
 fn write_return_signature(formatter: &mut fmt::Formatter<'_>, returns: &ReturnDef) -> fmt::Result {
     match returns {
         ReturnDef::Void => formatter.write_str("Void"),
-        ReturnDef::Value(type_expr) => write!(formatter, "{}", ClosureTypeSignature(type_expr)),
+        ReturnDef::Value(rust_type) => {
+            write!(formatter, "{}", ClosureTypeSignature(rust_type.expr()))
+        }
     }
 }
 
@@ -140,13 +143,24 @@ impl fmt::Display for ClosureTypeSignature<'_> {
 }
 
 fn write_signature_types(formatter: &mut fmt::Formatter<'_>, types: &[TypeExpr]) -> fmt::Result {
-    for (index, type_expr) in types.iter().enumerate() {
+    types.iter().enumerate().try_for_each(|(index, type_expr)| {
         if index > 0 {
             formatter.write_str("_")?;
         }
-        write!(formatter, "{}", ClosureTypeSignature(type_expr))?;
-    }
-    Ok(())
+        write!(formatter, "{}", ClosureTypeSignature(type_expr))
+    })
+}
+
+fn write_parameter_signature_types(
+    formatter: &mut fmt::Formatter<'_>,
+    types: &[RustType],
+) -> fmt::Result {
+    types.iter().enumerate().try_for_each(|(index, rust_type)| {
+        if index > 0 {
+            formatter.write_str("_")?;
+        }
+        write!(formatter, "{}", ClosureTypeSignature(rust_type.expr()))
+    })
 }
 
 fn source_type_signature(source_id: &str) -> String {
@@ -249,7 +263,7 @@ mod tests {
             vec![TypeExpr::option(TypeExpr::Record(RecordId::new(
                 "demo::Point",
             )))],
-            ReturnDef::Value(TypeExpr::result(
+            ReturnDef::value(TypeExpr::result(
                 TypeExpr::Primitive(AstPrimitive::I32),
                 TypeExpr::Record(RecordId::new("demo::MathError")),
             )),

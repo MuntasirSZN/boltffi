@@ -2,6 +2,56 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ClassId, CustomTypeId, EnumId, Primitive, RecordId, ReturnDef, TraitId};
 
+/// A Rust source type and its scanned semantic expression.
+///
+/// `spelling` preserves the type text written by the Rust author, such as
+/// `crate::models::Point` or `Vec<u8>`. `expr` stores the resolved BoltFFI type
+/// expression used by lowering and validation.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub struct RustType {
+    spelling: String,
+    expr: TypeExpr,
+}
+
+impl RustType {
+    /// Builds a Rust source type.
+    pub fn new(spelling: impl Into<String>, expr: TypeExpr) -> Self {
+        Self {
+            spelling: spelling.into(),
+            expr,
+        }
+    }
+
+    /// Builds a Rust type from a semantic expression when source spelling is unavailable.
+    pub fn from_expr(expr: TypeExpr) -> Self {
+        Self {
+            spelling: expr.fallback_spelling(),
+            expr,
+        }
+    }
+
+    /// Returns the Rust type spelling.
+    pub fn spelling(&self) -> &str {
+        &self.spelling
+    }
+
+    /// Returns the scanned semantic type expression.
+    pub const fn expr(&self) -> &TypeExpr {
+        &self.expr
+    }
+
+    /// Consumes the source type and returns its semantic expression.
+    pub fn into_expr(self) -> TypeExpr {
+        self.expr
+    }
+}
+
+impl From<TypeExpr> for RustType {
+    fn from(expr: TypeExpr) -> Self {
+        Self::from_expr(expr)
+    }
+}
+
 /// Form in which a Rust trait appears as a source value.
 ///
 /// Names the supported Rust spellings for trait-typed values: a
@@ -227,6 +277,47 @@ impl TypeExpr {
             value: Box::new(value),
         }
     }
+
+    fn fallback_spelling(&self) -> String {
+        match self {
+            Self::Primitive(primitive) => primitive.rust_name().to_owned(),
+            Self::Unit => "()".to_owned(),
+            Self::Record(id) => id.as_str().to_owned(),
+            Self::Enum(id) => id.as_str().to_owned(),
+            Self::Class { id, .. } => id.as_str().to_owned(),
+            Self::Trait { id, .. } => id.as_str().to_owned(),
+            Self::Closure { signature, .. } => signature.fallback_spelling(),
+            Self::Custom(id) => id.as_str().to_owned(),
+            Self::SelfType => "Self".to_owned(),
+            Self::Vec(element) => format!("Vec<{}>", element.fallback_spelling()),
+            Self::Option(inner) => format!("Option<{}>", inner.fallback_spelling()),
+            Self::Result { ok, err } => {
+                format!(
+                    "Result<{}, {}>",
+                    ok.fallback_spelling(),
+                    err.fallback_spelling()
+                )
+            }
+            Self::Tuple(elements) => {
+                let rendered = elements
+                    .iter()
+                    .map(Self::fallback_spelling)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({rendered})")
+            }
+            Self::Map { key, value } => {
+                format!(
+                    "std::collections::HashMap<{}, {}>",
+                    key.fallback_spelling(),
+                    value.fallback_spelling()
+                )
+            }
+            Self::String => "String".to_owned(),
+            Self::Bytes => "Vec<u8>".to_owned(),
+            Self::Parameter(parameter) => parameter.name.as_str().to_owned(),
+        }
+    }
 }
 
 /// Kind of inline closure-shaped parameter the source wrote.
@@ -258,7 +349,7 @@ pub struct ClosureType {
     /// Source-form kind the parser saw.
     pub kind: ClosureKind,
     /// Types accepted by the closure in source order.
-    pub parameters: Vec<TypeExpr>,
+    pub parameters: Vec<RustType>,
     /// Return type written by the closure signature.
     pub returns: ReturnDef,
 }
@@ -271,11 +362,36 @@ impl ClosureType {
     /// The `returns` parameter is the closure return type.
     ///
     /// Returns a closure signature suitable for [`TypeExpr::Closure`].
-    pub fn new(kind: ClosureKind, parameters: Vec<TypeExpr>, returns: ReturnDef) -> Self {
+    pub fn new<I>(kind: ClosureKind, parameters: I, returns: ReturnDef) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<RustType>,
+    {
         Self {
             kind,
-            parameters,
+            parameters: parameters.into_iter().map(Into::into).collect(),
             returns,
+        }
+    }
+
+    fn fallback_spelling(&self) -> String {
+        let parameters = self
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let trait_name = match self.kind {
+            ClosureKind::FunctionPointer => "fn",
+            ClosureKind::Fn => "impl Fn",
+            ClosureKind::FnMut => "impl FnMut",
+            ClosureKind::FnOnce => "impl FnOnce",
+        };
+        match &self.returns {
+            ReturnDef::Void => format!("{trait_name}({parameters})"),
+            ReturnDef::Value(rust_type) => {
+                format!("{trait_name}({parameters}) -> {}", rust_type.spelling())
+            }
         }
     }
 }
