@@ -6,6 +6,9 @@
 #include <string.h>
 #include <limits.h>
 #include <stdatomic.h>
+#if defined(__ANDROID__)
+#include <pthread.h>
+#endif
 #include <{{ module_name }}.h>
 
 static inline bool boltffi_exception_pending(JNIEnv* env) {
@@ -467,6 +470,117 @@ static jint boltffi_attach_current_thread(JavaVM* vm, JNIEnv** env) {
 #endif
 }
 
+#define BOLTFFI_JNI_CALLBACK_LOCAL_FRAME_CAPACITY 64
+
+#if defined(__ANDROID__)
+static pthread_key_t g_boltffi_jni_env_key;
+static pthread_once_t g_boltffi_jni_env_key_once = PTHREAD_ONCE_INIT;
+static int g_boltffi_jni_env_key_status = 0;
+static char g_boltffi_jni_tls_attached_marker;
+
+static void boltffi_android_jni_env_destructor(void* value) {
+    if (value != NULL && g_jvm != NULL) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
+}
+
+static void boltffi_android_jni_env_key_init(void) {
+    g_boltffi_jni_env_key_status =
+        pthread_key_create(&g_boltffi_jni_env_key, boltffi_android_jni_env_destructor);
+}
+
+// Android callback threads are commonly long-lived Rust worker threads. Cache only
+// BoltFFI-owned daemon attachments and let pthread TLS detach when the thread exits.
+static jint boltffi_android_attach_current_thread_cached(
+    JavaVM* vm,
+    JNIEnv** env,
+    int* attached
+) {
+    *attached = 0;
+
+    if (pthread_once(&g_boltffi_jni_env_key_once, boltffi_android_jni_env_key_init) != 0 ||
+            g_boltffi_jni_env_key_status != 0) {
+        jint result = boltffi_attach_current_thread(vm, env);
+        if (result == JNI_OK) {
+            *attached = 1;
+        }
+        return result;
+    }
+
+    jint result = (*vm)->AttachCurrentThreadAsDaemon(vm, env, NULL);
+    if (result != JNI_OK) {
+        return result;
+    }
+
+    if (pthread_setspecific(g_boltffi_jni_env_key, &g_boltffi_jni_tls_attached_marker) != 0) {
+        (*vm)->DetachCurrentThread(vm);
+        *env = NULL;
+        return JNI_ERR;
+    }
+
+    return JNI_OK;
+}
+#endif
+
+static inline jint boltffi_jni_callback_enter(JNIEnv** env, int* attached) {
+    if (g_jvm == NULL) {
+        *env = NULL;
+        *attached = 0;
+        return JNI_ERR;
+    }
+
+    *env = NULL;
+    *attached = 0;
+
+    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)env, JNI_VERSION_1_6);
+    if (get_env_result == JNI_EDETACHED) {
+#if defined(__ANDROID__)
+        if (boltffi_android_attach_current_thread_cached(g_jvm, env, attached) != JNI_OK) {
+            return JNI_ERR;
+        }
+#else
+        if (boltffi_attach_current_thread(g_jvm, env) != JNI_OK) {
+            return JNI_ERR;
+        }
+        *attached = 1;
+#endif
+    } else if (get_env_result != JNI_OK) {
+        return get_env_result;
+    }
+
+#if defined(__ANDROID__)
+    // Cached native attachments do not get automatic local-reference cleanup at
+    // callback return, so every native-to-Java callback runs inside a local frame.
+    JNIEnv* callback_env = *env;
+    if ((*callback_env)->PushLocalFrame(callback_env, BOLTFFI_JNI_CALLBACK_LOCAL_FRAME_CAPACITY) != JNI_OK) {
+        boltffi_consume_pending_exception(callback_env);
+        if (*attached) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+            *attached = 0;
+        }
+        return JNI_ERR;
+    }
+#endif
+
+    return JNI_OK;
+}
+
+static inline void boltffi_jni_callback_exit(JNIEnv* env, int attached) {
+#if defined(__ANDROID__)
+    if (env != NULL) {
+        (*env)->PopLocalFrame(env, NULL);
+        // Callback failures are reported to Rust through FfiStatus/default return
+        // values, so cached Android worker threads must not keep stale exceptions.
+        boltffi_consume_pending_exception(env);
+    }
+#else
+    (void)env;
+#endif
+    if (attached) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
+}
+
 {%- for cb in callback_traits %}
 static BoltFFICallbackInitResult init_{{ cb.trait_name }}_callbacks(JNIEnv* env);
 {%- endfor %}
@@ -501,20 +615,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 static void boltffi_jni_continuation_callback(uint64_t handle, int8_t poll_result) {
     JNIEnv* env;
     int attached = 0;
-    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
-    if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) {
-            return;
-        }
-        attached = 1;
-    } else if (get_env_result != JNI_OK) {
+    if (boltffi_jni_callback_enter(&env, &attached) != JNI_OK) {
         return;
     }
     (*env)->CallStaticVoidMethod(env, g_callback_class, g_callback_method, (jlong)handle, (jbyte)poll_result);
     boltffi_consume_pending_exception(env);
-    if (attached) {
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    }
+    boltffi_jni_callback_exit(env, attached);
 }
 {%- endif %}
 {%- endif %}
@@ -643,17 +749,7 @@ static BoltFFIStaticCallCache g_{{ trampoline.signature_id }}_cache = BOLTFFI_ST
 static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* user_data{{ trampoline.c_params }}) {
     JNIEnv* env;
     int attached = 0;
-    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
-    if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) {
-{%- if trampoline.is_void() %}
-            return;
-{%- else %}
-            {{ trampoline.c_return_type() }} zero = {0}; return zero;
-{%- endif %}
-        }
-        attached = 1;
-    } else if (get_env_result != JNI_OK) {
+    if (boltffi_jni_callback_enter(&env, &attached) != JNI_OK) {
 {%- if trampoline.is_void() %}
         return;
 {%- else %}
@@ -668,7 +764,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
         {{ line }}
 {%- endfor %}
-        if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+        boltffi_jni_callback_exit(env, attached);
 {%- if trampoline.is_void() %}
         return;
 {%- else %}
@@ -681,17 +777,13 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
         {{ line }}
 {%- endfor %}
-        if (attached) {
-            (*g_jvm)->DetachCurrentThread(g_jvm);
-        }
+        boltffi_jni_callback_exit(env, attached);
         return;
     }
 {%- for line in trampoline.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) {
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    }
+    boltffi_jni_callback_exit(env, attached);
 {%- else %}
 {%- if trampoline.is_wire_encoded_return() %}
     jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
@@ -701,9 +793,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
         {{ line }}
 {%- endfor %}
-        if (attached) {
-            (*g_jvm)->DetachCurrentThread(g_jvm);
-        }
+        boltffi_jni_callback_exit(env, attached);
         return _result;
     }
     if (_jarr != NULL) {
@@ -721,9 +811,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) {
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    }
+    boltffi_jni_callback_exit(env, attached);
     return _result;
 {%- elif trampoline.is_blittable_struct_return() %}
     jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
@@ -733,9 +821,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
         {{ line }}
 {%- endfor %}
-        if (attached) {
-            (*g_jvm)->DetachCurrentThread(g_jvm);
-        }
+        boltffi_jni_callback_exit(env, attached);
         return _result;
     }
     if (_jarr != NULL) {
@@ -748,9 +834,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) {
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    }
+    boltffi_jni_callback_exit(env, attached);
     return _result;
 {%- elif trampoline.is_raw_pointer_return() %}
     jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
@@ -760,9 +844,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
         {{ line }}
 {%- endfor %}
-        if (attached) {
-            (*g_jvm)->DetachCurrentThread(g_jvm);
-        }
+        boltffi_jni_callback_exit(env, attached);
         return _result;
     }
     if (_jarr != NULL) {
@@ -777,9 +859,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) {
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    }
+    boltffi_jni_callback_exit(env, attached);
     return _result;
 {%- elif trampoline.is_callback_handle_return() %}
     jlong _handle_val = (*env)->CallStaticLongMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
@@ -788,18 +868,14 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
         {{ line }}
 {%- endfor %}
-        if (attached) {
-            (*g_jvm)->DetachCurrentThread(g_jvm);
-        }
+        boltffi_jni_callback_exit(env, attached);
         return _zero;
     }
     BoltFFICallbackHandle _result = {{ trampoline.callback_create_fn() }}((uint64_t)_handle_val);
 {%- for line in trampoline.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) {
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    }
+    boltffi_jni_callback_exit(env, attached);
     return _result;
 {%- else %}
     {{ trampoline.c_return_type() }} _result = {{ trampoline.jni_return_cast() }}(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
@@ -808,17 +884,13 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for line in trampoline.cleanup_lines %}
         {{ line }}
 {%- endfor %}
-        if (attached) {
-            (*g_jvm)->DetachCurrentThread(g_jvm);
-        }
+        boltffi_jni_callback_exit(env, attached);
         return _zero;
     }
 {%- for line in trampoline.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) {
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    }
+    boltffi_jni_callback_exit(env, attached);
     return _result;
 {%- endif %}
 {%- endif %}
@@ -1273,19 +1345,13 @@ boltffi_input_cleanup:
 static void {{ cb.trait_name }}_{{ method.vtable_field }}_proxy_callback(uint64_t callback_data{% if method.is_wire() %}, const uint8_t* result_ptr, size_t result_len{% elif method.has_return() %}, {{ method.return_c_type() }} result{% endif %}, FfiStatus status) {
     JNIEnv* env;
     int attached = 0;
-    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
-    if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) {
-            return;
-        }
-        attached = 1;
-    } else if (get_env_result != JNI_OK) {
+    if (boltffi_jni_callback_enter(&env, &attached) != JNI_OK) {
         return;
     }
     if (status.code != 0) {
         (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, {{ method.failure_method_id }}, (jlong)callback_data);
         boltffi_consume_pending_exception(env);
-        if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+        boltffi_jni_callback_exit(env, attached);
         return;
     }
 {%- if method.is_wire() %}
@@ -1294,7 +1360,7 @@ static void {{ cb.trait_name }}_{{ method.vtable_field }}_proxy_callback(uint64_
         boltffi_consume_pending_exception(env);
         (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, {{ method.failure_method_id }}, (jlong)callback_data);
         boltffi_consume_pending_exception(env);
-        if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+        boltffi_jni_callback_exit(env, attached);
         return;
     }
     if (result_len > 0 && result_ptr != NULL) {
@@ -1304,7 +1370,7 @@ static void {{ cb.trait_name }}_{{ method.vtable_field }}_proxy_callback(uint64_
             (*env)->DeleteLocalRef(env, _result);
             (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, {{ method.failure_method_id }}, (jlong)callback_data);
             boltffi_consume_pending_exception(env);
-            if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+            boltffi_jni_callback_exit(env, attached);
             return;
         }
     }
@@ -1317,7 +1383,7 @@ static void {{ cb.trait_name }}_{{ method.vtable_field }}_proxy_callback(uint64_
         boltffi_consume_pending_exception(env);
         (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, {{ method.failure_method_id }}, (jlong)callback_data);
         boltffi_consume_pending_exception(env);
-        if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+        boltffi_jni_callback_exit(env, attached);
         return;
     }
     (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, {{ method.success_method_id }}, (jlong)callback_data, _result_handle);
@@ -1328,7 +1394,7 @@ static void {{ cb.trait_name }}_{{ method.vtable_field }}_proxy_callback(uint64_
     (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, {{ method.success_method_id }}, (jlong)callback_data);
 {%- endif %}
     boltffi_consume_pending_exception(env);
-    if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+    boltffi_jni_callback_exit(env, attached);
 }
 
 JNIEXPORT void JNICALL {{ method.jni_name }}(JNIEnv *env, jclass cls, jlong handle{{ method.jni_params }}) {
@@ -1401,30 +1467,22 @@ boltffi_input_cleanup:
 static void {{ cb.trait_name }}_vtable_free(uint64_t handle) {
     JNIEnv* env;
     int attached = 0;
-    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
-    if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) return;
-        attached = 1;
-    } else if (get_env_result != JNI_OK) return;
+    if (boltffi_jni_callback_enter(&env, &attached) != JNI_OK) return;
     (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, g_{{ cb.trait_name }}_free_method, (jlong)handle);
     boltffi_consume_pending_exception(env);
-    if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+    boltffi_jni_callback_exit(env, attached);
 }
 
 static uint64_t {{ cb.trait_name }}_vtable_clone(uint64_t handle) {
     JNIEnv* env;
     int attached = 0;
-    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
-    if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) return 0;
-        attached = 1;
-    } else if (get_env_result != JNI_OK) return 0;
+    if (boltffi_jni_callback_enter(&env, &attached) != JNI_OK) return 0;
     jlong result = (*env)->CallStaticLongMethod(env, g_{{ cb.trait_name }}_callbacks_class, g_{{ cb.trait_name }}_clone_method, (jlong)handle);
     if (boltffi_consume_pending_exception(env)) {
-        if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+        boltffi_jni_callback_exit(env, attached);
         return 0;
     }
-    if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+    boltffi_jni_callback_exit(env, attached);
     return (uint64_t)result;
 }
 
@@ -1443,14 +1501,7 @@ JNIEXPORT void JNICALL {{ cb.proxy_release_jni_name }}(JNIEnv* env, jclass cls, 
 static void {{ cb.trait_name }}_vtable_{{ method.ffi_name }}(uint64_t handle{% for param in method.c_params %}, {{ param.c_type }} {{ param.name }}{% endfor %}, FfiStatus* {{ method.status_param_name() }}) {
     JNIEnv* env;
     int attached = 0;
-    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
-    if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) {
-            {{ method.status_param_name() }}->code = 1;
-            return;
-        }
-        attached = 1;
-    } else if (get_env_result != JNI_OK) {
+    if (boltffi_jni_callback_enter(&env, &attached) != JNI_OK) {
         {{ method.status_param_name() }}->code = 1;
         return;
     }
@@ -1500,7 +1551,7 @@ cleanup:
 {%- for line in method.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+    boltffi_jni_callback_exit(env, attached);
 }
 {%- endfor %}
 {%- for method in cb.async_methods %}
@@ -1509,20 +1560,7 @@ static void {{ cb.trait_name }}_vtable_{{ method.ffi_name }}(uint64_t handle{% f
     JNIEnv* env;
     int attached = 0;
     bool _boltffi_dispatch_succeeded = false;
-    jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
-    if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) {
-{%- if method.is_wire() %}
-            callback((uint64_t)callback_data, NULL, 0, (FfiStatus){.code = 1});
-{%- elif method.has_return() %}
-            callback((uint64_t)callback_data, ({{ method.return_c_type() }}){0}, (FfiStatus){.code = 1});
-{%- else %}
-            callback((uint64_t)callback_data, (FfiStatus){.code = 1});
-{%- endif %}
-            return;
-        }
-        attached = 1;
-    } else if (get_env_result != JNI_OK) {
+    if (boltffi_jni_callback_enter(&env, &attached) != JNI_OK) {
 {%- if method.is_wire() %}
         callback((uint64_t)callback_data, NULL, 0, (FfiStatus){.code = 1});
 {%- elif method.has_return() %}
@@ -1543,7 +1581,7 @@ cleanup:
 {%- for line in method.cleanup_lines %}
     {{ line }}
 {%- endfor %}
-    if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+    boltffi_jni_callback_exit(env, attached);
     if (_boltffi_dispatch_succeeded) return;
 {%- if method.is_wire() %}
     callback((uint64_t)callback_data, NULL, 0, (FfiStatus){.code = 1});

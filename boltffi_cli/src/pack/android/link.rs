@@ -308,6 +308,7 @@ fn android_shared_link_args(
         OsString::from("-Xlinker"),
         export_script_path.as_os_str().to_os_string(),
         OsString::from("-Wl,--gc-sections"),
+        OsString::from("-Wl,-z,nodelete"),
         OsString::from("-lm"),
         OsString::from("-llog"),
         OsString::from("-ldl"),
@@ -620,6 +621,21 @@ enabled = true
         assert!(args.contains(&OsString::from("--version-script")));
         assert!(args.contains(&OsString::from("/tmp/out/exports.map")));
         assert!(args.contains(&OsString::from("-Wl,--gc-sections")));
+    }
+
+    #[test]
+    fn android_linker_marks_jni_library_nodelete_for_cached_thread_destructors() {
+        let args = android_shared_link_args(
+            Path::new("/tmp/out/libdemo.so"),
+            Path::new("/tmp/out/jni_glue.o"),
+            Path::new("/tmp/out/libdemo.a"),
+            Path::new("/tmp/out/exports.map"),
+        );
+
+        assert!(
+            args.contains(&OsString::from("-Wl,-z,nodelete")),
+            "Android JNI libraries should stay mapped so pthread TLS destructors remain callable"
+        );
     }
 
     #[test]
