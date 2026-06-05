@@ -372,6 +372,70 @@ mod tests {
     }
 
     #[test]
+    fn android_callback_glue_caches_native_thread_attachment_with_local_frames() {
+        let module = build_test_module();
+        let mut ir_module = module.clone();
+        let contract = ir::build_contract(&mut ir_module);
+        let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
+        let jni_module = JniLowerer::new(
+            &contract,
+            &abi_contract,
+            "com.example".to_string(),
+            "Native".to_string(),
+        )
+        .lower();
+
+        let glue = JniEmitter::emit(&jni_module);
+
+        assert!(
+            glue.contains("pthread_key_create(&g_boltffi_jni_env_key"),
+            "Android callback glue should create a pthread TLS key for cached JNI attachments"
+        );
+        assert!(
+            glue.contains("AttachCurrentThreadAsDaemon"),
+            "Android callback glue should attach native worker threads as daemon Java threads"
+        );
+        assert!(
+            glue.contains("pthread_setspecific(g_boltffi_jni_env_key"),
+            "Android callback glue should mark BoltFFI-owned thread attachments in TLS"
+        );
+        assert!(
+            glue.contains("JNIEnv* callback_env = *env;"),
+            "callback enter should convert JNIEnv** to a local JNIEnv* before calling JNI functions"
+        );
+        assert!(
+            glue.contains(
+                "(*callback_env)->PushLocalFrame(callback_env, BOLTFFI_JNI_CALLBACK_LOCAL_FRAME_CAPACITY)"
+            ),
+            "cached Android attachments should bound callback-local JNI references"
+        );
+        assert!(
+            !glue.contains("(*env)->PushLocalFrame(*env"),
+            "callback enter should not call JNI methods directly on the JNIEnv** parameter"
+        );
+        assert!(
+            glue.contains("PopLocalFrame(env, NULL)"),
+            "cached Android attachments should release callback-local JNI references before returning"
+        );
+        let exit_helper = glue
+            .split("static inline void boltffi_jni_callback_exit(JNIEnv* env, int attached)")
+            .nth(1)
+            .expect("callback exit helper should be rendered");
+        let android_exit_branch = exit_helper
+            .split("#else")
+            .next()
+            .expect("Android callback exit branch should be rendered");
+        assert!(
+            android_exit_branch.contains("boltffi_consume_pending_exception(env);"),
+            "cached Android attachments should not preserve pending JNI exceptions between callbacks"
+        );
+        assert!(
+            glue.contains("boltffi_jni_callback_enter(&env, &attached)"),
+            "native-to-Java callback paths should use the shared Android-aware callback entry helper"
+        );
+    }
+
+    #[test]
     fn wire_template_uses_typed_array_region_for_stack_copy_fast_path() {
         let function = JniWireFunction {
             ffi_name: "boltffi_sum".to_string(),
