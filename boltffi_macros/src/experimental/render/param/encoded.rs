@@ -130,80 +130,27 @@ impl<'binding, 'syntax> Slice<'binding, 'syntax> {
     }
 
     fn pointer_type(&self) -> TokenStream {
-        match (self.ty, self.receive) {
-            (TypeRef::String | TypeRef::Bytes, Receive::ByMutRef) => quote! { *mut u8 },
-            _ => quote! { *const u8 },
-        }
+        quote! { *const u8 }
     }
 
     fn string_conversion(&self) -> Result<TokenStream, Error> {
         let ident = self.ident;
-        let pointer = &self.pointer;
-        let length = &self.length;
-        let failure = &self.failure;
         match self.receive {
-            Receive::ByValue => Ok(quote! {
-                let #ident: String = if #pointer.is_null() {
-                    String::new()
-                } else {
-                    match ::core::str::from_utf8(unsafe {
-                        ::core::slice::from_raw_parts(#pointer, #length)
-                    }) {
-                        Ok(value) => value.to_string(),
-                        Err(error) => {
-                            ::boltffi::__private::set_last_error(format!(
-                                "{}: invalid UTF-8: {} (buf_len={})",
-                                stringify!(#ident),
-                                error,
-                                #length
-                            ));
-                            #failure
-                        }
-                    }
-                };
-            }),
-            Receive::ByRef => Ok(quote! {
-                let #ident: &str = if #pointer.is_null() {
-                    ""
-                } else {
-                    match ::core::str::from_utf8(unsafe {
-                        ::core::slice::from_raw_parts(#pointer, #length)
-                    }) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            ::boltffi::__private::set_last_error(format!(
-                                "{}: invalid UTF-8: {} (buf_len={})",
-                                stringify!(#ident),
-                                error,
-                                #length
-                            ));
-                            #failure
-                        }
-                    }
-                };
-            }),
+            Receive::ByValue => self.owned_value_conversion(quote! { String }, ident, false),
+            Receive::ByRef => {
+                let storage = local::Parameter::new(ident).storage();
+                let value = self.owned_value_conversion(quote! { String }, &storage, false)?;
+                Ok(quote! {
+                    #value
+                    let #ident = #storage.as_str();
+                })
+            }
             Receive::ByMutRef => {
                 let storage = local::Parameter::new(ident).storage();
+                let value = self.owned_value_conversion(quote! { String }, &storage, true)?;
                 Ok(quote! {
-                    let mut #storage = String::new();
-                    let #ident: &mut str = if #pointer.is_null() {
-                        #storage.as_mut_str()
-                    } else {
-                        match ::core::str::from_utf8_mut(unsafe {
-                            ::core::slice::from_raw_parts_mut(#pointer, #length)
-                        }) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                ::boltffi::__private::set_last_error(format!(
-                                    "{}: invalid UTF-8: {} (buf_len={})",
-                                    stringify!(#ident),
-                                    error,
-                                    #length
-                                ));
-                                #failure
-                            }
-                        }
-                    };
+                    #value
+                    let #ident = #storage.as_mut_str();
                 })
             }
             _ => Err(Error::UnsupportedExpansion(
@@ -214,30 +161,24 @@ impl<'binding, 'syntax> Slice<'binding, 'syntax> {
 
     fn bytes_conversion(&self) -> Result<TokenStream, Error> {
         let ident = self.ident;
-        let pointer = &self.pointer;
-        let length = &self.length;
         match self.receive {
-            Receive::ByValue => Ok(quote! {
-                let #ident: Vec<u8> = if #pointer.is_null() {
-                    Vec::new()
-                } else {
-                    unsafe { ::core::slice::from_raw_parts(#pointer, #length) }.to_vec()
-                };
-            }),
-            Receive::ByRef => Ok(quote! {
-                let #ident: &[u8] = if #pointer.is_null() {
-                    &[]
-                } else {
-                    unsafe { ::core::slice::from_raw_parts(#pointer, #length) }
-                };
-            }),
-            Receive::ByMutRef => Ok(quote! {
-                let #ident: &mut [u8] = if #pointer.is_null() {
-                    &mut []
-                } else {
-                    unsafe { ::core::slice::from_raw_parts_mut(#pointer, #length) }
-                };
-            }),
+            Receive::ByValue => self.owned_value_conversion(quote! { Vec<u8> }, ident, false),
+            Receive::ByRef => {
+                let storage = local::Parameter::new(ident).storage();
+                let value = self.owned_value_conversion(quote! { Vec<u8> }, &storage, false)?;
+                Ok(quote! {
+                    #value
+                    let #ident = #storage.as_slice();
+                })
+            }
+            Receive::ByMutRef => {
+                let storage = local::Parameter::new(ident).storage();
+                let value = self.owned_value_conversion(quote! { Vec<u8> }, &storage, true)?;
+                Ok(quote! {
+                    #value
+                    let #ident = #storage.as_mut_slice();
+                })
+            }
             _ => Err(Error::UnsupportedExpansion(
                 "unknown encoded bytes parameter receive mode",
             )),
@@ -301,6 +242,15 @@ impl<'binding, 'syntax> Slice<'binding, 'syntax> {
         binding: &syn::Ident,
         mutable: bool,
     ) -> Result<TokenStream, Error> {
+        self.owned_value_conversion(quote! { #rust_type }, binding, mutable)
+    }
+
+    fn owned_value_conversion(
+        &self,
+        rust_type: TokenStream,
+        binding: &syn::Ident,
+        mutable: bool,
+    ) -> Result<TokenStream, Error> {
         let pointer = &self.pointer;
         let length = &self.length;
         let failure = &self.failure;
@@ -343,7 +293,7 @@ impl<'binding, 'syntax> Slice<'binding, 'syntax> {
                 } else {
                     unsafe { ::core::slice::from_raw_parts(#pointer, #length) }
                 };
-                match ::boltffi::__private::wire::decode(__boltffi_bytes) {
+                match ::boltffi::__private::wire::decode::<#rust_type>(__boltffi_bytes) {
                     Ok(value) => value,
                     Err(error) => {
                         ::boltffi::__private::set_last_error(format!(

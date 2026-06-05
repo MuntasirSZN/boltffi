@@ -118,7 +118,7 @@ struct AsyncExports<'binding, 'syntax, S: Target> {
 impl<'binding, 'syntax, S> AsyncExports<'binding, 'syntax, S>
 where
     S: Target,
-    for<'plan> encoded::Rule: RenderRule<S, encoded::Input<'plan, S>, Output = encoded::Tokens>,
+    encoded::Rule: RenderRule<S, encoded::Input<S>, Output = encoded::Tokens>,
     encoded::Rule: RenderRule<S, encoded::Empty<S>, Output = encoded::Tokens>,
     direct_vec::Rule: RenderRule<S, direct_vec::Input, Output = render::returns::Tokens>
         + RenderRule<S, direct_vec::Empty, Output = render::returns::Tokens>,
@@ -425,7 +425,7 @@ struct PlainComplete {
 impl Complete {
     fn new<S: Target>(function: &FunctionDecl<S>, rust_return_type: &Type) -> Result<Self, Error>
     where
-        for<'plan> encoded::Rule: RenderRule<S, encoded::Input<'plan, S>, Output = encoded::Tokens>,
+        encoded::Rule: RenderRule<S, encoded::Input<S>, Output = encoded::Tokens>,
         encoded::Rule: RenderRule<S, encoded::Empty<S>, Output = encoded::Tokens>,
         direct_vec::Rule: RenderRule<S, direct_vec::Input, Output = render::returns::Tokens>
             + RenderRule<S, direct_vec::Empty, Output = render::returns::Tokens>,
@@ -465,7 +465,7 @@ impl Complete {
 impl PlainComplete {
     fn new<S: Target>(function: &FunctionDecl<S>, rust_return_type: &Type) -> Result<Self, Error>
     where
-        for<'plan> encoded::Rule: RenderRule<S, encoded::Input<'plan, S>, Output = encoded::Tokens>,
+        encoded::Rule: RenderRule<S, encoded::Input<S>, Output = encoded::Tokens>,
         encoded::Rule: RenderRule<S, encoded::Empty<S>, Output = encoded::Tokens>,
         direct_vec::Rule: RenderRule<S, direct_vec::Input, Output = render::returns::Tokens>
             + RenderRule<S, direct_vec::Empty, Output = render::returns::Tokens>,
@@ -514,10 +514,10 @@ impl PlainComplete {
                     }
                 },
             }),
-            ReturnPlan::EncodedViaReturnSlot { ty, shape, .. } => {
+            ReturnPlan::EncodedViaReturnSlot { shape, .. } => {
                 let encoded = <encoded::Rule as RenderRule<S, _>>::apply(
                     encoded::Rule,
-                    encoded::Input::new(ty, *shape, result.clone()),
+                    encoded::Input::new(*shape, result.clone()),
                 )?;
                 let empty = <encoded::Rule as RenderRule<S, _>>::apply(
                     encoded::Rule,
@@ -641,7 +641,7 @@ struct FallibleComplete {
 impl FallibleComplete {
     fn new<S: Target>(function: &FunctionDecl<S>, rust_return_type: &Type) -> Result<Self, Error>
     where
-        for<'plan> encoded::Rule: RenderRule<S, encoded::Input<'plan, S>, Output = encoded::Tokens>,
+        encoded::Rule: RenderRule<S, encoded::Input<S>, Output = encoded::Tokens>,
         encoded::Rule: RenderRule<S, encoded::Empty<S>, Output = encoded::Tokens>,
         fallible::Success: for<'plan> RenderRule<
                 S,
@@ -650,13 +650,13 @@ impl FallibleComplete {
             >,
         for<'plan> handle::Value: RenderRule<S, handle::ValueInput<'plan, S::HandleCarrier>, Output = handle::ValueTokens>,
     {
-        let ErrorDecl::EncodedViaReturnSlot { ty, shape, .. } = function.callable().error() else {
+        let ErrorDecl::EncodedViaReturnSlot { shape, .. } = function.callable().error() else {
             return Err(Error::UnsupportedExpansion("async error channel"));
         };
         let error = local::Wrapper::new(proc_macro2::Span::call_site()).error();
         let encoded_error = <encoded::Rule as RenderRule<S, _>>::apply(
             encoded::Rule,
-            encoded::Input::new(ty, *shape, error.clone()),
+            encoded::Input::new(*shape, error.clone()),
         )?;
         let empty_error =
             <encoded::Rule as RenderRule<S, _>>::apply(encoded::Rule, encoded::Empty::new(*shape))?;

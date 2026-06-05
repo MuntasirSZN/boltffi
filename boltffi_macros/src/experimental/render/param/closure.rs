@@ -351,23 +351,16 @@ impl<'binding, 'syntax, S: Target> InvokeParameterInput<'binding, 'syntax, S> {
                     ::boltffi::__private::Passable::pack(#argument)
                 }],
             }),
-            OutgoingParam::Value(ParamPlan::Encoded { ty, .. }) => {
+            OutgoingParam::Value(ParamPlan::Encoded { .. }) => {
                 let locals = local::ClosureArgument::new(self.index);
                 let wire = locals.wire();
                 let pointer = locals.pointer();
                 let length = locals.length();
-                let buffer = match ty {
-                    TypeRef::String => {
-                        quote! { ::boltffi::__private::FfiBuf::from_vec(#argument.into_bytes()) }
-                    }
-                    TypeRef::Bytes => quote! { ::boltffi::__private::FfiBuf::from_vec(#argument) },
-                    _ => quote! { ::boltffi::__private::FfiBuf::wire_encode(&#argument) },
-                };
                 Ok(InvokeParameterTokens {
                     rust_parameter: quote! { #argument: #rust_type },
                     ffi_parameter_types: vec![quote! { *const u8 }, quote! { usize }],
                     setup: vec![quote! {
-                        let #wire = #buffer;
+                        let #wire = ::boltffi::__private::FfiBuf::wire_encode(&#argument);
                         let #pointer = #wire.as_ptr();
                         let #length = #wire.len();
                     }],

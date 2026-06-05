@@ -63,7 +63,7 @@ impl<'a, S: Target> Input<'a, S> {
 impl<'a, S> RenderRule<S, Input<'a, S>> for Rule
 where
     S: Target,
-    encoded::Rule: RenderRule<S, encoded::Input<'a, S>, Output = encoded::Tokens>
+    encoded::Rule: RenderRule<S, encoded::Input<S>, Output = encoded::Tokens>
         + RenderRule<S, encoded::Empty<S>, Output = encoded::Tokens>,
     Success: RenderRule<S, SuccessInput<'a, S>, Output = SuccessTokens>,
     handle::Value:
@@ -119,7 +119,7 @@ impl<'a, S: Target> EncodedError<'a, S> {
 
     fn tokens(self) -> Result<Tokens, Error>
     where
-        encoded::Rule: RenderRule<S, encoded::Input<'a, S>, Output = encoded::Tokens>
+        encoded::Rule: RenderRule<S, encoded::Input<S>, Output = encoded::Tokens>
             + RenderRule<S, encoded::Empty<S>, Output = encoded::Tokens>,
         Success: RenderRule<S, SuccessInput<'a, S>, Output = SuccessTokens>,
         handle::Value:
@@ -129,7 +129,7 @@ impl<'a, S: Target> EncodedError<'a, S> {
         let error_ident = locals.error();
         let error = <encoded::Rule as RenderRule<S, _>>::apply(
             encoded::Rule,
-            encoded::Input::new(self.error_ty, self.error_shape, error_ident.clone()),
+            encoded::Input::new(self.error_shape, error_ident.clone()),
         )?;
         let empty_error = <encoded::Rule as RenderRule<S, _>>::apply(
             encoded::Rule,
@@ -190,7 +190,7 @@ impl<'a, S: Target> EncodedError<'a, S> {
 impl<'a, S> RenderRule<S, SuccessInput<'a, S>> for Success
 where
     S: Target,
-    encoded::Rule: RenderRule<S, encoded::Input<'a, S>, Output = encoded::Tokens>,
+    encoded::Rule: RenderRule<S, encoded::Input<S>, Output = encoded::Tokens>,
     closure::Write: RenderRule<S, closure::WriteInput<'a, S>, Output = closure::WriteTokens>,
     handle::Value:
         RenderRule<S, handle::ValueInput<'a, S::HandleCarrier>, Output = handle::ValueTokens>,
@@ -250,11 +250,11 @@ where
                     },
                 })
             }
-            ReturnPlan::EncodedViaOutPointer { ty, shape, .. } => {
+            ReturnPlan::EncodedViaOutPointer { shape, .. } => {
                 let out = locals.return_out();
                 let encoded = <encoded::Rule as RenderRule<S, _>>::apply(
                     encoded::Rule,
-                    encoded::Input::new(ty, *shape, success_ident.clone()),
+                    encoded::Input::new(*shape, success_ident.clone()),
                 )?;
                 let out_ty = encoded.return_type_without_arrow();
                 let encoded_value = encoded.value();

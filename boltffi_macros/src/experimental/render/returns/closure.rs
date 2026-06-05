@@ -423,9 +423,9 @@ impl<'a, S: Target> ClosureInvoke<'a, S> {
             .map(InvokeParameters::from)
     }
 
-    fn return_tokens(&self) -> Result<InvokeReturnTokens<'a>, Error>
+    fn return_tokens(&self) -> Result<InvokeReturnTokens, Error>
     where
-        InvokeReturnRule: RenderRule<S, InvokeReturnInput<'a, S>, Output = InvokeReturnTokens<'a>>,
+        InvokeReturnRule: RenderRule<S, InvokeReturnInput<'a, S>, Output = InvokeReturnTokens>,
     {
         <InvokeReturnRule as RenderRule<S, _>>::apply(
             InvokeReturnRule,
@@ -659,54 +659,6 @@ struct EncodedInvokeArgument<'a> {
 
 impl EncodedInvokeArgument<'_> {
     fn tokens(&self) -> TokenStream {
-        match self.ty {
-            TypeRef::String => self.string(),
-            TypeRef::Bytes => self.bytes(),
-            _ => self.generic(),
-        }
-    }
-
-    fn string(&self) -> TokenStream {
-        let argument = self.argument;
-        let pointer = self.pointer;
-        let length = self.length;
-        let failure = self.failure;
-        quote! {
-            let #argument: String = if #pointer.is_null() {
-                String::new()
-            } else {
-                match ::core::str::from_utf8(unsafe {
-                    ::core::slice::from_raw_parts(#pointer, #length)
-                }) {
-                    Ok(value) => value.to_string(),
-                    Err(error) => {
-                        ::boltffi::__private::set_last_error(format!(
-                            "{}: invalid UTF-8: {} (buf_len={})",
-                            stringify!(#argument),
-                            error,
-                            #length
-                        ));
-                        #failure
-                    }
-                }
-            };
-        }
-    }
-
-    fn bytes(&self) -> TokenStream {
-        let argument = self.argument;
-        let pointer = self.pointer;
-        let length = self.length;
-        quote! {
-            let #argument: Vec<u8> = if #pointer.is_null() {
-                Vec::new()
-            } else {
-                unsafe { ::core::slice::from_raw_parts(#pointer, #length) }.to_vec()
-            };
-        }
-    }
-
-    fn generic(&self) -> TokenStream {
         let rust_type = self.rust_type;
         let argument = self.argument;
         let pointer = self.pointer;
@@ -750,7 +702,7 @@ impl EncodedInvokeArgument<'_> {
                 } else {
                     unsafe { ::core::slice::from_raw_parts(#pointer, #length) }
                 };
-                match ::boltffi::__private::wire::decode(__boltffi_bytes) {
+                match ::boltffi::__private::wire::decode::<#rust_type>(__boltffi_bytes) {
                     Ok(value) => value,
                     Err(error) => {
                         ::boltffi::__private::set_last_error(format!(
@@ -796,7 +748,7 @@ impl<'a, S: Target> InvokeReturnInput<'a, S> {
         }
     }
 
-    fn direct_tokens<T: Target>(&self) -> Result<Option<InvokeReturnTokens<'a>>, Error>
+    fn direct_tokens<T: Target>(&self) -> Result<Option<InvokeReturnTokens>, Error>
     where
         for<'ty> render::type_ref::Rule: RenderRule<T, &'ty TypeRef, Output = TokenStream>,
     {
@@ -840,19 +792,15 @@ impl<'a, S: Target> InvokeReturnInput<'a, S> {
         ))
     }
 
-    fn encoded_error<T: Target>(
-        &self,
-        error_ty: &'a TypeRef,
-        error_shape: T::BufferShape,
-    ) -> Result<EncodedError, Error>
+    fn encoded_error<T: Target>(&self, error_shape: T::BufferShape) -> Result<EncodedError, Error>
     where
-        encoded::Rule: RenderRule<T, encoded::Input<'a, T>, Output = encoded::Tokens>
+        encoded::Rule: RenderRule<T, encoded::Input<T>, Output = encoded::Tokens>
             + RenderRule<T, encoded::Empty<T>, Output = encoded::Tokens>,
     {
         let error_ident = local::Wrapper::new(Span::call_site()).error();
         let error = <encoded::Rule as RenderRule<T, _>>::apply(
             encoded::Rule,
-            encoded::Input::new(error_ty, error_shape, error_ident),
+            encoded::Input::new(error_shape, error_ident),
         )?;
         let empty = <encoded::Rule as RenderRule<T, _>>::apply(
             encoded::Rule,
@@ -868,7 +816,7 @@ impl<'a, S: Target> InvokeReturnInput<'a, S> {
 }
 
 impl<'a> RenderRule<Native, InvokeReturnInput<'a, Native>> for InvokeReturnRule {
-    type Output = InvokeReturnTokens<'a>;
+    type Output = InvokeReturnTokens;
 
     fn apply(self, input: InvokeReturnInput<'a, Native>) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens::<Native>()? {
@@ -886,12 +834,11 @@ impl<'a> RenderRule<Native, InvokeReturnInput<'a, Native>> for InvokeReturnRule 
             (
                 ReturnPlan::Void,
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty,
                     shape: native::BufferShape::Buffer,
                     ..
                 },
             ) => Ok(InvokeReturnTokens::fallible(
-                input.encoded_error::<Native>(ty, native::BufferShape::Buffer)?,
+                input.encoded_error::<Native>(native::BufferShape::Buffer)?,
                 FallibleSuccess::Void,
             )),
             (
@@ -899,7 +846,6 @@ impl<'a> RenderRule<Native, InvokeReturnInput<'a, Native>> for InvokeReturnRule 
                     ty: TypeRef::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty,
                     shape: native::BufferShape::Buffer,
                     ..
                 },
@@ -909,31 +855,28 @@ impl<'a> RenderRule<Native, InvokeReturnInput<'a, Native>> for InvokeReturnRule 
                     &TypeRef::Primitive(*primitive),
                 )?;
                 Ok(InvokeReturnTokens::fallible(
-                    input.encoded_error::<Native>(ty, native::BufferShape::Buffer)?,
+                    input.encoded_error::<Native>(native::BufferShape::Buffer)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },
                 ))
             }
             (
                 ReturnPlan::DirectViaOutPointer { .. },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty,
                     shape: native::BufferShape::Buffer,
                     ..
                 },
             ) => Ok(InvokeReturnTokens::fallible(
-                input.encoded_error::<Native>(ty, native::BufferShape::Buffer)?,
+                input.encoded_error::<Native>(native::BufferShape::Buffer)?,
                 FallibleSuccess::DirectPassable {
                     rust_type: Box::new(input.result_type()?.ok),
                 },
             )),
             (
                 ReturnPlan::EncodedViaOutPointer {
-                    ty: ok_ty,
                     shape: native::BufferShape::Buffer,
                     ..
                 },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty: error_ty,
                     shape: native::BufferShape::Buffer,
                     ..
                 },
@@ -941,10 +884,10 @@ impl<'a> RenderRule<Native, InvokeReturnInput<'a, Native>> for InvokeReturnRule 
                 let success_ident = local::Wrapper::new(Span::call_site()).success();
                 let success = <encoded::Rule as RenderRule<Native, _>>::apply(
                     encoded::Rule,
-                    encoded::Input::new(ok_ty, native::BufferShape::Buffer, success_ident),
+                    encoded::Input::new(native::BufferShape::Buffer, success_ident),
                 )?;
                 Ok(InvokeReturnTokens::fallible(
-                    input.encoded_error::<Native>(error_ty, native::BufferShape::Buffer)?,
+                    input.encoded_error::<Native>(native::BufferShape::Buffer)?,
                     FallibleSuccess::Encoded {
                         out_type: success.return_type_without_arrow(),
                         value: success.value().clone(),
@@ -962,7 +905,7 @@ impl<'a> RenderRule<Native, InvokeReturnInput<'a, Native>> for InvokeReturnRule 
 }
 
 impl<'a> RenderRule<Wasm32, InvokeReturnInput<'a, Wasm32>> for InvokeReturnRule {
-    type Output = InvokeReturnTokens<'a>;
+    type Output = InvokeReturnTokens;
 
     fn apply(self, input: InvokeReturnInput<'a, Wasm32>) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens::<Wasm32>()? {
@@ -972,21 +915,20 @@ impl<'a> RenderRule<Wasm32, InvokeReturnInput<'a, Wasm32>> for InvokeReturnRule 
         match (input.plan, input.error) {
             (
                 ReturnPlan::EncodedViaReturnSlot {
-                    ty,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
                 ErrorDecl::None(_),
-            ) => Ok(InvokeReturnTokens::WasmEncoded { ty }),
+            ) => Ok(InvokeReturnTokens::WasmEncoded),
             (
                 ReturnPlan::Void,
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty,
+                    ty: TypeRef::String,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
-            ) if matches!(ty, TypeRef::String) => Ok(InvokeReturnTokens::fallible(
-                input.encoded_error::<Wasm32>(ty, wasm32::BufferShape::Packed)?,
+            ) => Ok(InvokeReturnTokens::fallible(
+                input.encoded_error::<Wasm32>(wasm32::BufferShape::Packed)?,
                 FallibleSuccess::Void,
             )),
             (
@@ -994,52 +936,51 @@ impl<'a> RenderRule<Wasm32, InvokeReturnInput<'a, Wasm32>> for InvokeReturnRule 
                     ty: TypeRef::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty,
+                    ty: TypeRef::String,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
-            ) if matches!(ty, TypeRef::String) => {
+            ) => {
                 let ffi_type = <render::type_ref::Rule as RenderRule<Wasm32, &TypeRef>>::apply(
                     render::type_ref::Rule,
                     &TypeRef::Primitive(*primitive),
                 )?;
                 Ok(InvokeReturnTokens::fallible(
-                    input.encoded_error::<Wasm32>(ty, wasm32::BufferShape::Packed)?,
+                    input.encoded_error::<Wasm32>(wasm32::BufferShape::Packed)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },
                 ))
             }
             (
                 ReturnPlan::DirectViaOutPointer { .. },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty,
+                    ty: TypeRef::String,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
-            ) if matches!(ty, TypeRef::String) => Ok(InvokeReturnTokens::fallible(
-                input.encoded_error::<Wasm32>(ty, wasm32::BufferShape::Packed)?,
+            ) => Ok(InvokeReturnTokens::fallible(
+                input.encoded_error::<Wasm32>(wasm32::BufferShape::Packed)?,
                 FallibleSuccess::DirectPassable {
                     rust_type: Box::new(input.result_type()?.ok),
                 },
             )),
             (
                 ReturnPlan::EncodedViaOutPointer {
-                    ty,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty: error_ty,
+                    ty: TypeRef::String,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
-            ) if matches!(error_ty, TypeRef::String) => {
+            ) => {
                 let success_ident = local::Wrapper::new(Span::call_site()).success();
                 let success = <encoded::Rule as RenderRule<Wasm32, _>>::apply(
                     encoded::Rule,
-                    encoded::Input::new(ty, wasm32::BufferShape::Packed, success_ident),
+                    encoded::Input::new(wasm32::BufferShape::Packed, success_ident),
                 )?;
                 Ok(InvokeReturnTokens::fallible(
-                    input.encoded_error::<Wasm32>(error_ty, wasm32::BufferShape::Packed)?,
+                    input.encoded_error::<Wasm32>(wasm32::BufferShape::Packed)?,
                     FallibleSuccess::Encoded {
                         out_type: success.return_type_without_arrow(),
                         value: success.value().clone(),
@@ -1056,16 +997,16 @@ impl<'a> RenderRule<Wasm32, InvokeReturnInput<'a, Wasm32>> for InvokeReturnRule 
     }
 }
 
-enum InvokeReturnTokens<'a> {
+enum InvokeReturnTokens {
     Void,
     DirectPrimitive { ffi_type: TokenStream },
     DirectPassable { rust_type: Box<Type> },
     NativeEncoded,
-    WasmEncoded { ty: &'a TypeRef },
+    WasmEncoded,
     Fallible(Box<FallibleInvokeReturn>),
 }
 
-impl InvokeReturnTokens<'_> {
+impl InvokeReturnTokens {
     fn fallible(error: EncodedError, success: FallibleSuccess) -> Self {
         Self::Fallible(Box::new(FallibleInvokeReturn { error, success }))
     }
@@ -1078,7 +1019,7 @@ impl InvokeReturnTokens<'_> {
                 quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out }
             }
             Self::NativeEncoded => quote! { -> ::boltffi::__private::FfiBuf },
-            Self::WasmEncoded { .. } => quote! { -> u64 },
+            Self::WasmEncoded => quote! { -> u64 },
             Self::Fallible(fallible) => fallible.error.return_type.clone(),
         }
     }
@@ -1112,17 +1053,7 @@ impl InvokeReturnTokens<'_> {
                     ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result)
                 }
             },
-            Self::WasmEncoded {
-                ty: TypeRef::String,
-            } => quote! {
-                {
-                    let __boltffi_result = #call;
-                    ::boltffi::__private::FfiBuf::from_vec(
-                        __boltffi_result.into_bytes().into_boxed_slice().into_vec()
-                    ).into_packed()
-                }
-            },
-            Self::WasmEncoded { .. } => quote! {
+            Self::WasmEncoded => quote! {
                 {
                     let __boltffi_result = #call;
                     ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result).into_packed()
@@ -1144,7 +1075,7 @@ impl InvokeReturnTokens<'_> {
             Self::NativeEncoded => quote! {
                 return ::boltffi::__private::FfiBuf::default();
             },
-            Self::WasmEncoded { .. } => quote! {
+            Self::WasmEncoded => quote! {
                 return ::boltffi::__private::FfiBuf::default().into_packed();
             },
             Self::Fallible(fallible) => fallible.error.failure(),
