@@ -227,7 +227,7 @@ fn wasm_callback_method_surface(
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{
-        CanonicalName as SourceName, ClassDef, ClosureKind, ClosureType,
+        CanonicalName as SourceName, ClassDef, ClosureKind, ClosureTrait, ClosureType,
         DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, FieldDef,
         HandlePresence as SourcePresence, MethodDef, MethodId as SourceMethodId,
         PackageInfo as SourcePackage, ParameterDef, ParameterPassing, Primitive, Receiver,
@@ -261,7 +261,7 @@ mod tests {
     fn closure_type(presence: SourcePresence) -> TypeExpr {
         TypeExpr::closure_with_presence(
             ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 vec![TypeExpr::Primitive(Primitive::U32)],
                 ReturnDef::Void,
             ),
@@ -508,14 +508,12 @@ mod tests {
 
     #[test]
     fn callback_method_with_closure_param_lowers_to_outgoing_closure() {
-        use boltffi_ast::{ClosureKind, ClosureType, ReturnDef};
-
         let mut callback = listener_callback();
         let mut handle = method("on_event", Receiver::Shared);
         handle.parameters = vec![value_param(
             "callback",
             TypeExpr::closure(ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 vec![TypeExpr::Primitive(Primitive::U32)],
                 ReturnDef::Void,
             )),
@@ -577,14 +575,12 @@ mod tests {
 
     #[test]
     fn wasm32_callback_method_with_closure_param_lowers_to_outgoing_closure() {
-        use boltffi_ast::{ClosureKind, ClosureType, ReturnDef};
-
         let mut callback = listener_callback();
         let mut handle = method("on_event", Receiver::Shared);
         handle.parameters = vec![value_param(
             "callback",
             TypeExpr::closure(ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 vec![TypeExpr::Primitive(Primitive::U32)],
                 ReturnDef::Void,
             )),
@@ -633,12 +629,10 @@ mod tests {
 
     #[test]
     fn wasm32_callback_method_returning_closure_lowers_to_closure_via_out_pointer() {
-        use boltffi_ast::{ClosureKind, ClosureType, ReturnDef};
-
         let mut callback = listener_callback();
         let mut handler_factory = method("handler", Receiver::Shared);
         handler_factory.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Primitive(Primitive::U32)],
             ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         )));
@@ -692,7 +686,7 @@ mod tests {
         let mut handler_factory = method("handler", Receiver::Shared);
         handler_factory.returns = ReturnDef::value(TypeExpr::closure_with_presence(
             ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 vec![TypeExpr::Primitive(Primitive::U32)],
                 ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
             ),
@@ -718,12 +712,10 @@ mod tests {
 
     #[test]
     fn native_callback_method_returning_closure_lowers_to_closure_via_out_pointer() {
-        use boltffi_ast::{ClosureKind, ClosureType, ReturnDef};
-
         let mut callback = listener_callback();
         let mut handler_factory = method("handler", Receiver::Shared);
         handler_factory.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Primitive(Primitive::U32)],
             ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         )));

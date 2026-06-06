@@ -54,8 +54,9 @@ fn parameters(sig: &syn::Signature, scanner: &Scanner<'_>) -> Result<Vec<Paramet
 mod tests {
     use super::*;
     use boltffi_ast::{
-        CallableForm, CanonicalName, ClosureKind, ExecutionKind, HandlePresence, NamePart,
-        ParameterPassing, Primitive, RecordId, ReturnDef, RustType, Source, TypeExpr, Visibility,
+        CallableForm, CanonicalName, ClosureKind, ClosureTrait, ExecutionKind, HandlePresence,
+        NamePart, ParameterPassing, Primitive, RecordId, ReturnDef, RustType, Source, TypeExpr,
+        Visibility,
     };
 
     fn parse(source: &str) -> syn::ItemFn {
@@ -160,7 +161,7 @@ mod tests {
             panic!("expected closure return");
         };
         assert_eq!(presence, HandlePresence::Required);
-        assert_eq!(signature.kind, ClosureKind::FnMut);
+        assert_eq!(signature.kind, ClosureKind::ImplTrait(ClosureTrait::FnMut));
         assert_eq!(
             signature
                 .parameters
@@ -189,7 +190,7 @@ mod tests {
             panic!("expected closure return");
         };
 
-        assert_eq!(signature.kind, ClosureKind::FnOnce);
+        assert_eq!(signature.kind, ClosureKind::ImplTrait(ClosureTrait::FnOnce));
         assert_eq!(
             signature
                 .parameters

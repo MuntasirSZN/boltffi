@@ -39,9 +39,10 @@ impl<'a, S: Surface> Expansion<'a, S> {
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{
-        CanonicalName, ClassDef, ClassId, ClosureKind, ClosureType, ExecutionKind, FieldDef,
-        FunctionDef, FunctionId, HandlePresence, PackageInfo, ParameterDef, ParameterPassing,
-        Primitive, RecordDef, ReturnDef, SourceContract, TraitDef, TraitId, TraitUseForm, TypeExpr,
+        CanonicalName, ClassDef, ClassId, ClosureKind, ClosureTrait, ClosureType, ExecutionKind,
+        FieldDef, FunctionDef, FunctionId, HandlePresence, PackageInfo, ParameterDef,
+        ParameterPassing, Primitive, RecordDef, ReturnDef, SourceContract, TraitDef, TraitId,
+        TraitUseForm, TypeExpr,
     };
     use boltffi_binding::{Native, Wasm32, lower_with_declarations};
     use proc_macro2::TokenStream;
@@ -214,7 +215,7 @@ mod tests {
         function.parameters = vec![ParameterDef::value(
             CanonicalName::single("callback"),
             TypeExpr::closure(ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 vec![TypeExpr::Primitive(Primitive::U32)],
                 ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
             )),
@@ -234,7 +235,7 @@ mod tests {
         function.parameters = vec![ParameterDef::value(
             CanonicalName::single("callback"),
             TypeExpr::closure(ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 vec![TypeExpr::String],
                 ReturnDef::value(TypeExpr::String),
             )),
@@ -254,7 +255,7 @@ mod tests {
         function.parameters = vec![ParameterDef::value(
             CanonicalName::single("callback"),
             TypeExpr::closure(ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 Vec::<TypeExpr>::new(),
                 ReturnDef::value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String)),
             )),
@@ -273,7 +274,7 @@ mod tests {
         function.parameters = vec![ParameterDef::value(
             CanonicalName::single("callback"),
             TypeExpr::closure(ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 Vec::<TypeExpr>::new(),
                 ReturnDef::value(TypeExpr::result(
                     TypeExpr::Primitive(Primitive::I32),
@@ -295,7 +296,7 @@ mod tests {
         function.parameters = vec![ParameterDef::value(
             CanonicalName::single("callback"),
             TypeExpr::closure(ClosureType::new(
-                ClosureKind::Fn,
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
                 Vec::<TypeExpr>::new(),
                 ReturnDef::value(TypeExpr::result(TypeExpr::String, TypeExpr::String)),
             )),
@@ -312,7 +313,7 @@ mod tests {
             CanonicalName::single("make_callback"),
         );
         function.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Primitive(Primitive::U32)],
             ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         )));
@@ -328,12 +329,12 @@ mod tests {
             CanonicalName::single("make_runner"),
         );
         let callback = TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::BoxedTraitObject(ClosureTrait::Fn),
             vec![TypeExpr::Primitive(Primitive::U32)],
             ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         ));
         function.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![callback],
             ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         )));
@@ -365,7 +366,7 @@ mod tests {
             CanonicalName::single("make_mapper"),
         );
         function.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::String],
             ReturnDef::value(TypeExpr::String),
         )));
@@ -381,7 +382,7 @@ mod tests {
             CanonicalName::single("make_callback"),
         );
         function.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             Vec::<TypeExpr>::new(),
             ReturnDef::value(TypeExpr::result(
                 TypeExpr::Primitive(Primitive::I32),
@@ -400,7 +401,7 @@ mod tests {
             CanonicalName::single("make_mapper"),
         );
         function.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             Vec::<TypeExpr>::new(),
             ReturnDef::value(TypeExpr::result(TypeExpr::String, TypeExpr::String)),
         )));
@@ -416,7 +417,7 @@ mod tests {
             CanonicalName::single("try_make_callback"),
         );
         let closure = TypeExpr::closure(ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Primitive(Primitive::U32)],
             ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         ));

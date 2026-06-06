@@ -1,6 +1,6 @@
 use boltffi_ast::{
-    ClosureKind, ClosureType, HandlePresence, Primitive, ReturnDef, RustType, TraitId,
-    TraitUseForm, TypeExpr,
+    ClosureKind, ClosureTrait, ClosureType, HandlePresence, Primitive, ReturnDef, RustType,
+    TraitId, TraitUseForm, TypeExpr,
 };
 
 use crate::declared_types::{DeclaredType, DeclaredTypes, SourceType};
@@ -374,11 +374,13 @@ impl<'a> Scanner<'a> {
         impl_trait: &syn::TypeImplTrait,
         source: &syn::Type,
     ) -> Result<TypeExpr, ScanError> {
-        if let Some((kind, arguments)) = impl_trait.bounds.iter().find_map(|bound| match bound {
-            syn::TypeParamBound::Trait(trait_bound) => closure_bound(trait_bound),
-            _ => None,
-        }) {
-            return self.closure(kind, arguments);
+        if let Some((trait_kind, arguments)) =
+            impl_trait.bounds.iter().find_map(|bound| match bound {
+                syn::TypeParamBound::Trait(trait_bound) => closure_bound(trait_bound),
+                _ => None,
+            })
+        {
+            return self.closure(ClosureKind::ImplTrait(trait_kind), arguments);
         }
 
         match impl_trait.bounds.iter().collect::<Vec<_>>().as_slice() {
@@ -524,7 +526,11 @@ impl<'a> Scanner<'a> {
             return Err(ScanError::unsupported_type(source));
         }
         match closure_bound(bound) {
-            Some((kind, arguments)) => self.closure_with_presence(kind, arguments, presence),
+            Some((trait_kind, arguments)) => self.closure_with_presence(
+                ClosureKind::BoxedTraitObject(trait_kind),
+                arguments,
+                presence,
+            ),
             None => Err(ScanError::unsupported_type(source)),
         }
     }
@@ -637,7 +643,7 @@ fn type_arguments(segment: &syn::PathSegment) -> Vec<&syn::Type> {
 
 fn closure_bound(
     bound: &syn::TraitBound,
-) -> Option<(ClosureKind, &syn::ParenthesizedGenericArguments)> {
+) -> Option<(ClosureTrait, &syn::ParenthesizedGenericArguments)> {
     let segment = bound.path.segments.last()?;
     let kind = closure_kind(&segment.ident.to_string())?;
     let syn::PathArguments::Parenthesized(arguments) = &segment.arguments else {
@@ -646,11 +652,11 @@ fn closure_bound(
     Some((kind, arguments))
 }
 
-fn closure_kind(name: &str) -> Option<ClosureKind> {
+fn closure_kind(name: &str) -> Option<ClosureTrait> {
     Some(match name {
-        "Fn" => ClosureKind::Fn,
-        "FnMut" => ClosureKind::FnMut,
-        "FnOnce" => ClosureKind::FnOnce,
+        "Fn" => ClosureTrait::Fn,
+        "FnMut" => ClosureTrait::FnMut,
+        "FnOnce" => ClosureTrait::FnOnce,
         _ => return None,
     })
 }
@@ -1246,7 +1252,10 @@ mod tests {
         };
 
         assert_eq!(presence, HandlePresence::Required);
-        assert_eq!(signature.kind, ClosureKind::FnMut);
+        assert_eq!(
+            signature.kind,
+            ClosureKind::BoxedTraitObject(ClosureTrait::FnMut)
+        );
         assert_eq!(
             signature
                 .parameters
@@ -1281,7 +1290,10 @@ mod tests {
             panic!("expected closure");
         };
         assert_eq!(presence, HandlePresence::Nullable);
-        assert_eq!(signature.kind, ClosureKind::FnOnce);
+        assert_eq!(
+            signature.kind,
+            ClosureKind::BoxedTraitObject(ClosureTrait::FnOnce)
+        );
         assert_eq!(
             signature.returns,
             ReturnDef::value(TypeExpr::Primitive(Primitive::I64))
@@ -1419,7 +1431,7 @@ mod tests {
         };
 
         assert_eq!(presence, boltffi_ast::HandlePresence::Required);
-        assert_eq!(signature.kind, ClosureKind::Fn);
+        assert_eq!(signature.kind, ClosureKind::ImplTrait(ClosureTrait::Fn));
         assert_eq!(
             signature
                 .parameters

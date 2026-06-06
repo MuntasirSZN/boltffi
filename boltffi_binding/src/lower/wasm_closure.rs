@@ -208,14 +208,14 @@ fn closure_symbol_case(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use boltffi_ast::{ClosureKind, RecordId};
+    use boltffi_ast::{ClosureKind, ClosureTrait, RecordId};
 
     use super::*;
 
     #[test]
     fn registration_uses_closure_signature_import_names() {
         let closure = ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Primitive(AstPrimitive::F64)],
             ReturnDef::Void,
         );
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn outgoing_registration_uses_closure_signature_export_names() {
         let closure = ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Primitive(AstPrimitive::F64)],
             ReturnDef::Void,
         );
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn signature_keeps_nested_source_shape() {
         let closure = ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::option(TypeExpr::Record(RecordId::new(
                 "demo::Point",
             )))],
@@ -278,12 +278,12 @@ mod tests {
     #[test]
     fn signature_includes_named_type_namespace() {
         let first = ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Record(RecordId::new("a::Point"))],
             ReturnDef::Void,
         );
         let second = ClosureType::new(
-            ClosureKind::Fn,
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
             vec![TypeExpr::Record(RecordId::new("b::Point"))],
             ReturnDef::Void,
         );

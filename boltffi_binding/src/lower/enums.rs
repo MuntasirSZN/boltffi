@@ -204,12 +204,12 @@ fn discriminants(variants: &[SourceVariant]) -> Result<Vec<(&SourceVariant, i128
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{
-        CanonicalName as SourceName, ClosureKind, ClosureType, DefaultValue as SourceDefaultValue,
-        DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, EnumDef,
-        ExecutionKind, FieldDef, IntegerLiteral, MethodDef, MethodId as SourceMethodId,
-        PackageInfo as SourcePackage, ParameterDef, ParameterPassing, Primitive, Receiver,
-        RecordDef, ReprAttr, ReprItem, ReturnDef, Source, SourceContract, TypeExpr, VariantDef,
-        VariantPayload,
+        CanonicalName as SourceName, ClosureKind, ClosureTrait, ClosureType,
+        DefaultValue as SourceDefaultValue, DeprecationInfo as SourceDeprecationInfo,
+        DocComment as SourceDocComment, EnumDef, ExecutionKind, FieldDef, IntegerLiteral,
+        MethodDef, MethodId as SourceMethodId, PackageInfo as SourcePackage, ParameterDef,
+        ParameterPassing, Primitive, Receiver, RecordDef, ReprAttr, ReprItem, ReturnDef, Source,
+        SourceContract, TypeExpr, VariantDef, VariantPayload,
     };
 
     use crate::lower::lower;
@@ -341,7 +341,11 @@ mod tests {
     }
 
     fn closure(parameters: Vec<TypeExpr>, returns: ReturnDef) -> TypeExpr {
-        TypeExpr::closure(ClosureType::new(ClosureKind::Fn, parameters, returns))
+        TypeExpr::closure(ClosureType::new(
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
+            parameters,
+            returns,
+        ))
     }
 
     fn enum_with_methods(mut enumeration: EnumDef, methods: Vec<MethodDef>) -> EnumDef {

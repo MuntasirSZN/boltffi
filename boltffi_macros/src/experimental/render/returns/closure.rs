@@ -1,14 +1,11 @@
-use boltffi_ast::{ClosureType, ReturnDef, RustType, TypeExpr};
+use boltffi_ast::{ClosureKind, ClosureType, ReturnDef, RustType, TypeExpr};
 use boltffi_binding::{
     ClosureForm, ClosureReturn, ErrorDecl, HandlePresence, IncomingParam, Native, OutOfRust,
     ParamPlan, ReadPlan, Receive, ReturnPlan, TypeRef, Wasm32, WritePlan, native, wasm32,
 };
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
-use syn::{
-    GenericArgument, Ident, PathArguments, ReturnType, Type, TypeBareFn, TypeImplTrait,
-    TypeParamBound,
-};
+use syn::{GenericArgument, Ident, PathArguments, Type};
 
 use crate::experimental::{
     error::Error,
@@ -206,8 +203,7 @@ impl<'a> NativeClosure<'a> {
     }
 
     fn tokens(self) -> Result<WriteTokens, Error> {
-        let syntax =
-            ClosureSyntax::new(&self.input.rust_type, self.input.source, self.input.closure)?;
+        let syntax = ClosureSyntax::new(self.input.source, self.input.closure)?;
         let invoke =
             ClosureInvoke::<Native>::new(self.input.closure.invoke(), self.input.source, &syntax)?;
         let return_tokens = invoke.return_tokens()?;
@@ -323,8 +319,7 @@ impl<'a> WasmClosure<'a> {
     }
 
     fn tokens(self) -> Result<WriteTokens, Error> {
-        let syntax =
-            ClosureSyntax::new(&self.input.rust_type, self.input.source, self.input.closure)?;
+        let syntax = ClosureSyntax::new(self.input.source, self.input.closure)?;
         let invoke =
             ClosureInvoke::<Wasm32>::new(self.input.closure.invoke(), self.input.source, &syntax)?;
         let return_tokens = invoke.return_tokens()?;
@@ -1233,34 +1228,27 @@ struct ClosureSyntax {
 
 impl ClosureSyntax {
     fn new<S: Target>(
-        ty: &Type,
         source: &ClosureType,
         closure: &ClosureReturn<S, OutOfRust>,
     ) -> Result<Self, Error> {
-        let (kind, signature) = match (closure.presence(), ty) {
-            (HandlePresence::Required, Type::ImplTrait(impl_trait)) => (
-                ClosureSyntaxKind::ImplTrait,
-                ClosureSignature::impl_trait(impl_trait)?,
-            ),
-            (HandlePresence::Required, Type::Path(_)) => {
-                (ClosureSyntaxKind::Boxed, ClosureSignature::boxed(ty)?)
+        let kind = match (closure.presence(), source.kind) {
+            (HandlePresence::Required, ClosureKind::ImplTrait(_)) => ClosureSyntaxKind::ImplTrait,
+            (HandlePresence::Required, ClosureKind::BoxedTraitObject(_)) => {
+                ClosureSyntaxKind::Boxed
             }
-            (HandlePresence::Nullable, Type::Path(_)) => (
-                ClosureSyntaxKind::NullableBoxed,
-                ClosureSignature::nullable_boxed(ty)?,
-            ),
-            (HandlePresence::Required, Type::BareFn(bare_fn)) => (
-                ClosureSyntaxKind::FunctionPointer,
-                ClosureSignature::bare_fn(bare_fn)?,
-            ),
+            (HandlePresence::Nullable, ClosureKind::BoxedTraitObject(_)) => {
+                ClosureSyntaxKind::NullableBoxed
+            }
+            (HandlePresence::Required, ClosureKind::FunctionPointer) => {
+                ClosureSyntaxKind::FunctionPointer
+            }
             _ => {
                 return Err(Error::SourceSyntaxMismatch(
                     "closure return syntax does not match binding closure",
                 ));
             }
         };
-
-        signature.matches_source(source, closure.form())?;
+        let signature = ClosureSignature::from_source(source, closure.form())?;
 
         Ok(Self {
             kind,
@@ -1386,130 +1374,31 @@ struct ClosureSignature {
 }
 
 impl ClosureSignature {
-    fn bare_fn(bare_fn: &TypeBareFn) -> Result<Self, Error> {
-        if bare_fn.lifetimes.is_some()
-            || bare_fn.unsafety.is_some()
-            || bare_fn.abi.is_some()
-            || bare_fn.variadic.is_some()
-        {
+    fn from_source(source: &ClosureType, form: ClosureForm) -> Result<Self, Error> {
+        if ClosureForm::from(source.kind) != form {
             return Err(Error::SourceSyntaxMismatch(
-                "function-pointer closure return syntax does not match binding closure",
+                "closure return form does not match source closure form",
             ));
         }
-        let parameters = bare_fn
-            .inputs
+        let parameters = source
+            .parameters
             .iter()
-            .map(|argument| argument.ty.clone())
-            .collect();
-        let return_type = match &bare_fn.output {
-            ReturnType::Default => None,
-            ReturnType::Type(_, ty) => Some(ty.as_ref().clone()),
+            .map(Self::rust_type)
+            .collect::<Result<Vec<_>, _>>()?;
+        let return_type = match &source.returns {
+            ReturnDef::Void => None,
+            ReturnDef::Value(rust_type) => Some(Self::rust_type(rust_type)?),
         };
         Ok(Self {
-            form: ClosureForm::FunctionPointer,
+            form,
             parameters,
             return_type,
         })
     }
 
-    fn impl_trait(impl_trait: &TypeImplTrait) -> Result<Self, Error> {
-        impl_trait
-            .bounds
-            .iter()
-            .find_map(Self::bound)
-            .ok_or(Error::SourceSyntaxMismatch(
-                "impl closure return syntax does not contain a closure trait",
-            ))
-    }
-
-    fn boxed(ty: &Type) -> Result<Self, Error> {
-        Self::boxed_inner(ty).ok_or(Error::SourceSyntaxMismatch(
-            "boxed closure return syntax does not match binding closure",
-        ))
-    }
-
-    fn nullable_boxed(ty: &Type) -> Result<Self, Error> {
-        let Type::Path(path) = ty else {
-            return Err(Error::SourceSyntaxMismatch(
-                "nullable closure return syntax does not match binding closure",
-            ));
-        };
-        let segment = path
-            .path
-            .segments
-            .last()
-            .ok_or(Error::SourceSyntaxMismatch(
-                "nullable closure return syntax does not match binding closure",
-            ))?;
-        if segment.ident != "Option" {
-            return Err(Error::SourceSyntaxMismatch(
-                "nullable closure return syntax does not match binding closure",
-            ));
-        }
-        let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-            return Err(Error::SourceSyntaxMismatch(
-                "nullable closure return syntax does not match binding closure",
-            ));
-        };
-        let inner = arguments
-            .args
-            .iter()
-            .find_map(|argument| match argument {
-                GenericArgument::Type(ty) => Some(ty),
-                _ => None,
-            })
-            .ok_or(Error::SourceSyntaxMismatch(
-                "nullable closure return syntax does not match binding closure",
-            ))?;
-        Self::boxed_inner(inner).ok_or(Error::SourceSyntaxMismatch(
-            "nullable boxed closure return syntax does not match binding closure",
-        ))
-    }
-
-    fn boxed_inner(ty: &Type) -> Option<Self> {
-        let Type::Path(path) = ty else {
-            return None;
-        };
-        let segment = path.path.segments.last()?;
-        if segment.ident != "Box" {
-            return None;
-        }
-        let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-            return None;
-        };
-        let inner = arguments.args.iter().find_map(|argument| match argument {
-            GenericArgument::Type(ty) => Some(ty),
-            _ => None,
-        })?;
-        let Type::TraitObject(trait_object) = inner else {
-            return None;
-        };
-        trait_object.bounds.iter().find_map(Self::bound)
-    }
-
-    fn bound(bound: &TypeParamBound) -> Option<Self> {
-        let TypeParamBound::Trait(bound) = bound else {
-            return None;
-        };
-        let segment = bound.path.segments.last()?;
-        let form = match segment.ident.to_string().as_str() {
-            "Fn" => ClosureForm::Fn,
-            "FnMut" => ClosureForm::FnMut,
-            "FnOnce" => ClosureForm::FnOnce,
-            _ => return None,
-        };
-        let PathArguments::Parenthesized(arguments) = &segment.arguments else {
-            return None;
-        };
-        let parameters = arguments.inputs.iter().cloned().collect();
-        let return_type = match &arguments.output {
-            ReturnType::Default => None,
-            ReturnType::Type(_, ty) => Some(ty.as_ref().clone()),
-        };
-        Some(Self {
-            form,
-            parameters,
-            return_type,
+    fn rust_type(rust_type: &RustType) -> Result<Type, Error> {
+        syn::parse_str(rust_type.spelling()).map_err(|_| {
+            Error::SourceSyntaxMismatch("closure source type spelling does not parse as Rust")
         })
     }
 
@@ -1517,25 +1406,6 @@ impl ClosureSignature {
         match &self.return_type {
             Some(ty) => quote! { -> #ty },
             None => TokenStream::new(),
-        }
-    }
-
-    fn matches_source(&self, source: &ClosureType, form: ClosureForm) -> Result<(), Error> {
-        if self.form != form || ClosureForm::from(source.kind) != form {
-            return Err(Error::SourceSyntaxMismatch(
-                "closure return form does not match source closure form",
-            ));
-        }
-        if self.parameters.len() != source.parameters.len() {
-            return Err(Error::SourceSyntaxMismatch(
-                "closure return parameter count does not match source closure parameter count",
-            ));
-        }
-        match (&self.return_type, &source.returns) {
-            (None, ReturnDef::Void) | (Some(_), ReturnDef::Value(_)) => Ok(()),
-            _ => Err(Error::SourceSyntaxMismatch(
-                "closure return type does not match source closure return",
-            )),
         }
     }
 }

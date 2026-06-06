@@ -4,6 +4,8 @@ use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
 
+use boltffi_ast::{ClosureKind, ClosureTrait};
+
 use crate::{
     AsyncProtocolIntrospect, BindingError, BindingErrorKind, BufferShapeRules, CallableScope,
     CanonicalName, ClosureRegistrationIntrospect, Direction, ElementMeta, ForeignBody,
@@ -556,13 +558,23 @@ pub enum ClosureForm {
     FnOnce,
 }
 
-impl From<boltffi_ast::ClosureKind> for ClosureForm {
-    fn from(kind: boltffi_ast::ClosureKind) -> Self {
+impl From<ClosureKind> for ClosureForm {
+    fn from(kind: ClosureKind) -> Self {
         match kind {
-            boltffi_ast::ClosureKind::FunctionPointer => Self::FunctionPointer,
-            boltffi_ast::ClosureKind::Fn => Self::Fn,
-            boltffi_ast::ClosureKind::FnMut => Self::FnMut,
-            boltffi_ast::ClosureKind::FnOnce => Self::FnOnce,
+            ClosureKind::FunctionPointer => Self::FunctionPointer,
+            ClosureKind::ImplTrait(trait_kind) | ClosureKind::BoxedTraitObject(trait_kind) => {
+                trait_kind.into()
+            }
+        }
+    }
+}
+
+impl From<ClosureTrait> for ClosureForm {
+    fn from(trait_kind: ClosureTrait) -> Self {
+        match trait_kind {
+            ClosureTrait::Fn => Self::Fn,
+            ClosureTrait::FnMut => Self::FnMut,
+            ClosureTrait::FnOnce => Self::FnOnce,
         }
     }
 }

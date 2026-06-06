@@ -320,33 +320,32 @@ impl TypeExpr {
     }
 }
 
-/// Kind of inline closure-shaped parameter the source wrote.
-///
-/// Mirrors what the Rust parser saw. The `FunctionPointer` variant is
-/// the bare `fn(...)` type (no captured environment); `Fn` / `FnMut` /
-/// `FnOnce` are the standard Rust closure trait flavors used as
-/// `impl Fn*(...)` parameter bounds.
+/// Callable trait used by a closure-shaped Rust type.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-pub enum ClosureKind {
-    /// Bare `fn(...)` function-pointer parameter.
-    FunctionPointer,
-    /// `impl Fn(...)` parameter.
+pub enum ClosureTrait {
+    /// `Fn(...)`.
     Fn,
-    /// `impl FnMut(...)` parameter.
+    /// `FnMut(...)`.
     FnMut,
-    /// `impl FnOnce(...)` parameter.
+    /// `FnOnce(...)`.
     FnOnce,
 }
 
+/// Rust source form used for an inline closure type.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum ClosureKind {
+    /// Bare `fn(...)` function pointer.
+    FunctionPointer,
+    /// `impl Fn*(...)` opaque closure type.
+    ImplTrait(ClosureTrait),
+    /// `Box<dyn Fn*(...)>` owned closure trait object.
+    BoxedTraitObject(ClosureTrait),
+}
+
 /// An inline closure signature used as a type expression.
-///
-/// Closure parameters are not named declarations in Rust source. The scanner
-/// stores the source `kind` (function pointer vs `Fn` family), the parameter
-/// list, and the return type here so the closure shape remains local to the
-/// parameter that introduced it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct ClosureType {
-    /// Source-form kind the parser saw.
+    /// Rust source form that carried the closure signature.
     pub kind: ClosureKind,
     /// Types accepted by the closure in source order.
     pub parameters: Vec<RustType>,
@@ -381,17 +380,28 @@ impl ClosureType {
             .map(|parameter| parameter.spelling())
             .collect::<Vec<_>>()
             .join(", ");
-        let trait_name = match self.kind {
-            ClosureKind::FunctionPointer => "fn",
-            ClosureKind::Fn => "impl Fn",
-            ClosureKind::FnMut => "impl FnMut",
-            ClosureKind::FnOnce => "impl FnOnce",
+        let signature = match &self.returns {
+            ReturnDef::Void => format!("({parameters})"),
+            ReturnDef::Value(rust_type) => format!("({parameters}) -> {}", rust_type.spelling()),
         };
-        match &self.returns {
-            ReturnDef::Void => format!("{trait_name}({parameters})"),
-            ReturnDef::Value(rust_type) => {
-                format!("{trait_name}({parameters}) -> {}", rust_type.spelling())
+        match self.kind {
+            ClosureKind::FunctionPointer => format!("fn{signature}"),
+            ClosureKind::ImplTrait(trait_kind) => {
+                format!("impl {}{signature}", trait_kind.as_ref())
             }
+            ClosureKind::BoxedTraitObject(trait_kind) => {
+                format!("Box<dyn {}{signature}>", trait_kind.as_ref())
+            }
+        }
+    }
+}
+
+impl AsRef<str> for ClosureTrait {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Fn => "Fn",
+            Self::FnMut => "FnMut",
+            Self::FnOnce => "FnOnce",
         }
     }
 }
