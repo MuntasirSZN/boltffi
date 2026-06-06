@@ -13,7 +13,7 @@ mod repr;
 mod scan;
 mod source_tree;
 mod spelling;
-mod type_expr;
+pub(crate) mod type_expr;
 mod unsupported;
 mod visibility;
 

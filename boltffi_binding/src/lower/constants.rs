@@ -88,13 +88,17 @@ fn lower_value_decl<S: SurfaceLower>(
     // any constant whose declared type is not an inline scalar type.
     match inline_default::<S>(idx, constant)? {
         Some(value) => {
-            let ty = types::lower(ids, &constant.type_expr)?;
+            let ty = types::lower(ids, constant.rust_type.expr())?;
             Ok(ConstantValueDecl::inline(ty, value))
         }
         None => {
             let symbol = allocator.mint(constant_accessor_symbol_name(constant.id.as_str()))?;
-            let callable =
-                callable::lower_constant_accessor::<S>(idx, ids, allocator, &constant.type_expr)?;
+            let callable = callable::lower_constant_accessor::<S>(
+                idx,
+                ids,
+                allocator,
+                constant.rust_type.expr(),
+            )?;
             Ok(ConstantValueDecl::accessor(symbol, Box::new(callable)))
         }
     }
@@ -107,7 +111,8 @@ fn inline_default<S: SurfaceLower>(
     // Returns the inline literal for a constant, `None` when the value
     // must be delivered through an accessor, or an error when the value
     // cannot inhabit its declared type.
-    let Some(expected) = InlineConstantType::from_type_expr::<S>(idx, &constant.type_expr) else {
+    let Some(expected) = InlineConstantType::from_type_expr::<S>(idx, constant.rust_type.expr())
+    else {
         return Ok(None);
     };
     expected.lower_value(constant)

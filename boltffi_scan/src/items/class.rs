@@ -111,18 +111,18 @@ mod tests {
         assert_eq!(class.methods[0].id, MethodId::new("demo::Engine::new"));
         assert_eq!(class.methods[0].receiver, Receiver::None);
         assert_eq!(
-            class.methods[0].parameters[0].type_expr,
-            TypeExpr::Primitive(Primitive::U64)
+            class.methods[0].parameters[0].rust_type.expr(),
+            &TypeExpr::Primitive(Primitive::U64)
         );
         assert_eq!(
             class.methods[0].returns,
-            ReturnDef::Value(TypeExpr::SelfType)
+            ReturnDef::value(TypeExpr::SelfType)
         );
         assert_eq!(class.methods[1].receiver, Receiver::Mutable);
         assert_eq!(class.methods[2].receiver, Receiver::Shared);
         assert_eq!(
             class.methods[2].returns,
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::U32))
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32))
         );
     }
 

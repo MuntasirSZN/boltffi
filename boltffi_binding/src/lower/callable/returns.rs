@@ -47,7 +47,8 @@ where
             ReturnDecl::new(ElementMeta::new(None, None, None), ReturnPlan::Void),
             ErrorDecl::none(),
         )),
-        ReturnDef::Value(type_expr) => {
+        ReturnDef::Value(rust_type) => {
+            let type_expr = rust_type.expr();
             if let TypeExpr::Result { ok, err } = type_expr {
                 let ok_type_expr = substitute_self_type(owner, ok)?;
                 let err_type_expr = substitute_self_type(owner, err)?;

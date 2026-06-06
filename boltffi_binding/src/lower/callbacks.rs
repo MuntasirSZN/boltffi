@@ -335,7 +335,7 @@ mod tests {
         contract.traits.push(listener_callback());
         let mut class = ClassDef::new("demo::Engine".into(), name("Engine"));
         let mut take_listener = method("take_listener", Receiver::Mutable);
-        take_listener.returns = ReturnDef::Value(listener_type);
+        take_listener.returns = ReturnDef::value(listener_type);
         class.methods.push(take_listener);
         contract.classes.push(class);
         lower::<S>(&contract)
@@ -637,10 +637,10 @@ mod tests {
 
         let mut callback = listener_callback();
         let mut handler_factory = method("handler", Receiver::Shared);
-        handler_factory.returns = ReturnDef::Value(TypeExpr::closure(ClosureType::new(
+        handler_factory.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
             ClosureKind::Fn,
             vec![TypeExpr::Primitive(Primitive::U32)],
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::U32)),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         )));
         callback.methods.push(handler_factory);
 
@@ -690,11 +690,11 @@ mod tests {
     fn callback_method_returning_nullable_closure_lowers_to_nullable_crossing() {
         let mut callback = listener_callback();
         let mut handler_factory = method("handler", Receiver::Shared);
-        handler_factory.returns = ReturnDef::Value(TypeExpr::closure_with_presence(
+        handler_factory.returns = ReturnDef::value(TypeExpr::closure_with_presence(
             ClosureType::new(
                 ClosureKind::Fn,
                 vec![TypeExpr::Primitive(Primitive::U32)],
-                ReturnDef::Value(TypeExpr::Primitive(Primitive::U32)),
+                ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
             ),
             SourcePresence::Nullable,
         ));
@@ -722,10 +722,10 @@ mod tests {
 
         let mut callback = listener_callback();
         let mut handler_factory = method("handler", Receiver::Shared);
-        handler_factory.returns = ReturnDef::Value(TypeExpr::closure(ClosureType::new(
+        handler_factory.returns = ReturnDef::value(TypeExpr::closure(ClosureType::new(
             ClosureKind::Fn,
             vec![TypeExpr::Primitive(Primitive::U32)],
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::U32)),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         )));
         callback.methods.push(handler_factory);
 
@@ -768,7 +768,7 @@ mod tests {
     fn callback_method_returning_string_uses_write_codec() {
         let mut callback = listener_callback();
         let mut describe = method("describe", Receiver::Shared);
-        describe.returns = ReturnDef::Value(TypeExpr::String);
+        describe.returns = ReturnDef::value(TypeExpr::String);
         callback.methods.push(describe);
 
         let bindings = lower_callback::<Native>(callback);
@@ -1071,7 +1071,7 @@ mod tests {
     fn callback_method_returning_self_is_rejected() {
         let mut callback = listener_callback();
         let mut clone_self = method("clone_self", Receiver::Shared);
-        clone_self.returns = ReturnDef::Value(TypeExpr::SelfType);
+        clone_self.returns = ReturnDef::value(TypeExpr::SelfType);
         callback.methods.push(clone_self);
 
         let mut contract = package();
@@ -1105,7 +1105,7 @@ mod tests {
     fn callback_method_returning_vec_of_self_is_rejected() {
         let mut callback = listener_callback();
         let mut clones = method("clones", Receiver::Shared);
-        clones.returns = ReturnDef::Value(TypeExpr::Vec(Box::new(TypeExpr::SelfType)));
+        clones.returns = ReturnDef::value(TypeExpr::Vec(Box::new(TypeExpr::SelfType)));
         callback.methods.push(clones);
 
         let mut contract = package();
@@ -1366,7 +1366,7 @@ mod tests {
     fn result_unit_ok_emits_void_lift_with_encoded_error() {
         let mut callback = listener_callback();
         let mut try_handle = method("try_handle", Receiver::Shared);
-        try_handle.returns = ReturnDef::Value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String));
+        try_handle.returns = ReturnDef::value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String));
         callback.methods.push(try_handle);
 
         let bindings = lower_callback::<Native>(callback);
@@ -1391,7 +1391,7 @@ mod tests {
     fn bare_unit_return_is_rejected_in_favor_of_void() {
         let mut callback = listener_callback();
         let mut bare_unit = method("bare_unit", Receiver::Shared);
-        bare_unit.returns = ReturnDef::Value(TypeExpr::Unit);
+        bare_unit.returns = ReturnDef::value(TypeExpr::Unit);
         callback.methods.push(bare_unit);
 
         let mut contract = package();
@@ -1524,7 +1524,7 @@ mod tests {
         let mut on_event = method("on_event", Receiver::Shared);
         on_event.execution = boltffi_ast::ExecutionKind::Async;
         on_event.parameters = vec![value_param("value", TypeExpr::Primitive(Primitive::I32))];
-        on_event.returns = ReturnDef::Value(TypeExpr::String);
+        on_event.returns = ReturnDef::value(TypeExpr::String);
         callback.methods.push(on_event);
 
         let bindings = lower_callback::<Native>(callback);
@@ -1562,7 +1562,7 @@ mod tests {
         let mut on_event = method("on_event", Receiver::Shared);
         on_event.execution = boltffi_ast::ExecutionKind::Async;
         on_event.parameters = vec![value_param("value", TypeExpr::Primitive(Primitive::I32))];
-        on_event.returns = ReturnDef::Value(TypeExpr::String);
+        on_event.returns = ReturnDef::value(TypeExpr::String);
         callback.methods.push(on_event);
 
         let bindings = lower_callback::<Wasm32>(callback);

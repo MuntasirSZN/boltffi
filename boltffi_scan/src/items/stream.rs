@@ -147,7 +147,7 @@ fn method_stream(
         return Err(Attribute::invalid_placement("stream method"));
     }
     validate(method, owner.as_str(), scope, scanner, &attribute)?;
-    let item_type = scanner.scan(attribute.item())?;
+    let item_type = scanner.rust_type(attribute.item())?;
     let stream_name = method.sig.ident.to_string();
     let mut stream = StreamDef::new(
         StreamId::new(format!("{}::{stream_name}", owner.as_str())),
@@ -185,13 +185,13 @@ fn validate(
         )));
     }
     let returned = subscription_item(&method.sig.output, scope, &item)?;
-    let declared_item = scanner.scan(attribute.item())?;
-    let returned_item = scanner.scan(returned)?;
-    if declared_item != returned_item {
+    let declared_item = scanner.rust_type(attribute.item())?;
+    let returned_item = scanner.rust_type(returned)?;
+    if declared_item.expr() != returned_item.expr() {
         return Err(Attribute::invalid(format!(
             "`{item}` declares item `{}` but returns `{}`",
-            spelling::ty(attribute.item()),
-            spelling::ty(returned)
+            declared_item.spelling(),
+            returned_item.spelling()
         )));
     }
     Ok(())
@@ -467,8 +467,8 @@ mod tests {
         assert_eq!(streams[0].owner, Some(ClassId::new("demo::Engine")));
         assert_eq!(streams[0].mode, StreamMode::Batch);
         assert_eq!(
-            streams[0].item_type,
-            boltffi_ast::TypeExpr::Record(boltffi_ast::RecordId::new("demo::Point"))
+            streams[0].item_type.expr(),
+            &boltffi_ast::TypeExpr::Record(boltffi_ast::RecordId::new("demo::Point"))
         );
     }
 
@@ -493,8 +493,8 @@ mod tests {
 
         assert_eq!(streams.len(), 1);
         assert_eq!(
-            streams[0].item_type,
-            boltffi_ast::TypeExpr::Primitive(boltffi_ast::Primitive::I32)
+            streams[0].item_type.expr(),
+            &boltffi_ast::TypeExpr::Primitive(boltffi_ast::Primitive::I32)
         );
     }
 

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DefaultValue, DeprecationInfo, DocComment, RecordId, ReprAttr, Source, SourceName, SourceSpan,
-    TypeExpr, UserAttr,
+    DefaultValue, DeprecationInfo, DocComment, RecordId, ReprAttr, RustType, Source, SourceName,
+    SourceSpan, UserAttr,
 };
 
 /// A Rust struct exported as a BoltFFI record.
@@ -68,8 +68,8 @@ impl RecordDef {
 pub struct FieldDef {
     /// Source field name.
     pub name: SourceName,
-    /// Source type expression written for the field.
-    pub type_expr: TypeExpr,
+    /// Rust source type written for the field.
+    pub rust_type: RustType,
     /// Documentation attached to the field.
     pub doc: Option<DocComment>,
     /// Default value written for the field.
@@ -86,14 +86,14 @@ pub struct FieldDef {
 impl FieldDef {
     /// Builds a field without documentation, attributes, or default value.
     ///
-    /// The `name` parameter is the canonical field name. The `type_expr`
-    /// parameter is the field's source type expression.
+    /// The `name` parameter is the canonical field name. The `rust_type`
+    /// parameter is the field's source type.
     ///
     /// Returns a field definition that can be attached to records and variants.
-    pub fn new(name: impl Into<SourceName>, type_expr: TypeExpr) -> Self {
+    pub fn new(name: impl Into<SourceName>, rust_type: impl Into<RustType>) -> Self {
         Self {
             name: name.into(),
-            type_expr,
+            rust_type: rust_type.into(),
             doc: None,
             default: None,
             user_attrs: Vec::new(),

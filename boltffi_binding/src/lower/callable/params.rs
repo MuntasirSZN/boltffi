@@ -56,7 +56,7 @@ fn lower_one<S: SurfaceLower, D: Direction + LowerClosure<S>>(
 where
     D::Opposite: ParamDirection<S>,
 {
-    let type_expr = substitute_self_type(owner, &parameter.type_expr)?;
+    let type_expr = substitute_self_type(owner, parameter.rust_type.expr())?;
     let receive = receive_for_passing(parameter.passing);
     let canonical_name = CanonicalName::from(&parameter.name);
     let meta = metadata::element_meta(parameter.doc.as_ref(), None, parameter.default.as_ref())?;

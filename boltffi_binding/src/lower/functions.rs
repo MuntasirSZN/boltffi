@@ -172,7 +172,7 @@ mod tests {
 
     fn returning(id: &str, function_name: &str, type_expr: TypeExpr) -> FunctionDef {
         let mut decl = function(id, function_name);
-        decl.returns = ReturnDef::Value(type_expr);
+        decl.returns = ReturnDef::value(type_expr);
         decl
     }
 
@@ -222,7 +222,7 @@ mod tests {
             value_param("lhs", TypeExpr::Primitive(Primitive::I32)),
             value_param("rhs", TypeExpr::Primitive(Primitive::I32)),
         ];
-        add.returns = ReturnDef::Value(TypeExpr::Primitive(Primitive::I32));
+        add.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::I32));
 
         let bindings = TestContract::new().with_function(add).lower_ok::<Native>();
         let callable = first_function(&bindings).callable();
@@ -247,7 +247,7 @@ mod tests {
     fn string_param_lowers_to_encoded_with_native_slice_shape() {
         let mut greet = function("demo::greet", "greet");
         greet.parameters = vec![value_param("name", TypeExpr::String)];
-        greet.returns = ReturnDef::Value(TypeExpr::String);
+        greet.returns = ReturnDef::value(TypeExpr::String);
 
         let bindings = TestContract::new()
             .with_function(greet)
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn wasm32_string_return_uses_packed_shape() {
         let mut greet = function("demo::greet", "greet");
-        greet.returns = ReturnDef::Value(TypeExpr::String);
+        greet.returns = ReturnDef::value(TypeExpr::String);
 
         let bindings = TestContract::new()
             .with_function(greet)
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn result_return_splits_into_lift_and_encoded_error() {
         let mut try_open = function("demo::try_open", "try_open");
-        try_open.returns = ReturnDef::Value(TypeExpr::result(
+        try_open.returns = ReturnDef::value(TypeExpr::result(
             TypeExpr::Primitive(Primitive::I32),
             TypeExpr::String,
         ));
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn result_unit_ok_emits_void_lift_with_encoded_error() {
         let mut try_init = function("demo::try_init", "try_init");
-        try_init.returns = ReturnDef::Value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String));
+        try_init.returns = ReturnDef::value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String));
 
         let bindings = TestContract::new()
             .with_function(try_init)
@@ -462,7 +462,7 @@ mod tests {
     fn async_result_unit_success_keeps_void_success_and_encoded_error() {
         let mut run = function("demo::run", "run");
         run.execution = ExecutionKind::Async;
-        run.returns = ReturnDef::Value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String));
+        run.returns = ReturnDef::value(TypeExpr::result(TypeExpr::Unit, TypeExpr::String));
 
         let bindings = TestContract::new().with_function(run).lower_ok::<Native>();
         let callable = first_function(&bindings).callable();
@@ -479,7 +479,7 @@ mod tests {
     fn async_option_scalar_return_keeps_scalar_option_plan() {
         let mut maybe_count = function("demo::maybe_count", "maybe_count");
         maybe_count.execution = ExecutionKind::Async;
-        maybe_count.returns = ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Primitive(
+        maybe_count.returns = ReturnDef::value(TypeExpr::Option(Box::new(TypeExpr::Primitive(
             Primitive::I32,
         ))));
 
@@ -501,7 +501,7 @@ mod tests {
     fn async_result_vec_success_falls_back_to_encoded_out_pointer() {
         let mut load_all = function("demo::load_all", "load_all");
         load_all.execution = ExecutionKind::Async;
-        load_all.returns = ReturnDef::Value(TypeExpr::result(
+        load_all.returns = ReturnDef::value(TypeExpr::result(
             TypeExpr::Vec(Box::new(TypeExpr::Primitive(Primitive::I32))),
             TypeExpr::String,
         ));
@@ -616,7 +616,7 @@ mod tests {
     fn function_taking_record_param_lowers_through_record_decl() {
         let mut translate = function("demo::translate", "translate");
         translate.parameters = vec![value_param("point", TypeExpr::Record("demo::Point".into()))];
-        translate.returns = ReturnDef::Value(TypeExpr::Primitive(Primitive::F64));
+        translate.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::F64));
 
         let bindings = TestContract::new()
             .with_record(point_record())
@@ -1018,7 +1018,7 @@ mod tests {
         let mut decl = function("demo::peek", "peek");
         decl.parameters = vec![ParameterDef {
             name: name("values").into(),
-            type_expr: TypeExpr::vec(TypeExpr::Primitive(Primitive::U32)),
+            rust_type: TypeExpr::vec(TypeExpr::Primitive(Primitive::U32)).into(),
             passing: boltffi_ast::ParameterPassing::Ref,
             doc: None,
             default: None,

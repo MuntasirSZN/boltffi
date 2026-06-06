@@ -41,7 +41,7 @@ pub(super) fn is_direct(record: &SourceRecord) -> bool {
         && record
             .fields
             .iter()
-            .all(|field| primitive::fixed_primitive(&field.type_expr).is_some())
+            .all(|field| primitive::fixed_primitive(field.rust_type.expr()).is_some())
 }
 
 fn lower_one<S: SurfaceLower>(
@@ -71,7 +71,7 @@ fn lower_direct<S: SurfaceLower>(
         .map(|field| {
             Ok(DirectFieldDecl::new(
                 FieldKey::from(field),
-                types::lower(ids, &field.type_expr)?,
+                types::lower(ids, field.rust_type.expr())?,
                 metadata::element_meta(field.doc.as_ref(), None, field.default.as_ref())?,
             ))
         })
@@ -101,8 +101,8 @@ fn lower_encoded<S: SurfaceLower>(
         .map(|field| {
             let key = FieldKey::from(field);
             let value = ValueRef::self_value().field(key.clone());
-            let ty = types::lower(ids, &field.type_expr)?;
-            let codec = codecs::plan(idx, ids, &field.type_expr, value)?;
+            let ty = types::lower(ids, field.rust_type.expr())?;
+            let codec = codecs::plan(idx, ids, field.rust_type.expr(), value)?;
             Ok(EncodedFieldDecl::new(
                 key,
                 ty,
@@ -478,7 +478,7 @@ mod tests {
                 value_param("x", TypeExpr::Primitive(Primitive::F64)),
                 value_param("y", TypeExpr::Primitive(Primitive::F64)),
             ],
-            ReturnDef::Value(TypeExpr::SelfType),
+            ReturnDef::value(TypeExpr::SelfType),
         ));
         let initializers = record_decl_initializers(&bindings);
 
@@ -500,7 +500,7 @@ mod tests {
                 value_param("x", TypeExpr::Primitive(Primitive::F64)),
                 value_param("y", TypeExpr::Primitive(Primitive::F64)),
             ],
-            ReturnDef::Value(TypeExpr::SelfType),
+            ReturnDef::value(TypeExpr::SelfType),
         ));
         let initializers = record_decl_initializers(&bindings);
 
@@ -517,7 +517,7 @@ mod tests {
             "try_new",
             Receiver::None,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::Result {
+            ReturnDef::value(TypeExpr::Result {
                 ok: Box::new(TypeExpr::SelfType),
                 err: Box::new(TypeExpr::String),
             }),
@@ -546,7 +546,7 @@ mod tests {
             "try_new",
             Receiver::None,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::Result {
+            ReturnDef::value(TypeExpr::Result {
                 ok: Box::new(TypeExpr::SelfType),
                 err: Box::new(TypeExpr::String),
             }),
@@ -574,7 +574,7 @@ mod tests {
             "shifted",
             Receiver::Shared,
             vec![value_param("delta", TypeExpr::Primitive(Primitive::F64))],
-            ReturnDef::Value(TypeExpr::SelfType),
+            ReturnDef::value(TypeExpr::SelfType),
         ));
         let methods = record_decl_methods(&bindings);
         let returns = methods[0].callable().returns().plan();
@@ -725,7 +725,7 @@ mod tests {
             "new",
             Receiver::None,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::SelfType),
+            ReturnDef::value(TypeExpr::SelfType),
         );
         new_point.execution = ExecutionKind::Async;
 
@@ -776,7 +776,7 @@ mod tests {
             "try_distance",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::Result {
+            ReturnDef::value(TypeExpr::Result {
                 ok: Box::new(TypeExpr::Primitive(Primitive::F64)),
                 err: Box::new(TypeExpr::String),
             }),
@@ -803,7 +803,7 @@ mod tests {
                     value_param("x", TypeExpr::Primitive(Primitive::F64)),
                     value_param("y", TypeExpr::Primitive(Primitive::F64)),
                 ],
-                ReturnDef::Value(TypeExpr::SelfType),
+                ReturnDef::value(TypeExpr::SelfType),
             ),
             method_with(
                 "translate",
@@ -928,7 +928,7 @@ mod tests {
             "origin_x",
             Receiver::None,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::Primitive(Primitive::F64)),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
         ));
 
         assert_eq!(first_record_initializers(&bindings).len(), 0);
@@ -1337,7 +1337,7 @@ mod tests {
             Receiver::Shared,
             vec![value_param(
                 "callback",
-                closure(vec![TypeExpr::String], ReturnDef::Value(TypeExpr::String)),
+                closure(vec![TypeExpr::String], ReturnDef::value(TypeExpr::String)),
             )],
             ReturnDef::Void,
         ));
@@ -1378,9 +1378,9 @@ mod tests {
             "project",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(closure(
+            ReturnDef::value(closure(
                 vec![TypeExpr::Primitive(Primitive::F64)],
-                ReturnDef::Value(TypeExpr::Primitive(Primitive::F64)),
+                ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
             )),
         ));
 
@@ -1427,9 +1427,9 @@ mod tests {
             "maybe_project",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(closure_with_presence(
+            ReturnDef::value(closure_with_presence(
                 vec![TypeExpr::Primitive(Primitive::F64)],
-                ReturnDef::Value(TypeExpr::Primitive(Primitive::F64)),
+                ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
                 SourcePresence::Nullable,
             )),
         ));
@@ -1454,9 +1454,9 @@ mod tests {
             "project",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(closure(
+            ReturnDef::value(closure(
                 vec![TypeExpr::Primitive(Primitive::F64)],
-                ReturnDef::Value(TypeExpr::Primitive(Primitive::F64)),
+                ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
             )),
         ));
 
@@ -1523,10 +1523,10 @@ mod tests {
             "try_project",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::Result {
+            ReturnDef::value(TypeExpr::Result {
                 ok: Box::new(closure(
                     vec![TypeExpr::Primitive(Primitive::F64)],
-                    ReturnDef::Value(TypeExpr::Primitive(Primitive::F64)),
+                    ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
                 )),
                 err: Box::new(TypeExpr::String),
             }),
@@ -1577,7 +1577,7 @@ mod tests {
                     "callback",
                     closure(
                         vec![TypeExpr::Primitive(Primitive::I32)],
-                        ReturnDef::Value(TypeExpr::Result {
+                        ReturnDef::value(TypeExpr::Result {
                             ok: Box::new(TypeExpr::Primitive(Primitive::I32)),
                             err: Box::new(TypeExpr::Enum("demo::ParseError".into())),
                         }),
@@ -1618,7 +1618,7 @@ mod tests {
                     "callback",
                     closure(
                         Vec::new(),
-                        ReturnDef::Value(TypeExpr::Result {
+                        ReturnDef::value(TypeExpr::Result {
                             ok: Box::new(TypeExpr::Unit),
                             err: Box::new(TypeExpr::Enum("demo::ParseError".into())),
                         }),
@@ -1757,7 +1757,7 @@ mod tests {
             "describe",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::String),
+            ReturnDef::value(TypeExpr::String),
         ));
         let methods = first_record_methods(&bindings);
 
@@ -1777,7 +1777,7 @@ mod tests {
             "samples",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::vec(TypeExpr::Primitive(Primitive::F64))),
+            ReturnDef::value(TypeExpr::vec(TypeExpr::Primitive(Primitive::F64))),
         ));
         let methods = first_record_methods(&bindings);
 
@@ -1795,7 +1795,7 @@ mod tests {
             "neighbours",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::vec(TypeExpr::SelfType)),
+            ReturnDef::value(TypeExpr::vec(TypeExpr::SelfType)),
         ));
         let methods = first_record_methods(&bindings);
 
@@ -1813,7 +1813,7 @@ mod tests {
             "maybe",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::SelfType))),
+            ReturnDef::value(TypeExpr::Option(Box::new(TypeExpr::SelfType))),
         ));
         let methods = first_record_methods(&bindings);
 
@@ -1838,7 +1838,7 @@ mod tests {
             "pair",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::tuple(vec![
+            ReturnDef::value(TypeExpr::tuple(vec![
                 TypeExpr::SelfType,
                 TypeExpr::SelfType,
             ])),
@@ -1875,7 +1875,7 @@ mod tests {
                 "callback",
                 closure(
                     vec![TypeExpr::SelfType],
-                    ReturnDef::Value(TypeExpr::SelfType),
+                    ReturnDef::value(TypeExpr::SelfType),
                 ),
             )],
             ReturnDef::Void,
@@ -1949,7 +1949,7 @@ mod tests {
             "describe",
             Receiver::Shared,
             Vec::new(),
-            ReturnDef::Value(TypeExpr::String),
+            ReturnDef::value(TypeExpr::String),
         ));
         let methods = first_record_methods(&bindings);
 
@@ -2065,7 +2065,7 @@ mod tests {
                     value_param("x", TypeExpr::Primitive(Primitive::F64)),
                     value_param("y", TypeExpr::Primitive(Primitive::F64)),
                 ],
-                ReturnDef::Value(TypeExpr::SelfType),
+                ReturnDef::value(TypeExpr::SelfType),
             ),
             method_with(
                 "from_xy",
@@ -2074,13 +2074,13 @@ mod tests {
                     value_param("x", TypeExpr::Primitive(Primitive::F64)),
                     value_param("y", TypeExpr::Primitive(Primitive::F64)),
                 ],
-                ReturnDef::Value(TypeExpr::SelfType),
+                ReturnDef::value(TypeExpr::SelfType),
             ),
             method_with(
                 "origin",
                 Receiver::None,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::SelfType),
+                ReturnDef::value(TypeExpr::SelfType),
             ),
         ]);
         let initializers = first_record_initializers(&bindings);
@@ -2141,7 +2141,7 @@ mod tests {
             "find_point",
             Receiver::Shared,
             vec![value_param("key", TypeExpr::Primitive(Primitive::U32))],
-            ReturnDef::Value(TypeExpr::Record("demo::Point".into())),
+            ReturnDef::value(TypeExpr::Record("demo::Point".into())),
         ));
 
         let bindings = lower_records::<Native>(vec![point_record(), path]);
@@ -2168,7 +2168,7 @@ mod tests {
                 "heading",
                 Receiver::Shared,
                 Vec::new(),
-                ReturnDef::Value(TypeExpr::Enum("demo::Direction".into())),
+                ReturnDef::value(TypeExpr::Enum("demo::Direction".into())),
             )])],
             vec![direction],
         );
@@ -2252,7 +2252,7 @@ mod tests {
             note: Some("use Point::origin instead".to_owned()),
             since: None,
         });
-        new_init.returns = ReturnDef::Value(TypeExpr::SelfType);
+        new_init.returns = ReturnDef::value(TypeExpr::SelfType);
 
         let bindings = lower_point_method::<Native>(new_init);
         let initializers = first_record_initializers(&bindings);
