@@ -131,12 +131,13 @@ fn lower_encoded<S: SurfaceLower>(
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{
-        CanonicalName as SourceName, ClosureKind, ClosureType, DefaultValue as SourceDefaultValue,
-        DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, EnumDef,
-        ExecutionKind, FieldDef, HandlePresence as SourcePresence, IntegerLiteral, MethodDef,
-        MethodId as SourceMethodId, PackageInfo as SourcePackage, ParameterDef, ParameterPassing,
-        Path as SourcePath, Primitive, Receiver, RecordDef, ReprAttr, ReprItem, ReturnDef, Source,
-        SourceContract, TypeExpr, VariantDef, VariantPayload,
+        CanonicalName as SourceName, ClosureKind, ClosureTrait, ClosureType,
+        DefaultValue as SourceDefaultValue, DeprecationInfo as SourceDeprecationInfo,
+        DocComment as SourceDocComment, EnumDef, ExecutionKind, FieldDef,
+        HandlePresence as SourcePresence, IntegerLiteral, MethodDef, MethodId as SourceMethodId,
+        PackageInfo as SourcePackage, ParameterDef, ParameterPassing, Path as SourcePath,
+        Primitive, Receiver, RecordDef, ReprAttr, ReprItem, ReturnDef, Source, SourceContract,
+        TypeExpr, VariantDef, VariantPayload,
     };
 
     use crate::lower::lower;
@@ -844,7 +845,11 @@ mod tests {
     }
 
     fn closure(parameters: Vec<TypeExpr>, returns: ReturnDef) -> TypeExpr {
-        closure_kind(ClosureKind::Fn, parameters, returns)
+        closure_kind(
+            ClosureKind::ImplTrait(ClosureTrait::Fn),
+            parameters,
+            returns,
+        )
     }
 
     fn closure_kind(kind: ClosureKind, parameters: Vec<TypeExpr>, returns: ReturnDef) -> TypeExpr {
@@ -857,7 +862,11 @@ mod tests {
         presence: SourcePresence,
     ) -> TypeExpr {
         TypeExpr::closure_with_presence(
-            ClosureType::new(ClosureKind::Fn, parameters, returns),
+            ClosureType::new(
+                ClosureKind::ImplTrait(ClosureTrait::Fn),
+                parameters,
+                returns,
+            ),
             presence,
         )
     }
@@ -1646,12 +1655,17 @@ mod tests {
 
     #[test]
     fn closure_with_fn_mut_kind_lowers_to_closure_plan() {
-        assert_closure_kind_lowers(ClosureKind::FnMut);
+        assert_closure_kind_lowers(ClosureKind::ImplTrait(ClosureTrait::FnMut));
     }
 
     #[test]
     fn closure_with_fn_once_kind_lowers_to_closure_plan() {
-        assert_closure_kind_lowers(ClosureKind::FnOnce);
+        assert_closure_kind_lowers(ClosureKind::ImplTrait(ClosureTrait::FnOnce));
+    }
+
+    #[test]
+    fn closure_with_boxed_fn_kind_lowers_to_closure_plan() {
+        assert_closure_kind_lowers(ClosureKind::BoxedTraitObject(ClosureTrait::Fn));
     }
 
     #[test]

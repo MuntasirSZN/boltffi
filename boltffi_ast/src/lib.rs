@@ -56,5 +56,6 @@ pub use source::{Source, SourceFile, SourceSpan, Visibility};
 pub use stream::{StreamDef, StreamMode};
 pub use trait_def::TraitDef;
 pub use type_expr::{
-    ClosureKind, ClosureType, HandlePresence, RustType, TraitUseForm, TypeExpr, TypeParameter,
+    ClosureKind, ClosureTrait, ClosureType, HandlePresence, RustType, TraitUseForm, TypeExpr,
+    TypeParameter,
 };
