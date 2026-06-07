@@ -3,6 +3,7 @@ use proc_macro2::TokenStream;
 
 use crate::experimental::{
     error::Error,
+    expansion::CustomTypeDeclarations,
     rust_api,
     target::Target,
     wrapper::{self, Render},
@@ -11,29 +12,31 @@ use crate::experimental::{
 pub struct SyncRenderer;
 pub struct AsyncRenderer;
 
-pub struct Input<'binding, S: Target> {
+pub struct Input<'context, 'binding, S: Target> {
     callable: &'binding ExportedCallable<S>,
     source: rust_api::Callable<'binding>,
     failure: TokenStream,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, S: Target> Input<'binding, S> {
+impl<'context, 'binding, S: Target> Input<'context, 'binding, S> {
     pub fn new(
         callable: &'binding ExportedCallable<S>,
         source: rust_api::Callable<'binding>,
         failure: TokenStream,
+        custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
     ) -> Self {
         Self {
             callable,
             source,
             failure,
+            custom_declarations,
         }
     }
 
     fn render(self) -> Result<Tokens, Error>
     where
-        wrapper::param::Renderer:
-            Render<S, wrapper::param::Input<'binding, S>, Output = wrapper::param::Tokens>,
+        wrapper::param::Renderer: Render<S, wrapper::param::Input<'context, 'binding, S>, Output = wrapper::param::Tokens>,
     {
         let binding = self.callable;
         if binding.params().len() != self.source.parameters().len() {
@@ -53,6 +56,7 @@ impl<'binding, S: Target> Input<'binding, S> {
                         param,
                         rust_api::Parameter::new(source),
                         self.failure.clone(),
+                        self.custom_declarations,
                     ),
                 )
             })
@@ -118,15 +122,15 @@ impl Tokens {
     }
 }
 
-impl<'binding, S> Render<S, Input<'binding, S>> for SyncRenderer
+impl<'context, 'binding, S> Render<S, Input<'context, 'binding, S>> for SyncRenderer
 where
     S: Target,
     wrapper::param::Renderer:
-        Render<S, wrapper::param::Input<'binding, S>, Output = wrapper::param::Tokens>,
+        Render<S, wrapper::param::Input<'context, 'binding, S>, Output = wrapper::param::Tokens>,
 {
     type Output = Tokens;
 
-    fn render(self, input: Input<'binding, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'binding, S>) -> Result<Self::Output, Error> {
         match input.callable.execution() {
             ExecutionDecl::Synchronous(_) => {}
             ExecutionDecl::Asynchronous(_) => {
@@ -139,15 +143,15 @@ where
     }
 }
 
-impl<'binding, S> Render<S, Input<'binding, S>> for AsyncRenderer
+impl<'context, 'binding, S> Render<S, Input<'context, 'binding, S>> for AsyncRenderer
 where
     S: Target,
     wrapper::param::Renderer:
-        Render<S, wrapper::param::Input<'binding, S>, Output = wrapper::param::Tokens>,
+        Render<S, wrapper::param::Input<'context, 'binding, S>, Output = wrapper::param::Tokens>,
 {
     type Output = Tokens;
 
-    fn render(self, input: Input<'binding, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'binding, S>) -> Result<Self::Output, Error> {
         match input.callable.execution() {
             ExecutionDecl::Asynchronous(_) => {}
             ExecutionDecl::Synchronous(_) => {

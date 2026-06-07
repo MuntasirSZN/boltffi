@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use boltffi_binding::{Bindings, DeclarationId, LoweredBindings, Surface};
+use boltffi_binding::{
+    CustomTypeDecl, CustomTypeId, Decl, DeclarationId, LoweredBindings, Surface,
+};
 
 use super::pair::{PairedDeclaration, SourceDeclaration};
 use crate::experimental::error::Error;
@@ -10,10 +12,10 @@ pub struct ExpansionIndex {
 }
 
 impl ExpansionIndex {
-    pub fn new<S: Surface>(bindings: &Bindings<S>) -> Self {
+    pub fn new<S: Surface>(lowered: &LoweredBindings<S>) -> Self {
+        let declarations = lowered.bindings().decls();
         Self {
-            binding_by_id: bindings
-                .decls()
+            binding_by_id: declarations
                 .iter()
                 .enumerate()
                 .map(|(index, decl)| (decl.id(), index))
@@ -42,5 +44,22 @@ impl ExpansionIndex {
             .get(binding_index)
             .ok_or(Error::MissingDeclaration(binding_id))?;
         source.pair(binding)
+    }
+
+    pub fn custom_type<'a, S: Surface>(
+        &self,
+        lowered: &'a LoweredBindings<S>,
+        id: CustomTypeId,
+    ) -> Result<&'a CustomTypeDecl, Error> {
+        let declaration_id = DeclarationId::CustomType(id);
+        let index = self
+            .binding_by_id
+            .get(&declaration_id)
+            .copied()
+            .ok_or(Error::MissingDeclaration(declaration_id))?;
+        match lowered.bindings().decls().get(index) {
+            Some(Decl::CustomType(custom)) => Ok(custom),
+            _ => Err(Error::WrongDeclaration),
+        }
     }
 }

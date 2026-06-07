@@ -5,6 +5,7 @@ use syn::Ident;
 
 use crate::experimental::{
     error::Error,
+    expansion::CustomTypeDeclarations,
     rust_api,
     target::Target,
     wrapper::{self, Render, names},
@@ -15,25 +16,28 @@ use super::{RustInvocation, Tokens, closure, encoded, handle};
 pub struct Renderer;
 pub struct Success;
 
-pub struct Input<'a, S: Target> {
+pub struct Input<'context, 'a, S: Target> {
     returns: &'a ReturnDecl<S, OutOfRust>,
     error: &'a ErrorDecl<S, OutOfRust>,
     source: rust_api::Return<'a>,
     invocation: RustInvocation,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-pub struct SuccessInput<'a, S: Target> {
+pub struct SuccessInput<'context, 'a, S: Target> {
     returns: &'a ReturnDecl<S, OutOfRust>,
     source: rust_api::Fallible<'a>,
     owner: Ident,
     span: Span,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-impl<'a, S: Target> SuccessInput<'a, S> {
+impl<'context, 'a, S: Target> SuccessInput<'context, 'a, S> {
     pub fn new(
         returns: &'a ReturnDecl<S, OutOfRust>,
         source: rust_api::Fallible<'a>,
         owner: Ident,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
         let span = owner.span();
         Self {
@@ -41,38 +45,41 @@ impl<'a, S: Target> SuccessInput<'a, S> {
             source,
             owner,
             span,
+            custom_declarations,
         }
     }
 }
 
-impl<'a, S: Target> Input<'a, S> {
+impl<'context, 'a, S: Target> Input<'context, 'a, S> {
     pub fn new(
         returns: &'a ReturnDecl<S, OutOfRust>,
         error: &'a ErrorDecl<S, OutOfRust>,
         source: rust_api::Return<'a>,
         invocation: RustInvocation,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
         Self {
             returns,
             error,
             source,
             invocation,
+            custom_declarations,
         }
     }
 }
 
-impl<'a, S> Render<S, Input<'a, S>> for Renderer
+impl<'context, 'a, S> Render<S, Input<'context, 'a, S>> for Renderer
 where
     S: Target,
-    encoded::Renderer: Render<S, encoded::Input<'a, S>, Output = encoded::Tokens>
+    encoded::Renderer: Render<S, encoded::Input<'context, 'a, S>, Output = encoded::Tokens>
         + Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
-    Success: Render<S, SuccessInput<'a, S>, Output = SuccessTokens>,
+    Success: Render<S, SuccessInput<'context, 'a, S>, Output = SuccessTokens>,
     handle::Value:
         Render<S, handle::ValueInput<'a, S::HandleCarrier>, Output = handle::ValueTokens>,
 {
     type Output = Tokens;
 
-    fn render(self, input: Input<'a, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'a, S>) -> Result<Self::Output, Error> {
         match input.error {
             ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } => EncodedError::new(
                 input.returns,
@@ -80,6 +87,7 @@ where
                 *shape,
                 input.source.fallible()?,
                 input.invocation,
+                input.custom_declarations,
             )
             .tokens(),
             ErrorDecl::StatusViaReturnSlot { .. } => {
@@ -97,21 +105,23 @@ where
     }
 }
 
-struct EncodedError<'a, S: Target> {
+struct EncodedError<'context, 'a, S: Target> {
     returns: &'a ReturnDecl<S, OutOfRust>,
     error_codec: &'a ReadPlan,
     error_shape: S::BufferShape,
     source: rust_api::Fallible<'a>,
     invocation: RustInvocation,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-impl<'a, S: Target> EncodedError<'a, S> {
+impl<'context, 'a, S: Target> EncodedError<'context, 'a, S> {
     fn new(
         returns: &'a ReturnDecl<S, OutOfRust>,
         error_codec: &'a ReadPlan,
         error_shape: S::BufferShape,
         source: rust_api::Fallible<'a>,
         invocation: RustInvocation,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
         Self {
             returns,
@@ -119,14 +129,15 @@ impl<'a, S: Target> EncodedError<'a, S> {
             error_shape,
             source,
             invocation,
+            custom_declarations,
         }
     }
 
     fn tokens(self) -> Result<Tokens, Error>
     where
-        encoded::Renderer: Render<S, encoded::Input<'a, S>, Output = encoded::Tokens>
+        encoded::Renderer: Render<S, encoded::Input<'context, 'a, S>, Output = encoded::Tokens>
             + Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
-        Success: Render<S, SuccessInput<'a, S>, Output = SuccessTokens>,
+        Success: Render<S, SuccessInput<'context, 'a, S>, Output = SuccessTokens>,
         handle::Value:
             Render<S, handle::ValueInput<'a, S::HandleCarrier>, Output = handle::ValueTokens>,
     {
@@ -134,7 +145,12 @@ impl<'a, S: Target> EncodedError<'a, S> {
         let error_ident = locals.error();
         let error = <encoded::Renderer as Render<S, _>>::render(
             encoded::Renderer,
-            encoded::Input::new(self.error_codec, self.error_shape, error_ident.clone()),
+            encoded::Input::new(
+                self.error_codec,
+                self.error_shape,
+                error_ident.clone(),
+                self.custom_declarations,
+            ),
         )?;
         let empty_error = <encoded::Renderer as Render<S, _>>::render(
             encoded::Renderer,
@@ -145,7 +161,12 @@ impl<'a, S: Target> EncodedError<'a, S> {
         let empty_error_value = empty_error.value();
         let success = <Success as Render<S, _>>::render(
             Success,
-            SuccessInput::new(self.returns, self.source, self.invocation.function.clone()),
+            SuccessInput::new(
+                self.returns,
+                self.source,
+                self.invocation.function.clone(),
+                self.custom_declarations,
+            ),
         )?;
         let (success_items, success_ffi_parameters, success_pattern, success_body) =
             success.into_parts();
@@ -188,17 +209,17 @@ impl<'a, S: Target> EncodedError<'a, S> {
     }
 }
 
-impl<'a, S> Render<S, SuccessInput<'a, S>> for Success
+impl<'context, 'a, S> Render<S, SuccessInput<'context, 'a, S>> for Success
 where
     S: Target,
-    encoded::Renderer: Render<S, encoded::Input<'a, S>, Output = encoded::Tokens>,
-    closure::Write: Render<S, closure::WriteInput<'a, S>, Output = closure::WriteTokens>,
+    encoded::Renderer: Render<S, encoded::Input<'context, 'a, S>, Output = encoded::Tokens>,
+    closure::Write: Render<S, closure::WriteInput<'context, 'a, S>, Output = closure::WriteTokens>,
     handle::Value:
         Render<S, handle::ValueInput<'a, S::HandleCarrier>, Output = handle::ValueTokens>,
 {
     type Output = SuccessTokens;
 
-    fn render(self, input: SuccessInput<'a, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: SuccessInput<'context, 'a, S>) -> Result<Self::Output, Error> {
         let locals = names::Wrapper::new(input.span);
         let success_ident = locals.success();
         match input.returns.plan() {
@@ -252,7 +273,12 @@ where
                 let out = locals.return_out();
                 let encoded = <encoded::Renderer as Render<S, _>>::render(
                     encoded::Renderer,
-                    encoded::Input::new(codec, *shape, success_ident.clone()),
+                    encoded::Input::new(
+                        codec,
+                        *shape,
+                        success_ident.clone(),
+                        input.custom_declarations,
+                    ),
                 )?;
                 let out_ty = encoded.return_type_without_arrow();
                 let encoded_value = encoded.value();
@@ -304,6 +330,7 @@ where
                         source_closure,
                         success_ident.clone(),
                         input.owner,
+                        input.custom_declarations,
                     ),
                 )?;
                 let (items, ffi_parameters, body) = writer.into_parts();

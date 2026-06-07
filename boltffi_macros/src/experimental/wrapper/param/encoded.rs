@@ -5,6 +5,7 @@ use syn::Ident;
 
 use crate::experimental::{
     error::Error,
+    expansion::CustomTypeDeclarations,
     rust_api,
     target::Target,
     wrapper::{Render, encoded, names},
@@ -14,21 +15,23 @@ use super::Tokens;
 
 pub struct Renderer;
 
-pub struct Input<'binding, S: Target> {
+pub struct Input<'context, 'binding, S: Target> {
     codec: &'binding WritePlan,
     shape: S::BufferShape,
-    target: rust_api::DecodeTarget,
+    target: rust_api::DecodeTarget<'binding>,
     ident: Ident,
     failure: TokenStream,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, S: Target> Input<'binding, S> {
+impl<'context, 'binding, S: Target> Input<'context, 'binding, S> {
     pub fn new(
         codec: &'binding WritePlan,
         shape: S::BufferShape,
-        target: rust_api::DecodeTarget,
+        target: rust_api::DecodeTarget<'binding>,
         ident: Ident,
         failure: TokenStream,
+        custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
     ) -> Self {
         Self {
             codec,
@@ -36,14 +39,15 @@ impl<'binding, S: Target> Input<'binding, S> {
             target,
             ident,
             failure,
+            custom_declarations,
         }
     }
 }
 
-impl<'binding> Render<Native, Input<'binding, Native>> for Renderer {
+impl<'context, 'binding> Render<Native, Input<'context, 'binding, Native>> for Renderer {
     type Output = Tokens;
 
-    fn render(self, input: Input<'binding, Native>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'binding, Native>) -> Result<Self::Output, Error> {
         match input.shape {
             native::BufferShape::Slice => Slice::new(input).tokens(),
             native::BufferShape::Buffer | native::BufferShape::BufferPointer => Err(
@@ -56,10 +60,10 @@ impl<'binding> Render<Native, Input<'binding, Native>> for Renderer {
     }
 }
 
-impl<'binding> Render<Wasm32, Input<'binding, Wasm32>> for Renderer {
+impl<'context, 'binding> Render<Wasm32, Input<'context, 'binding, Wasm32>> for Renderer {
     type Output = Tokens;
 
-    fn render(self, input: Input<'binding, Wasm32>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'binding, Wasm32>) -> Result<Self::Output, Error> {
         match input.shape {
             wasm32::BufferShape::Slice => Slice::new(input).tokens(),
             wasm32::BufferShape::Packed => {
@@ -72,23 +76,26 @@ impl<'binding> Render<Wasm32, Input<'binding, Wasm32>> for Renderer {
     }
 }
 
-struct Slice<'binding> {
+struct Slice<'context, 'binding, S: Target> {
     codec: &'binding WritePlan,
-    target: rust_api::DecodeTarget,
+    target: rust_api::DecodeTarget<'binding>,
     ident: Ident,
     pointer: Ident,
     length: Ident,
     failure: TokenStream,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, S: Target> From<Input<'binding, S>> for Slice<'binding> {
-    fn from(input: Input<'binding, S>) -> Self {
+impl<'context, 'binding, S: Target> From<Input<'context, 'binding, S>>
+    for Slice<'context, 'binding, S>
+{
+    fn from(input: Input<'context, 'binding, S>) -> Self {
         Self::new(input)
     }
 }
 
-impl<'binding> Slice<'binding> {
-    fn new<S: Target>(input: Input<'binding, S>) -> Self {
+impl<'context, 'binding, S: Target> Slice<'context, 'binding, S> {
+    fn new(input: Input<'context, 'binding, S>) -> Self {
         let ident = input.ident;
         let locals = names::Parameter::new(&ident);
         let pointer = locals.pointer();
@@ -100,6 +107,7 @@ impl<'binding> Slice<'binding> {
             pointer,
             length,
             failure: input.failure,
+            custom_declarations: input.custom_declarations,
         }
     }
 
@@ -108,9 +116,10 @@ impl<'binding> Slice<'binding> {
         let length = &self.length;
         let ident = &self.ident;
         let pointer_type = self.pointer_type();
-        let conversion = encoded::incoming::Value::new(self.codec.root()).decode(
-            encoded::incoming::Input::new(&self.target, ident, pointer, length, &self.failure),
-        )?;
+        let conversion =
+            encoded::incoming::Value::new(self.codec.root(), self.custom_declarations).decode(
+                encoded::incoming::Input::new(&self.target, ident, pointer, length, &self.failure),
+            )?;
 
         Ok(Tokens {
             items: Vec::new(),

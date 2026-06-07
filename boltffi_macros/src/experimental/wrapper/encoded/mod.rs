@@ -5,16 +5,18 @@ use crate::experimental::error::Error;
 pub mod incoming;
 pub mod outgoing;
 
-fn require_runtime_wire(root: &CodecNode) -> Result<(), Error> {
-    if uses_runtime_wire(root) {
+mod custom;
+
+fn require_runtime_wire(codec: &CodecNode) -> Result<(), Error> {
+    if uses_runtime_wire(codec) {
         Ok(())
     } else {
         Err(Error::UnsupportedExpansion("codec node"))
     }
 }
 
-fn uses_runtime_wire(root: &CodecNode) -> bool {
-    match root {
+fn uses_runtime_wire(codec: &CodecNode) -> bool {
+    match codec {
         CodecNode::Primitive(_)
         | CodecNode::String
         | CodecNode::Bytes

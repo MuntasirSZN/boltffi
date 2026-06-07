@@ -41,17 +41,18 @@ impl TypeTokens {
     }
 }
 
-pub struct DecodeTarget {
+pub struct DecodeTarget<'a> {
     parameter: Type,
     owned: Type,
     borrow: DecodeBorrow,
+    source: &'a TypeExpr,
 }
 
-impl DecodeTarget {
+impl<'a> DecodeTarget<'a> {
     pub fn new(
         passing: ParameterPassing,
         receive: Receive,
-        type_expr: &TypeExpr,
+        type_expr: &'a TypeExpr,
     ) -> Result<Self, Error> {
         match (passing, receive) {
             (ParameterPassing::Value, Receive::ByValue) => {
@@ -60,6 +61,7 @@ impl DecodeTarget {
                     parameter: ty.clone(),
                     owned: ty,
                     borrow: DecodeBorrow::Owned,
+                    source: type_expr,
                 })
             }
             (ParameterPassing::Ref, Receive::ByRef) => Ok(Self::borrowed(
@@ -78,7 +80,7 @@ impl DecodeTarget {
         }
     }
 
-    pub fn received(receive: Receive, type_expr: &TypeExpr) -> Result<Self, Error> {
+    pub fn received(receive: Receive, type_expr: &'a TypeExpr) -> Result<Self, Error> {
         let passing = match receive {
             Receive::ByValue => ParameterPassing::Value,
             Receive::ByRef => ParameterPassing::Ref,
@@ -104,7 +106,11 @@ impl DecodeTarget {
         self.borrow
     }
 
-    fn borrowed(parameter: Type, type_expr: &TypeExpr, mutable: bool) -> Result<Self, Error> {
+    pub const fn source(&self) -> &'a TypeExpr {
+        self.source
+    }
+
+    fn borrowed(parameter: Type, type_expr: &'a TypeExpr, mutable: bool) -> Result<Self, Error> {
         let (owned, borrow) = match type_expr {
             TypeExpr::Str => (
                 TypeTokens::new(&TypeExpr::String)?.into_type(),
@@ -123,6 +129,7 @@ impl DecodeTarget {
             parameter,
             owned,
             borrow,
+            source: type_expr,
         })
     }
 }

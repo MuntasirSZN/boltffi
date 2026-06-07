@@ -303,6 +303,8 @@ pub enum UnsupportedType {
     OpaqueRustContainer,
     /// A stream item type was not wire-encodable.
     StreamItem,
+    /// A custom type converter cannot be represented as a binding converter.
+    CustomConverter,
 }
 
 impl fmt::Display for UnsupportedType {
@@ -322,6 +324,7 @@ impl fmt::Display for UnsupportedType {
             Self::ClosureInValuePosition => "closure in a value-shaped position",
             Self::OpaqueRustContainer => "opaque Rust pointer container",
             Self::StreamItem => "stream item type",
+            Self::CustomConverter => "custom type converter",
         })
     }
 }

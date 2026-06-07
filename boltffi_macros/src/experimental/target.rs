@@ -31,16 +31,27 @@ use quote::quote;
 pub trait Target: Surface {
     /// Returns the `cfg` attribute applied to generated wrapper items for this surface.
     fn cfg_attr() -> TokenStream;
+
+    /// Returns whether direct record parameters arrive through raw pointers.
+    fn direct_record_params_use_pointers() -> bool;
 }
 
 impl Target for Native {
     fn cfg_attr() -> TokenStream {
         quote! { #[cfg(not(target_arch = "wasm32"))] }
     }
+
+    fn direct_record_params_use_pointers() -> bool {
+        false
+    }
 }
 
 impl Target for Wasm32 {
     fn cfg_attr() -> TokenStream {
         quote! { #[cfg(target_arch = "wasm32")] }
+    }
+
+    fn direct_record_params_use_pointers() -> bool {
+        true
     }
 }

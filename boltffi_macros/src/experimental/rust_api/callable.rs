@@ -53,7 +53,7 @@ impl<'a> Parameter<'a> {
             .map(|target| target.parameter().clone())
     }
 
-    pub fn decode_target(self, receive: Receive) -> Result<DecodeTarget, Error> {
+    pub fn decode_target(self, receive: Receive) -> Result<DecodeTarget<'a>, Error> {
         DecodeTarget::new(self.definition.passing, receive, &self.definition.type_expr)
     }
 
@@ -247,6 +247,15 @@ impl<'a> Return<'a> {
             ReturnDef::Value(type_expr) => TypeTokens::new(type_expr)
                 .map(TypeTokens::into_type)
                 .map(Some),
+        }
+    }
+
+    pub fn value_type(self) -> Result<&'a TypeExpr, Error> {
+        match self.definition {
+            ReturnDef::Void => Err(Error::SourceSyntaxMismatch(
+                "source return does not have a value type",
+            )),
+            ReturnDef::Value(type_expr) => Ok(type_expr),
         }
     }
 

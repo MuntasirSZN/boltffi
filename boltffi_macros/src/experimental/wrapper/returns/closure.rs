@@ -9,6 +9,7 @@ use syn::{Ident, Type};
 
 use crate::experimental::{
     error::Error,
+    expansion::CustomTypeDeclarations,
     rust_api,
     target::Target,
     wrapper::{self, Render, names},
@@ -19,19 +20,21 @@ use super::{RustInvocation, Tokens, encoded};
 pub struct Renderer;
 pub struct Write;
 
-pub struct Input<'a, S: Target> {
+pub struct Input<'context, 'a, S: Target> {
     closure: &'a ClosureReturn<S, OutOfRust>,
     source: rust_api::Closure<'a>,
     invocation: RustInvocation,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-pub struct WriteInput<'a, S: Target> {
+pub struct WriteInput<'context, 'a, S: Target> {
     closure: &'a ClosureReturn<S, OutOfRust>,
     source: rust_api::Closure<'a>,
     value: Ident,
     owner: Ident,
     lane: ReturnLane,
     span: Span,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
 #[derive(Clone, Copy)]
@@ -46,28 +49,38 @@ pub struct WriteTokens {
     body: TokenStream,
 }
 
-impl<'a, S: Target> Input<'a, S> {
+impl<'context, 'a, S: Target> Input<'context, 'a, S> {
     pub fn new(
         closure: &'a ClosureReturn<S, OutOfRust>,
         source: rust_api::Closure<'a>,
         invocation: RustInvocation,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
         Self {
             closure,
             source,
             invocation,
+            custom_declarations,
         }
     }
 }
 
-impl<'a, S: Target> WriteInput<'a, S> {
+impl<'context, 'a, S: Target> WriteInput<'context, 'a, S> {
     pub fn returned(
         closure: &'a ClosureReturn<S, OutOfRust>,
         source: rust_api::Closure<'a>,
         value: Ident,
         owner: Ident,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
-        Self::new(closure, source, value, owner, ReturnLane::Return)
+        Self::new(
+            closure,
+            source,
+            value,
+            owner,
+            ReturnLane::Return,
+            custom_declarations,
+        )
     }
 
     pub fn success(
@@ -75,8 +88,16 @@ impl<'a, S: Target> WriteInput<'a, S> {
         source: rust_api::Closure<'a>,
         value: Ident,
         owner: Ident,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
-        Self::new(closure, source, value, owner, ReturnLane::Success)
+        Self::new(
+            closure,
+            source,
+            value,
+            owner,
+            ReturnLane::Success,
+            custom_declarations,
+        )
     }
 
     fn new(
@@ -85,6 +106,7 @@ impl<'a, S: Target> WriteInput<'a, S> {
         value: Ident,
         owner: Ident,
         lane: ReturnLane,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
         let span = owner.span();
         Self {
@@ -94,6 +116,7 @@ impl<'a, S: Target> WriteInput<'a, S> {
             owner,
             lane,
             span,
+            custom_declarations,
         }
     }
 }
@@ -113,14 +136,14 @@ impl WriteTokens {
     }
 }
 
-impl<'a, S> Render<S, Input<'a, S>> for Renderer
+impl<'context, 'a, S> Render<S, Input<'context, 'a, S>> for Renderer
 where
     S: Target,
-    Write: Render<S, WriteInput<'a, S>, Output = WriteTokens>,
+    Write: Render<S, WriteInput<'context, 'a, S>, Output = WriteTokens>,
 {
     type Output = Tokens;
 
-    fn render(self, input: Input<'a, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'a, S>) -> Result<Self::Output, Error> {
         let RustInvocation {
             function,
             conversions,
@@ -130,7 +153,13 @@ where
         let value = names::Wrapper::new(function.span()).closure();
         let writer = <Write as Render<S, _>>::render(
             Write,
-            WriteInput::returned(input.closure, input.source, value.clone(), function.clone()),
+            WriteInput::returned(
+                input.closure,
+                input.source,
+                value.clone(),
+                function.clone(),
+                input.custom_declarations,
+            ),
         )?;
         let (items, ffi_parameters, body) = writer.into_parts();
 
@@ -149,10 +178,10 @@ where
     }
 }
 
-impl<'a> Render<Native, WriteInput<'a, Native>> for Write {
+impl<'context, 'a> Render<Native, WriteInput<'context, 'a, Native>> for Write {
     type Output = WriteTokens;
 
-    fn render(self, input: WriteInput<'a, Native>) -> Result<Self::Output, Error> {
+    fn render(self, input: WriteInput<'context, 'a, Native>) -> Result<Self::Output, Error> {
         match input.closure.registration().shape() {
             native::ClosureRegistration::InvokeContextRelease => NativeClosure::new(input).tokens(),
             _ => Err(Error::UnsupportedExpansion(
@@ -162,20 +191,20 @@ impl<'a> Render<Native, WriteInput<'a, Native>> for Write {
     }
 }
 
-impl<'a> Render<Wasm32, WriteInput<'a, Wasm32>> for Write {
+impl<'context, 'a> Render<Wasm32, WriteInput<'context, 'a, Wasm32>> for Write {
     type Output = WriteTokens;
 
-    fn render(self, input: WriteInput<'a, Wasm32>) -> Result<Self::Output, Error> {
+    fn render(self, input: WriteInput<'context, 'a, Wasm32>) -> Result<Self::Output, Error> {
         WasmClosure::new(input).tokens()
     }
 }
 
-struct NativeClosure<'a> {
-    input: WriteInput<'a, Native>,
+struct NativeClosure<'context, 'a> {
+    input: WriteInput<'context, 'a, Native>,
 }
 
-impl<'a> NativeClosure<'a> {
-    fn new(input: WriteInput<'a, Native>) -> Self {
+impl<'context, 'a> NativeClosure<'context, 'a> {
+    fn new(input: WriteInput<'context, 'a, Native>) -> Self {
         Self { input }
     }
 
@@ -185,6 +214,7 @@ impl<'a> NativeClosure<'a> {
             self.input.closure.invoke(),
             self.input.source.signature(),
             &returned_closure,
+            self.input.custom_declarations,
         )?;
         let return_tokens = invoke.return_tokens()?;
         let failure = return_tokens.failure();
@@ -289,12 +319,12 @@ impl<'a> NativeClosure<'a> {
     }
 }
 
-struct WasmClosure<'a> {
-    input: WriteInput<'a, Wasm32>,
+struct WasmClosure<'context, 'a> {
+    input: WriteInput<'context, 'a, Wasm32>,
 }
 
-impl<'a> WasmClosure<'a> {
-    fn new(input: WriteInput<'a, Wasm32>) -> Self {
+impl<'context, 'a> WasmClosure<'context, 'a> {
+    fn new(input: WriteInput<'context, 'a, Wasm32>) -> Self {
         Self { input }
     }
 
@@ -304,6 +334,7 @@ impl<'a> WasmClosure<'a> {
             self.input.closure.invoke(),
             self.input.source.signature(),
             &returned_closure,
+            self.input.custom_declarations,
         )?;
         let return_tokens = invoke.return_tokens()?;
         let failure = return_tokens.failure();
@@ -384,17 +415,19 @@ impl<'a> WasmClosure<'a> {
     }
 }
 
-struct ClosureInvoke<'a, S: Target> {
+struct ClosureInvoke<'context, 'a, S: Target> {
     callable: &'a boltffi_binding::ExportedCallable<S>,
     source: &'a FnSig,
     returned_closure: &'a ReturnedClosure,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-impl<'a, S: Target> ClosureInvoke<'a, S> {
+impl<'context, 'a, S: Target> ClosureInvoke<'context, 'a, S> {
     fn new(
         callable: &'a boltffi_binding::ExportedCallable<S>,
         source: &'a FnSig,
         returned_closure: &'a ReturnedClosure,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Result<Self, Error> {
         if callable.params().len() != source.parameters.len() {
             return Err(Error::SourceSyntaxMismatch(
@@ -405,13 +438,14 @@ impl<'a, S: Target> ClosureInvoke<'a, S> {
             callable,
             source,
             returned_closure,
+            custom_declarations,
         })
     }
 
     fn parameters(&self, failure: &TokenStream) -> Result<InvokeParameters, Error>
     where
         InvokeParameterRenderer:
-            Render<S, InvokeParameterInput<'a, S>, Output = InvokeParameterTokens>,
+            Render<S, InvokeParameterInput<'context, 'a, S>, Output = InvokeParameterTokens>,
     {
         self.callable
             .params()
@@ -428,6 +462,7 @@ impl<'a, S: Target> ClosureInvoke<'a, S> {
                         source,
                         rust_type,
                         failure: failure.clone(),
+                        custom_declarations: self.custom_declarations,
                     },
                 )
             })
@@ -438,7 +473,7 @@ impl<'a, S: Target> ClosureInvoke<'a, S> {
     fn return_tokens(&self) -> Result<RustClosureReturnTokens, Error>
     where
         RustClosureReturnRenderer:
-            Render<S, RustClosureReturn<'a, S>, Output = RustClosureReturnTokens>,
+            Render<S, RustClosureReturn<'context, 'a, S>, Output = RustClosureReturnTokens>,
     {
         <RustClosureReturnRenderer as Render<S, _>>::render(
             RustClosureReturnRenderer,
@@ -447,6 +482,7 @@ impl<'a, S: Target> ClosureInvoke<'a, S> {
                 self.callable.error(),
                 &self.source.returns,
                 self.returned_closure.signature.return_type.as_ref(),
+                self.custom_declarations,
             ),
         )
     }
@@ -454,20 +490,24 @@ impl<'a, S: Target> ClosureInvoke<'a, S> {
 
 struct InvokeParameterRenderer;
 
-struct InvokeParameterInput<'a, S: Target> {
+struct InvokeParameterInput<'context, 'a, S: Target> {
     index: usize,
     payload: &'a IncomingParam<S>,
     source: &'a TypeExpr,
     rust_type: &'a Type,
     failure: TokenStream,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-impl<'a, S: Target> InvokeParameterInput<'a, S> {
+impl<'context, 'a, S: Target> InvokeParameterInput<'context, 'a, S> {
     fn direct_tokens(&self) -> Result<Option<InvokeParameterTokens>, Error>
     where
         for<'ty> wrapper::type_ref::Renderer: Render<S, &'ty TypeRef, Output = TokenStream>,
-        for<'binding> wrapper::param::closure::Renderer:
-            Render<S, wrapper::param::closure::Input<'binding, S>, Output = wrapper::param::Tokens>,
+        for<'binding> wrapper::param::closure::Renderer: Render<
+                S,
+                wrapper::param::closure::Input<'context, 'binding, S>,
+                Output = wrapper::param::Tokens,
+            >,
     {
         let argument = names::ClosureArgument::new(self.index).value();
         match self.payload {
@@ -517,6 +557,7 @@ impl<'a, S: Target> InvokeParameterInput<'a, S> {
                         source_closure,
                         argument.clone(),
                         self.failure.clone(),
+                        self.custom_declarations,
                     ),
                 )?;
                 let conversions = tokens.conversions();
@@ -541,15 +582,16 @@ impl<'a, S: Target> InvokeParameterInput<'a, S> {
         let pointer = locals.pointer();
         let length = locals.length();
         let target = rust_api::DecodeTarget::received(receive, self.source)?;
-        let conversion = wrapper::encoded::incoming::Value::new(codec.root()).decode(
-            wrapper::encoded::incoming::Input::new(
-                &target,
-                &argument,
-                &pointer,
-                &length,
-                &self.failure,
-            ),
-        )?;
+        let conversion =
+            wrapper::encoded::incoming::Value::new(codec.root(), self.custom_declarations).decode(
+                wrapper::encoded::incoming::Input::new(
+                    &target,
+                    &argument,
+                    &pointer,
+                    &length,
+                    &self.failure,
+                ),
+            )?;
 
         Ok(InvokeParameterTokens {
             items: Vec::new(),
@@ -561,10 +603,15 @@ impl<'a, S: Target> InvokeParameterInput<'a, S> {
     }
 }
 
-impl<'a> Render<Native, InvokeParameterInput<'a, Native>> for InvokeParameterRenderer {
+impl<'context, 'a> Render<Native, InvokeParameterInput<'context, 'a, Native>>
+    for InvokeParameterRenderer
+{
     type Output = InvokeParameterTokens;
 
-    fn render(self, input: InvokeParameterInput<'a, Native>) -> Result<Self::Output, Error> {
+    fn render(
+        self,
+        input: InvokeParameterInput<'context, 'a, Native>,
+    ) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens()? {
             return Ok(tokens);
         }
@@ -586,10 +633,15 @@ impl<'a> Render<Native, InvokeParameterInput<'a, Native>> for InvokeParameterRen
     }
 }
 
-impl<'a> Render<Wasm32, InvokeParameterInput<'a, Wasm32>> for InvokeParameterRenderer {
+impl<'context, 'a> Render<Wasm32, InvokeParameterInput<'context, 'a, Wasm32>>
+    for InvokeParameterRenderer
+{
     type Output = InvokeParameterTokens;
 
-    fn render(self, input: InvokeParameterInput<'a, Wasm32>) -> Result<Self::Output, Error> {
+    fn render(
+        self,
+        input: InvokeParameterInput<'context, 'a, Wasm32>,
+    ) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens()? {
             return Ok(tokens);
         }
@@ -670,25 +722,28 @@ impl From<Vec<InvokeParameterTokens>> for InvokeParameters {
 
 struct RustClosureReturnRenderer;
 
-struct RustClosureReturn<'a, S: Target> {
+struct RustClosureReturn<'context, 'a, S: Target> {
     plan: &'a ReturnPlan<S, OutOfRust>,
     error: &'a ErrorDecl<S, OutOfRust>,
     source: &'a ReturnDef,
     rust_type: Option<&'a Type>,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-impl<'a, S: Target> RustClosureReturn<'a, S> {
+impl<'context, 'a, S: Target> RustClosureReturn<'context, 'a, S> {
     fn new(
         plan: &'a ReturnPlan<S, OutOfRust>,
         error: &'a ErrorDecl<S, OutOfRust>,
         source: &'a ReturnDef,
         rust_type: Option<&'a Type>,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
     ) -> Self {
         Self {
             plan,
             error,
             source,
             rust_type,
+            custom_declarations,
         }
     }
 
@@ -745,27 +800,42 @@ impl<'a, S: Target> RustClosureReturn<'a, S> {
     }
 
     fn rust_fallible_return(&self) -> Result<RustFallibleReturn, Error> {
-        let ok = rust_api::Return::new(self.source)
-            .fallible()?
-            .ok_written_type()?;
+        let ok = self.source_fallible()?.ok_written_type()?;
         Ok(RustFallibleReturn { ok })
     }
 
-    fn encoded_error<T: Target>(
+    fn source_fallible(&self) -> Result<rust_api::Fallible<'a>, Error> {
+        rust_api::Return::new(self.source).fallible()
+    }
+
+    fn source_ok(&self) -> Result<&'a TypeExpr, Error> {
+        Ok(self.source_fallible()?.ok())
+    }
+
+    fn source_error(&self) -> Result<&'a TypeExpr, Error> {
+        Ok(self.source_fallible()?.error())
+    }
+
+    fn encoded_error(
         &self,
         error_codec: &'a ReadPlan,
-        error_shape: T::BufferShape,
+        error_shape: S::BufferShape,
     ) -> Result<EncodedError, Error>
     where
-        encoded::Renderer: Render<T, encoded::Input<'a, T>, Output = encoded::Tokens>
-            + Render<T, encoded::Empty<T>, Output = encoded::Tokens>,
+        encoded::Renderer: Render<S, encoded::Input<'context, 'a, S>, Output = encoded::Tokens>
+            + Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
     {
         let error_ident = names::Wrapper::new(Span::call_site()).error();
-        let error = <encoded::Renderer as Render<T, _>>::render(
+        let error = <encoded::Renderer as Render<S, _>>::render(
             encoded::Renderer,
-            encoded::Input::new(error_codec, error_shape, error_ident),
+            encoded::Input::new(
+                error_codec,
+                error_shape,
+                error_ident,
+                self.custom_declarations,
+            ),
         )?;
-        let empty = <encoded::Renderer as Render<T, _>>::render(
+        let empty = <encoded::Renderer as Render<S, _>>::render(
             encoded::Renderer,
             encoded::Empty::new(error_shape),
         )?;
@@ -778,10 +848,12 @@ impl<'a, S: Target> RustClosureReturn<'a, S> {
     }
 }
 
-impl<'a> Render<Native, RustClosureReturn<'a, Native>> for RustClosureReturnRenderer {
+impl<'context, 'a> Render<Native, RustClosureReturn<'context, 'a, Native>>
+    for RustClosureReturnRenderer
+{
     type Output = RustClosureReturnTokens;
 
-    fn render(self, input: RustClosureReturn<'a, Native>) -> Result<Self::Output, Error> {
+    fn render(self, input: RustClosureReturn<'context, 'a, Native>) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens::<Native>()? {
             return Ok(tokens);
         }
@@ -802,7 +874,7 @@ impl<'a> Render<Native, RustClosureReturn<'a, Native>> for RustClosureReturnRend
                     ..
                 },
             ) => Ok(RustClosureReturnTokens::fallible(
-                input.encoded_error::<Native>(codec, native::BufferShape::Buffer)?,
+                input.encoded_error(codec, native::BufferShape::Buffer)?,
                 FallibleSuccess::Void,
             )),
             (
@@ -820,7 +892,7 @@ impl<'a> Render<Native, RustClosureReturn<'a, Native>> for RustClosureReturnRend
                     &TypeRef::Primitive(*primitive),
                 )?;
                 Ok(RustClosureReturnTokens::fallible(
-                    input.encoded_error::<Native>(codec, native::BufferShape::Buffer)?,
+                    input.encoded_error(codec, native::BufferShape::Buffer)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },
                 ))
             }
@@ -832,7 +904,7 @@ impl<'a> Render<Native, RustClosureReturn<'a, Native>> for RustClosureReturnRend
                     ..
                 },
             ) => Ok(RustClosureReturnTokens::fallible(
-                input.encoded_error::<Native>(codec, native::BufferShape::Buffer)?,
+                input.encoded_error(codec, native::BufferShape::Buffer)?,
                 FallibleSuccess::DirectPassable {
                     rust_type: Box::new(input.rust_fallible_return()?.ok),
                 },
@@ -852,10 +924,15 @@ impl<'a> Render<Native, RustClosureReturn<'a, Native>> for RustClosureReturnRend
                 let success_ident = names::Wrapper::new(Span::call_site()).success();
                 let success = <encoded::Renderer as Render<Native, _>>::render(
                     encoded::Renderer,
-                    encoded::Input::new(ok_codec, native::BufferShape::Buffer, success_ident),
+                    encoded::Input::new(
+                        ok_codec,
+                        native::BufferShape::Buffer,
+                        success_ident,
+                        input.custom_declarations,
+                    ),
                 )?;
                 Ok(RustClosureReturnTokens::fallible(
-                    input.encoded_error::<Native>(error_codec, native::BufferShape::Buffer)?,
+                    input.encoded_error(error_codec, native::BufferShape::Buffer)?,
                     FallibleSuccess::Encoded {
                         out_type: success.return_type_without_arrow(),
                         value: success.value().clone(),
@@ -872,10 +949,12 @@ impl<'a> Render<Native, RustClosureReturn<'a, Native>> for RustClosureReturnRend
     }
 }
 
-impl<'a> Render<Wasm32, RustClosureReturn<'a, Wasm32>> for RustClosureReturnRenderer {
+impl<'context, 'a> Render<Wasm32, RustClosureReturn<'context, 'a, Wasm32>>
+    for RustClosureReturnRenderer
+{
     type Output = RustClosureReturnTokens;
 
-    fn render(self, input: RustClosureReturn<'a, Wasm32>) -> Result<Self::Output, Error> {
+    fn render(self, input: RustClosureReturn<'context, 'a, Wasm32>) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens::<Wasm32>()? {
             return Ok(tokens);
         }
@@ -896,7 +975,7 @@ impl<'a> Render<Wasm32, RustClosureReturn<'a, Wasm32>> for RustClosureReturnRend
                     ..
                 },
             ) => Ok(RustClosureReturnTokens::fallible(
-                input.encoded_error::<Wasm32>(codec, wasm32::BufferShape::Packed)?,
+                input.encoded_error(codec, wasm32::BufferShape::Packed)?,
                 FallibleSuccess::Void,
             )),
             (
@@ -914,7 +993,7 @@ impl<'a> Render<Wasm32, RustClosureReturn<'a, Wasm32>> for RustClosureReturnRend
                     &TypeRef::Primitive(*primitive),
                 )?;
                 Ok(RustClosureReturnTokens::fallible(
-                    input.encoded_error::<Wasm32>(codec, wasm32::BufferShape::Packed)?,
+                    input.encoded_error(codec, wasm32::BufferShape::Packed)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },
                 ))
             }
@@ -926,7 +1005,7 @@ impl<'a> Render<Wasm32, RustClosureReturn<'a, Wasm32>> for RustClosureReturnRend
                     ..
                 },
             ) => Ok(RustClosureReturnTokens::fallible(
-                input.encoded_error::<Wasm32>(codec, wasm32::BufferShape::Packed)?,
+                input.encoded_error(codec, wasm32::BufferShape::Packed)?,
                 FallibleSuccess::DirectPassable {
                     rust_type: Box::new(input.rust_fallible_return()?.ok),
                 },
@@ -946,10 +1025,15 @@ impl<'a> Render<Wasm32, RustClosureReturn<'a, Wasm32>> for RustClosureReturnRend
                 let success_ident = names::Wrapper::new(Span::call_site()).success();
                 let success = <encoded::Renderer as Render<Wasm32, _>>::render(
                     encoded::Renderer,
-                    encoded::Input::new(codec, wasm32::BufferShape::Packed, success_ident),
+                    encoded::Input::new(
+                        codec,
+                        wasm32::BufferShape::Packed,
+                        success_ident,
+                        input.custom_declarations,
+                    ),
                 )?;
                 Ok(RustClosureReturnTokens::fallible(
-                    input.encoded_error::<Wasm32>(error_codec, wasm32::BufferShape::Packed)?,
+                    input.encoded_error(error_codec, wasm32::BufferShape::Packed)?,
                     FallibleSuccess::Encoded {
                         out_type: success.return_type_without_arrow(),
                         value: success.value().clone(),
