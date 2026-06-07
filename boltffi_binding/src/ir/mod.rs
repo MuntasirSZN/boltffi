@@ -75,6 +75,7 @@
 mod callable;
 mod codec;
 mod contract;
+mod custom;
 mod decl;
 mod direction;
 mod error;
@@ -95,6 +96,10 @@ pub use callable::{
 };
 pub use codec::{CodecNode, CodecPlan, ReadPlan, WritePlan};
 pub use contract::{Bindings, ContractVersion, PackageInfo, SerializedBindings};
+pub use custom::{
+    CustomConverterExpression, CustomConverterPath, CustomConverterPathRoot, CustomTypeConverter,
+    CustomTypeConverters,
+};
 pub(crate) use decl::StreamDeclParts;
 pub use decl::{
     CStyleEnumDecl, CStyleVariantDecl, CallbackDecl, ClassDecl, ConstantDecl, ConstantValueDecl,

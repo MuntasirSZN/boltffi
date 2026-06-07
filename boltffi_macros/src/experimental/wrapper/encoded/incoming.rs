@@ -3,39 +3,52 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Ident, Type};
 
-use crate::experimental::{error::Error, rust_api, wrapper::names};
+use crate::experimental::{
+    error::Error, expansion::CustomTypeDeclarations, rust_api, target::Target, wrapper::names,
+};
 
-pub struct Value<'a> {
-    root: &'a CodecNode,
+pub struct Value<'context, 'a, S: Target> {
+    codec: &'a CodecNode,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
 pub struct Input<'a> {
-    target: &'a rust_api::DecodeTarget,
+    target: &'a rust_api::DecodeTarget<'a>,
     binding: &'a Ident,
     pointer: &'a Ident,
     length: &'a Ident,
     failure: &'a TokenStream,
 }
 
-impl<'a> Value<'a> {
-    pub const fn new(root: &'a CodecNode) -> Self {
-        Self { root }
+impl<'context, 'a, S: Target> Value<'context, 'a, S> {
+    pub const fn new(
+        codec: &'a CodecNode,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
+    ) -> Self {
+        Self {
+            codec,
+            custom_declarations,
+        }
     }
 
     pub fn decode(&self, input: Input<'_>) -> Result<TokenStream, Error> {
-        super::require_runtime_wire(self.root)?;
+        super::require_runtime_wire(self.codec)?;
         match input.target.borrow() {
-            rust_api::DecodeBorrow::Owned => {
-                input.owned(self.root, input.target.owned(), input.binding, false)
-            }
-            borrow => input.reference(self.root, borrow),
+            rust_api::DecodeBorrow::Owned => input.owned(
+                self.codec,
+                input.target.owned(),
+                input.binding,
+                false,
+                self.custom_declarations,
+            ),
+            borrow => input.reference(self.codec, borrow, self.custom_declarations),
         }
     }
 }
 
 impl<'a> Input<'a> {
     pub const fn new(
-        target: &'a rust_api::DecodeTarget,
+        target: &'a rust_api::DecodeTarget<'a>,
         binding: &'a Ident,
         pointer: &'a Ident,
         length: &'a Ident,
@@ -50,13 +63,20 @@ impl<'a> Input<'a> {
         }
     }
 
-    fn reference(
+    fn reference<S: Target>(
         &self,
-        root: &CodecNode,
+        codec: &CodecNode,
         borrow: rust_api::DecodeBorrow,
+        custom_declarations: CustomTypeDeclarations<'_, 'a, S>,
     ) -> Result<TokenStream, Error> {
         let storage = names::Parameter::new(self.binding).storage();
-        let owned = self.owned(root, self.target.owned(), &storage, borrow.mutable())?;
+        let owned = self.owned(
+            codec,
+            self.target.owned(),
+            &storage,
+            borrow.mutable(),
+            custom_declarations,
+        )?;
         let binding = self.binding;
         let borrow = self.borrow(&storage, borrow)?;
         Ok(quote! {
@@ -65,18 +85,71 @@ impl<'a> Input<'a> {
         })
     }
 
-    fn owned(
+    fn owned<S: Target>(
         &self,
-        root: &CodecNode,
+        codec: &CodecNode,
         rust_type: &Type,
         binding: &Ident,
         mutable: bool,
+        custom_declarations: CustomTypeDeclarations<'_, 'a, S>,
     ) -> Result<TokenStream, Error> {
         let pointer = self.pointer;
         let length = self.length;
         let failure = self.failure;
         let mutability = mutable.then(|| quote! { mut });
-        let turbofish = self.decode_type(root, rust_type);
+        let incoming = super::custom::Incoming::new(codec, custom_declarations);
+        let converted = incoming.convert(quote! { __boltffi_decoded })?;
+        if !converted.changed() {
+            return Ok(quote! {
+                let #mutability #binding: #rust_type = {
+                    if #pointer.is_null() && #length > 0 {
+                        ::boltffi::__private::set_last_error(format!(
+                            "{}: null pointer with non-zero length (buf_len={})",
+                            stringify!(#binding),
+                            #length
+                        ));
+                        #failure
+                    }
+                    let __boltffi_bytes: &[u8] = if #length == 0 {
+                        &[]
+                    } else {
+                        unsafe { ::core::slice::from_raw_parts(#pointer, #length) }
+                    };
+                    match ::boltffi::__private::wire::decode::<#rust_type>(__boltffi_bytes) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            ::boltffi::__private::set_last_error(format!(
+                                "{}: wire decode failed: {} (buf_len={})",
+                                stringify!(#binding),
+                                error,
+                                #length
+                            ));
+                            #failure
+                        }
+                    }
+                };
+            });
+        }
+        let decoded_value = if converted.fallible() {
+            let converted_value = converted.tokens();
+            quote! {
+                match #converted_value {
+                    Ok(value) => value,
+                    Err(error) => {
+                        ::boltffi::__private::set_last_error(format!(
+                            "{}: custom conversion failed: {} (buf_len={})",
+                            stringify!(#binding),
+                            error,
+                            #length
+                        ));
+                        #failure
+                    }
+                }
+            }
+        } else {
+            let converted_value = converted.tokens();
+            quote! { #converted_value }
+        };
         Ok(quote! {
             let #mutability #binding: #rust_type = {
                 if #pointer.is_null() && #length > 0 {
@@ -92,7 +165,7 @@ impl<'a> Input<'a> {
                 } else {
                     unsafe { ::core::slice::from_raw_parts(#pointer, #length) }
                 };
-                match ::boltffi::__private::wire::decode::<#turbofish>(__boltffi_bytes) {
+                let __boltffi_decoded = match ::boltffi::__private::wire::decode(__boltffi_bytes) {
                     Ok(value) => value,
                     Err(error) => {
                         ::boltffi::__private::set_last_error(format!(
@@ -103,16 +176,10 @@ impl<'a> Input<'a> {
                         ));
                         #failure
                     }
-                }
+                };
+                #decoded_value
             };
         })
-    }
-
-    fn decode_type(&self, root: &CodecNode, rust_type: &Type) -> Type {
-        match root {
-            CodecNode::Bytes => syn::parse_quote! { Vec<u8> },
-            _ => rust_type.clone(),
-        }
     }
 
     fn borrow(

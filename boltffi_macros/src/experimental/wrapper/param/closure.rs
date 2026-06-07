@@ -1,4 +1,4 @@
-use boltffi_ast::{FnSig, ReturnDef};
+use boltffi_ast::{FnSig, ReturnDef, TypeExpr};
 use boltffi_binding::{
     ClosureForm, ClosureParameter, ErrorDecl, HandlePresence, ImportedCallable, IntoRust, Native,
     OutgoingParam, ParamPlan, ReturnPlan, TypeRef, Wasm32, native, wasm32,
@@ -9,6 +9,7 @@ use syn::{Ident, Type};
 
 use crate::experimental::{
     error::Error,
+    expansion::CustomTypeDeclarations,
     rust_api,
     target::Target,
     wrapper::{self, Render, encoded, names},
@@ -18,51 +19,54 @@ use super::Tokens;
 
 pub struct Renderer;
 
-pub struct Input<'binding, S: Target> {
+pub struct Input<'context, 'binding, S: Target> {
     closure: &'binding ClosureParameter<S, IntoRust>,
     source: rust_api::Closure<'binding>,
     ident: Ident,
     failure: TokenStream,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, S: Target> Input<'binding, S> {
+impl<'context, 'binding, S: Target> Input<'context, 'binding, S> {
     pub fn new(
         closure: &'binding ClosureParameter<S, IntoRust>,
         source: rust_api::Closure<'binding>,
         ident: Ident,
         failure: TokenStream,
+        custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
     ) -> Self {
         Self {
             closure,
             source,
             ident,
             failure,
+            custom_declarations,
         }
     }
 }
 
-impl<'binding> Render<Native, Input<'binding, Native>> for Renderer {
+impl<'context, 'binding> Render<Native, Input<'context, 'binding, Native>> for Renderer {
     type Output = Tokens;
 
-    fn render(self, input: Input<'binding, Native>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'binding, Native>) -> Result<Self::Output, Error> {
         NativeClosure::new(input).tokens()
     }
 }
 
-impl<'binding> Render<Wasm32, Input<'binding, Wasm32>> for Renderer {
+impl<'context, 'binding> Render<Wasm32, Input<'context, 'binding, Wasm32>> for Renderer {
     type Output = Tokens;
 
-    fn render(self, input: Input<'binding, Wasm32>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'binding, Wasm32>) -> Result<Self::Output, Error> {
         WasmClosure::new(input).tokens()
     }
 }
 
-struct NativeClosure<'binding> {
-    input: Input<'binding, Native>,
+struct NativeClosure<'context, 'binding> {
+    input: Input<'context, 'binding, Native>,
 }
 
-impl<'binding> NativeClosure<'binding> {
-    fn new(input: Input<'binding, Native>) -> Self {
+impl<'context, 'binding> NativeClosure<'context, 'binding> {
+    fn new(input: Input<'context, 'binding, Native>) -> Self {
         Self { input }
     }
 
@@ -82,6 +86,7 @@ impl<'binding> NativeClosure<'binding> {
             self.input.closure.invoke(),
             self.input.source.signature(),
             &rust_closure,
+            self.input.custom_declarations,
         )?;
         let invoke_parameters = invoke.parameters()?;
         let names = RegistrationNames::new(ident);
@@ -170,12 +175,12 @@ impl RustClosure {
     }
 }
 
-struct WasmClosure<'binding> {
-    input: Input<'binding, Wasm32>,
+struct WasmClosure<'context, 'binding> {
+    input: Input<'context, 'binding, Wasm32>,
 }
 
-impl<'binding> WasmClosure<'binding> {
-    fn new(input: Input<'binding, Wasm32>) -> Self {
+impl<'context, 'binding> WasmClosure<'context, 'binding> {
+    fn new(input: Input<'context, 'binding, Wasm32>) -> Self {
         Self { input }
     }
 
@@ -186,6 +191,7 @@ impl<'binding> WasmClosure<'binding> {
             self.input.closure.invoke(),
             self.input.source.signature(),
             &rust_closure,
+            self.input.custom_declarations,
         )?;
         let invoke_parameters = invoke.parameters()?;
         let return_tokens = invoke.return_tokens()?;
@@ -265,17 +271,19 @@ impl RegistrationNames {
     }
 }
 
-struct ClosureInvoke<'binding, 'rust, S: Target> {
+struct ClosureInvoke<'context, 'binding, 'rust, S: Target> {
     callable: &'binding ImportedCallable<S>,
     source: &'binding FnSig,
     rust_closure: &'rust RustClosure,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, 'rust, S: Target> ClosureInvoke<'binding, 'rust, S> {
+impl<'context, 'binding, 'rust, S: Target> ClosureInvoke<'context, 'binding, 'rust, S> {
     fn new(
         callable: &'binding ImportedCallable<S>,
         source: &'binding FnSig,
         rust_closure: &'rust RustClosure,
+        custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
     ) -> Result<Self, Error> {
         if callable.params().len() != source.parameters.len() {
             return Err(Error::SourceSyntaxMismatch(
@@ -286,6 +294,7 @@ impl<'binding, 'rust, S: Target> ClosureInvoke<'binding, 'rust, S> {
             callable,
             source,
             rust_closure,
+            custom_declarations,
         })
     }
 
@@ -294,10 +303,18 @@ impl<'binding, 'rust, S: Target> ClosureInvoke<'binding, 'rust, S> {
             .callable
             .params()
             .iter()
+            .zip(self.source.parameters.iter())
             .zip(self.rust_closure.parameters().iter())
             .enumerate()
-            .map(|(index, (param, rust_type))| {
-                InvokeParameterInput::new(index, param.payload(), rust_type).tokens()
+            .map(|(index, ((param, source), rust_type))| {
+                InvokeParameterInput::new(
+                    index,
+                    param.payload(),
+                    source,
+                    rust_type,
+                    self.custom_declarations,
+                )
+                .tokens()
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(InvokeParameters::from(tokens))
@@ -307,34 +324,48 @@ impl<'binding, 'rust, S: Target> ClosureInvoke<'binding, 'rust, S> {
     where
         ForeignClosureReturnRenderer: Render<
                 S,
-                ForeignClosureReturn<'binding, 'rust, S>,
+                ForeignClosureReturn<'context, 'binding, 'rust, S>,
                 Output = ForeignClosureReturnTokens<'rust>,
             >,
     {
-        <ForeignClosureReturnRenderer as Render<S, ForeignClosureReturn<'binding, 'rust, S>>>::render(
+        <ForeignClosureReturnRenderer as Render<
+            S,
+            ForeignClosureReturn<'context, 'binding, 'rust, S>,
+        >>::render(
             ForeignClosureReturnRenderer,
             ForeignClosureReturn::new(
                 self.callable.returns().plan(),
                 self.callable.error(),
                 &self.source.returns,
                 self.rust_closure.return_type(),
+                self.custom_declarations,
             ),
         )
     }
 }
 
-struct InvokeParameterInput<'binding, 'rust, S: Target> {
+struct InvokeParameterInput<'context, 'binding, 'rust, S: Target> {
     index: usize,
     payload: &'binding OutgoingParam<S>,
+    source: &'binding TypeExpr,
     rust_type: &'rust Type,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, 'rust, S: Target> InvokeParameterInput<'binding, 'rust, S> {
-    fn new(index: usize, payload: &'binding OutgoingParam<S>, rust_type: &'rust Type) -> Self {
+impl<'context, 'binding, 'rust, S: Target> InvokeParameterInput<'context, 'binding, 'rust, S> {
+    fn new(
+        index: usize,
+        payload: &'binding OutgoingParam<S>,
+        source: &'binding TypeExpr,
+        rust_type: &'rust Type,
+        custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
+    ) -> Self {
         Self {
             index,
             payload,
+            source,
             rust_type,
+            custom_declarations,
         }
     }
 
@@ -373,8 +404,8 @@ impl<'binding, 'rust, S: Target> InvokeParameterInput<'binding, 'rust, S> {
                 let wire = locals.wire();
                 let pointer = locals.pointer();
                 let length = locals.length();
-                let buffer =
-                    encoded::outgoing::Value::new(codec.root()).buffer(quote! { #argument })?;
+                let buffer = encoded::outgoing::Value::new(codec.root(), self.custom_declarations)
+                    .buffer(quote! { #argument })?;
                 Ok(InvokeParameterTokens {
                     rust_parameter: quote! { #argument: #rust_type },
                     ffi_parameter_types: vec![quote! { *const u8 }, quote! { usize }],
@@ -433,25 +464,28 @@ impl From<Vec<InvokeParameterTokens>> for InvokeParameters {
     }
 }
 
-struct ForeignClosureReturn<'binding, 'rust, S: Target> {
+struct ForeignClosureReturn<'context, 'binding, 'rust, S: Target> {
     plan: &'binding ReturnPlan<S, IntoRust>,
     error: &'binding ErrorDecl<S, IntoRust>,
     source: &'binding ReturnDef,
     rust_type: Option<&'rust Type>,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, 'rust, S: Target> ForeignClosureReturn<'binding, 'rust, S> {
+impl<'context, 'binding, 'rust, S: Target> ForeignClosureReturn<'context, 'binding, 'rust, S> {
     fn new(
         plan: &'binding ReturnPlan<S, IntoRust>,
         error: &'binding ErrorDecl<S, IntoRust>,
         source: &'binding ReturnDef,
         rust_type: Option<&'rust Type>,
+        custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
     ) -> Self {
         Self {
             plan,
             error,
             source,
             rust_type,
+            custom_declarations,
         }
     }
 
@@ -515,14 +549,15 @@ impl<'binding, 'rust, S: Target> ForeignClosureReturn<'binding, 'rust, S> {
 
 struct ForeignClosureReturnRenderer;
 
-impl<'binding, 'rust> Render<Native, ForeignClosureReturn<'binding, 'rust, Native>>
+impl<'context, 'binding, 'rust>
+    Render<Native, ForeignClosureReturn<'context, 'binding, 'rust, Native>>
     for ForeignClosureReturnRenderer
 {
     type Output = ForeignClosureReturnTokens<'rust>;
 
     fn render(
         self,
-        input: ForeignClosureReturn<'binding, 'rust, Native>,
+        input: ForeignClosureReturn<'context, 'binding, 'rust, Native>,
     ) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens()? {
             return Ok(tokens);
@@ -606,14 +641,15 @@ impl<'binding, 'rust> Render<Native, ForeignClosureReturn<'binding, 'rust, Nativ
     }
 }
 
-impl<'binding, 'rust> Render<Wasm32, ForeignClosureReturn<'binding, 'rust, Wasm32>>
+impl<'context, 'binding, 'rust>
+    Render<Wasm32, ForeignClosureReturn<'context, 'binding, 'rust, Wasm32>>
     for ForeignClosureReturnRenderer
 {
     type Output = ForeignClosureReturnTokens<'rust>;
 
     fn render(
         self,
-        input: ForeignClosureReturn<'binding, 'rust, Wasm32>,
+        input: ForeignClosureReturn<'context, 'binding, 'rust, Wasm32>,
     ) -> Result<Self::Output, Error> {
         if let Some(tokens) = input.direct_tokens()? {
             return Ok(tokens);

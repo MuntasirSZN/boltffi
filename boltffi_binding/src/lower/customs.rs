@@ -6,10 +6,9 @@
 //! appears as a field, parameter, or return.
 //!
 //! The source carries converter functions between the remote Rust type
-//! and the chosen FFI representation. Those converters run inside the
-//! generated Rust extern wrappers; they are private to the codegen and
-//! do not surface as their own declared symbols on the FFI boundary.
-//! The lowered IR therefore keeps only the wire representation.
+//! and the chosen FFI representation. Lowering keeps that conversion
+//! contract on the custom declaration so every consumer reads the same
+//! boundary rule.
 //!
 //! Custom-type references already lower transparently through
 //! [`super::types::lower`] for `TypeExpr::Custom(id)`; this pass adds
@@ -20,11 +19,19 @@
 //! [`CustomTypeDecl`]: crate::CustomTypeDecl
 //! [`TypeRef`]: crate::TypeRef
 
-use boltffi_ast::CustomTypeDef as SourceCustom;
+use boltffi_ast::{
+    CustomTypeConverter as SourceConverter, CustomTypeConverters as SourceConverters,
+    CustomTypeDef as SourceCustom, Path as SourcePath, PathRoot as SourcePathRoot,
+};
 
-use crate::{CanonicalName, CustomTypeDecl};
+use crate::{
+    CanonicalName, CustomConverterExpression, CustomConverterPath, CustomConverterPathRoot,
+    CustomTypeConverter, CustomTypeConverters, CustomTypeDecl, NamePart,
+};
 
-use super::{LowerError, ids::DeclarationIds, index::Index, metadata, types};
+use super::{
+    LowerError, error::UnsupportedType, ids::DeclarationIds, index::Index, metadata, types,
+};
 
 pub(super) fn lower(
     idx: &Index<'_>,
@@ -44,7 +51,44 @@ fn lower_one(ids: &DeclarationIds, custom: &SourceCustom) -> Result<CustomTypeDe
         CanonicalName::from(&custom.name),
         metadata::decl_meta(custom.doc.as_ref(), custom.deprecated.as_ref()),
         representation,
+        lower_converters(&custom.converters)?,
     ))
+}
+
+fn lower_converters(converters: &SourceConverters) -> Result<CustomTypeConverters, LowerError> {
+    Ok(CustomTypeConverters::new(
+        lower_converter(&converters.into_ffi)?,
+        lower_converter(&converters.try_from_ffi)?,
+    ))
+}
+
+fn lower_converter(converter: &SourceConverter) -> Result<CustomTypeConverter, LowerError> {
+    match converter {
+        SourceConverter::Path(path) => lower_path(path).map(CustomTypeConverter::path),
+        SourceConverter::Expr(expression) => Ok(CustomTypeConverter::expression(
+            CustomConverterExpression::new(expression.source.clone()),
+        )),
+    }
+}
+
+fn lower_path(path: &SourcePath) -> Result<CustomConverterPath, LowerError> {
+    let root = match path.root {
+        SourcePathRoot::Relative => CustomConverterPathRoot::Relative,
+        SourcePathRoot::Crate => CustomConverterPathRoot::Crate,
+        SourcePathRoot::Self_ => CustomConverterPathRoot::Self_,
+        SourcePathRoot::Super(levels) => CustomConverterPathRoot::Super(levels),
+        SourcePathRoot::Absolute => CustomConverterPathRoot::Absolute,
+    };
+    path.segments
+        .iter()
+        .map(|segment| match segment.arguments.is_empty() {
+            true => Ok(NamePart::new(segment.name.as_str())),
+            false => Err(LowerError::unsupported_type(
+                UnsupportedType::CustomConverter,
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|segments| CustomConverterPath::new(root, segments))
 }
 
 #[cfg(test)]

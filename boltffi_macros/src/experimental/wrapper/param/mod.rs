@@ -1,7 +1,9 @@
 use boltffi_binding::{IncomingParam, IntoRust, ParamDecl, ParamPlan};
 use proc_macro2::TokenStream;
 
-use crate::experimental::{error::Error, rust_api, target::Target, wrapper::Render};
+use crate::experimental::{
+    error::Error, expansion::CustomTypeDeclarations, rust_api, target::Target, wrapper::Render,
+};
 
 pub mod closure;
 mod direct;
@@ -12,22 +14,40 @@ mod scalar_option;
 
 pub struct Renderer;
 
-pub struct Input<'binding, S: Target> {
+pub fn requires_failure_return<S: Target>(param: &ParamDecl<S, IntoRust>) -> bool {
+    match param.payload() {
+        IncomingParam::Value(ParamPlan::Direct { ty, .. }) => {
+            S::direct_record_params_use_pointers()
+                && matches!(ty, boltffi_binding::TypeRef::Record(_))
+        }
+        IncomingParam::Value(ParamPlan::Encoded { .. })
+        | IncomingParam::Value(ParamPlan::Handle { .. })
+        | IncomingParam::Value(ParamPlan::ScalarOption { .. })
+        | IncomingParam::Value(ParamPlan::DirectVec { .. })
+        | IncomingParam::Closure(_) => true,
+        IncomingParam::Value(_) => true,
+    }
+}
+
+pub struct Input<'context, 'binding, S: Target> {
     param: &'binding ParamDecl<S, IntoRust>,
     source: rust_api::Parameter<'binding>,
     failure: TokenStream,
+    custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
 }
 
-impl<'binding, S: Target> Input<'binding, S> {
+impl<'context, 'binding, S: Target> Input<'context, 'binding, S> {
     pub fn new(
         param: &'binding ParamDecl<S, IntoRust>,
         source: rust_api::Parameter<'binding>,
         failure: TokenStream,
+        custom_declarations: CustomTypeDeclarations<'context, 'binding, S>,
     ) -> Self {
         Self {
             param,
             source,
             failure,
+            custom_declarations,
         }
     }
 }
@@ -67,19 +87,19 @@ impl Tokens {
     }
 }
 
-impl<'binding, S> Render<S, Input<'binding, S>> for Renderer
+impl<'context, 'binding, S> Render<S, Input<'context, 'binding, S>> for Renderer
 where
     S: Target,
     direct::Renderer: Render<S, direct::Input<'binding>, Output = Tokens>,
     direct_vec::Renderer: Render<S, direct_vec::Input<'binding>, Output = Tokens>,
-    closure::Renderer: Render<S, closure::Input<'binding, S>, Output = Tokens>,
-    encoded::Renderer: Render<S, encoded::Input<'binding, S>, Output = Tokens>,
+    closure::Renderer: Render<S, closure::Input<'context, 'binding, S>, Output = Tokens>,
+    encoded::Renderer: Render<S, encoded::Input<'context, 'binding, S>, Output = Tokens>,
     handle::Renderer: Render<S, handle::Input<'binding, S::HandleCarrier>, Output = Tokens>,
     scalar_option::Renderer: Render<S, scalar_option::Input, Output = Tokens>,
 {
     type Output = Tokens;
 
-    fn render(self, input: Input<'binding, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'binding, S>) -> Result<Self::Output, Error> {
         let ident = input.source.ident()?;
         match input.param.payload() {
             IncomingParam::Value(ParamPlan::Direct { ty, receive }) => {
@@ -107,6 +127,7 @@ where
                     input.source.decode_target(*receive)?,
                     ident,
                     input.failure,
+                    input.custom_declarations,
                 ),
             ),
             IncomingParam::Value(ParamPlan::ScalarOption { primitive }) => {
@@ -153,6 +174,7 @@ where
                     input.source.closure(closure.presence())?,
                     ident,
                     input.failure,
+                    input.custom_declarations,
                 ),
             ),
             IncomingParam::Value(_) => Err(Error::UnsupportedExpansion("unknown parameter plan")),

@@ -6,7 +6,7 @@ use syn::{Ident, Path, parse_str};
 
 use crate::experimental::{
     error::Error,
-    expansion::DeclarationPair,
+    expansion::{CustomTypeDeclarations, DeclarationPair},
     rust_api,
     target::Target,
     wrapper::{self, Render},
@@ -16,25 +16,32 @@ use crate::experimental::{
 ///
 /// The renderer receives a paired source and binding declaration, then renders only the
 /// generated extern wrapper. The original Rust function item remains owned by the caller.
-pub struct Renderer<'a, S: Target> {
+pub struct Renderer<'context, 'a, S: Target> {
     pair: DeclarationPair<'a, FunctionDef, FunctionDecl<S>>,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-impl<'a, S> Renderer<'a, S>
+impl<'context, 'a, S> Renderer<'context, 'a, S>
 where
     S: Target,
     wrapper::arguments::SyncRenderer:
-        Render<S, wrapper::arguments::Input<'a, S>, Output = wrapper::arguments::Tokens>,
+        Render<S, wrapper::arguments::Input<'context, 'a, S>, Output = wrapper::arguments::Tokens>,
     wrapper::returns::Failure:
-        Render<S, wrapper::returns::FailureInput<'a, S>, Output = TokenStream>,
+        Render<S, wrapper::returns::FailureInput<'context, 'a, S>, Output = TokenStream>,
     wrapper::returns::Renderer:
-        Render<S, wrapper::returns::Input<'a, S>, Output = wrapper::returns::Tokens>,
+        Render<S, wrapper::returns::Input<'context, 'a, S>, Output = wrapper::returns::Tokens>,
     wrapper::async_call::Renderer:
-        Render<S, wrapper::async_call::Input<'a, S>, Output = TokenStream>,
+        Render<S, wrapper::async_call::Input<'context, 'a, S>, Output = TokenStream>,
 {
     /// Creates a renderer for one paired function declaration.
-    pub fn new(pair: DeclarationPair<'a, FunctionDef, FunctionDecl<S>>) -> Self {
-        Self { pair }
+    pub fn new(
+        pair: DeclarationPair<'a, FunctionDef, FunctionDecl<S>>,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
+    ) -> Self {
+        Self {
+            pair,
+            custom_declarations,
+        }
     }
 
     /// Renders the generated extern wrapper.
@@ -55,21 +62,36 @@ where
                     source_signature,
                     function_ident,
                     visibility,
+                    self.custom_declarations,
                 ),
             );
         }
 
         let cfg = S::cfg_attr();
-        let failure = <wrapper::returns::Failure as Render<S, _>>::render(
-            wrapper::returns::Failure,
-            wrapper::returns::FailureInput::new(
-                function.callable().returns(),
-                function.callable().error(),
-            ),
-        )?;
+        let failure = match function
+            .callable()
+            .params()
+            .iter()
+            .any(wrapper::param::requires_failure_return::<S>)
+        {
+            true => <wrapper::returns::Failure as Render<S, _>>::render(
+                wrapper::returns::Failure,
+                wrapper::returns::FailureInput::new(
+                    function.callable().returns(),
+                    function.callable().error(),
+                    self.custom_declarations,
+                ),
+            )?,
+            false => TokenStream::new(),
+        };
         let wrapper_arguments = <wrapper::arguments::SyncRenderer as Render<S, _>>::render(
             wrapper::arguments::SyncRenderer,
-            wrapper::arguments::Input::new(function.callable(), source_signature, failure),
+            wrapper::arguments::Input::new(
+                function.callable(),
+                source_signature,
+                failure,
+                self.custom_declarations,
+            ),
         )?;
         let export_ident = format_ident!("{}", function.symbol().name().as_str());
         let argument_ffi_parameters = wrapper_arguments.ffi_parameters();
@@ -89,6 +111,7 @@ where
                     writebacks.to_vec(),
                     rust_arguments.to_vec(),
                 ),
+                self.custom_declarations,
             ),
         )?;
         let ffi_parameters = argument_ffi_parameters

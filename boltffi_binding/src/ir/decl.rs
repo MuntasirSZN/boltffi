@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BufferShapeRules, ByteSize, CallableScope, CallbackId, CallbackProtocolIntrospect,
-    CanonicalName, ClassId, CodecPlan, ConstantId, CustomTypeId, DeclMeta, DeclarationId,
-    DefaultValue, ElementMeta, EnumId, ExportedCallable, FunctionId, ImportedCallable,
-    InitializerId, IntegerRepr, IntegerValue, MethodId, NativeSymbol, ReadPlan, RecordId,
-    RecordLayout, ReturnTypeRef, RustBody, StreamId, Surface, TypeRef, WritePlan,
+    CanonicalName, ClassId, CodecPlan, ConstantId, CustomTypeConverters, CustomTypeId, DeclMeta,
+    DeclarationId, DefaultValue, ElementMeta, EnumId, ExportedCallable, FunctionId,
+    ImportedCallable, InitializerId, IntegerRepr, IntegerValue, MethodId, NativeSymbol, ReadPlan,
+    RecordId, RecordLayout, ReturnTypeRef, RustBody, StreamId, Surface, TypeRef, WritePlan,
 };
 
 /// One classified declaration in a binding contract.
@@ -1346,17 +1346,18 @@ impl<S: Surface> ConstantValueDecl<S> {
     }
 }
 
-/// A user-defined type that maps to an existing binding shape.
+/// A user-defined Rust type carried through an existing binding shape.
 ///
-/// Custom types let users layer a Rust newtype on top of a standard
-/// binding type without introducing a new representation. The value
-/// crosses the boundary as the underlying [`TypeRef`].
+/// The declaration records both the representation visible at the FFI boundary
+/// and the Rust conversion expressions generated wrappers must call at the
+/// boundary.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct CustomTypeDecl {
     id: CustomTypeId,
     name: CanonicalName,
     meta: DeclMeta,
     representation: TypeRef,
+    converters: CustomTypeConverters,
 }
 
 impl CustomTypeDecl {
@@ -1365,12 +1366,14 @@ impl CustomTypeDecl {
         name: CanonicalName,
         meta: DeclMeta,
         representation: TypeRef,
+        converters: CustomTypeConverters,
     ) -> Self {
         Self {
             id,
             name,
             meta,
             representation,
+            converters,
         }
     }
 
@@ -1389,9 +1392,14 @@ impl CustomTypeDecl {
         &self.meta
     }
 
-    /// Returns the underlying representation.
+    /// Returns the representation visible at the FFI boundary.
     pub fn representation(&self) -> &TypeRef {
         &self.representation
+    }
+
+    /// Returns the Rust converters used by generated wrappers.
+    pub fn converters(&self) -> &CustomTypeConverters {
+        &self.converters
     }
 }
 

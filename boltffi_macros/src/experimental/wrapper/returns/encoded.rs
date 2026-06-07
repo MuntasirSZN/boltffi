@@ -4,24 +4,46 @@ use quote::quote;
 
 use crate::experimental::{
     error::Error,
+    expansion::CustomTypeDeclarations,
     target::Target,
     wrapper::{Render, encoded},
 };
 
 pub struct Renderer;
 
-pub struct Input<'a, S: Target> {
+pub struct Input<'context, 'a, S: Target> {
     codec: &'a ReadPlan,
     shape: S::BufferShape,
     value: syn::Ident,
+    custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
 }
 
-impl<'a, S: Target> Input<'a, S> {
-    pub fn new(codec: &'a ReadPlan, shape: S::BufferShape, value: syn::Ident) -> Self {
+impl<'context, 'a, S: Target> Input<'context, 'a, S> {
+    pub fn new(
+        codec: &'a ReadPlan,
+        shape: S::BufferShape,
+        value: syn::Ident,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
+    ) -> Self {
         Self {
             codec,
             shape,
             value,
+            custom_declarations,
+        }
+    }
+
+    pub fn string(
+        codec: &'a ReadPlan,
+        shape: S::BufferShape,
+        value: syn::Ident,
+        custom_declarations: CustomTypeDeclarations<'context, 'a, S>,
+    ) -> Self {
+        Self {
+            codec,
+            shape,
+            value,
+            custom_declarations,
         }
     }
 }
@@ -56,15 +78,16 @@ impl<S: Target> Empty<S> {
     }
 }
 
-impl<'a> Render<Native, Input<'a, Native>> for Renderer {
+impl<'context, 'a> Render<Native, Input<'context, 'a, Native>> for Renderer {
     type Output = Tokens;
 
-    fn render(self, input: Input<'a, Native>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'a, Native>) -> Result<Self::Output, Error> {
         let value = input.value;
         match input.shape {
             native::BufferShape::Buffer => {
                 let value =
-                    encoded::outgoing::Value::new(input.codec.root()).buffer(quote! { #value })?;
+                    encoded::outgoing::Value::new(input.codec.root(), input.custom_declarations)
+                        .buffer(quote! { #value })?;
                 Ok(Tokens {
                     value_type: quote! { ::boltffi::__private::FfiBuf },
                     return_type: quote! { -> ::boltffi::__private::FfiBuf },
@@ -101,16 +124,17 @@ impl Render<Native, Empty<Native>> for Renderer {
     }
 }
 
-impl<'a> Render<Wasm32, Input<'a, Wasm32>> for Renderer {
+impl<'context, 'a> Render<Wasm32, Input<'context, 'a, Wasm32>> for Renderer {
     type Output = Tokens;
 
-    fn render(self, input: Input<'a, Wasm32>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'context, 'a, Wasm32>) -> Result<Self::Output, Error> {
         let value = input.value;
 
         match input.shape {
             wasm32::BufferShape::Packed => {
                 let buffer =
-                    encoded::outgoing::Value::new(input.codec.root()).buffer(quote! { #value })?;
+                    encoded::outgoing::Value::new(input.codec.root(), input.custom_declarations)
+                        .buffer(quote! { #value })?;
                 Ok(Tokens {
                     value_type: quote! { u64 },
                     return_type: quote! { -> u64 },

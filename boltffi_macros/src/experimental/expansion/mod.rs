@@ -2,7 +2,7 @@ mod index;
 mod pair;
 
 use boltffi_ast::FunctionDef;
-use boltffi_binding::{FunctionDecl, LoweredBindings, Surface};
+use boltffi_binding::{CustomTypeDecl, CustomTypeId, FunctionDecl, LoweredBindings, Surface};
 
 use self::index::ExpansionIndex;
 use self::pair::{PairedDeclaration, SourceDeclaration};
@@ -24,13 +24,20 @@ impl<'a, S: Surface> Expansion<'a, S> {
     pub fn new(lowered: &'a LoweredBindings<S>) -> Self {
         Self {
             lowered,
-            index: ExpansionIndex::new(lowered.bindings()),
+            index: ExpansionIndex::new(lowered),
         }
     }
 
     /// Returns the lowered binding declarations.
     pub fn bindings(&self) -> &'a boltffi_binding::Bindings<S> {
         self.lowered.bindings()
+    }
+
+    /// Returns custom declarations referenced by encoded codec trees.
+    pub fn custom_declarations<'context>(
+        &'context self,
+    ) -> CustomTypeDeclarations<'context, 'a, S> {
+        CustomTypeDeclarations { expansion: self }
     }
 
     /// Returns the lowered function declaration paired with the scanned source function.
@@ -48,13 +55,27 @@ impl<'a, S: Surface> Expansion<'a, S> {
     }
 }
 
+/// Custom declarations referenced by codec trees.
+#[derive(Clone, Copy)]
+pub struct CustomTypeDeclarations<'context, 'a, S: Surface> {
+    expansion: &'context Expansion<'a, S>,
+}
+
+impl<'context, 'a, S: Surface> CustomTypeDeclarations<'context, 'a, S> {
+    /// Returns the custom declaration for a custom codec node.
+    pub fn get(self, id: CustomTypeId) -> Result<&'a CustomTypeDecl, Error> {
+        self.expansion.index.custom_type(self.expansion.lowered, id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{
-        CanonicalName, ClassDef, ClassId, ExecutionKind, FieldDef, FnSig, FnTrait, FnTraitKind,
-        FunctionDef, FunctionId, PackageInfo, ParameterDef, ParameterPassing, Path, Primitive,
-        RecordDef, RecordId, ReturnDef, Source, SourceContract, SourceName, TraitDef, TraitId,
-        TypeExpr, Visibility,
+        CanonicalName, ClassDef, ClassId, CustomRemoteType, CustomTypeConverter,
+        CustomTypeConverters, CustomTypeDef, CustomTypeId, ExecutionKind, FieldDef, FnSig, FnTrait,
+        FnTraitKind, FunctionDef, FunctionId, PackageInfo, ParameterDef, ParameterPassing, Path,
+        Primitive, RecordDef, RecordId, ReturnDef, Source, SourceContract, SourceName, TraitDef,
+        TraitId, TypeExpr, Visibility,
     };
     use boltffi_binding::{Native, Wasm32, lower_with_declarations};
     use proc_macro2::TokenStream;
@@ -72,19 +93,29 @@ mod tests {
     ) -> Result<TokenStream, Error>
     where
         S: Target,
-        wrapper::arguments::SyncRenderer: wrapper::Render<
+        for<'context> wrapper::arguments::SyncRenderer: wrapper::Render<
                 S,
-                wrapper::arguments::Input<'a, S>,
+                wrapper::arguments::Input<'context, 'a, S>,
                 Output = wrapper::arguments::Tokens,
             >,
-        wrapper::returns::Failure:
-            wrapper::Render<S, wrapper::returns::FailureInput<'a, S>, Output = TokenStream>,
-        wrapper::returns::Renderer:
-            wrapper::Render<S, wrapper::returns::Input<'a, S>, Output = wrapper::returns::Tokens>,
-        wrapper::async_call::Renderer:
-            wrapper::Render<S, wrapper::async_call::Input<'a, S>, Output = TokenStream>,
+        for<'context> wrapper::returns::Failure: wrapper::Render<
+                S,
+                wrapper::returns::FailureInput<'context, 'a, S>,
+                Output = TokenStream,
+            >,
+        for<'context> wrapper::returns::Renderer: wrapper::Render<
+                S,
+                wrapper::returns::Input<'context, 'a, S>,
+                Output = wrapper::returns::Tokens,
+            >,
+        for<'context> wrapper::async_call::Renderer:
+            wrapper::Render<S, wrapper::async_call::Input<'context, 'a, S>, Output = TokenStream>,
     {
-        let wrapper = wrapper::function::Renderer::new(expansion.function(source)?).render()?;
+        let wrapper = wrapper::function::Renderer::new(
+            expansion.function(source)?,
+            expansion.custom_declarations(),
+        )
+        .render()?;
 
         Ok(quote! {
             #syntax
@@ -155,6 +186,24 @@ mod tests {
 
     fn class(name: &str) -> TypeExpr {
         TypeExpr::class(ClassId::new(format!("demo::{name}")), path(name))
+    }
+
+    fn custom_timestamp() -> TypeExpr {
+        TypeExpr::custom(CustomTypeId::new("demo::Timestamp"), path("Timestamp"))
+    }
+
+    fn timestamp_custom_def() -> CustomTypeDef {
+        CustomTypeDef::new(
+            CustomTypeId::new("demo::Timestamp"),
+            CanonicalName::single("Timestamp"),
+            CustomRemoteType::single_path("Timestamp"),
+            TypeExpr::Primitive(Primitive::I64),
+            None,
+            CustomTypeConverters::new(
+                CustomTypeConverter::path(Path::single("timestamp_into_ffi")),
+                CustomTypeConverter::path(Path::single("timestamp_try_from_ffi")),
+            ),
+        )
     }
 
     fn byte_slice() -> TypeExpr {
@@ -883,6 +932,57 @@ mod tests {
         source
     }
 
+    fn custom_param_contract() -> SourceContract {
+        let mut function =
+            FunctionDef::new(FunctionId::new("demo::year"), CanonicalName::single("year"));
+        function.parameters = vec![parameter("when", custom_timestamp())];
+        function.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::U32));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.functions.push(function);
+        source
+    }
+
+    fn custom_return_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::stamp"),
+            CanonicalName::single("stamp"),
+        );
+        function.returns = ReturnDef::value(custom_timestamp());
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.functions.push(function);
+        source
+    }
+
+    fn custom_result_error_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::try_stamp"),
+            CanonicalName::single("try_stamp"),
+        );
+        function.returns = result_return(TypeExpr::Primitive(Primitive::U32), custom_timestamp());
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.functions.push(function);
+        source
+    }
+
+    fn nested_custom_return_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::timeline"),
+            CanonicalName::single("timeline"),
+        );
+        function.returns = ReturnDef::value(TypeExpr::vec(TypeExpr::option(custom_timestamp())));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.functions.push(function);
+        source
+    }
+
     #[test]
     fn function_expansion_uses_exact_source_declaration() {
         let source = source_contract();
@@ -1006,6 +1106,171 @@ mod tests {
     }
 
     #[test]
+    fn native_custom_param_expansion_decodes_repr_and_calls_try_from_ffi() {
+        let source = custom_param_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn year(when: Timestamp) -> u32 {
+                when.year()
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                pub fn year(when: Timestamp) -> u32 {
+                    when.year()
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn boltffi_function_demo_year(
+                    __boltffi_when_ptr: *const u8,
+                    __boltffi_when_len: usize
+                ) -> u32 {
+                    let when: Timestamp = {
+                        if __boltffi_when_ptr.is_null() && __boltffi_when_len > 0 {
+                            ::boltffi::__private::set_last_error(format!(
+                                "{}: null pointer with non-zero length (buf_len={})",
+                                stringify!(when),
+                                __boltffi_when_len
+                            ));
+                            return ::core::default::Default::default();
+                        }
+                        let __boltffi_bytes: &[u8] = if __boltffi_when_len == 0 {
+                            &[]
+                        } else {
+                            unsafe {
+                                ::core::slice::from_raw_parts(
+                                    __boltffi_when_ptr,
+                                    __boltffi_when_len
+                                )
+                            }
+                        };
+                        let __boltffi_decoded = match ::boltffi::__private::wire::decode(__boltffi_bytes) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                ::boltffi::__private::set_last_error(format!(
+                                    "{}: wire decode failed: {} (buf_len={})",
+                                    stringify!(when),
+                                    error,
+                                    __boltffi_when_len
+                                ));
+                                return ::core::default::Default::default();
+                            }
+                        };
+                        match (timestamp_try_from_ffi)(__boltffi_decoded) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                ::boltffi::__private::set_last_error(format!(
+                                    "{}: custom conversion failed: {} (buf_len={})",
+                                    stringify!(when),
+                                    error,
+                                    __boltffi_when_len
+                                ));
+                                return ::core::default::Default::default();
+                            }
+                        }
+                    };
+                    year(when)
+                }
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn native_custom_return_expansion_calls_into_ffi_before_wire_encode() {
+        let source = custom_return_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn stamp() -> Timestamp {
+                Timestamp::now()
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                pub fn stamp() -> Timestamp {
+                    Timestamp::now()
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                #[unsafe(no_mangle)]
+                pub extern "C" fn boltffi_function_demo_stamp() -> ::boltffi::__private::FfiBuf {
+                    let __boltffi_result: Timestamp = stamp();
+                    {
+                        let __boltffi_wire = (timestamp_into_ffi)(&__boltffi_result);
+                        ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_wire)
+                    }
+                }
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn native_custom_error_expansion_converts_error_before_wire_encode() {
+        let source = custom_result_error_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn try_stamp() -> Result<u32, Timestamp> {
+                Err(Timestamp::now())
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let rendered = tokens.to_string();
+
+        assert!(rendered.contains(
+            "pub unsafe extern \"C\" fn boltffi_function_demo_try_stamp (__boltffi_return_out : * mut u32) -> :: boltffi :: __private :: FfiBuf"
+        ));
+        assert!(rendered.contains("Err (__boltffi_error) =>"));
+        assert!(
+            rendered.contains("let __boltffi_wire = (timestamp_into_ffi) (& __boltffi_error) ;")
+        );
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_wire)")
+        );
+    }
+
+    #[test]
+    fn native_nested_custom_return_expansion_converts_every_inner_value() {
+        let source = nested_custom_return_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn timeline() -> Vec<Option<Timestamp>> {
+                Vec::new()
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let rendered = tokens.to_string();
+
+        assert!(
+            rendered
+                .contains("let __boltffi_result : Vec < Option < Timestamp > > = timeline () ;")
+        );
+        assert!(rendered.contains(". into_iter () . map (| value | value . map (| value | (timestamp_into_ffi) (& value))) . collect :: < Vec < _ >> ()"));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_wire)")
+        );
+    }
+
+    #[test]
     fn function_expansion_uses_restricted_source_visibility() {
         let source = source_visibility_contract(Visibility::Restricted("crate".to_owned()));
         let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
@@ -1082,11 +1347,13 @@ mod tests {
 
         let native_wrapper = wrapper::function::Renderer::new(
             native_expansion.function(&source.functions[0]).unwrap(),
+            native_expansion.custom_declarations(),
         )
         .render()
         .expect("native wrapper");
         let wasm_wrapper = wrapper::function::Renderer::new(
             wasm_expansion.function(&source.functions[0]).unwrap(),
+            wasm_expansion.custom_declarations(),
         )
         .render()
         .expect("wasm wrapper");
