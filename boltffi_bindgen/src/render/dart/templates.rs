@@ -69,7 +69,8 @@ mod tests {
         ir::{
             self, CallbackId, CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ClassId,
             ConstructorDef, FfiContract, MethodDef, MethodId, PackageInfo, ParamDef, ParamName,
-            ParamPassing, PrimitiveType, Receiver, ReturnDef, TypeExpr,
+            ParamPassing, PrimitiveType, Receiver, ReturnDef, StreamDef, StreamId, StreamMode,
+            TypeExpr,
         },
         render::dart::{DartLibrary, DartLowerer},
     };
@@ -182,6 +183,49 @@ mod tests {
     #[test]
     pub fn snapshot_class() {
         let mut ffi = empty_contract();
+
+        let temperature_stream = |mode: StreamMode| StreamDef {
+            id: StreamId::new(format!(
+                "temperature_event_{}",
+                match mode {
+                    StreamMode::Async => "async",
+                    StreamMode::Batch => "batch",
+                    StreamMode::Callback => "callback",
+                }
+            )),
+            item_type: TypeExpr::Primitive(PrimitiveType::F32),
+            mode,
+            doc: None,
+            deprecated: None,
+        };
+
+        let names_stream = |mode: StreamMode| StreamDef {
+            id: StreamId::new(format!(
+                "names_event_{}",
+                match mode {
+                    StreamMode::Async => "async",
+                    StreamMode::Batch => "batch",
+                    StreamMode::Callback => "callback",
+                }
+            )),
+            item_type: TypeExpr::String,
+            mode,
+            doc: None,
+            deprecated: None,
+        };
+
+        let mut streams = vec![];
+        streams.extend(
+            [StreamMode::Async, StreamMode::Batch, StreamMode::Callback]
+                .into_iter()
+                .map(temperature_stream),
+        );
+        streams.extend(
+            [StreamMode::Async, StreamMode::Batch, StreamMode::Callback]
+                .into_iter()
+                .map(names_stream),
+        );
+
         ffi.catalog.insert_class(ClassDef {
             id: ClassId::new("Person"),
             constructors: vec![
@@ -229,7 +273,7 @@ mod tests {
                 doc: None,
                 deprecated: None,
             }],
-            streams: vec![],
+            streams,
             doc: None,
             deprecated: None,
         });

@@ -5,4 +5,5 @@ pub struct DartClass {
     pub free_symbol: String,
     pub constructors: Vec<super::DartConstructor>,
     pub methods: Vec<super::DartFunction>,
+    pub streams: Vec<super::DartStream>,
 }

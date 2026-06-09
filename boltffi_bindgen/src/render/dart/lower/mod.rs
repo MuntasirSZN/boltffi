@@ -48,7 +48,7 @@ impl<'a> DartLowerer<'a> {
     fn lower_param(&self, param: &ParamDef) -> DartFunctionParam {
         DartFunctionParam {
             name: NamingConvention::param_name(param.name.as_str()),
-            ty: DartType::from_type_expr(&param.type_expr),
+            ty: DartType::from_type_expr(&param.type_expr, &self.ffi.catalog),
         }
     }
 
@@ -82,7 +82,7 @@ impl<'a> DartLowerer<'a> {
             name: NamingConvention::function_name(meth.id.as_str()),
             ffi_name: abi_call.symbol.to_string(),
             params: meth.params.iter().map(|p| self.lower_param(p)).collect(),
-            ret_ty: DartType::from_return_def(&meth.returns),
+            ret_ty: DartType::from_return_def(&meth.returns, &self.ffi.catalog),
             receiver: meth.receiver,
         }
     }

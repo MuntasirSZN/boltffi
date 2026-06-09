@@ -11,7 +11,7 @@ impl<'a> super::DartLowerer<'a> {
 
         DartEnumField {
             name: field_name,
-            dart_type: DartType::from_type_expr(&field.type_expr),
+            dart_type: DartType::from_type_expr(&field.type_expr, &self.ffi.catalog),
             read_seq: field.decode.clone(),
             write_seq: field.encode.clone(),
         }
