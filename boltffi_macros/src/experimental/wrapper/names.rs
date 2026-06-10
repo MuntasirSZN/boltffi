@@ -39,17 +39,21 @@ impl Wrapper {
         Ident::new("__boltffi_closure_context", self.span)
     }
 
+    pub fn receiver(&self) -> Ident {
+        Ident::new("__boltffi_receiver", self.span)
+    }
+
     pub fn success_out(&self) -> Ident {
         Ident::new("__boltffi_success_out", self.span)
     }
 }
 
-pub struct ClosureRegistration<'a> {
-    source: &'a Ident,
+pub struct ClosureRegistration<'source> {
+    source: &'source Ident,
 }
 
-impl<'a> ClosureRegistration<'a> {
-    pub const fn new(source: &'a Ident) -> Self {
+impl<'source> ClosureRegistration<'source> {
+    pub const fn new(source: &'source Ident) -> Self {
         Self { source }
     }
 
@@ -76,41 +80,107 @@ impl<'a> ClosureRegistration<'a> {
     }
 }
 
-pub struct Parameter<'a> {
-    source: &'a Ident,
+pub struct NativeClosureRegistration<'source> {
+    source: &'source Ident,
 }
 
-impl<'a> Parameter<'a> {
-    pub const fn new(source: &'a Ident) -> Self {
+impl<'source> NativeClosureRegistration<'source> {
+    pub const fn new(source: &'source Ident) -> Self {
+        Self { source }
+    }
+
+    pub fn call(&self) -> Ident {
+        self.ident("call")
+    }
+
+    pub fn context(&self) -> Ident {
+        self.ident("context")
+    }
+
+    pub fn release(&self) -> Ident {
+        self.ident("release")
+    }
+
+    fn ident(&self, role: &str) -> Ident {
+        format_ident!(
+            "__boltffi_{}_{}",
+            self.source,
+            role,
+            span = self.source.span()
+        )
+    }
+}
+
+pub struct ReturnedClosureRegistration<'source> {
+    owner: &'source Ident,
+    channel: &'source str,
+}
+
+impl<'source> ReturnedClosureRegistration<'source> {
+    pub const fn new(owner: &'source Ident, channel: &'source str) -> Self {
+        Self { owner, channel }
+    }
+
+    pub fn call(&self) -> Ident {
+        self.ident("call")
+    }
+
+    pub fn release(&self) -> Ident {
+        self.ident("release")
+    }
+
+    fn ident(&self, role: &str) -> Ident {
+        format_ident!(
+            "__boltffi_{}_{}_{}",
+            self.owner,
+            self.channel,
+            role,
+            span = self.owner.span()
+        )
+    }
+}
+
+pub struct Parameter<'source> {
+    source: &'source Ident,
+}
+
+impl<'source> Parameter<'source> {
+    pub const fn new(source: &'source Ident) -> Self {
         Self { source }
     }
 
     pub fn pointer(&self) -> Ident {
-        format_ident!("__boltffi_{}_ptr", self.source, span = self.source.span())
+        self.ident("ptr")
     }
 
     pub fn length(&self) -> Ident {
-        format_ident!("__boltffi_{}_len", self.source, span = self.source.span())
+        self.ident("len")
     }
 
     pub fn storage(&self) -> Ident {
-        format_ident!(
-            "__boltffi_{}_storage",
-            self.source,
-            span = self.source.span()
-        )
+        self.ident("storage")
+    }
+
+    pub fn buffer(&self) -> Ident {
+        self.ident("buffer")
     }
 
     pub fn writeback(&self) -> Ident {
-        format_ident!("__boltffi_{}_out", self.source, span = self.source.span())
+        self.ident("out")
+    }
+
+    pub fn packed(&self) -> Ident {
+        self.ident("packed")
     }
 
     pub fn handle(&self) -> Ident {
-        format_ident!(
-            "__boltffi_{}_handle",
-            self.source,
-            span = self.source.span()
-        )
+        self.ident("handle")
+    }
+
+    fn ident(&self, role: &str) -> Ident {
+        let text = self.source.to_string();
+        let stem = text.strip_prefix("__boltffi_").unwrap_or(&text);
+        Ident::new(&format!("__boltffi_{stem}_{role}"), self.source.span())
     }
 }
 
@@ -141,5 +211,36 @@ impl ClosureArgument {
 
     pub fn wire(&self) -> Ident {
         format_ident!("__boltffi_arg{}_wire", self.index)
+    }
+}
+
+pub struct RecordField<'source> {
+    source: &'source Ident,
+}
+
+impl<'source> RecordField<'source> {
+    pub const fn new(source: &'source Ident) -> Self {
+        Self { source }
+    }
+
+    pub fn decoded(&self) -> Ident {
+        self.ident("decoded")
+    }
+
+    pub fn used(&self) -> Ident {
+        self.ident("used")
+    }
+
+    pub fn wire(&self) -> Ident {
+        self.ident("wire")
+    }
+
+    fn ident(&self, role: &str) -> Ident {
+        format_ident!(
+            "__boltffi_{}_{}",
+            self.source,
+            role,
+            span = self.source.span()
+        )
     }
 }

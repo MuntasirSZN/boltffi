@@ -12,14 +12,19 @@ use crate::experimental::{
     wrapper::{self, Render},
 };
 
-pub struct Incoming<'context, 'a, S: Target> {
-    codec: &'a CodecNode,
-    expansion: &'context Expansion<'a, S>,
+pub struct Incoming<'expansion, 'lowered, S: Target> {
+    codec: &'lowered CodecNode,
+    expansion: &'expansion Expansion<'lowered, S>,
 }
 
-pub struct Outgoing<'context, 'a, S: Target> {
-    codec: &'a CodecNode,
-    expansion: &'context Expansion<'a, S>,
+pub struct Outgoing<'expansion, 'lowered, S: Target> {
+    codec: &'lowered CodecNode,
+    expansion: &'expansion Expansion<'lowered, S>,
+}
+
+pub struct BorrowedOutgoing<'expansion, 'lowered, S: Target> {
+    codec: &'lowered CodecNode,
+    expansion: &'expansion Expansion<'lowered, S>,
 }
 
 pub struct IncomingConversion {
@@ -28,12 +33,12 @@ pub struct IncomingConversion {
     changed: bool,
 }
 
-struct ConverterRenderer<'a> {
-    converter: &'a CustomTypeConverter,
+struct ConverterRenderer<'lowered> {
+    converter: &'lowered CustomTypeConverter,
 }
 
-struct PathRenderer<'a> {
-    path: &'a CustomConverterPath,
+struct PathRenderer<'lowered> {
+    path: &'lowered CustomConverterPath,
 }
 
 impl IncomingConversion {
@@ -50,8 +55,11 @@ impl IncomingConversion {
     }
 }
 
-impl<'context, 'a, S: Target> Incoming<'context, 'a, S> {
-    pub const fn new(codec: &'a CodecNode, expansion: &'context Expansion<'a, S>) -> Self {
+impl<'expansion, 'lowered, S: Target> Incoming<'expansion, 'lowered, S> {
+    pub const fn new(
+        codec: &'lowered CodecNode,
+        expansion: &'expansion Expansion<'lowered, S>,
+    ) -> Self {
         Self { codec, expansion }
     }
 
@@ -85,16 +93,11 @@ impl<'context, 'a, S: Target> Incoming<'context, 'a, S> {
             CodecNode::Optional(inner) => self.convert_optional(inner, value),
             CodecNode::Sequence { element, .. } => self.convert_sequence(element, value),
             CodecNode::Result { ok, err } => self.convert_result(ok, err, value),
-            CodecNode::EncodedRecord(id) => match record_contains_custom(*id, self.expansion)? {
-                true => Err(Error::UnsupportedExpansion(
-                    "custom conversion inside encoded record codec",
-                )),
-                false => Ok(IncomingConversion {
-                    tokens: value,
-                    fallible: false,
-                    changed: false,
-                }),
-            },
+            CodecNode::EncodedRecord(_) => Ok(IncomingConversion {
+                tokens: value,
+                fallible: false,
+                changed: false,
+            }),
             CodecNode::Tuple(elements) => {
                 let custom = contains_any(elements.iter(), self.expansion)?;
                 Err(match custom {
@@ -206,8 +209,11 @@ impl<'context, 'a, S: Target> Incoming<'context, 'a, S> {
     }
 }
 
-impl<'context, 'a, S: Target> Outgoing<'context, 'a, S> {
-    pub const fn new(codec: &'a CodecNode, expansion: &'context Expansion<'a, S>) -> Self {
+impl<'expansion, 'lowered, S: Target> Outgoing<'expansion, 'lowered, S> {
+    pub const fn new(
+        codec: &'lowered CodecNode,
+        expansion: &'expansion Expansion<'lowered, S>,
+    ) -> Self {
         Self { codec, expansion }
     }
 
@@ -249,12 +255,7 @@ impl<'context, 'a, S: Target> Outgoing<'context, 'a, S> {
                     }
                 })
             }
-            CodecNode::EncodedRecord(id) => match record_contains_custom(*id, self.expansion)? {
-                true => Err(Error::UnsupportedExpansion(
-                    "custom conversion inside encoded record codec",
-                )),
-                false => Ok(value),
-            },
+            CodecNode::EncodedRecord(_) => Ok(value),
             CodecNode::Tuple(elements) => {
                 let custom = contains_any(elements.iter(), self.expansion)?;
                 Err(match custom {
@@ -275,8 +276,75 @@ impl<'context, 'a, S: Target> Outgoing<'context, 'a, S> {
     }
 }
 
-impl<'a> ConverterRenderer<'a> {
-    const fn new(converter: &'a CustomTypeConverter) -> Self {
+impl<'expansion, 'lowered, S: Target> BorrowedOutgoing<'expansion, 'lowered, S> {
+    pub const fn new(
+        codec: &'lowered CodecNode,
+        expansion: &'expansion Expansion<'lowered, S>,
+    ) -> Self {
+        Self { codec, expansion }
+    }
+
+    pub fn has_custom_conversion(&self) -> Result<bool, Error> {
+        contains_custom(self.codec, self.expansion)
+    }
+
+    pub fn convert(&self, value: TokenStream) -> Result<TokenStream, Error> {
+        self.convert_node(self.codec, value)
+    }
+
+    fn convert_node(&self, codec: &CodecNode, value: TokenStream) -> Result<TokenStream, Error> {
+        match codec {
+            CodecNode::Custom(id) => {
+                let custom = self.expansion.custom_type(*id)?;
+                let converter = ConverterRenderer::new(custom.converters().into_ffi()).render()?;
+                Ok(quote! { (#converter)(#value) })
+            }
+            CodecNode::Optional(inner) => {
+                let inner = self.convert_node(inner, quote! { value })?;
+                Ok(quote! { #value.as_ref().map(|value| #inner) })
+            }
+            CodecNode::Sequence { element, .. } => {
+                let element = self.convert_node(element, quote! { value })?;
+                Ok(quote! {
+                    #value
+                        .iter()
+                        .map(|value| #element)
+                        .collect::<Vec<_>>()
+                })
+            }
+            CodecNode::Result { ok, err } => {
+                let ok = self.convert_node(ok, quote! { value })?;
+                let err = self.convert_node(err, quote! { error })?;
+                Ok(quote! {
+                    match #value {
+                        Ok(value) => Ok(#ok),
+                        Err(error) => Err(#err),
+                    }
+                })
+            }
+            CodecNode::EncodedRecord(_) => Ok(value),
+            CodecNode::Tuple(elements) => {
+                let custom = contains_any(elements.iter(), self.expansion)?;
+                Err(match custom {
+                    true => Error::UnsupportedExpansion("custom conversion inside tuple codec"),
+                    false => Error::UnsupportedExpansion("tuple codec conversion"),
+                })
+            }
+            CodecNode::Map { key, value } => Err(
+                match contains_custom(key, self.expansion)?
+                    || contains_custom(value, self.expansion)?
+                {
+                    true => Error::UnsupportedExpansion("custom conversion inside map codec"),
+                    false => Error::UnsupportedExpansion("map codec conversion"),
+                },
+            ),
+            _ => Ok(value),
+        }
+    }
+}
+
+impl<'lowered> ConverterRenderer<'lowered> {
+    const fn new(converter: &'lowered CustomTypeConverter) -> Self {
         Self { converter }
     }
 
@@ -291,8 +359,8 @@ impl<'a> ConverterRenderer<'a> {
     }
 }
 
-impl<'a> PathRenderer<'a> {
-    const fn new(path: &'a CustomConverterPath) -> Self {
+impl<'lowered> PathRenderer<'lowered> {
+    const fn new(path: &'lowered CustomConverterPath) -> Self {
         Self { path }
     }
 
@@ -370,9 +438,9 @@ fn representation_type<S: Target>(
             let err = representation_type(err, expansion)?;
             Ok(quote! { Result<#ok, #err> })
         }
-        CodecNode::EncodedRecord(id) if record_contains_custom(*id, expansion)? => Err(
-            Error::UnsupportedExpansion("custom conversion inside encoded record codec"),
-        ),
+        CodecNode::EncodedRecord(_) => Err(Error::UnsupportedExpansion(
+            "encoded record representation type",
+        )),
         _ => Err(Error::UnsupportedExpansion("codec representation type")),
     }
 }
@@ -383,7 +451,7 @@ fn contains_custom<S: Target>(
 ) -> Result<bool, Error> {
     match codec {
         CodecNode::Custom(_) => Ok(true),
-        CodecNode::EncodedRecord(id) => record_contains_custom(*id, expansion),
+        CodecNode::EncodedRecord(_) => Ok(false),
         CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
             contains_custom(inner, expansion)
         }
@@ -398,22 +466,8 @@ fn contains_custom<S: Target>(
     }
 }
 
-fn record_contains_custom<S: Target>(
-    id: boltffi_binding::RecordId,
-    expansion: &Expansion<'_, S>,
-) -> Result<bool, Error> {
-    let record = expansion.encoded_record(id)?;
-    contains_any(
-        record
-            .fields()
-            .iter()
-            .map(|field| field.codec().read().root()),
-        expansion,
-    )
-}
-
-fn contains_any<'a, S: Target>(
-    mut codecs: impl Iterator<Item = &'a CodecNode>,
+fn contains_any<'lowered, S: Target>(
+    mut codecs: impl Iterator<Item = &'lowered CodecNode>,
     expansion: &Expansion<'_, S>,
 ) -> Result<bool, Error> {
     codecs.try_fold(false, |found, codec| {

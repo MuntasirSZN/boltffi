@@ -10,10 +10,12 @@ pub mod encoded;
 pub mod function;
 pub mod handle;
 pub mod param;
+pub mod record;
 pub mod returns;
 pub mod type_ref;
 
 mod closure;
+mod export;
 
 /// A render rule for one typed expansion input.
 ///

@@ -1,5 +1,5 @@
 use boltffi_binding::{CodecNode, ErrorDecl, OutOfRust, ReturnDecl, ReturnPlan, TypeRef};
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Type;
 
@@ -21,85 +21,59 @@ pub mod fallible;
 pub mod handle;
 pub mod scalar_option;
 
-/// The original Rust function invocation prepared for return rendering.
-///
-/// Return rendering owns this value because the return plan decides how the
-/// result of the Rust function call leaves the exported wrapper. The same
-/// invocation can be returned directly, packed through `Passable`, or bound to
-/// a temporary before producing a buffer value.
-///
-/// # Example
-///
-/// For this Rust function:
-///
-/// ```rust
-/// pub fn greet(name: String) -> String {
-///     format!("hello {name}")
-/// }
-/// ```
-///
-/// after parameter rendering, the invocation payload is:
-///
-/// ```text
-/// function:
-///     greet
-///
-/// conversions:
-///     let name: String = unsafe {
-///         <String as ::boltffi::__private::Passable>::unpack(name)
-///     };
-///
-/// arguments:
-///     name
-/// ```
-///
-/// An encoded return plan can render that payload as:
-///
-/// ```text
-/// let __boltffi_result: String = greet(name);
-/// ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result)
-/// ```
 pub struct RustInvocation {
-    function: syn::Ident,
+    owner: syn::Ident,
+    span: Span,
+    call: TokenStream,
     conversions: Vec<TokenStream>,
     writebacks: Vec<TokenStream>,
-    arguments: Vec<TokenStream>,
 }
 
 impl RustInvocation {
-    /// Creates an invocation from the original function name and rendered parameter fragments.
     pub fn new(
+        owner: syn::Ident,
+        call: TokenStream,
+        conversions: Vec<TokenStream>,
+        writebacks: Vec<TokenStream>,
+    ) -> Self {
+        let span = owner.span();
+        Self {
+            owner,
+            span,
+            call,
+            conversions,
+            writebacks,
+        }
+    }
+
+    pub fn function(
         function: syn::Ident,
         conversions: Vec<TokenStream>,
         writebacks: Vec<TokenStream>,
         arguments: Vec<TokenStream>,
     ) -> Self {
-        Self {
-            function,
-            conversions,
-            writebacks,
-            arguments,
-        }
+        let call = quote! { #function(#(#arguments),*) };
+        Self::new(function, call, conversions, writebacks)
     }
 }
 
-pub struct Input<'context, 'a, S: Target> {
-    returns: &'a ReturnDecl<S, OutOfRust>,
-    error: &'a ErrorDecl<S, OutOfRust>,
-    source: rust_api::Return<'a>,
+pub struct Input<'expansion, 'lowered, S: Target> {
+    returns: &'lowered ReturnDecl<S, OutOfRust>,
+    error: &'lowered ErrorDecl<S, OutOfRust>,
+    source: rust_api::Return<'lowered>,
     rust_type: Option<Type>,
     invocation: RustInvocation,
-    expansion: &'context Expansion<'a, S>,
+    expansion: &'expansion Expansion<'lowered, S>,
 }
 
-impl<'context, 'a, S: Target> Input<'context, 'a, S> {
+impl<'expansion, 'lowered, S: Target> Input<'expansion, 'lowered, S> {
     pub fn new(
-        returns: &'a ReturnDecl<S, OutOfRust>,
-        error: &'a ErrorDecl<S, OutOfRust>,
-        source: rust_api::Return<'a>,
+        returns: &'lowered ReturnDecl<S, OutOfRust>,
+        error: &'lowered ErrorDecl<S, OutOfRust>,
+        source: rust_api::Return<'lowered>,
         rust_type: Option<Type>,
         invocation: RustInvocation,
-        expansion: &'context Expansion<'a, S>,
+        expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
         Self {
             returns,
@@ -119,17 +93,17 @@ pub struct Tokens {
     body: TokenStream,
 }
 
-pub struct FailureInput<'context, 'a, S: Target> {
-    returns: &'a ReturnDecl<S, OutOfRust>,
-    error: &'a ErrorDecl<S, OutOfRust>,
-    expansion: &'context Expansion<'a, S>,
+pub struct FailureInput<'expansion, 'lowered, S: Target> {
+    returns: &'lowered ReturnDecl<S, OutOfRust>,
+    error: &'lowered ErrorDecl<S, OutOfRust>,
+    expansion: &'expansion Expansion<'lowered, S>,
 }
 
-impl<'context, 'a, S: Target> FailureInput<'context, 'a, S> {
+impl<'expansion, 'lowered, S: Target> FailureInput<'expansion, 'lowered, S> {
     pub fn new(
-        returns: &'a ReturnDecl<S, OutOfRust>,
-        error: &'a ErrorDecl<S, OutOfRust>,
-        expansion: &'context Expansion<'a, S>,
+        returns: &'lowered ReturnDecl<S, OutOfRust>,
+        error: &'lowered ErrorDecl<S, OutOfRust>,
+        expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
         Self {
             returns,
@@ -157,23 +131,23 @@ impl Tokens {
     }
 }
 
-impl<'context, 'a, S> Render<S, Input<'context, 'a, S>> for Renderer
+impl<'expansion, 'lowered, S> Render<S, Input<'expansion, 'lowered, S>> for Renderer
 where
     S: Target,
-    closure::Renderer: Render<S, closure::Input<'context, 'a, S>, Output = Tokens>,
-    encoded::Renderer: Render<S, encoded::Input<'context, 'a, S>, Output = encoded::Tokens>,
+    closure::Renderer: Render<S, closure::Input<'expansion, 'lowered, S>, Output = Tokens>,
+    encoded::Renderer: Render<S, encoded::Input<'expansion, 'lowered, S>, Output = encoded::Tokens>,
     direct_vec::Renderer: Render<S, direct_vec::Input, Output = Tokens>,
-    fallible::Renderer: Render<S, fallible::Input<'context, 'a, S>, Output = Tokens>,
+    fallible::Renderer: Render<S, fallible::Input<'expansion, 'lowered, S>, Output = Tokens>,
     handle::Value: Render<
             S,
-            handle::ValueInput<'context, 'a, S, S::HandleCarrier>,
+            handle::ValueInput<'expansion, 'lowered, S, S::HandleCarrier>,
             Output = handle::ValueTokens,
         >,
     scalar_option::Renderer: Render<S, scalar_option::Input, Output = Tokens>,
 {
     type Output = Tokens;
 
-    fn render(self, input: Input<'context, 'a, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: Input<'expansion, 'lowered, S>) -> Result<Self::Output, Error> {
         if !matches!(input.error, ErrorDecl::None(_)) {
             return <fallible::Renderer as Render<S, _>>::render(
                 fallible::Renderer,
@@ -200,12 +174,13 @@ where
         }
 
         let RustInvocation {
-            function,
+            span,
+            call,
             conversions,
             writebacks,
-            arguments,
+            ..
         } = input.invocation;
-        let locals = names::Wrapper::new(function.span());
+        let locals = names::Wrapper::new(span);
         match input.returns.plan() {
             ReturnPlan::Void => Ok(Tokens {
                 items: Vec::new(),
@@ -213,7 +188,7 @@ where
                 return_type: quote! { -> ::boltffi::__private::FfiStatus },
                 body: quote! {
                     #(#conversions)*
-                    #function(#(#arguments),*);
+                    #call;
                     #(#writebacks)*
                     ::boltffi::__private::FfiStatus::OK
                 },
@@ -229,13 +204,13 @@ where
                 let body = if writebacks.is_empty() {
                     quote! {
                         #(#conversions)*
-                        #function(#(#arguments),*)
+                        #call
                     }
                 } else {
                     let result = locals.result();
                     quote! {
                         #(#conversions)*
-                        let #result = #function(#(#arguments),*);
+                        let #result = #call;
                         #(#writebacks)*
                         #result
                     }
@@ -254,13 +229,13 @@ where
                 let body = if writebacks.is_empty() {
                     quote! {
                         #(#conversions)*
-                        ::boltffi::__private::Passable::pack(#function(#(#arguments),*))
+                        ::boltffi::__private::Passable::pack(#call)
                     }
                 } else {
                     let result = locals.result();
                     quote! {
                         #(#conversions)*
-                        let #result = #function(#(#arguments),*);
+                        let #result = #call;
                         #(#writebacks)*
                         ::boltffi::__private::Passable::pack(#result)
                     }
@@ -289,7 +264,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #function(#(#arguments),*);
+                        let #result: #rust_type = #call;
                         #(#writebacks)*
                         #value
                     },
@@ -324,7 +299,7 @@ where
                     return_type: quote! { -> #return_type },
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #function(#(#arguments),*);
+                        let #result: #rust_type = #call;
                         #(#writebacks)*
                         #value
                     },
@@ -348,7 +323,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #function(#(#arguments),*);
+                        let #result: #rust_type = #call;
                         #(#writebacks)*
                         #body
                     },
@@ -369,7 +344,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result = #function(#(#arguments),*);
+                        let #result = #call;
                         #(#writebacks)*
                         #body
                     },
@@ -392,18 +367,18 @@ where
     }
 }
 
-impl<'context, 'a, S> Render<S, FailureInput<'context, 'a, S>> for Failure
+impl<'expansion, 'lowered, S> Render<S, FailureInput<'expansion, 'lowered, S>> for Failure
 where
     S: Target,
     direct_vec::Failure: Render<S, direct_vec::FailureInput, Output = TokenStream>,
     encoded::Renderer: Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
-    encoded::Renderer: Render<S, encoded::Input<'context, 'a, S>, Output = encoded::Tokens>,
+    encoded::Renderer: Render<S, encoded::Input<'expansion, 'lowered, S>, Output = encoded::Tokens>,
     handle::Failure: Render<S, handle::FailureInput<S::HandleCarrier>, Output = TokenStream>,
     scalar_option::Failure: Render<S, scalar_option::FailureInput, Output = TokenStream>,
 {
     type Output = TokenStream;
 
-    fn render(self, input: FailureInput<'context, 'a, S>) -> Result<Self::Output, Error> {
+    fn render(self, input: FailureInput<'expansion, 'lowered, S>) -> Result<Self::Output, Error> {
         if !matches!(input.error, ErrorDecl::None(_)) {
             return ErrorFailure::new(input.error, input.expansion).tokens();
         }
@@ -458,19 +433,23 @@ where
     }
 }
 
-struct ErrorFailure<'context, 'a, S: Target> {
-    error: &'a ErrorDecl<S, OutOfRust>,
-    expansion: &'context Expansion<'a, S>,
+struct ErrorFailure<'expansion, 'lowered, S: Target> {
+    error: &'lowered ErrorDecl<S, OutOfRust>,
+    expansion: &'expansion Expansion<'lowered, S>,
 }
 
-impl<'context, 'a, S: Target> ErrorFailure<'context, 'a, S> {
-    fn new(error: &'a ErrorDecl<S, OutOfRust>, expansion: &'context Expansion<'a, S>) -> Self {
+impl<'expansion, 'lowered, S: Target> ErrorFailure<'expansion, 'lowered, S> {
+    fn new(
+        error: &'lowered ErrorDecl<S, OutOfRust>,
+        expansion: &'expansion Expansion<'lowered, S>,
+    ) -> Self {
         Self { error, expansion }
     }
 
     fn tokens(self) -> Result<TokenStream, Error>
     where
-        encoded::Renderer: Render<S, encoded::Input<'context, 'a, S>, Output = encoded::Tokens>,
+        encoded::Renderer:
+            Render<S, encoded::Input<'expansion, 'lowered, S>, Output = encoded::Tokens>,
     {
         match self.error {
             ErrorDecl::EncodedViaReturnSlot { codec, shape, .. }

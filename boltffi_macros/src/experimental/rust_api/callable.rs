@@ -1,5 +1,8 @@
+use std::borrow::Cow;
+
 use boltffi_ast::{
-    BaseTrait, FunctionDef, MethodDef, ParameterDef, ParameterPassing, ReturnDef, TypeExpr,
+    BaseTrait, FnSig, FunctionDef, MapKind, MethodDef, ParameterDef, ParameterPassing,
+    Path as SourcePath, RecordDef, ReturnDef, TraitBounds, TypeExpr,
 };
 use boltffi_binding::{HandlePresence, HandleTarget, Primitive, Receive};
 use syn::{Ident, Type, parse_str};
@@ -8,43 +11,74 @@ use super::{Closure, DecodeTarget, TypeTokens};
 use crate::experimental::error::Error;
 
 #[derive(Clone, Copy)]
-pub struct Callable<'a> {
-    parameters: &'a [ParameterDef],
-    returns: &'a ReturnDef,
+pub struct Callable<'source> {
+    parameters: &'source [ParameterDef],
+    returns: &'source ReturnDef,
+    self_record: Option<&'source RecordDef>,
 }
 
-impl<'a> Callable<'a> {
-    pub fn function(function: &'a FunctionDef) -> Self {
+impl<'source> Callable<'source> {
+    pub fn function(function: &'source FunctionDef) -> Self {
         Self {
             parameters: &function.parameters,
             returns: &function.returns,
+            self_record: None,
         }
     }
 
-    pub fn method(method: &'a MethodDef) -> Self {
+    pub fn method(method: &'source MethodDef) -> Self {
         Self {
             parameters: &method.parameters,
             returns: &method.returns,
+            self_record: None,
         }
     }
 
-    pub fn parameters(self) -> &'a [ParameterDef] {
-        self.parameters
+    pub fn record_method(method: &'source MethodDef, record: &'source RecordDef) -> Self {
+        Self {
+            parameters: &method.parameters,
+            returns: &method.returns,
+            self_record: Some(record),
+        }
     }
 
-    pub fn returns(self) -> Return<'a> {
-        Return::new(self.returns)
+    pub fn parameter_count(&self) -> usize {
+        self.parameters.len()
+    }
+
+    pub fn parameters(&self) -> impl Iterator<Item = Parameter<'source>> + '_ {
+        self.parameters
+            .iter()
+            .map(|definition| Parameter::with_self_record(definition, self.self_record))
+    }
+
+    pub fn returns(&self) -> Return<'source> {
+        Return::with_self_record(self.returns, self.self_record)
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct Parameter<'a> {
-    definition: &'a ParameterDef,
+pub struct Parameter<'source> {
+    definition: &'source ParameterDef,
+    self_record: Option<&'source RecordDef>,
 }
 
-impl<'a> Parameter<'a> {
-    pub fn new(definition: &'a ParameterDef) -> Self {
-        Self { definition }
+impl<'source> Parameter<'source> {
+    pub fn new(definition: &'source ParameterDef) -> Self {
+        Self {
+            definition,
+            self_record: None,
+        }
+    }
+
+    fn with_self_record(
+        definition: &'source ParameterDef,
+        self_record: Option<&'source RecordDef>,
+    ) -> Self {
+        Self {
+            definition,
+            self_record,
+        }
     }
 
     pub fn ident(self) -> Result<Ident, Error> {
@@ -54,24 +88,24 @@ impl<'a> Parameter<'a> {
     }
 
     pub fn written_type(self) -> Result<Type, Error> {
-        TypeTokens::new(&self.definition.type_expr).map(TypeTokens::into_type)
+        TypeTokens::new(self.type_expr().as_ref()).map(TypeTokens::into_type)
     }
 
     pub fn value_type(self, receive: Receive) -> Result<Type, Error> {
-        DecodeTarget::new(self.definition.passing, receive, &self.definition.type_expr)
+        DecodeTarget::new(self.definition.passing, receive, self.type_expr().as_ref())
             .map(|target| target.parameter().clone())
     }
 
-    pub fn decode_target(self, receive: Receive) -> Result<DecodeTarget<'a>, Error> {
-        DecodeTarget::new(self.definition.passing, receive, &self.definition.type_expr)
+    pub fn decode_target(self, receive: Receive) -> Result<DecodeTarget, Error> {
+        DecodeTarget::new(self.definition.passing, receive, self.type_expr().as_ref())
     }
 
-    pub fn closure(self, presence: HandlePresence) -> Result<Closure<'a>, Error> {
+    pub fn closure(self, presence: HandlePresence) -> Result<Closure<'source>, Error> {
         Closure::new(&self.definition.type_expr, presence)
     }
 
     pub fn handle(self, target: &HandleTarget, presence: HandlePresence) -> Result<(), Error> {
-        Handle::new(&self.definition.type_expr).matches(target, presence)
+        Handle::new(self.type_expr().as_ref()).matches(target, presence)
     }
 
     pub fn class_handle(
@@ -81,9 +115,10 @@ impl<'a> Parameter<'a> {
         receive: Receive,
     ) -> Result<ClassHandle, Error> {
         self.handle(target, presence)?;
+        let source_type = self.type_expr();
         let type_expr = match presence {
-            HandlePresence::Required => &self.definition.type_expr,
-            HandlePresence::Nullable => option_inner(&self.definition.type_expr)?,
+            HandlePresence::Required => source_type.as_ref(),
+            HandlePresence::Nullable => option_inner(source_type.as_ref())?,
             _ => return Err(Error::UnsupportedExpansion("unknown class handle presence")),
         };
         let ty = match (self.definition.passing, receive) {
@@ -107,9 +142,10 @@ impl<'a> Parameter<'a> {
         presence: HandlePresence,
     ) -> Result<CallbackObject, Error> {
         self.handle(target, presence)?;
+        let source_type = self.type_expr();
         let type_expr = match presence {
-            HandlePresence::Required => &self.definition.type_expr,
-            HandlePresence::Nullable => option_inner(&self.definition.type_expr)?,
+            HandlePresence::Required => source_type.as_ref(),
+            HandlePresence::Nullable => option_inner(source_type.as_ref())?,
             _ => {
                 return Err(Error::UnsupportedExpansion(
                     "unknown callback handle presence",
@@ -120,7 +156,8 @@ impl<'a> Parameter<'a> {
     }
 
     pub fn scalar_option(self, primitive: Primitive) -> Result<(), Error> {
-        let TypeExpr::Option(inner) = &self.definition.type_expr else {
+        let source_type = self.type_expr();
+        let TypeExpr::Option(inner) = source_type.as_ref() else {
             return Err(Error::SourceSyntaxMismatch(
                 "source parameter is not an optional scalar",
             ));
@@ -138,7 +175,7 @@ impl<'a> Parameter<'a> {
     }
 
     pub fn direct_vec(self) -> Result<(), Error> {
-        match &self.definition.type_expr {
+        match self.type_expr().as_ref() {
             TypeExpr::Vec(_) => Ok(()),
             _ => Err(Error::SourceSyntaxMismatch(
                 "source parameter is not a direct vector",
@@ -147,13 +184,18 @@ impl<'a> Parameter<'a> {
     }
 
     pub fn direct_vec_element_type(self) -> Result<Type, Error> {
-        self.direct_vec()?;
-        let TypeExpr::Vec(element) = &self.definition.type_expr else {
+        let source_type = self.type_expr();
+        let TypeExpr::Vec(element) = source_type.as_ref() else {
             return Err(Error::SourceSyntaxMismatch(
                 "source direct-vector parameter is missing element type",
             ));
         };
         TypeTokens::new(element).map(TypeTokens::into_type)
+    }
+
+    fn type_expr(&self) -> Cow<'source, TypeExpr> {
+        let self_type = self.self_record.map(record_self_type);
+        substituted_type(&self.definition.type_expr, self_type.as_ref())
     }
 }
 
@@ -282,17 +324,32 @@ impl CallbackReturn {
 }
 
 #[derive(Clone, Copy)]
-pub struct Return<'a> {
-    definition: &'a ReturnDef,
+pub struct Return<'source> {
+    definition: &'source ReturnDef,
+    self_record: Option<&'source RecordDef>,
 }
 
-impl<'a> Return<'a> {
-    pub fn new(definition: &'a ReturnDef) -> Self {
-        Self { definition }
+impl<'source> Return<'source> {
+    pub fn new(definition: &'source ReturnDef) -> Self {
+        Self {
+            definition,
+            self_record: None,
+        }
+    }
+
+    fn with_self_record(
+        definition: &'source ReturnDef,
+        self_record: Option<&'source RecordDef>,
+    ) -> Self {
+        Self {
+            definition,
+            self_record,
+        }
     }
 
     pub fn written_type(self) -> Result<Option<Type>, Error> {
-        match self.definition {
+        let return_def = self.return_def();
+        match return_def.as_ref() {
             ReturnDef::Void => Ok(None),
             ReturnDef::Value(type_expr) => TypeTokens::new(type_expr)
                 .map(TypeTokens::into_type)
@@ -300,16 +357,17 @@ impl<'a> Return<'a> {
         }
     }
 
-    pub fn value_type(self) -> Result<&'a TypeExpr, Error> {
-        match self.definition {
-            ReturnDef::Void => Err(Error::SourceSyntaxMismatch(
+    pub fn value_type(self) -> Result<Cow<'source, TypeExpr>, Error> {
+        match self.return_def() {
+            Cow::Borrowed(ReturnDef::Value(type_expr)) => Ok(Cow::Borrowed(type_expr)),
+            Cow::Owned(ReturnDef::Value(type_expr)) => Ok(Cow::Owned(type_expr)),
+            _ => Err(Error::SourceSyntaxMismatch(
                 "source return does not have a value type",
             )),
-            ReturnDef::Value(type_expr) => Ok(type_expr),
         }
     }
 
-    pub fn closure(self, presence: HandlePresence) -> Result<Closure<'a>, Error> {
+    pub fn closure(self, presence: HandlePresence) -> Result<Closure<'source>, Error> {
         let ReturnDef::Value(type_expr) = self.definition else {
             return Err(Error::SourceSyntaxMismatch(
                 "source return is not an inline closure",
@@ -323,7 +381,8 @@ impl<'a> Return<'a> {
         target: &HandleTarget,
         presence: HandlePresence,
     ) -> Result<HandleReturn, Error> {
-        let ReturnDef::Value(value) = self.definition else {
+        let return_def = self.return_def();
+        let ReturnDef::Value(value) = return_def.as_ref() else {
             return Err(Error::SourceSyntaxMismatch(
                 "source return is not a handle value",
             ));
@@ -332,7 +391,8 @@ impl<'a> Return<'a> {
     }
 
     pub fn scalar_option(self, primitive: Primitive) -> Result<(), Error> {
-        let ReturnDef::Value(TypeExpr::Option(inner)) = self.definition else {
+        let return_def = self.return_def();
+        let ReturnDef::Value(TypeExpr::Option(inner)) = return_def.as_ref() else {
             return Err(Error::SourceSyntaxMismatch(
                 "source return is not an optional scalar",
             ));
@@ -350,7 +410,7 @@ impl<'a> Return<'a> {
     }
 
     pub fn direct_vec(self) -> Result<(), Error> {
-        match self.definition {
+        match self.return_def().as_ref() {
             ReturnDef::Value(TypeExpr::Vec(_)) => Ok(()),
             _ => Err(Error::SourceSyntaxMismatch(
                 "source return is not a direct vector",
@@ -358,56 +418,246 @@ impl<'a> Return<'a> {
         }
     }
 
-    pub fn fallible(self) -> Result<Fallible<'a>, Error> {
-        let ReturnDef::Value(TypeExpr::Result { ok, err }) = self.definition else {
-            return Err(Error::SourceSyntaxMismatch("source return is not a Result"));
-        };
-        Ok(Fallible { ok, err })
+    pub fn fallible(self) -> Result<Fallible<'source>, Error> {
+        match self.return_def() {
+            Cow::Borrowed(ReturnDef::Value(TypeExpr::Result { ok, err })) => {
+                Ok(Fallible::Borrowed { ok, err })
+            }
+            Cow::Owned(ReturnDef::Value(TypeExpr::Result { ok, err })) => {
+                Ok(Fallible::Owned { ok: *ok, err: *err })
+            }
+            _ => Err(Error::SourceSyntaxMismatch("source return is not a Result")),
+        }
+    }
+
+    fn return_def(&self) -> Cow<'source, ReturnDef> {
+        let self_type = self.self_record.map(record_self_type);
+        substituted_return(self.definition, self_type.as_ref())
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Fallible<'a> {
-    ok: &'a TypeExpr,
-    err: &'a TypeExpr,
+#[derive(Clone)]
+pub enum Fallible<'source> {
+    Borrowed {
+        ok: &'source TypeExpr,
+        err: &'source TypeExpr,
+    },
+    Owned {
+        ok: TypeExpr,
+        err: TypeExpr,
+    },
 }
 
-impl<'a> Fallible<'a> {
-    pub fn ok(self) -> &'a TypeExpr {
-        self.ok
+impl<'source> Fallible<'source> {
+    pub fn ok(&self) -> &TypeExpr {
+        match self {
+            Self::Borrowed { ok, .. } => ok,
+            Self::Owned { ok, .. } => ok,
+        }
     }
 
-    pub fn error(self) -> &'a TypeExpr {
-        self.err
+    pub fn error(&self) -> &TypeExpr {
+        match self {
+            Self::Borrowed { err, .. } => err,
+            Self::Owned { err, .. } => err,
+        }
     }
 
-    pub fn ok_written_type(self) -> Result<Type, Error> {
-        TypeTokens::new(self.ok).map(TypeTokens::into_type)
+    pub fn ok_written_type(&self) -> Result<Type, Error> {
+        TypeTokens::new(self.ok()).map(TypeTokens::into_type)
     }
 
-    pub fn error_written_type(self) -> Result<Type, Error> {
-        TypeTokens::new(self.err).map(TypeTokens::into_type)
+    pub fn error_written_type(&self) -> Result<Type, Error> {
+        TypeTokens::new(self.error()).map(TypeTokens::into_type)
     }
 
-    pub fn ok_closure(self, presence: HandlePresence) -> Result<Closure<'a>, Error> {
-        Closure::new(self.ok, presence)
+    pub fn ok_closure(&self, presence: HandlePresence) -> Result<Closure<'source>, Error> {
+        match self {
+            Self::Borrowed { ok, .. } => Closure::new(ok, presence),
+            Self::Owned { .. } => Err(Error::UnsupportedExpansion(
+                "self-referential fallible closure return",
+            )),
+        }
     }
 
     pub fn ok_handle_return(
-        self,
+        &self,
         target: &HandleTarget,
         presence: HandlePresence,
     ) -> Result<HandleReturn, Error> {
-        Handle::new(self.ok).return_shape(target, presence)
+        Handle::new(self.ok()).return_shape(target, presence)
     }
 }
 
-struct Handle<'a> {
-    source: &'a TypeExpr,
+fn record_self_type(record: &RecordDef) -> TypeExpr {
+    TypeExpr::record(
+        record.id.clone(),
+        SourcePath::single(record.name.spelling()),
+    )
 }
 
-impl<'a> Handle<'a> {
-    const fn new(source: &'a TypeExpr) -> Self {
+fn substituted_return<'source>(
+    return_def: &'source ReturnDef,
+    self_type: Option<&TypeExpr>,
+) -> Cow<'source, ReturnDef> {
+    let ReturnDef::Value(type_expr) = return_def else {
+        return Cow::Borrowed(return_def);
+    };
+    match substituted_type(type_expr, self_type) {
+        Cow::Borrowed(_) => Cow::Borrowed(return_def),
+        Cow::Owned(type_expr) => Cow::Owned(ReturnDef::Value(type_expr)),
+    }
+}
+
+fn substituted_type<'source>(
+    type_expr: &'source TypeExpr,
+    self_type: Option<&TypeExpr>,
+) -> Cow<'source, TypeExpr> {
+    let Some(self_type) = self_type else {
+        return Cow::Borrowed(type_expr);
+    };
+    match type_expr {
+        TypeExpr::SelfType => Cow::Owned(self_type.clone()),
+        TypeExpr::Boxed(inner) => substituted_wrapped(TypeExpr::boxed, type_expr, inner, self_type),
+        TypeExpr::Arc(inner) => substituted_wrapped(TypeExpr::arc, type_expr, inner, self_type),
+        TypeExpr::Vec(element) => substituted_wrapped(TypeExpr::vec, type_expr, element, self_type),
+        TypeExpr::Slice(element) => {
+            substituted_wrapped(TypeExpr::slice, type_expr, element, self_type)
+        }
+        TypeExpr::Option(inner) => {
+            substituted_wrapped(TypeExpr::option, type_expr, inner, self_type)
+        }
+        TypeExpr::Result { ok, err } => substituted_result(type_expr, ok, err, self_type),
+        TypeExpr::Tuple(elements) => substituted_tuple(type_expr, elements, self_type),
+        TypeExpr::Map { kind, key, value } => {
+            substituted_map(type_expr, *kind, key, value, self_type)
+        }
+        TypeExpr::Dyn(bounds) => substituted_bounds(TypeExpr::Dyn, bounds, self_type, type_expr),
+        TypeExpr::ImplTrait(bounds) => {
+            substituted_bounds(TypeExpr::ImplTrait, bounds, self_type, type_expr)
+        }
+        TypeExpr::FnPtr(signature) => match substituted_signature(signature, self_type) {
+            Some(signature) => Cow::Owned(TypeExpr::fn_ptr(signature)),
+            None => Cow::Borrowed(type_expr),
+        },
+        _ => Cow::Borrowed(type_expr),
+    }
+}
+
+fn substituted_wrapped<'source>(
+    build: impl Fn(TypeExpr) -> TypeExpr,
+    original: &'source TypeExpr,
+    inner: &'source TypeExpr,
+    self_type: &TypeExpr,
+) -> Cow<'source, TypeExpr> {
+    match substituted_type(inner, Some(self_type)) {
+        Cow::Borrowed(_) => Cow::Borrowed(original),
+        Cow::Owned(inner) => Cow::Owned(build(inner)),
+    }
+}
+
+fn substituted_result<'source>(
+    original: &'source TypeExpr,
+    ok: &'source TypeExpr,
+    err: &'source TypeExpr,
+    self_type: &TypeExpr,
+) -> Cow<'source, TypeExpr> {
+    let ok = substituted_type(ok, Some(self_type));
+    let err = substituted_type(err, Some(self_type));
+    match (&ok, &err) {
+        (Cow::Borrowed(_), Cow::Borrowed(_)) => Cow::Borrowed(original),
+        _ => Cow::Owned(TypeExpr::result(ok.into_owned(), err.into_owned())),
+    }
+}
+
+fn substituted_tuple<'source>(
+    original: &'source TypeExpr,
+    elements: &'source [TypeExpr],
+    self_type: &TypeExpr,
+) -> Cow<'source, TypeExpr> {
+    let elements = elements
+        .iter()
+        .map(|element| substituted_type(element, Some(self_type)))
+        .collect::<Vec<_>>();
+    match elements
+        .iter()
+        .all(|element| matches!(element, Cow::Borrowed(_)))
+    {
+        true => Cow::Borrowed(original),
+        false => Cow::Owned(TypeExpr::tuple(
+            elements
+                .into_iter()
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>(),
+        )),
+    }
+}
+
+fn substituted_map<'source>(
+    original: &'source TypeExpr,
+    kind: MapKind,
+    key: &'source TypeExpr,
+    value: &'source TypeExpr,
+    self_type: &TypeExpr,
+) -> Cow<'source, TypeExpr> {
+    let key = substituted_type(key, Some(self_type));
+    let value = substituted_type(value, Some(self_type));
+    match (&key, &value) {
+        (Cow::Borrowed(_), Cow::Borrowed(_)) => Cow::Borrowed(original),
+        _ => Cow::Owned(TypeExpr::map(kind, key.into_owned(), value.into_owned())),
+    }
+}
+
+fn substituted_bounds<'source>(
+    build: impl Fn(TraitBounds) -> TypeExpr,
+    bounds: &'source TraitBounds,
+    self_type: &TypeExpr,
+    original: &'source TypeExpr,
+) -> Cow<'source, TypeExpr> {
+    let BaseTrait::Function(function_trait) = &bounds.base else {
+        return Cow::Borrowed(original);
+    };
+    let Some(signature) = substituted_signature(&function_trait.signature, self_type) else {
+        return Cow::Borrowed(original);
+    };
+    let mut bounds = bounds.clone();
+    let BaseTrait::Function(function_trait) = &mut bounds.base else {
+        return Cow::Borrowed(original);
+    };
+    function_trait.signature = signature;
+    Cow::Owned(build(bounds))
+}
+
+fn substituted_signature(signature: &FnSig, self_type: &TypeExpr) -> Option<FnSig> {
+    let parameters = signature
+        .parameters
+        .iter()
+        .map(|parameter| substituted_type(parameter, Some(self_type)))
+        .collect::<Vec<_>>();
+    let returns = substituted_return(&signature.returns, Some(self_type));
+    match (
+        parameters
+            .iter()
+            .all(|parameter| matches!(parameter, Cow::Borrowed(_))),
+        matches!(returns, Cow::Borrowed(_)),
+    ) {
+        (true, true) => None,
+        _ => Some(FnSig::new(
+            parameters
+                .into_iter()
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>(),
+            returns.into_owned(),
+        )),
+    }
+}
+
+struct Handle<'source> {
+    source: &'source TypeExpr,
+}
+
+impl<'source> Handle<'source> {
+    const fn new(source: &'source TypeExpr) -> Self {
         Self { source }
     }
 
