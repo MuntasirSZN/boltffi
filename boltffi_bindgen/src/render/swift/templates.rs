@@ -655,7 +655,9 @@ mod tests {
                 "name.withUTF8 { nameBuf -> FfiBuf_u8 in boltffi_service_config_from_name"
             )
         );
-        assert!(!rendered.contains("-> OpaquePointer? in boltffi_service_config_from_name"));
+        assert!(
+            !rendered.contains("-> UnsafeMutableRawPointer? in boltffi_service_config_from_name")
+        );
     }
 
     #[test]
@@ -1183,7 +1185,7 @@ mod tests {
             constructors: vec![
                 SwiftConstructor::Designated {
                     ffi_symbol: "boltffi_data_store_new".to_string(),
-                    closure_return_type: "OpaquePointer?".to_string(),
+                    closure_return_type: "UnsafeMutableRawPointer?".to_string(),
                     params: vec![SwiftParam {
                         label: None,
                         name: "capacity".to_string(),
@@ -1234,7 +1236,7 @@ mod tests {
             ffi_free: "boltffi_database_free".to_string(),
             constructors: vec![SwiftConstructor::Designated {
                 ffi_symbol: "boltffi_database_open".to_string(),
-                closure_return_type: "OpaquePointer?".to_string(),
+                closure_return_type: "UnsafeMutableRawPointer?".to_string(),
                 params: vec![SwiftParam {
                     label: None,
                     name: "path".to_string(),
@@ -1349,7 +1351,7 @@ mod tests {
             ffi_free: "boltffi_connection_free".to_string(),
             constructors: vec![SwiftConstructor::Designated {
                 ffi_symbol: "boltffi_connection_open".to_string(),
-                closure_return_type: "OpaquePointer?".to_string(),
+                closure_return_type: "UnsafeMutableRawPointer?".to_string(),
                 params: vec![SwiftParam {
                     label: None,
                     name: "url".to_string(),
@@ -1376,7 +1378,7 @@ mod tests {
             constructors: vec![SwiftConstructor::Convenience {
                 name: "tryOpen".to_string(),
                 ffi_symbol: "boltffi_connection_open".to_string(),
-                closure_return_type: "OpaquePointer?".to_string(),
+                closure_return_type: "UnsafeMutableRawPointer?".to_string(),
                 params: vec![
                     SwiftParam {
                         label: None,

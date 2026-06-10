@@ -49,7 +49,7 @@ pub fn abi_type_c(abi_type: &AbiType) -> String {
             let c_return = abi_type_c(return_type);
             format!("{} (*)({})", c_return, param_types.join(", "))
         }
-        AbiType::Handle(class_id) => format!("const struct {} *", class_id.as_str()),
+        AbiType::Handle(_) => "const void*".to_string(),
         AbiType::CallbackHandle => "BoltFFICallbackHandle".to_string(),
         AbiType::Struct(record_id) => format!("___{}", record_id.as_str()),
     }

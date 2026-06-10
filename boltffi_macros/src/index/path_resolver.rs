@@ -133,6 +133,10 @@ impl PathResolver {
 pub(crate) struct ResolvedPath(Path);
 
 impl ResolvedPath {
+    pub(crate) fn into_path(self) -> Path {
+        self.0
+    }
+
     pub(crate) fn with_foreign_leaf(mut self) -> Path {
         let foreign_ident = self
             .0
@@ -146,6 +150,26 @@ impl ResolvedPath {
             last_segment.ident = foreign_ident;
         }
         self.0
+    }
+}
+
+#[cfg(test)]
+impl PathResolver {
+    pub(crate) fn with_use_aliases(aliases: &[(&str, &str)]) -> Self {
+        let use_aliases = aliases
+            .iter()
+            .map(|(alias, target)| {
+                (
+                    (*alias).to_string(),
+                    target.split("::").map(str::to_string).collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+
+        Self {
+            use_aliases,
+            type_aliases: HashMap::new(),
+        }
     }
 }
 

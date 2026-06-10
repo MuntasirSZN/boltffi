@@ -4,9 +4,9 @@ expression: "render_class(&cls, \"boltffi\")"
 ---
 /// A persistent key-value data store.
 public final class DataStore {
-    let handle: OpaquePointer
+    let handle: UnsafeMutableRawPointer
 
-    init(handle: OpaquePointer) {
+    init(handle: UnsafeMutableRawPointer) {
         self.handle = handle
     }
 

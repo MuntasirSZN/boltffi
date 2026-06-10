@@ -17,6 +17,10 @@ pub enum CSharpReturnKind {
         bridge_class: CSharpClassName,
         nullable: bool,
     },
+    ClassHandle {
+        class_name: CSharpClassName,
+        nullable: bool,
+    },
     /// `FfiBuf` carrying a wire-encoded `string`.
     WireDecodeString,
     /// `FfiBuf` carrying a wire-encoded value with a static
@@ -85,10 +89,28 @@ impl CSharpReturnKind {
         matches!(self, Self::CallbackHandle { .. })
     }
 
+    pub fn is_class_handle(&self) -> bool {
+        matches!(self, Self::ClassHandle { .. })
+    }
+
     pub fn callback_bridge_class(&self) -> &CSharpClassName {
         match self {
             Self::CallbackHandle { bridge_class, .. } => bridge_class,
             _ => panic!("callback_bridge_class called for non-callback return"),
+        }
+    }
+
+    pub fn class_handle_class(&self) -> &CSharpClassName {
+        match self {
+            Self::ClassHandle { class_name, .. } => class_name,
+            _ => panic!("class_handle_class called for non-class-handle return"),
+        }
+    }
+
+    pub fn class_handle_nullable(&self) -> bool {
+        match self {
+            Self::ClassHandle { nullable, .. } => *nullable,
+            _ => panic!("class_handle_nullable called for non-class-handle return"),
         }
     }
 
@@ -123,6 +145,8 @@ pub(crate) fn native_return_type(
         "FfiBuf".to_string()
     } else if return_kind.is_callback_handle() {
         "BoltFFICallbackHandle".to_string()
+    } else if return_kind.is_class_handle() {
+        "IntPtr".to_string()
     } else {
         return_type.to_string()
     }

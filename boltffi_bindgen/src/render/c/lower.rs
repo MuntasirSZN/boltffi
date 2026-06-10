@@ -49,7 +49,6 @@ impl<'a> CHeaderLowerer<'a> {
         .render()
         .unwrap();
 
-        out.push_str(&self.forward_declarations());
         out.push_str(&self.composite_struct_typedefs());
         out.push_str(&self.enum_typedefs());
         out.push_str(&self.callback_vtables());
@@ -59,26 +58,6 @@ impl<'a> CHeaderLowerer<'a> {
         out.push_str(&self.free_functions());
 
         out
-    }
-
-    fn forward_declarations(&self) -> String {
-        let names: Vec<_> = self
-            .contract
-            .catalog
-            .all_classes()
-            .map(|c| c.id.as_str().to_string())
-            .collect();
-
-        if names.is_empty() {
-            return String::new();
-        }
-
-        let decls: String = names
-            .iter()
-            .map(|name| format!("struct {};\n", name))
-            .collect();
-
-        format!("\n{}\n", decls)
     }
 
     fn composite_struct_typedefs(&self) -> String {
@@ -385,8 +364,8 @@ impl<'a> CHeaderLowerer<'a> {
     }
 
     fn return_c_type(&self, returns: &ReturnShape, error: &ErrorTransport) -> String {
-        if let Some(Transport::Handle { class_id, .. }) = &returns.transport {
-            return format!("struct {} *", class_id.as_str());
+        if matches!(returns.transport, Some(Transport::Handle { .. })) {
+            return "void*".to_string();
         }
 
         if matches!(returns.transport, Some(Transport::Callback { .. })) {
@@ -418,7 +397,7 @@ impl<'a> CHeaderLowerer<'a> {
             Some(Transport::Scalar(origin)) => emit::primitive_c_type(origin.primitive()),
             Some(Transport::Composite(layout)) => format!("___{}", layout.record_id.as_str()),
             Some(Transport::Span(_)) => "FfiBuf_u8".to_string(),
-            Some(Transport::Handle { class_id, .. }) => format!("struct {} *", class_id.as_str()),
+            Some(Transport::Handle { .. }) => "void*".to_string(),
             Some(Transport::Callback { .. }) => "BoltFFICallbackHandle".to_string(),
         }
     }
@@ -564,10 +543,10 @@ mod tests {
                 ),
         );
         let header = generate_header(&mut module);
-        assert!(header.contains("struct Player"));
-        assert!(header.contains("boltffi_player_new("));
-        assert!(header.contains("boltffi_player_free(struct Player * handle);"));
-        assert!(header.contains("boltffi_player_get_score("));
+        assert!(!header.contains("struct Player"));
+        assert!(header.contains("void* boltffi_player_new("));
+        assert!(header.contains("void boltffi_player_free(void* handle);"));
+        assert!(header.contains("int32_t boltffi_player_get_score(const void* self);"));
     }
 
     #[test]

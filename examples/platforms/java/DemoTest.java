@@ -1966,6 +1966,15 @@ public final class DemoTest {
             assert holder.getValue() == 0 : "StateHolder.clear value";
             assert holder.getItems().equals(Collections.emptyList()) : "StateHolder.clear items";
             holder.close();
+
+            demoCase("case:classes.unsafe_single_threaded.map_view.add_marker.should_return_single_threaded_marker_handle");
+            try (MapView mapView = new MapView()) {
+                try (Marker marker = mapView.addMarker(new MarkerOptions(7, "harbor"))) {
+                    assert marker.id() == 7 : "MapView.addMarker Marker.id";
+                    assert marker.title().equals("harbor") : "MapView.addMarker Marker.title";
+                }
+                assert mapView.markerCount() == 1 : "MapView.markerCount";
+            }
         } catch (Exception e) {
             throw new RuntimeException("single-threaded state holder test failed", e);
         }

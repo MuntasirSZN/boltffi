@@ -2,6 +2,15 @@ import Demo
 import XCTest
 
 final class UnsafeSingleThreadedTests: DemoTestCase {
+    func testMapViewReturnsMarkerHandle() throws {
+        demoCase("case:classes.unsafe_single_threaded.map_view.add_marker.should_return_single_threaded_marker_handle")
+        let mapView = MapView()
+        let marker = mapView.addMarker(options: MarkerOptions(id: 7, title: "harbor"))
+        XCTAssertEqual(marker.id(), 7)
+        XCTAssertEqual(marker.title(), "harbor")
+        XCTAssertEqual(mapView.markerCount(), 1)
+    }
+
     func testStateHolderSyncAndAsyncMethods() async throws {
         let stateHolder = StateHolder(label: "local")
         let incrementer = makeIncrementingCallback(delta: 3)

@@ -15,7 +15,7 @@ use crate::exports::extern_export::{
     ExternExport, ReceiverParameter,
 };
 use crate::index::callback_traits::CallbackTraitRegistry;
-use crate::index::{CrateIndex, custom_types, data_types};
+use crate::index::{CrateIndex, class_types, custom_types, data_types};
 use crate::lowering::params::{FfiParams, transform_params, transform_params_async};
 use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::model::{
@@ -210,7 +210,8 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
     let custom_types = crate_index.custom_types().clone();
     let callback_registry = crate_index.callback_traits().clone();
     let data_types = crate_index.data_types().clone();
-    let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types);
+    let class_types = crate_index.class_types().clone();
+    let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types, &class_types);
 
     let input = callable.item();
     debug_assert_eq!(callable.form(), CallableForm::Function);
@@ -519,6 +520,41 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
             #[unsafe(no_mangle)]
             #fn_vis extern "C" fn #export_ident() -> #return_type {
                 #body
+                }
+            }
+        }
+    } else if return_abi.is_object_handle() {
+        let object_handle = return_abi
+            .object_handle()
+            .expect("object handle return must carry handle metadata");
+        let pointer_type = object_handle.pointer_type();
+        let pointer_expression =
+            object_handle.raw_pointer_expression(quote! { #fn_name(#(#call_args),*) });
+        let body = quote! {
+            #(#conversions)*
+            #pointer_expression
+        };
+
+        if has_params {
+            quote! {
+                #input
+
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #export_ident(
+                    #(#ffi_params),*
+                ) -> #pointer_type {
+                    #body
+                }
+            }
+        } else {
+            quote! {
+            #input
+
+            #[allow(clippy::not_unsafe_ptr_arg_deref)]
+            #[unsafe(no_mangle)]
+            #fn_vis extern "C" fn #export_ident() -> #pointer_type {
+                #body
             }
             }
         }
@@ -552,7 +588,11 @@ fn generate_async_export(
         Ok(registry) => registry,
         Err(error) => return error.to_compile_error().into(),
     };
-    let return_lowering = ReturnLoweringContext::new(custom_types, &data_types);
+    let class_types = match class_types::registry_for_current_crate() {
+        Ok(registry) => registry,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    let return_lowering = ReturnLoweringContext::new(custom_types, &data_types, &class_types);
     let return_abi = return_lowering.lower_output(fn_output);
 
     let on_wire_record_error = return_abi.async_invalid_arg_early_return_statement();

@@ -16,8 +16,7 @@ namespace Demo
     {
         private IntPtr _handle;
 
-        // Private handle-adopting ctor; used only by chained `: this(...)` and the static factories below.
-        private Inventory(IntPtr handle)
+        internal Inventory(IntPtr handle)
         {
             _handle = handle;
         }

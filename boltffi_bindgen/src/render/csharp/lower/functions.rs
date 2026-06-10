@@ -96,6 +96,9 @@ impl<'a> CSharpLowerer<'a> {
                 nullable: false,
             };
         }
+        if let Some(return_kind) = self.class_handle_return_kind(raw_type) {
+            return return_kind;
+        }
         // Custom returns always cross as wire-encoded FfiBuf (the macro
         // wraps the underlying value uniformly). For repr shapes that
         // already have a wire-decode path (String, Record, Enum, Vec,
@@ -230,6 +233,23 @@ impl<'a> CSharpLowerer<'a> {
             // are all direct: the CLR marshals them across P/Invoke
             // without any wrapper help.
             _ => CSharpReturnKind::Direct,
+        }
+    }
+
+    fn class_handle_return_kind(&self, type_expr: &TypeExpr) -> Option<CSharpReturnKind> {
+        match type_expr {
+            TypeExpr::Handle(id) => Some(CSharpReturnKind::ClassHandle {
+                class_name: id.into(),
+                nullable: false,
+            }),
+            TypeExpr::Option(inner) => match inner.as_ref() {
+                TypeExpr::Handle(id) => Some(CSharpReturnKind::ClassHandle {
+                    class_name: id.into(),
+                    nullable: true,
+                }),
+                _ => None,
+            },
+            _ => None,
         }
     }
 }

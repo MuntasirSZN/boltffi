@@ -28,4 +28,5 @@
 {%- when CSharpReturnKind::Void %}
 {%- when CSharpReturnKind::Direct %}
 {%- when CSharpReturnKind::CallbackHandle with { .. } %}
+{%- when CSharpReturnKind::ClassHandle with { .. } %}
 {%- endmatch %}

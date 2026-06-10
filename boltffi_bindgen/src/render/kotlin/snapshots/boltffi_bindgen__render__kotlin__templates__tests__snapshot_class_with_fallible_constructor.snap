@@ -3,7 +3,7 @@ source: boltffi_bindgen/src/render/kotlin/templates.rs
 assertion_line: 1031
 expression: template.render().unwrap()
 ---
-class Connection private constructor(internal val handle: Long) : AutoCloseable {
+class Connection internal constructor(internal val handle: Long) : AutoCloseable {
     private val closed = AtomicBoolean(false)
 
     constructor(url: String) : this(

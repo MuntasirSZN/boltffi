@@ -9,7 +9,7 @@ import java.util.concurrent.CompletableFuture;
     private final long handle;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    private {{ class.class_name }}(long handle) {
+    {{ class.class_name }}(long handle) {
         this.handle = handle;
     }
 {%- for ctor in class.constructors %}{% if !ctor.is_factory() %}

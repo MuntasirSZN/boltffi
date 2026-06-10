@@ -189,6 +189,10 @@ impl<'a> CSharpLowerer<'a> {
                 let class_name: CSharpClassName = id.into();
                 Some(CSharpType::Record(class_name.into()))
             }
+            TypeExpr::Handle(id) => {
+                let class_name: CSharpClassName = id.into();
+                Some(CSharpType::Record(class_name.into()))
+            }
             TypeExpr::Enum(id) if self.supported_enums.contains(id) => {
                 let enum_def = self.ffi.catalog.resolve_enum(id)?;
                 Some(CSharpType::for_enum(enum_def))

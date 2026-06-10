@@ -5,7 +5,7 @@ expression: template.render().unwrap()
 /**
  * A persistent key-value data store.
  */
-class DataStore private constructor(internal val handle: Long) : AutoCloseable {
+class DataStore internal constructor(internal val handle: Long) : AutoCloseable {
     private val closed = AtomicBoolean(false)
 
     /**

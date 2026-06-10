@@ -59,6 +59,10 @@ pub fn classify_value_return_strategy(
     rust_type: &Type,
     return_lowering: &ReturnLoweringContext<'_>,
 ) -> ValueReturnStrategy {
+    if return_lowering.object_handle_return(rust_type).is_some() {
+        return ValueReturnStrategy::ObjectHandle;
+    }
+
     let return_type = ReturnTypeDescriptor::parse(rust_type);
 
     match return_type.type_descriptor.shape() {
