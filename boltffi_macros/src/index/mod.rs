@@ -1,7 +1,7 @@
 use boltffi_ffi_rules::cargo_graph;
 use proc_macro2::Span;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) mod callback_traits;
@@ -65,7 +65,7 @@ impl CrateIndex {
 
     fn indexed_sources(
         source_modules: Vec<SourceModule>,
-        manifest_dir: &PathBuf,
+        manifest_dir: &Path,
     ) -> syn::Result<Vec<IndexedCrateSource>> {
         let dependency_sources = cargo_graph::PackageGraph::load(manifest_dir)
             .map_err(|error| syn::Error::new(Span::call_site(), error.to_string()))?
