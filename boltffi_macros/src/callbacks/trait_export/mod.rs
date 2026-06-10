@@ -63,9 +63,9 @@ pub fn ffi_trait_impl(item: TokenStream) -> TokenStream {
 
 fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStream, syn::Error> {
     let crate_index = CrateIndex::for_current_crate()?;
+    let class_types = crate_index.class_types().clone();
     let custom_types = crate_index.custom_types().clone();
     let data_types = crate_index.data_types().clone();
-    let class_types = crate_index.class_types().clone();
     let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types, &class_types);
     let trait_name = &item_trait.ident;
     let trait_name_snake = snake_case_ident(trait_name);

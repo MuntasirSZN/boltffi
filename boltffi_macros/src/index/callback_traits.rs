@@ -1,7 +1,7 @@
 use boltffi_ffi_rules::naming;
 use syn::{Item, ItemMod, ItemTrait};
 
-use crate::index::{ModulePath, SourceModule};
+use crate::index::{IndexedCrateSource, ModulePath};
 
 #[derive(Clone, Default)]
 pub struct CallbackTraitRegistry {
@@ -18,6 +18,7 @@ pub struct CallbackTraitResolution {
 
 #[derive(Clone)]
 struct CallbackTraitEntry {
+    root_path: Vec<String>,
     module_path: Vec<String>,
     trait_name: String,
     is_object_safe: bool,
@@ -36,7 +37,7 @@ impl CallbackTraitRegistry {
             .entries
             .iter()
             .filter(|entry| entry.trait_name == *trait_name)
-            .filter(|entry| module_path.is_empty() || entry.module_path == module_path)
+            .filter(|entry| module_path.is_empty() || entry.resolution_path() == module_path)
             .collect::<Vec<_>>();
 
         match matches.as_slice() {
@@ -52,26 +53,37 @@ impl CallbackTraitRegistry {
 }
 
 pub(super) fn build_callback_trait_registry(
-    source_modules: &[SourceModule],
+    sources: &[IndexedCrateSource],
 ) -> syn::Result<CallbackTraitRegistry> {
     let mut entries = Vec::new();
 
-    source_modules.iter().try_for_each(|source_module| {
+    sources
+        .iter()
+        .try_for_each(|source| collect_source_callbacks(source, &mut entries))?;
+
+    Ok(CallbackTraitRegistry { entries })
+}
+
+fn collect_source_callbacks(
+    source: &IndexedCrateSource,
+    entries: &mut Vec<CallbackTraitEntry>,
+) -> syn::Result<()> {
+    source.modules().iter().try_for_each(|source_module| {
         let mut collector = CallbackTraitCollector {
+            root_path: source.root_path().to_vec(),
             module_path: source_module.module_path().clone().into_strings(),
-            entries: &mut entries,
+            entries,
         };
         source_module
             .syntax()
             .items
             .iter()
             .try_for_each(|item| collector.collect_item(item))
-    })?;
-
-    Ok(CallbackTraitRegistry { entries })
+    })
 }
 
 struct CallbackTraitCollector<'a> {
+    root_path: Vec<String>,
     module_path: Vec<String>,
     entries: &'a mut Vec<CallbackTraitEntry>,
 }
@@ -92,6 +104,7 @@ impl<'a> CallbackTraitCollector<'a> {
         }
 
         let entry = CallbackTraitEntry {
+            root_path: self.root_path.clone(),
             module_path: self.module_path.clone(),
             trait_name: item_trait.ident.to_string(),
             is_object_safe: trait_descriptor.is_object_safe(),
@@ -108,6 +121,7 @@ impl<'a> CallbackTraitCollector<'a> {
         let mut next_path = self.module_path.clone();
         next_path.push(item_mod.ident.to_string());
         let mut nested = CallbackTraitCollector {
+            root_path: self.root_path.clone(),
             module_path: next_path,
             entries: self.entries,
         };
@@ -153,6 +167,22 @@ impl<'a> CallbackTraitDescriptor<'a> {
 }
 
 impl CallbackTraitEntry {
+    fn resolution_path(&self) -> Vec<String> {
+        self.root_path
+            .iter()
+            .cloned()
+            .chain(self.module_path.iter().cloned())
+            .collect()
+    }
+
+    fn helper_path_root(&self) -> Vec<String> {
+        if self.root_path.is_empty() {
+            vec!["crate".to_string()]
+        } else {
+            self.root_path.clone()
+        }
+    }
+
     fn callback_handle_helper_name(&self) -> String {
         format!(
             "__boltffi_local_{}_handle",
@@ -161,8 +191,7 @@ impl CallbackTraitEntry {
     }
 
     fn foreign_path(&self) -> syn::Path {
-        let mut segments = Vec::with_capacity(self.module_path.len() + 2);
-        segments.push("crate".to_string());
+        let mut segments = self.helper_path_root();
         segments.extend(self.module_path.iter().cloned());
         segments.push(format!("Foreign{}", self.trait_name));
         syn::parse_str(&segments.join("::")).unwrap_or_else(|_| syn::Path {
@@ -172,8 +201,7 @@ impl CallbackTraitEntry {
     }
 
     fn local_handle_path(&self) -> syn::Path {
-        let mut segments = Vec::with_capacity(self.module_path.len() + 2);
-        segments.push("crate".to_string());
+        let mut segments = self.helper_path_root();
         segments.extend(self.module_path.iter().cloned());
         segments.push(self.callback_handle_helper_name());
         syn::parse_str(&segments.join("::")).unwrap_or_else(|_| syn::Path {

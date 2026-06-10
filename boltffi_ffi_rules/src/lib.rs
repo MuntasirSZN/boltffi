@@ -3,6 +3,7 @@
 //! agree across the FFI boundary.
 
 pub mod callable;
+pub mod cargo_graph;
 pub mod primitive;
 
 pub const FFI_PREFIX: &str = "boltffi";
@@ -282,12 +283,16 @@ pub mod naming {
         format!("{}FFI", module_name(crate_name))
     }
 
+    pub fn cargo_crate_name(package_or_target_name: &str) -> String {
+        package_or_target_name.replace('-', "_")
+    }
+
     /// Derives the native shared-library name from a crate name.
     ///
     /// Cargo converts hyphens to underscores in the library filename
     /// (e.g. `my-crate` → `libmy_crate.so`), so this applies the same rule.
     pub fn library_name(crate_name: &str) -> Name<LibraryName> {
-        Name::new(crate_name.replace('-', "_"))
+        Name::new(cargo_crate_name(crate_name))
     }
 
     /// Wraps an already-selected native loader name.
@@ -827,6 +832,15 @@ pub mod callback {
         #[case::mixed("my-cool_crate", "my_cool_crate")]
         fn library_name_replaces_hyphens(#[case] input: &str, #[case] expected: &str) {
             assert_eq!(crate::naming::library_name(input).as_str(), expected);
+        }
+
+        #[rstest::rstest]
+        #[case::simple("demo", "demo")]
+        #[case::hyphenated("my-crate", "my_crate")]
+        #[case::multiple_hyphens("my-cool-crate", "my_cool_crate")]
+        #[case::already_underscored("my_crate", "my_crate")]
+        fn cargo_crate_name_replaces_hyphens(#[case] input: &str, #[case] expected: &str) {
+            assert_eq!(crate::naming::cargo_crate_name(input), expected);
         }
 
         #[test]

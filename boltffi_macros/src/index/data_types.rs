@@ -4,7 +4,7 @@ use syn::{Item, ItemEnum, ItemStruct, Type};
 
 use crate::data::analysis::{EnumDataShape, StructDataShape};
 use crate::index::type_paths::TypePathKey;
-use crate::index::{CrateIndex, SourceModule};
+use crate::index::{CrateIndex, IndexedCrateSource, SourceModule};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataTypeCategory {
@@ -97,22 +97,30 @@ pub fn registry_for_current_crate() -> syn::Result<DataTypeRegistry> {
 }
 
 pub(super) fn build_data_type_registry(
-    source_modules: &[SourceModule],
+    sources: &[IndexedCrateSource],
 ) -> syn::Result<DataTypeRegistry> {
     let mut registry = DataTypeRegistry::default();
-    collect_root_types(source_modules, &mut registry)?;
+    sources.iter().try_for_each(|source| {
+        collect_root_types(source.root_path(), source.modules(), &mut registry)
+    })?;
 
     registry.finalize_unique_names();
     Ok(registry)
 }
 
 fn collect_root_types(
+    root_path: &[String],
     source_modules: &[SourceModule],
     registry: &mut DataTypeRegistry,
 ) -> syn::Result<()> {
     source_modules.iter().try_for_each(|source_module| {
+        let module_path = root_path
+            .iter()
+            .cloned()
+            .chain(source_module.module_path().clone().into_strings())
+            .collect::<Vec<_>>();
         let mut collector = DataTypeCollector {
-            module_path: source_module.module_path().clone().into_strings(),
+            module_path,
             registry,
         };
         source_module

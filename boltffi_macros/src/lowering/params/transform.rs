@@ -7,6 +7,7 @@ use boltffi_ffi_rules::transport::{
 use quote::quote;
 use syn::Type;
 
+use crate::index::class_types::{ClassParam, ClassTypeRegistry};
 use crate::index::data_types::DataTypeCategory;
 use crate::lowering::transport::{
     NamedTypeTransport, NamedTypeTransportClassifier, StandardContainer, TypeShapeExt,
@@ -44,6 +45,7 @@ pub(super) enum ParamTransform {
     ImplTrait(syn::Path),
     VecPrimitive(syn::Type),
     VecPassable(syn::Type),
+    ClassHandle(ClassHandleParam),
     WireEncoded(WireEncodedParam),
     Passable(syn::Type),
 }
@@ -70,6 +72,19 @@ pub(super) enum WireEncodedParamKind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum WireEncodedPassing {
     ByValue,
+    SharedRef,
+    MutableRef,
+}
+
+#[derive(Clone)]
+pub(super) struct ClassHandleParam {
+    pub(super) rust_type: syn::Type,
+    pub(super) kind: ClassHandleParamKind,
+    pub(super) nullable: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClassHandleParamKind {
     SharedRef,
     MutableRef,
 }
@@ -107,6 +122,7 @@ impl WireEncodedParam {
 
 #[derive(Clone, Copy)]
 pub(super) struct ParamTransformClassifier<'a> {
+    class_types: &'a ClassTypeRegistry,
     named_type_transport_classifier: NamedTypeTransportClassifier<'a>,
 }
 
@@ -147,14 +163,46 @@ enum TraitObjectOwnership {
 }
 
 impl<'a> ParamTransformClassifier<'a> {
-    pub(super) fn new(named_type_transport_classifier: NamedTypeTransportClassifier<'a>) -> Self {
+    pub(super) fn new(
+        class_types: &'a ClassTypeRegistry,
+        named_type_transport_classifier: NamedTypeTransportClassifier<'a>,
+    ) -> Self {
         Self {
+            class_types,
             named_type_transport_classifier,
         }
     }
 
     pub(super) fn classify(&self, ty: &Type) -> ClassifiedParamTransform {
         let param_syntax = ParamSyntax::new(ty);
+
+        if let Some(class_param) = self.class_types.class_param(ty) {
+            let (rust_type, kind, nullable) = match class_param {
+                ClassParam::SharedRef {
+                    rust_type,
+                    nullable,
+                } => (rust_type, ClassHandleParamKind::SharedRef, nullable),
+                ClassParam::MutableRef {
+                    rust_type,
+                    nullable,
+                } => (rust_type, ClassHandleParamKind::MutableRef, nullable),
+            };
+            let passing_strategy = match kind {
+                ClassHandleParamKind::SharedRef => ParamPassingStrategy::SharedRef,
+                ClassHandleParamKind::MutableRef => ParamPassingStrategy::MutableRef,
+            };
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::ObjectHandle { nullable },
+                    passing_strategy,
+                ),
+                transform: ParamTransform::ClassHandle(ClassHandleParam {
+                    rust_type,
+                    kind,
+                    nullable,
+                }),
+            };
+        }
 
         if let Some(param_shape) = param_syntax.parse_shape() {
             return match param_shape {
@@ -716,12 +764,28 @@ pub(super) fn is_primitive_vec_inner(type_string: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::class_types::ClassTypeRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
     use crate::index::data_types::{DataTypeCategory, DataTypeRegistry};
 
     fn classifier(data_types: &'static DataTypeRegistry) -> ParamTransformClassifier<'static> {
+        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
-        ParamTransformClassifier::new(NamedTypeTransportClassifier::new(custom_types, data_types))
+        ParamTransformClassifier::new(
+            class_types,
+            NamedTypeTransportClassifier::new(custom_types, data_types),
+        )
+    }
+
+    fn classifier_with_classes(
+        class_types: &'static ClassTypeRegistry,
+    ) -> ParamTransformClassifier<'static> {
+        let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        ParamTransformClassifier::new(
+            class_types,
+            NamedTypeTransportClassifier::new(custom_types, data_types),
+        )
     }
 
     fn empty_data_types() -> &'static DataTypeRegistry {
@@ -730,6 +794,60 @@ mod tests {
 
     fn data_types(entries: &[(&str, DataTypeCategory)]) -> &'static DataTypeRegistry {
         Box::leak(Box::new(DataTypeRegistry::with_entries(entries)))
+    }
+
+    #[test]
+    fn dependency_class_reference_lowers_to_object_handle() {
+        let class_types = Box::leak(Box::new(ClassTypeRegistry::with_paths(&[&[
+            "session_api",
+            "Session",
+        ]])));
+        let ty: Type = syn::parse_quote!(&session_api::Session);
+        let classified = classifier_with_classes(class_types).classify(&ty);
+
+        assert_eq!(
+            classified.contract.value_strategy(),
+            ParamValueStrategy::ObjectHandle { nullable: false },
+        );
+        assert_eq!(
+            classified.contract.passing_strategy(),
+            ParamPassingStrategy::SharedRef,
+        );
+        assert!(matches!(
+            classified.transform,
+            ParamTransform::ClassHandle(ClassHandleParam {
+                kind: ClassHandleParamKind::SharedRef,
+                nullable: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn nullable_dependency_class_reference_lowers_to_nullable_object_handle() {
+        let class_types = Box::leak(Box::new(ClassTypeRegistry::with_paths(&[&[
+            "session_api",
+            "Session",
+        ]])));
+        let ty: Type = syn::parse_quote!(Option<&mut session_api::Session>);
+        let classified = classifier_with_classes(class_types).classify(&ty);
+
+        assert_eq!(
+            classified.contract.value_strategy(),
+            ParamValueStrategy::ObjectHandle { nullable: true },
+        );
+        assert_eq!(
+            classified.contract.passing_strategy(),
+            ParamPassingStrategy::MutableRef,
+        );
+        assert!(matches!(
+            classified.transform,
+            ParamTransform::ClassHandle(ClassHandleParam {
+                kind: ClassHandleParamKind::MutableRef,
+                nullable: true,
+                ..
+            })
+        ));
     }
 
     #[test]
