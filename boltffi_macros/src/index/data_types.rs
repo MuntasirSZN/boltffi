@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use syn::{Item, ItemEnum, ItemStruct, Type};
 
 use crate::data::analysis::{EnumDataShape, StructDataShape};
+use crate::index::reexports::ReExport;
 use crate::index::type_paths::TypePathKey;
 use crate::index::{CrateIndex, IndexedCrateSource, SourceModule};
 
@@ -28,6 +29,26 @@ pub struct DataTypeRegistry {
 impl DataTypeRegistry {
     fn insert(&mut self, qualified_path: Vec<String>, category: DataTypeCategory) {
         self.categories_by_path.insert(qualified_path, category);
+    }
+
+    fn category_for_segments(&self, path_segments: &[String]) -> Option<DataTypeCategory> {
+        if path_segments.len() == 1 {
+            return path_segments
+                .first()
+                .and_then(|name| self.unique_name_categories.get(name).copied());
+        }
+
+        if let Some(category) = self.categories_by_path.get(path_segments).copied() {
+            return Some(category);
+        }
+
+        let mut matches = self
+            .categories_by_path
+            .iter()
+            .filter(|(registered_path, _)| registered_path.ends_with(path_segments))
+            .map(|(_, category)| *category);
+        let first = matches.next()?;
+        matches.all(|next| next == first).then_some(first)
     }
 
     fn finalize_unique_names(&mut self) {
@@ -105,6 +126,10 @@ pub(super) fn build_data_type_registry(
     })?;
 
     registry.finalize_unique_names();
+    sources.iter().try_for_each(|source| {
+        collect_root_reexports(source.root_path(), source.modules(), &mut registry)
+    })?;
+    registry.finalize_unique_names();
     Ok(registry)
 }
 
@@ -128,6 +153,29 @@ fn collect_root_types(
             .items
             .iter()
             .try_for_each(|item| collector.collect_item(item))
+    })
+}
+
+fn collect_root_reexports(
+    root_path: &[String],
+    source_modules: &[SourceModule],
+    registry: &mut DataTypeRegistry,
+) -> syn::Result<()> {
+    source_modules.iter().try_for_each(|source_module| {
+        let module_path = root_path
+            .iter()
+            .cloned()
+            .chain(source_module.module_path().clone().into_strings())
+            .collect::<Vec<_>>();
+        let mut collector = DataTypeCollector {
+            module_path,
+            registry,
+        };
+        source_module
+            .syntax()
+            .items
+            .iter()
+            .try_for_each(|item| collector.collect_reexport_item(item))
     })
 }
 
@@ -162,6 +210,29 @@ impl<'a> DataTypeCollector<'a> {
         }
     }
 
+    fn collect_reexport_item(&mut self, item: &Item) -> syn::Result<()> {
+        match item {
+            Item::Use(_) => {
+                ReExport::from_item(item)
+                    .into_iter()
+                    .for_each(|reexport| self.collect_reexport(reexport));
+                Ok(())
+            }
+            Item::Mod(item_mod) => {
+                let Some((_, items)) = &item_mod.content else {
+                    return Ok(());
+                };
+                self.module_path.push(item_mod.ident.to_string());
+                let collect_result = items
+                    .iter()
+                    .try_for_each(|nested| self.collect_reexport_item(nested));
+                self.module_path.pop();
+                collect_result
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn collect_struct(&mut self, item_struct: &ItemStruct) {
         if !StructDataShape::new(item_struct).is_boltffi_data() {
             return;
@@ -180,6 +251,20 @@ impl<'a> DataTypeCollector<'a> {
         let mut qualified_path = self.module_path.clone();
         qualified_path.push(item_enum.ident.to_string());
         self.registry.insert(qualified_path, category);
+    }
+
+    fn collect_reexport(&mut self, reexport: ReExport) {
+        let Some(category) = self.registry.category_for_segments(reexport.target()) else {
+            return;
+        };
+        self.registry.insert(
+            self.module_path
+                .iter()
+                .cloned()
+                .chain(std::iter::once(reexport.alias().to_string()))
+                .collect(),
+            category,
+        );
     }
 }
 

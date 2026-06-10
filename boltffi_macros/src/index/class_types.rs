@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use syn::{Attribute, Item, ItemImpl, Type};
 
+use super::reexports::ReExport;
 use crate::index::type_paths::TypePathKey;
 use crate::index::{IndexedCrateSource, PathResolver, SourceModule};
 
@@ -20,6 +21,24 @@ pub enum ClassParam {
 impl ClassTypeRegistry {
     fn insert(&mut self, qualified_path: Vec<String>) {
         self.paths.insert(qualified_path);
+    }
+
+    fn contains_path_segments(&self, path_segments: &[String]) -> bool {
+        if path_segments.len() == 1 {
+            return path_segments
+                .first()
+                .is_some_and(|name| self.unique_names.contains(name));
+        }
+
+        self.paths
+            .iter()
+            .any(|registered_path| registered_path.as_slice() == path_segments)
+            || self
+                .paths
+                .iter()
+                .filter(|registered_path| registered_path.ends_with(path_segments))
+                .count()
+                == 1
     }
 
     fn finalize_unique_names(&mut self) {
@@ -172,6 +191,10 @@ pub fn build_class_type_registry(
         collect_root_types(source.root_path(), source.modules(), &mut registry)
     })?;
     registry.finalize_unique_names();
+    sources.iter().try_for_each(|source| {
+        collect_root_reexports(source.root_path(), source.modules(), &mut registry)
+    })?;
+    registry.finalize_unique_names();
     Ok(registry)
 }
 
@@ -195,6 +218,29 @@ fn collect_root_types(
             .items
             .iter()
             .try_for_each(|item| collector.collect_item(item))
+    })
+}
+
+fn collect_root_reexports(
+    root_path: &[String],
+    source_modules: &[SourceModule],
+    registry: &mut ClassTypeRegistry,
+) -> syn::Result<()> {
+    source_modules.iter().try_for_each(|source_module| {
+        let module_path = root_path
+            .iter()
+            .cloned()
+            .chain(source_module.module_path().clone().into_strings())
+            .collect::<Vec<_>>();
+        let mut collector = ClassTypeCollector {
+            module_path,
+            registry,
+        };
+        source_module
+            .syntax()
+            .items
+            .iter()
+            .try_for_each(|item| collector.collect_reexport_item(item))
     })
 }
 
@@ -225,6 +271,29 @@ impl<'a> ClassTypeCollector<'a> {
         }
     }
 
+    fn collect_reexport_item(&mut self, item: &Item) -> syn::Result<()> {
+        match item {
+            Item::Use(_) => {
+                ReExport::from_item(item)
+                    .into_iter()
+                    .for_each(|reexport| self.collect_reexport(reexport));
+                Ok(())
+            }
+            Item::Mod(item_mod) => {
+                let Some((_, items)) = &item_mod.content else {
+                    return Ok(());
+                };
+                self.module_path.push(item_mod.ident.to_string());
+                let collect_result = items
+                    .iter()
+                    .try_for_each(|nested| self.collect_reexport_item(nested));
+                self.module_path.pop();
+                collect_result
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn collect_impl(&mut self, item_impl: &ItemImpl) {
         if !Self::is_class_export_impl(item_impl) {
             return;
@@ -236,6 +305,19 @@ impl<'a> ClassTypeCollector<'a> {
 
         self.registry
             .insert(self.qualified_class_path(type_path_key));
+    }
+
+    fn collect_reexport(&mut self, reexport: ReExport) {
+        if !self.registry.contains_path_segments(reexport.target()) {
+            return;
+        }
+        self.registry.insert(
+            self.module_path
+                .iter()
+                .cloned()
+                .chain(std::iter::once(reexport.alias().to_string()))
+                .collect(),
+        );
     }
 
     fn qualified_class_path(&self, type_path_key: TypePathKey) -> Vec<String> {

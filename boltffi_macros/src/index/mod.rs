@@ -9,6 +9,7 @@ pub(crate) mod class_types;
 pub(crate) mod custom_types;
 pub(crate) mod data_types;
 mod path_resolver;
+mod reexports;
 mod source_tree;
 pub(crate) mod type_paths;
 
@@ -69,7 +70,7 @@ impl CrateIndex {
     ) -> syn::Result<Vec<IndexedCrateSource>> {
         let dependency_sources = cargo_graph::PackageGraph::load(manifest_dir)
             .map_err(|error| syn::Error::new(Span::call_site(), error.to_string()))?
-            .map(|graph| graph.exported_dependencies(graph.root_id()))
+            .map(|graph| graph.reachable_exported_dependencies(graph.root_id()))
             .unwrap_or_default()
             .into_iter()
             .map(|package| {

@@ -1,10 +1,12 @@
 use crate::naming;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use syn::{Attribute, Item};
 use walkdir::WalkDir;
 
@@ -29,6 +31,12 @@ pub struct PackageGraph {
 #[derive(Debug)]
 pub struct LoadError {
     message: String,
+}
+
+#[derive(Clone, Copy)]
+enum MetadataMode {
+    CurrentBuild,
+    Standalone,
 }
 
 #[derive(Deserialize)]
@@ -77,14 +85,18 @@ impl PackageId {
 
 impl PackageGraph {
     pub fn load(manifest_dir: &Path) -> Result<Option<Self>, LoadError> {
-        Self::load_manifest(manifest_dir, None)
+        Self::load_manifest(manifest_dir, None, MetadataMode::CurrentBuild)
     }
 
     pub fn load_for_module(
         manifest_dir: &Path,
         root_module_name: &str,
     ) -> Result<Option<Self>, LoadError> {
-        Self::load_manifest(manifest_dir, Some(root_module_name))
+        Self::load_manifest(
+            manifest_dir,
+            Some(root_module_name),
+            MetadataMode::Standalone,
+        )
     }
 
     pub fn root_id(&self) -> &PackageId {
@@ -121,17 +133,14 @@ impl PackageGraph {
     fn load_manifest(
         manifest_dir: &Path,
         root_module_name: Option<&str>,
+        metadata_mode: MetadataMode,
     ) -> Result<Option<Self>, LoadError> {
         let manifest_path = manifest_dir.join("Cargo.toml");
         if !manifest_path.exists() {
             return Ok(None);
         }
 
-        let output = Command::new("cargo")
-            .args(["metadata", "--format-version", "1", "--manifest-path"])
-            .arg(&manifest_path)
-            .output()
-            .map_err(|error| LoadError::new(format!("cargo metadata failed: {error}")))?;
+        let output = MetadataCommand::new(&manifest_path, metadata_mode).output()?;
 
         if !output.status.success() {
             return Err(LoadError::new(format!(
@@ -270,6 +279,57 @@ impl fmt::Display for LoadError {
 }
 
 impl std::error::Error for LoadError {}
+
+struct MetadataCommand<'a> {
+    manifest_path: &'a Path,
+    mode: MetadataMode,
+}
+
+impl<'a> MetadataCommand<'a> {
+    fn new(manifest_path: &'a Path, mode: MetadataMode) -> Self {
+        Self {
+            manifest_path,
+            mode,
+        }
+    }
+
+    fn output(self) -> Result<Output, LoadError> {
+        let mut command = Command::new(Self::cargo_executable());
+        command
+            .args(["metadata", "--format-version", "1", "--manifest-path"])
+            .arg(self.manifest_path)
+            .args(self.mode.args());
+        command
+            .output()
+            .map_err(|error| LoadError::new(format!("cargo metadata failed: {error}")))
+    }
+
+    fn cargo_executable() -> OsString {
+        env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
+    }
+}
+
+impl MetadataMode {
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::CurrentBuild => &["--offline"],
+            Self::Standalone if Self::env_flag("CARGO_FROZEN") => &["--frozen"],
+            Self::Standalone
+                if Self::env_flag("CARGO_NET_OFFLINE") || Self::env_flag("CARGO_OFFLINE") =>
+            {
+                &["--offline"]
+            }
+            Self::Standalone if Self::env_flag("CARGO_LOCKED") => &["--locked"],
+            Self::Standalone => &[],
+        }
+    }
+
+    fn env_flag(name: &str) -> bool {
+        env::var(name)
+            .ok()
+            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+    }
+}
 
 #[derive(Clone)]
 struct CargoDependency {

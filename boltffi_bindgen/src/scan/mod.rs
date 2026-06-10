@@ -49,6 +49,9 @@ pub enum TypeShape {
     Custom {
         repr: MType,
     },
+    ImportedCustom {
+        repr: MType,
+    },
 }
 
 pub struct TypeMeta {
@@ -108,7 +111,7 @@ impl TypeRegistry {
                     custom_type.name.clone(),
                     TypeMeta {
                         doc: None,
-                        shape: TypeShape::Custom {
+                        shape: TypeShape::ImportedCustom {
                             repr: custom_type.repr.clone(),
                         },
                     },
@@ -281,7 +284,7 @@ impl TypeRegistry {
                 MType::Object(name.to_string())
             }
             TypeShape::Pending(PendingKind::Callback) => MType::BoxedTrait(name.to_string()),
-            TypeShape::Custom { repr } => MType::Custom {
+            TypeShape::Custom { repr } | TypeShape::ImportedCustom { repr } => MType::Custom {
                 name: name.to_string(),
                 repr: Box::new(repr.clone()),
             },
@@ -1657,6 +1660,7 @@ impl SourceScanner {
                 TypeShape::Custom { repr } => {
                     module = module.with_custom_type(CustomType::new(name, repr));
                 }
+                TypeShape::ImportedCustom { .. } => {}
                 TypeShape::Pending(_) => {}
             }
         }
