@@ -561,8 +561,7 @@ impl SourceScanner {
                 }
             }
             Item::Impl(item_impl) => {
-                let is_exported = has_attribute(&item_impl.attrs, "ffi_class")
-                    || has_attribute(&item_impl.attrs, "export")
+                let is_exported = has_attribute(&item_impl.attrs, "export")
                     || has_data_impl_attribute(&item_impl.attrs);
                 if is_exported {
                     item_impl
@@ -992,8 +991,7 @@ impl SourceScanner {
                     );
                 }
                 Item::Impl(item_impl) => {
-                    if (has_attribute(&item_impl.attrs, "ffi_class")
-                        || has_attribute(&item_impl.attrs, "export"))
+                    if has_attribute(&item_impl.attrs, "export")
                         && !has_data_impl_attribute(&item_impl.attrs)
                         && let Type::Path(type_path) = item_impl.self_ty.as_ref()
                         && let Some(seg) = type_path.path.segments.last()
@@ -1057,9 +1055,7 @@ impl SourceScanner {
             Item::Impl(item_impl) => {
                 if has_data_impl_attribute(&item_impl.attrs) {
                     self.process_value_type_impl(item_impl);
-                } else if has_attribute(&item_impl.attrs, "ffi_class")
-                    || has_attribute(&item_impl.attrs, "export")
-                {
+                } else if has_attribute(&item_impl.attrs, "export") {
                     self.process_class(item_impl);
                 }
             }

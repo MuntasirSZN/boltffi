@@ -7,8 +7,9 @@ use crate::index::custom_types::{self, CustomTypeRegistry};
 
 use super::classify::{ReturnTypeDescriptor, option_primitive_uses_scalar_encoding};
 use super::model::{
-    DirectBufferReturnMethod, EncodedReturnStrategy, ResolvedReturn, ReturnInvocationContext,
-    ReturnPlatform, ScalarReturnStrategy, ValueReturnStrategy, WasmOptionScalarEncoding,
+    DirectBufferReturnMethod, EncodedReturnStrategy, ObjectHandleReturn, ResolvedReturn,
+    ReturnInvocationContext, ReturnPlatform, ScalarReturnStrategy, ValueReturnStrategy,
+    WasmOptionScalarEncoding,
 };
 
 impl ResolvedReturn {
@@ -136,9 +137,11 @@ impl ResolvedReturn {
                 quote! { <#rust_type as ::boltffi::__private::Passable>::Out }
             }
             ValueReturnStrategy::Buffer(_) => quote! { ::boltffi::__private::FfiBuf },
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
-                quote! { #rust_type }
-            }
+            ValueReturnStrategy::ObjectHandle => self
+                .object_handle()
+                .expect("object handle return must carry handle metadata")
+                .pointer_type(),
+            ValueReturnStrategy::CallbackHandle => quote! { #rust_type },
         }
     }
 
@@ -188,7 +191,17 @@ impl ResolvedReturn {
                     #encode_expression
                 }
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => quote! {
+            ValueReturnStrategy::ObjectHandle => {
+                let object_handle = self
+                    .object_handle()
+                    .expect("object handle return must carry handle metadata");
+                let pointer_expression = object_handle.raw_pointer_expression(quote! { result });
+                quote! {
+                    if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
+                    #pointer_expression
+                }
+            }
+            ValueReturnStrategy::CallbackHandle => quote! {
                 if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
                 result
             },
@@ -203,6 +216,36 @@ impl ResolvedReturn {
             | ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::CallbackHandle => quote! { Default::default() },
             ValueReturnStrategy::Buffer(_) => quote! { ::boltffi::__private::FfiBuf::default() },
+        }
+    }
+}
+
+impl ObjectHandleReturn {
+    pub fn pointer_type(&self) -> proc_macro2::TokenStream {
+        let pointee = self.pointee();
+        quote! { *mut #pointee }
+    }
+
+    pub fn ffi_return_type(&self) -> proc_macro2::TokenStream {
+        let pointer_type = self.pointer_type();
+        quote! { -> #pointer_type }
+    }
+
+    pub fn raw_pointer_expression(
+        &self,
+        value: proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
+        if self.is_nullable() {
+            quote! {
+                match #value {
+                    Some(value) => Box::into_raw(Box::new(value)),
+                    None => ::core::ptr::null_mut(),
+                }
+            }
+        } else {
+            quote! {
+                Box::into_raw(Box::new(#value))
+            }
         }
     }
 }

@@ -2,7 +2,7 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
-class Cache private constructor(internal val handle: Long) : AutoCloseable {
+class Cache internal constructor(internal val handle: Long) : AutoCloseable {
     private val closed = AtomicBoolean(false)
 
     override fun close() {

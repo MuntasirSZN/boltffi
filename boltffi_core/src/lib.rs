@@ -17,8 +17,8 @@ pub mod wasm;
 pub mod wire;
 
 pub use boltffi_macros::{
-    Data, FfiType, custom_ffi, custom_type, data, default, error, export, ffi_class, ffi_export,
-    ffi_stream, ffi_trait, name, skip,
+    Data, FfiType, custom_ffi, custom_type, data, default, error, export, ffi_export, ffi_stream,
+    ffi_trait, name, skip,
 };
 #[cfg(target_arch = "wasm32")]
 pub use callback::WasmCallbackOwner;

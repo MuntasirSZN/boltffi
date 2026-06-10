@@ -8,7 +8,7 @@ use std::fmt;
 use boltffi_ffi_rules::naming;
 
 use crate::ir::ids::{
-    EnumId, FieldName, FunctionId, MethodId, ParamName, RecordId, StreamId, VariantName,
+    ClassId, EnumId, FieldName, FunctionId, MethodId, ParamName, RecordId, StreamId, VariantName,
 };
 
 /// A C# class, struct, or record name in PascalCase.
@@ -69,6 +69,12 @@ impl fmt::Display for CSharpClassName {
 
 impl From<&RecordId> for CSharpClassName {
     fn from(id: &RecordId) -> Self {
+        Self::from_source(id.as_str())
+    }
+}
+
+impl From<&ClassId> for CSharpClassName {
+    fn from(id: &ClassId) -> Self {
         Self::from_source(id.as_str())
     }
 }

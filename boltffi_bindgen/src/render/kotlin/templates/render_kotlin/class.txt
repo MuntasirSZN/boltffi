@@ -1,4 +1,4 @@
-{{ self::kdoc_block(doc, "") }}class {{ class_name }} private constructor(internal val handle: Long) : AutoCloseable {
+{{ self::kdoc_block(doc, "") }}class {{ class_name }} internal constructor(internal val handle: Long) : AutoCloseable {
     private val closed = AtomicBoolean(false)
 {%- for ctor in constructors %}{% if ctor.renders_as_constructor() %}
 

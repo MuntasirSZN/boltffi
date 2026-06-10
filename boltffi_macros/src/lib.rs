@@ -43,11 +43,6 @@ pub fn ffi_stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn ffi_class(attr: TokenStream, item: TokenStream) -> TokenStream {
-    exports::methods::ffi_class_impl(attr, item)
-}
-
-#[proc_macro_attribute]
 pub fn ffi_trait(_attr: TokenStream, item: TokenStream) -> TokenStream {
     callbacks::trait_export::ffi_trait_impl(item)
 }
@@ -90,7 +85,7 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     if let Ok(item_impl) = syn::parse::<syn::ItemImpl>(item_clone.clone()) {
-        return ffi_class(attr, TokenStream::from(quote!(#item_impl)));
+        return exports::methods::export_impl(attr, TokenStream::from(quote!(#item_impl)));
     }
 
     if let Ok(item_trait) = syn::parse::<syn::ItemTrait>(item_clone) {

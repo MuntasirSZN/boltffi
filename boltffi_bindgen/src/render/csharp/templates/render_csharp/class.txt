@@ -24,8 +24,7 @@ namespace {{ namespace }}
     {
         private IntPtr _handle;
 
-        // Private handle-adopting ctor; used only by chained `: this(...)` and the static factories below.
-        private {{ class.class_name }}(IntPtr handle)
+        internal {{ class.class_name }}(IntPtr handle)
         {
             _handle = handle;
         }

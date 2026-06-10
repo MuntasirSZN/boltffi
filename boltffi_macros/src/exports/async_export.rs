@@ -107,6 +107,33 @@ impl AsyncWasmCompleteExport {
             };
         }
 
+        if resolved_return.is_object_handle() {
+            let object_handle = resolved_return
+                .object_handle()
+                .expect("object handle return must carry handle metadata");
+            let return_type = object_handle.ffi_return_type();
+            let pointer_expression = object_handle.raw_pointer_expression(quote! { result });
+            return Self {
+                params: quote! {
+                    handle: ::boltffi::__private::RustFutureHandle,
+                    out_status: *mut ::boltffi::__private::FfiStatus
+                },
+                return_type,
+                body: quote! {
+                    match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                        Ok(result) => {
+                            if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
+                            #pointer_expression
+                        }
+                        Err(status) => {
+                            if !out_status.is_null() { *out_status = status; }
+                            Default::default()
+                        }
+                    }
+                },
+            };
+        }
+
         if let Some(strategy) = resolved_return.encoded_return_strategy() {
             let rust_type = resolved_return.rust_type();
             let registry = custom_types::registry_for_current_crate().ok();

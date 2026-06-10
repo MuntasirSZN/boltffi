@@ -23,4 +23,13 @@ export async function run() {
   assert.equal(holder.getValue(), 0);
   assertArrayEqual(holder.getItems(), []);
   holder.dispose();
+
+  globalThis.demoCase("case:classes.unsafe_single_threaded.map_view.add_marker.should_return_single_threaded_marker_handle");
+  const mapView = demo.MapView.new();
+  const marker = mapView.addMarker({ id: 7, title: "harbor" });
+  assert.equal(marker.id(), 7);
+  assert.equal(marker.title(), "harbor");
+  assert.equal(mapView.markerCount(), 1);
+  marker.dispose();
+  mapView.dispose();
 }

@@ -401,6 +401,8 @@ public final class ResultEqualitySmoke {
         .render()
         .expect("class template should render");
 
+        assert!(source.contains("Node(long handle)"));
+        assert!(!source.contains("private Node(long handle)"));
         assert!(source.contains("if (_handle == 0L) return null;"));
         assert!(source.contains("return new Node(_handle);"));
     }

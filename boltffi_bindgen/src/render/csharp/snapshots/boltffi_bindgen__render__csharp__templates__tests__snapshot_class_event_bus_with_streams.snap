@@ -19,8 +19,7 @@ namespace Demo
     {
         private IntPtr _handle;
 
-        // Private handle-adopting ctor; used only by chained `: this(...)` and the static factories below.
-        private EventBus(IntPtr handle)
+        internal EventBus(IntPtr handle)
         {
             _handle = handle;
         }

@@ -16,8 +16,7 @@ namespace Demo
     {
         private IntPtr _handle;
 
-        // Private handle-adopting ctor; used only by chained `: this(...)` and the static factories below.
-        private Counter(IntPtr handle)
+        internal Counter(IntPtr handle)
         {
             _handle = handle;
         }

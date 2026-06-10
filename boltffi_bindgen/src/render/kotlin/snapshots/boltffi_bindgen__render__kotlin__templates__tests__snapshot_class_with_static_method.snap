@@ -2,7 +2,7 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
-class Logger private constructor(internal val handle: Long) : AutoCloseable {
+class Logger internal constructor(internal val handle: Long) : AutoCloseable {
     private val closed = AtomicBoolean(false)
 
     override fun close() {

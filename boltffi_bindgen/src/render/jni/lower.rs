@@ -1304,6 +1304,9 @@ impl<'a> JniLowerer<'a> {
         returns: &ReturnDef,
         ret_shape: Option<&ReturnShape>,
     ) -> JniReturnMeta {
+        if let Some(return_meta) = ret_shape.and_then(Self::object_handle_return_meta) {
+            return return_meta;
+        }
         if let Some(return_meta) = ret_shape.and_then(Self::callback_handle_return_meta) {
             return return_meta;
         }
@@ -1375,6 +1378,7 @@ impl<'a> JniLowerer<'a> {
                     jni_c_return_type: String::new(),
                     jni_return_expr: String::new(),
                 },
+                TypeExpr::Handle(_) => Self::direct_object_handle_return_meta(),
                 _ => JniReturnMeta {
                     is_unit: false,
                     is_direct: true,
@@ -1383,6 +1387,24 @@ impl<'a> JniLowerer<'a> {
                     jni_return_expr: "_result".to_string(),
                 },
             },
+        }
+    }
+
+    fn object_handle_return_meta(ret_shape: &ReturnShape) -> Option<JniReturnMeta> {
+        matches!(
+            ret_shape.value_return_strategy(),
+            ValueReturnStrategy::ObjectHandle
+        )
+        .then(Self::direct_object_handle_return_meta)
+    }
+
+    fn direct_object_handle_return_meta() -> JniReturnMeta {
+        JniReturnMeta {
+            is_unit: false,
+            is_direct: true,
+            jni_return_type: "jlong".to_string(),
+            jni_c_return_type: "void*".to_string(),
+            jni_return_expr: "(jlong)_result".to_string(),
         }
     }
 
@@ -2841,9 +2863,9 @@ mod tests {
     use crate::ir::contract::{FfiContract, PackageInfo, TypeCatalog};
     use crate::ir::types::PrimitiveType;
     use crate::ir::{
-        CStyleVariant, CallbackId, CallbackKind, CallbackMethodDef, CallbackTraitDef, EnumDef,
-        FieldDef, FieldName, FunctionDef, FunctionId, MethodDef, MethodId, ParamDef, ParamName,
-        ParamPassing, Receiver, RecordDef, RecordId, ReturnDef, VariantName,
+        CStyleVariant, CallbackId, CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassId,
+        EnumDef, FieldDef, FieldName, FunctionDef, FunctionId, MethodDef, MethodId, ParamDef,
+        ParamName, ParamPassing, Receiver, RecordDef, RecordId, ReturnDef, VariantName,
     };
     use boltffi_ffi_rules::callable::ExecutionKind;
 
@@ -3725,6 +3747,34 @@ mod tests {
         let meta = lowerer.return_meta(&ReturnDef::Value(TypeExpr::Enum("Shape".into())));
         assert!(!meta.is_direct);
         assert_eq!(meta.jni_return_type, "jbyteArray");
+    }
+
+    #[test]
+    fn return_meta_object_handle_returns_pointer_as_jlong() {
+        let marker_id = ClassId::new("Marker");
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: marker_id.clone(),
+            constructors: vec![],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+        let ret_shape = closure_return_shape_from_contract(
+            contract.clone(),
+            ReturnDef::Value(TypeExpr::Handle(marker_id.clone())),
+        );
+        let lowerer = lowerer_from_contract(&contract);
+        let meta = lowerer.return_meta_for_shape(
+            &ReturnDef::Value(TypeExpr::Handle(marker_id)),
+            Some(&ret_shape),
+        );
+
+        assert!(meta.is_direct);
+        assert_eq!(meta.jni_return_type, "jlong");
+        assert_eq!(meta.jni_c_return_type, "void*");
+        assert_eq!(meta.jni_return_expr, "(jlong)_result");
     }
 
     #[test]

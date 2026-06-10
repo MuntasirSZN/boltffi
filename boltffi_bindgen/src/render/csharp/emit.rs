@@ -3228,12 +3228,10 @@ mod tests {
         );
         assert_source_contains(
             &file.source,
-            "private Inventory(IntPtr handle)",
-            "handle-adopting ctor is private so an integer literal like \
-             `new Inventory(2)` can never resolve here via the implicit \
-             literal-to-IntPtr conversion; the chained `: this(...)` form \
-             and the static factories live inside the class and can still \
-             reach it",
+            "internal Inventory(IntPtr handle)",
+            "handle-adopting ctor is internal so generated peer classes \
+             can adopt returned handles while consumer assemblies cannot \
+             call it or resolve integer literals through IntPtr conversion",
         );
         assert_source_contains(
             &file.source,
@@ -3531,6 +3529,22 @@ mod tests {
             "MathUtils::round (&self) lifts to a ClassInstance method",
         );
 
+        let map_view = output
+            .files
+            .iter()
+            .find(|f| f.file_name == "MapView.cs")
+            .expect("MapView.cs from demo crate");
+        assert_source_contains(
+            &map_view.source,
+            "public Marker AddMarker(MarkerOptions options)",
+            "MapView::add_marker returns the generated Marker wrapper",
+        );
+        assert_source_contains(
+            &map_view.source,
+            "return new Marker(NativeMethods.MapViewAddMarker(_handle, _optionsBytes, (UIntPtr)_optionsBytes.Length));",
+            "class-handle method returns adopt the native IntPtr in the target wrapper",
+        );
+
         let main = output
             .files
             .iter()
@@ -3580,6 +3594,11 @@ mod tests {
             &main.source,
             "internal static extern int CounterGet(IntPtr self);",
             "ClassInstance methods prepend `IntPtr self` to the DllImport signature",
+        );
+        assert_source_contains(
+            &main.source,
+            "internal static extern IntPtr MapViewAddMarker(IntPtr self, byte[] options, UIntPtr optionsLen);",
+            "class-handle method returns use IntPtr in the DllImport signature",
         );
         assert_source_contains(
             &main.source,

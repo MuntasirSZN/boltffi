@@ -1,1 +1,1 @@
-void {{ symbol }}(struct {{ class_name }} * handle);
+void {{ symbol }}(void* handle);

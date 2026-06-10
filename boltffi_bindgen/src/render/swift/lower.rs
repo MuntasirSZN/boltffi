@@ -452,7 +452,7 @@ impl<'a> SwiftLowerer<'a> {
             }
             (_, Some(Transport::Composite(layout))) => format!("___{}", layout.record_id.as_str()),
             (_, Some(Transport::Span(_))) => "FfiBuf_u8".to_string(),
-            (_, Some(Transport::Handle { .. })) => "OpaquePointer?".to_string(),
+            (_, Some(Transport::Handle { .. })) => "UnsafeMutableRawPointer?".to_string(),
             (_, Some(Transport::Callback { .. })) => "BoltFFICallbackHandle".to_string(),
         }
     }
@@ -717,7 +717,7 @@ impl<'a> SwiftLowerer<'a> {
                                 ..
                             } => SwiftConstructor::Designated {
                                 ffi_symbol: call.symbol.as_str().to_string(),
-                                closure_return_type: "OpaquePointer?".to_string(),
+                                closure_return_type: "UnsafeMutableRawPointer?".to_string(),
                                 params: ctor
                                     .params()
                                     .into_iter()
@@ -758,7 +758,7 @@ impl<'a> SwiftLowerer<'a> {
                                 SwiftConstructor::Convenience {
                                     name: label,
                                     ffi_symbol: call.symbol.as_str().to_string(),
-                                    closure_return_type: "OpaquePointer?".to_string(),
+                                    closure_return_type: "UnsafeMutableRawPointer?".to_string(),
                                     params: std::iter::once(first).chain(rest).collect(),
                                     is_fallible: *is_fallible,
                                     is_optional: *is_optional,
@@ -2136,7 +2136,7 @@ impl<'a> SwiftLowerer<'a> {
             AbiType::Pointer(_)
             | AbiType::OwnedBuffer
             | AbiType::InlineCallbackFn { .. }
-            | AbiType::Handle(_) => "OpaquePointer".to_string(),
+            | AbiType::Handle(_) => "UnsafeMutableRawPointer".to_string(),
             AbiType::CallbackHandle => "BoltFFICallbackHandle".to_string(),
             AbiType::Struct(id) => format!("___{}", id.as_str()),
         }

@@ -1,11 +1,12 @@
 ---
 source: boltffi_bindgen/src/render/swift/templates.rs
+assertion_line: 1490
 expression: "render_class(&cls, \"boltffi\")"
 ---
 public final class Logger {
-    let handle: OpaquePointer
+    let handle: UnsafeMutableRawPointer
 
-    init(handle: OpaquePointer) {
+    init(handle: UnsafeMutableRawPointer) {
         self.handle = handle
     }
 

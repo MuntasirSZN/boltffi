@@ -5,9 +5,11 @@ pub use boltffi_ffi_rules::transport::{
 };
 use syn::{ReturnType, Type};
 
+use crate::index::class_types::ClassTypeRegistry;
 use crate::index::custom_types::CustomTypeRegistry;
 use crate::index::data_types::DataTypeRegistry;
-use crate::lowering::transport::NamedTypeTransportClassifier;
+use crate::index::type_paths::TypePathKey;
+use crate::lowering::transport::{NamedTypeTransportClassifier, StandardContainer, TypeDescriptor};
 
 use super::classify::classify_value_return_strategy;
 
@@ -15,6 +17,7 @@ use super::classify::classify_value_return_strategy;
 pub struct ResolvedReturn {
     rust_type: syn::Type,
     return_contract: ReturnContract,
+    object_handle: Option<ObjectHandleReturn>,
 }
 
 impl ResolvedReturn {
@@ -22,6 +25,19 @@ impl ResolvedReturn {
         Self {
             rust_type,
             return_contract,
+            object_handle: None,
+        }
+    }
+
+    pub fn with_object_handle(
+        rust_type: syn::Type,
+        return_contract: ReturnContract,
+        object_handle: ObjectHandleReturn,
+    ) -> Self {
+        Self {
+            rust_type,
+            return_contract,
+            object_handle: Some(object_handle),
         }
     }
 
@@ -62,6 +78,17 @@ impl ResolvedReturn {
         )
     }
 
+    pub fn is_object_handle(&self) -> bool {
+        matches!(
+            self.return_contract.value_strategy(),
+            ValueReturnStrategy::ObjectHandle
+        )
+    }
+
+    pub fn object_handle(&self) -> Option<&ObjectHandleReturn> {
+        self.object_handle.as_ref()
+    }
+
     pub fn value_return_method(
         &self,
         context: ReturnInvocationContext,
@@ -84,13 +111,63 @@ impl ResolvedReturn {
 pub struct ReturnLoweringContext<'a> {
     custom_types: &'a CustomTypeRegistry,
     data_types: &'a DataTypeRegistry,
+    class_types: &'a ClassTypeRegistry,
+    self_type: Option<&'a Type>,
+}
+
+#[derive(Clone)]
+pub struct ObjectHandleReturn {
+    pointee: Type,
+    nullable: bool,
+}
+
+impl ObjectHandleReturn {
+    fn required(pointee: Type) -> Self {
+        Self {
+            pointee,
+            nullable: false,
+        }
+    }
+
+    fn nullable(pointee: Type) -> Self {
+        Self {
+            pointee,
+            nullable: true,
+        }
+    }
+
+    pub fn pointee(&self) -> &Type {
+        &self.pointee
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.nullable
+    }
 }
 
 impl<'a> ReturnLoweringContext<'a> {
-    pub fn new(custom_types: &'a CustomTypeRegistry, data_types: &'a DataTypeRegistry) -> Self {
+    pub fn new(
+        custom_types: &'a CustomTypeRegistry,
+        data_types: &'a DataTypeRegistry,
+        class_types: &'a ClassTypeRegistry,
+    ) -> Self {
         Self {
             custom_types,
             data_types,
+            class_types,
+            self_type: None,
+        }
+    }
+
+    pub fn with_self_type<'b>(&'b self, self_type: &'b Type) -> ReturnLoweringContext<'b>
+    where
+        'a: 'b,
+    {
+        ReturnLoweringContext {
+            custom_types: self.custom_types,
+            data_types: self.data_types,
+            class_types: self.class_types,
+            self_type: Some(self_type),
         }
     }
 
@@ -106,6 +183,36 @@ impl<'a> ReturnLoweringContext<'a> {
         NamedTypeTransportClassifier::new(self.custom_types, self.data_types)
     }
 
+    pub(crate) fn object_handle_return(&self, rust_type: &Type) -> Option<ObjectHandleReturn> {
+        match TypeDescriptor::new(rust_type).standard_container() {
+            Some(StandardContainer::Option(inner_type)) => self
+                .object_handle_pointee(inner_type)
+                .map(ObjectHandleReturn::nullable),
+            _ => self
+                .object_handle_pointee(rust_type)
+                .map(ObjectHandleReturn::required),
+        }
+    }
+
+    fn object_handle_pointee(&self, rust_type: &Type) -> Option<Type> {
+        if self.is_self_type(rust_type) {
+            return self.self_type.cloned();
+        }
+
+        self.class_types
+            .contains(rust_type)
+            .then(|| rust_type.clone())
+    }
+
+    fn is_self_type(&self, rust_type: &Type) -> bool {
+        TypePathKey::from_type(rust_type).is_some_and(|type_path_key| {
+            type_path_key.is_single_segment()
+                && type_path_key
+                    .first_segment()
+                    .is_some_and(|segment| segment == "Self")
+        })
+    }
+
     pub fn lower_output(&self, output: &ReturnType) -> ResolvedReturn {
         match output {
             ReturnType::Default => ResolvedReturn::new(
@@ -117,13 +224,19 @@ impl<'a> ReturnLoweringContext<'a> {
     }
 
     pub fn lower_type(&self, rust_type: &Type) -> ResolvedReturn {
-        ResolvedReturn::new(
-            rust_type.clone(),
-            ReturnContract::new(
-                classify_value_return_strategy(rust_type, self),
-                ErrorReturnStrategy::None,
-            ),
-        )
+        let value_strategy = classify_value_return_strategy(rust_type, self);
+        let return_contract = ReturnContract::new(value_strategy, ErrorReturnStrategy::None);
+        if matches!(value_strategy, ValueReturnStrategy::ObjectHandle)
+            && let Some(object_handle) = self.object_handle_return(rust_type)
+        {
+            return ResolvedReturn::with_object_handle(
+                rust_type.clone(),
+                return_contract,
+                object_handle,
+            );
+        }
+
+        ResolvedReturn::new(rust_type.clone(), return_contract)
     }
 }
 

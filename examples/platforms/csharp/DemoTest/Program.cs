@@ -1929,6 +1929,16 @@ public static class DemoTest
             Require(holder.RemoveLast() == null, "StateHolder.RemoveLast returns null on empty");
         }
 
+        DemoCase("case:classes.unsafe_single_threaded.map_view.add_marker.should_return_single_threaded_marker_handle");
+        using (var mapView = new MapView())
+        {
+            Require(mapView.MarkerCount() == 0u, "MapView.MarkerCount starts at zero");
+            using var marker = mapView.AddMarker(new MarkerOptions(73u, "trailhead"));
+            Require(marker.Id() == 73u, "MapView.AddMarker returns Marker with id");
+            Require(marker.Title() == "trailhead", "MapView.AddMarker returns Marker with title");
+            Require(mapView.MarkerCount() == 1u, "MapView.MarkerCount increments after AddMarker");
+        }
+
         // MixedRecordService drives an instance method that takes a
         // wire-encoded record (echo_record) and one that takes the
         // record's parts as separate args (store_record_parts). Both

@@ -80,6 +80,15 @@ class DemoClassesAndStreamsTest {
 
     @Test
     fun asyncWorkerSharedCounterAndStateHolderExerciseSyncAndAsyncMethods() = runBlocking {
+        demoCase("case:classes.unsafe_single_threaded.map_view.add_marker.should_return_single_threaded_marker_handle")
+        MapView().use { mapView ->
+            mapView.addMarker(MarkerOptions(7u, "harbor")).use { marker ->
+                assertEquals(7u, marker.id())
+                assertEquals("harbor", marker.title())
+            }
+            assertEquals(1u, mapView.markerCount())
+        }
+
         AsyncWorker("test").use { worker ->
             assertEquals("test", worker.getPrefix())
             assertEquals("test: data", worker.process("data"))
