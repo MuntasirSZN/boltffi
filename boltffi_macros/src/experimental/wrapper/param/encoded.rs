@@ -18,7 +18,7 @@ pub struct Renderer;
 pub struct Input<'context, 'binding, S: Target> {
     codec: &'binding WritePlan,
     shape: S::BufferShape,
-    target: rust_api::DecodeTarget<'binding>,
+    target: rust_api::DecodeTarget,
     ident: Ident,
     failure: TokenStream,
     expansion: &'context Expansion<'binding, S>,
@@ -28,7 +28,7 @@ impl<'context, 'binding, S: Target> Input<'context, 'binding, S> {
     pub fn new(
         codec: &'binding WritePlan,
         shape: S::BufferShape,
-        target: rust_api::DecodeTarget<'binding>,
+        target: rust_api::DecodeTarget,
         ident: Ident,
         failure: TokenStream,
         expansion: &'context Expansion<'binding, S>,
@@ -78,7 +78,7 @@ impl<'context, 'binding> Render<Wasm32, Input<'context, 'binding, Wasm32>> for R
 
 struct Slice<'context, 'binding, S: Target> {
     codec: &'binding WritePlan,
-    target: rust_api::DecodeTarget<'binding>,
+    target: rust_api::DecodeTarget,
     ident: Ident,
     pointer: Ident,
     length: Ident,

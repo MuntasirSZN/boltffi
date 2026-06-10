@@ -2,13 +2,17 @@ use boltffi_binding::{IncomingParam, IntoRust, ParamDecl, ParamPlan};
 use proc_macro2::TokenStream;
 
 use crate::experimental::{
-    error::Error, expansion::Expansion, rust_api, target::Target, wrapper::Render,
+    error::Error,
+    expansion::Expansion,
+    rust_api,
+    target::{DirectRecordCrossing, Target},
+    wrapper::Render,
 };
 
 pub mod closure;
 pub mod direct;
 mod direct_vec;
-mod encoded;
+pub mod encoded;
 mod handle;
 mod scalar_option;
 
@@ -17,7 +21,7 @@ pub struct Renderer;
 pub fn requires_failure_return<S: Target>(param: &ParamDecl<S, IntoRust>) -> bool {
     match param.payload() {
         IncomingParam::Value(ParamPlan::Direct { ty, .. }) => {
-            S::direct_record_params_use_pointers()
+            matches!(S::DIRECT_RECORD_PARAMS, DirectRecordCrossing::Pointer)
                 && matches!(ty, boltffi_binding::TypeRef::Record(_))
         }
         IncomingParam::Value(ParamPlan::Encoded { .. })

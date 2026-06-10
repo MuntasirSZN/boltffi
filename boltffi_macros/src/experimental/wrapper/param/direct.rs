@@ -48,7 +48,7 @@ pub struct RecordInput {
 }
 
 impl RecordInput {
-    fn new(receive: Receive, rust_type: Type, ident: Ident, failure: TokenStream) -> Self {
+    pub fn new(receive: Receive, rust_type: Type, ident: Ident, failure: TokenStream) -> Self {
         Self {
             receive,
             rust_type,

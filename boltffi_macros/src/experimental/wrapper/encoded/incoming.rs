@@ -13,7 +13,7 @@ pub struct Value<'context, 'a, S: Target> {
 }
 
 pub struct Input<'a> {
-    target: &'a rust_api::DecodeTarget<'a>,
+    target: &'a rust_api::DecodeTarget,
     binding: &'a Ident,
     pointer: &'a Ident,
     length: &'a Ident,
@@ -98,7 +98,7 @@ impl<'a> Bytes<'a> {
 
 impl<'a> Input<'a> {
     pub const fn new(
-        target: &'a rust_api::DecodeTarget<'a>,
+        target: &'a rust_api::DecodeTarget,
         binding: &'a Ident,
         pointer: &'a Ident,
         length: &'a Ident,

@@ -143,19 +143,21 @@ where
 
     fn render(self, input: Input<'context, 'a, S>) -> Result<Self::Output, Error> {
         let RustInvocation {
-            function,
+            owner,
+            span,
+            call,
             conversions,
             writebacks,
-            arguments,
+            ..
         } = input.invocation;
-        let value = names::Wrapper::new(function.span()).closure();
+        let value = names::Wrapper::new(span).closure();
         let writer = <Write as Render<S, _>>::render(
             Write,
             WriteInput::returned(
                 input.closure,
                 input.source,
                 value.clone(),
-                function.clone(),
+                owner,
                 input.expansion,
             ),
         )?;
@@ -167,7 +169,7 @@ where
             return_type: quote! { -> ::boltffi::__private::FfiStatus },
             body: quote! {
                 #(#conversions)*
-                let #value = #function(#(#arguments),*);
+                let #value = #call;
                 #(#writebacks)*
                 #body
                 ::boltffi::__private::FfiStatus::OK
@@ -222,8 +224,9 @@ impl<'context, 'a> NativeClosure<'context, 'a> {
         let return_ffi_parameter_types = return_tokens.ffi_parameter_types();
         let storage = format_ident!("__BoltffiClosureReturn{}", self.input.value);
         let channel = self.input.channel.suffix();
-        let call = format_ident!("__boltffi_{}_{}_call", self.input.owner, channel);
-        let release = format_ident!("__boltffi_{}_{}_release", self.input.owner, channel);
+        let registration = names::ReturnedClosureRegistration::new(&self.input.owner, channel);
+        let call = registration.call();
+        let release = registration.release();
         let locals = names::Wrapper::new(self.input.span);
         let output = locals.return_out();
         let context = locals.closure_context();

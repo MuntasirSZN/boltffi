@@ -62,7 +62,7 @@ impl<'a> Parameter<'a> {
             .map(|target| target.parameter().clone())
     }
 
-    pub fn decode_target(self, receive: Receive) -> Result<DecodeTarget<'a>, Error> {
+    pub fn decode_target(self, receive: Receive) -> Result<DecodeTarget, Error> {
         DecodeTarget::new(self.definition.passing, receive, &self.definition.type_expr)
     }
 

@@ -1,5 +1,5 @@
 use boltffi_binding::{CodecNode, ErrorDecl, OutOfRust, ReturnDecl, ReturnPlan, TypeRef};
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Type;
 
@@ -21,65 +21,39 @@ pub mod fallible;
 pub mod handle;
 pub mod scalar_option;
 
-/// The original Rust function invocation prepared for return rendering.
-///
-/// Return rendering owns this value because the return plan decides how the
-/// result of the Rust function call leaves the exported wrapper. The same
-/// invocation can be returned directly, packed through `Passable`, or bound to
-/// a temporary before producing a buffer value.
-///
-/// # Example
-///
-/// For this Rust function:
-///
-/// ```rust
-/// pub fn greet(name: String) -> String {
-///     format!("hello {name}")
-/// }
-/// ```
-///
-/// after parameter rendering, the invocation payload is:
-///
-/// ```text
-/// function:
-///     greet
-///
-/// conversions:
-///     let name: String = unsafe {
-///         <String as ::boltffi::__private::Passable>::unpack(name)
-///     };
-///
-/// arguments:
-///     name
-/// ```
-///
-/// An encoded return plan can render that payload as:
-///
-/// ```text
-/// let __boltffi_result: String = greet(name);
-/// ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result)
-/// ```
 pub struct RustInvocation {
-    function: syn::Ident,
+    owner: syn::Ident,
+    span: Span,
+    call: TokenStream,
     conversions: Vec<TokenStream>,
     writebacks: Vec<TokenStream>,
-    arguments: Vec<TokenStream>,
 }
 
 impl RustInvocation {
-    /// Creates an invocation from the original function name and rendered parameter fragments.
     pub fn new(
+        owner: syn::Ident,
+        call: TokenStream,
+        conversions: Vec<TokenStream>,
+        writebacks: Vec<TokenStream>,
+    ) -> Self {
+        let span = owner.span();
+        Self {
+            owner,
+            span,
+            call,
+            conversions,
+            writebacks,
+        }
+    }
+
+    pub fn function(
         function: syn::Ident,
         conversions: Vec<TokenStream>,
         writebacks: Vec<TokenStream>,
         arguments: Vec<TokenStream>,
     ) -> Self {
-        Self {
-            function,
-            conversions,
-            writebacks,
-            arguments,
-        }
+        let call = quote! { #function(#(#arguments),*) };
+        Self::new(function, call, conversions, writebacks)
     }
 }
 
@@ -200,12 +174,13 @@ where
         }
 
         let RustInvocation {
-            function,
+            span,
+            call,
             conversions,
             writebacks,
-            arguments,
+            ..
         } = input.invocation;
-        let locals = names::Wrapper::new(function.span());
+        let locals = names::Wrapper::new(span);
         match input.returns.plan() {
             ReturnPlan::Void => Ok(Tokens {
                 items: Vec::new(),
@@ -213,7 +188,7 @@ where
                 return_type: quote! { -> ::boltffi::__private::FfiStatus },
                 body: quote! {
                     #(#conversions)*
-                    #function(#(#arguments),*);
+                    #call;
                     #(#writebacks)*
                     ::boltffi::__private::FfiStatus::OK
                 },
@@ -229,13 +204,13 @@ where
                 let body = if writebacks.is_empty() {
                     quote! {
                         #(#conversions)*
-                        #function(#(#arguments),*)
+                        #call
                     }
                 } else {
                     let result = locals.result();
                     quote! {
                         #(#conversions)*
-                        let #result = #function(#(#arguments),*);
+                        let #result = #call;
                         #(#writebacks)*
                         #result
                     }
@@ -254,13 +229,13 @@ where
                 let body = if writebacks.is_empty() {
                     quote! {
                         #(#conversions)*
-                        ::boltffi::__private::Passable::pack(#function(#(#arguments),*))
+                        ::boltffi::__private::Passable::pack(#call)
                     }
                 } else {
                     let result = locals.result();
                     quote! {
                         #(#conversions)*
-                        let #result = #function(#(#arguments),*);
+                        let #result = #call;
                         #(#writebacks)*
                         ::boltffi::__private::Passable::pack(#result)
                     }
@@ -289,7 +264,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #function(#(#arguments),*);
+                        let #result: #rust_type = #call;
                         #(#writebacks)*
                         #value
                     },
@@ -324,7 +299,7 @@ where
                     return_type: quote! { -> #return_type },
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #function(#(#arguments),*);
+                        let #result: #rust_type = #call;
                         #(#writebacks)*
                         #value
                     },
@@ -348,7 +323,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #function(#(#arguments),*);
+                        let #result: #rust_type = #call;
                         #(#writebacks)*
                         #body
                     },
@@ -369,7 +344,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result = #function(#(#arguments),*);
+                        let #result = #call;
                         #(#writebacks)*
                         #body
                     },

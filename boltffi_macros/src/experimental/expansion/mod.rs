@@ -1,10 +1,10 @@
 mod index;
 mod pair;
 
-use boltffi_ast::{FunctionDef, TraitDef};
+use boltffi_ast::{FunctionDef, RecordDef, TraitDef};
 use boltffi_binding::{
     CallbackDecl, CallbackId, CustomTypeDecl, CustomTypeId, EncodedRecordDecl, FunctionDecl,
-    LoweredBindings, RecordId, Surface,
+    LoweredBindings, RecordDecl, RecordId, Surface,
 };
 
 use self::index::ExpansionIndex;
@@ -65,6 +65,20 @@ impl<'a, S: Surface> Expansion<'a, S> {
         self.index.encoded_record(self.lowered, id)
     }
 
+    /// Returns the lowered record declaration paired with the scanned source record.
+    pub fn record(
+        &self,
+        source: &'a RecordDef,
+    ) -> Result<DeclarationPair<'a, RecordDef, RecordDecl<S>>, Error> {
+        match self
+            .index
+            .paired(self.lowered, SourceDeclaration::Record(source))?
+        {
+            PairedDeclaration::Record(pair) => Ok(pair),
+            _ => Err(Error::WrongDeclaration),
+        }
+    }
+
     /// Returns the lowered function declaration paired with the scanned source function.
     pub fn function(
         &self,
@@ -86,8 +100,8 @@ mod tests {
         CanonicalName, ClassDef, ClassId, CustomRemoteType, CustomTypeConverter,
         CustomTypeConverters, CustomTypeDef, CustomTypeId, ExecutionKind, FieldDef, FnSig, FnTrait,
         FnTraitKind, FunctionDef, FunctionId, MethodDef, MethodId, PackageInfo, ParameterDef,
-        ParameterPassing, Path, Primitive, Receiver, RecordDef, RecordId, ReturnDef, Source,
-        SourceContract, SourceName, TraitDef, TraitId, TypeExpr, Visibility,
+        ParameterPassing, Path, Primitive, Receiver, RecordDef, RecordId, ReprAttr, ReprItem,
+        ReturnDef, Source, SourceContract, SourceName, TraitDef, TraitId, TypeExpr, Visibility,
     };
     use boltffi_binding::{Native, Wasm32, lower_with_declarations};
     use proc_macro2::TokenStream;
@@ -144,6 +158,39 @@ mod tests {
         source: &'a TraitDef,
     ) -> Result<TokenStream, Error> {
         wrapper::callback::Renderer::new(expansion.callback_trait(source)?, expansion).render()
+    }
+
+    fn expand_record<'a, S>(
+        expansion: &Expansion<'a, S>,
+        source: &'a RecordDef,
+    ) -> Result<TokenStream, Error>
+    where
+        S: Target,
+        for<'context> wrapper::arguments::SyncRenderer: wrapper::Render<
+                S,
+                wrapper::arguments::Input<'context, 'a, S>,
+                Output = wrapper::arguments::Tokens,
+            >,
+        for<'context> wrapper::returns::Failure: wrapper::Render<
+                S,
+                wrapper::returns::FailureInput<'context, 'a, S>,
+                Output = TokenStream,
+            >,
+        for<'context> wrapper::returns::Renderer: wrapper::Render<
+                S,
+                wrapper::returns::Input<'context, 'a, S>,
+                Output = wrapper::returns::Tokens,
+            >,
+        for<'context> wrapper::async_call::Renderer:
+            wrapper::Render<S, wrapper::async_call::Input<'context, 'a, S>, Output = TokenStream>,
+        wrapper::param::direct::Record: wrapper::Render<S, wrapper::param::direct::RecordInput, Output = wrapper::param::Tokens>,
+        for<'context> wrapper::param::encoded::Renderer: wrapper::Render<
+                S,
+                wrapper::param::encoded::Input<'context, 'a, S>,
+                Output = wrapper::param::Tokens,
+            >,
+    {
+        wrapper::record::Renderer::new(expansion.record(source)?, expansion).render()
     }
 
     fn source_contract() -> SourceContract {
@@ -394,11 +441,62 @@ mod tests {
         record
     }
 
+    fn direct_point_record() -> RecordDef {
+        let mut record = point_record();
+        record.repr = ReprAttr::new(vec![ReprItem::C]);
+        record
+    }
+
+    fn record_method(
+        name: &str,
+        receiver: Receiver,
+        parameters: Vec<ParameterDef>,
+        returns: ReturnDef,
+    ) -> MethodDef {
+        let mut method = MethodDef::new(MethodId::new(name), CanonicalName::single(name), receiver);
+        method.parameters = parameters;
+        method.returns = returns;
+        method
+    }
+
+    fn direct_point_record_with_method(method: MethodDef) -> RecordDef {
+        let mut record = direct_point_record();
+        record.methods.push(method);
+        record
+    }
+
+    fn profile_record_with_method(method: MethodDef) -> RecordDef {
+        let mut record = profile_record();
+        record.methods.push(method);
+        record
+    }
+
     fn profile_record() -> RecordDef {
         let mut record = RecordDef::new("demo::Profile".into(), CanonicalName::single("Profile"));
         record.fields = vec![FieldDef::new(
             CanonicalName::single("name"),
             TypeExpr::String,
+        )];
+        record
+    }
+
+    fn custom_profile_record() -> RecordDef {
+        let mut record = RecordDef::new("demo::Profile".into(), CanonicalName::single("Profile"));
+        record.fields = vec![FieldDef::new(
+            CanonicalName::single("when"),
+            custom_timestamp(),
+        )];
+        record
+    }
+
+    fn tuple_record() -> RecordDef {
+        let mut record = RecordDef::new("demo::Pair".into(), CanonicalName::single("Pair"));
+        record.fields = vec![FieldDef::new(
+            CanonicalName::single("values"),
+            TypeExpr::tuple(vec![
+                TypeExpr::Primitive(Primitive::I32),
+                TypeExpr::Primitive(Primitive::I32),
+            ]),
         )];
         record
     }
@@ -1504,6 +1602,271 @@ mod tests {
             }
             .to_string()
         );
+    }
+
+    #[test]
+    fn native_direct_record_expansion_emits_raw_memory_traits() {
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(direct_point_record());
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        syn::parse2::<syn::File>(quote! {
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Point {
+                pub x: f64,
+            }
+            #tokens
+        })
+        .expect("direct record expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("unsafe impl :: boltffi :: __private :: Passable for Point"));
+        assert!(
+            rendered.contains("unsafe impl :: boltffi :: __private :: wire :: Blittable for Point")
+        );
+        assert!(rendered.contains("impl :: boltffi :: __private :: VecTransport for Point"));
+        assert!(rendered.contains(
+            "const _ : [() ; 8usize] = [() ; :: core :: mem :: size_of :: < Point > ()] ;"
+        ));
+        assert!(rendered.contains(
+            "const _ : [() ; 8usize] = [() ; :: core :: mem :: align_of :: < Point > ()] ;"
+        ));
+    }
+
+    #[test]
+    fn native_encoded_record_expansion_emits_wire_traits() {
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(profile_record());
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Profile {
+                pub name: String,
+            }
+            #tokens
+        })
+        .expect("encoded record expansion parses");
+        let rendered = tokens.to_string();
+        assert!(
+            rendered.contains("unsafe impl :: boltffi :: __private :: WirePassable for Profile")
+        );
+        assert!(
+            rendered.contains("impl :: boltffi :: __private :: wire :: WireEncode for Profile")
+        );
+        assert!(
+            rendered.contains("impl :: boltffi :: __private :: wire :: WireDecode for Profile")
+        );
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: WireEncode :: wire_size (& self . name)"
+        ));
+        assert!(rendered.contains("let name : String = __boltffi_name_decoded ;"));
+    }
+
+    #[test]
+    fn native_encoded_record_expansion_converts_custom_fields_inside_wire_traits() {
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.records.push(custom_profile_record());
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Timestamp(i64);
+
+            fn timestamp_into_ffi(value: &Timestamp) -> i64 {
+                value.0
+            }
+
+            fn timestamp_try_from_ffi(value: i64) -> Result<Timestamp, ()> {
+                Ok(Timestamp(value))
+            }
+
+            pub struct Profile {
+                pub when: Timestamp,
+            }
+
+            #tokens
+        })
+        .expect("custom encoded record expansion parses");
+        let rendered = tokens.to_string();
+        assert!(
+            rendered.contains("let __boltffi_when_wire = (timestamp_into_ffi) (& self . when) ;")
+        );
+        assert!(
+            rendered.contains(
+                "< i64 as :: boltffi :: __private :: wire :: WireDecode > :: decode_from"
+            )
+        );
+        assert!(rendered.contains("match (timestamp_try_from_ffi) (__boltffi_when_decoded)"));
+        assert!(
+            !rendered.contains("< Timestamp as :: boltffi :: __private :: wire :: WireDecode >")
+        );
+    }
+
+    #[test]
+    fn native_direct_record_expansion_emits_initializer_wrapper() {
+        let initializer = record_method(
+            "new",
+            Receiver::None,
+            vec![parameter("x", TypeExpr::Primitive(Primitive::F64))],
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source
+            .records
+            .push(direct_point_record_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        syn::parse2::<syn::File>(quote! {
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Point {
+                pub x: f64,
+            }
+
+            impl Point {
+                pub fn new(x: f64) -> Self {
+                    Self { x }
+                }
+            }
+
+            #tokens
+        })
+        .expect("direct record initializer expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_record_demo_point_new"));
+        assert!(rendered.contains("Point :: new (x)"));
+    }
+
+    #[test]
+    fn native_direct_record_expansion_emits_instance_method_wrapper() {
+        let method = record_method(
+            "norm",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(direct_point_record_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_record_demo_point_norm"));
+        assert!(rendered.contains(
+            "__boltffi_receiver : < Point as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(rendered.contains(
+            "let __boltffi_receiver : Point = unsafe { < Point as :: boltffi :: __private :: Passable > :: unpack (__boltffi_receiver) } ;"
+        ));
+        assert!(rendered.contains("__boltffi_receiver . norm ()"));
+    }
+
+    #[test]
+    fn wasm_direct_record_expansion_writes_mutable_receiver_back() {
+        let method = record_method(
+            "shift",
+            Receiver::Mutable,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(direct_point_record_with_method(method));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_record_demo_point_shift"));
+        assert!(rendered.contains("__boltffi_receiver : * mut u8"));
+        assert!(rendered.contains("let __boltffi_receiver_out = __boltffi_receiver ;"));
+        assert!(rendered.contains("__boltffi_receiver . shift ()"));
+        assert!(rendered.contains(
+            ":: core :: ptr :: write_unaligned (__boltffi_receiver_out as * mut < Point as :: boltffi :: __private :: Passable > :: In"
+        ));
+    }
+
+    #[test]
+    fn native_encoded_record_expansion_emits_static_initializer_wrapper() {
+        let initializer = record_method(
+            "from_name",
+            Receiver::None,
+            vec![parameter("name", TypeExpr::String)],
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(profile_record_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_record_demo_profile_from_name"));
+        assert!(rendered.contains("Profile :: from_name (name)"));
+        assert!(rendered.contains(":: boltffi :: __private :: FfiBuf :: wire_encode"));
+    }
+
+    #[test]
+    fn native_encoded_record_expansion_emits_instance_method_wrapper() {
+        let method = record_method(
+            "display_name",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::String),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(profile_record_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_record_demo_profile_display_name"));
+        assert!(rendered.contains("__boltffi_receiver_ptr : * const u8"));
+        assert!(rendered.contains("__boltffi_receiver_len : usize"));
+        assert!(rendered.contains("let __boltffi_receiver_storage : Profile ="));
+        assert!(rendered.contains("let __boltffi_receiver = & __boltffi_receiver_storage ;"));
+        assert!(rendered.contains("__boltffi_receiver . display_name ()"));
+    }
+
+    #[test]
+    fn wasm_encoded_record_expansion_emits_instance_method_wrapper() {
+        let method = record_method(
+            "display_name",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::String),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(profile_record_with_method(method));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_method_record_demo_profile_display_name"));
+        assert!(rendered.contains("__boltffi_receiver_ptr : * const u8"));
+        assert!(rendered.contains("__boltffi_receiver_len : usize"));
+        assert!(rendered.contains("__boltffi_receiver . display_name ()"));
+        assert!(rendered.contains("into_packed"));
     }
 
     #[test]

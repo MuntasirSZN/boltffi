@@ -1,7 +1,7 @@
 use boltffi_ast::{FunctionDef, Visibility};
 use boltffi_binding::{ExecutionDecl, FunctionDecl};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{Ident, Path, parse_str};
 
 use crate::experimental::{
@@ -11,6 +11,8 @@ use crate::experimental::{
     target::Target,
     wrapper::{self, Render},
 };
+
+use super::export;
 
 /// A function wrapper renderer for one target surface.
 ///
@@ -64,72 +66,16 @@ where
             );
         }
 
-        let cfg = S::cfg_attr();
-        let failure = match function
-            .callable()
-            .params()
-            .iter()
-            .any(wrapper::param::requires_failure_return::<S>)
-        {
-            true => <wrapper::returns::Failure as Render<S, _>>::render(
-                wrapper::returns::Failure,
-                wrapper::returns::FailureInput::new(
-                    function.callable().returns(),
-                    function.callable().error(),
-                    self.expansion,
-                ),
-            )?,
-            false => TokenStream::new(),
-        };
-        let wrapper_arguments = <wrapper::arguments::SyncRenderer as Render<S, _>>::render(
-            wrapper::arguments::SyncRenderer,
-            wrapper::arguments::Input::new(
-                function.callable(),
-                source_signature,
-                failure,
-                self.expansion,
-            ),
-        )?;
-        let export_ident = format_ident!("{}", function.symbol().name().as_str());
-        let argument_ffi_parameters = wrapper_arguments.ffi_parameters();
-        let conversions = wrapper_arguments.conversions();
-        let writebacks = wrapper_arguments.writebacks();
-        let rust_arguments = wrapper_arguments.rust_arguments();
-        let return_tokens = <wrapper::returns::Renderer as Render<S, _>>::render(
-            wrapper::returns::Renderer,
-            wrapper::returns::Input::new(
-                function.callable().returns(),
-                function.callable().error(),
-                source_signature.returns(),
-                source_signature.returns().written_type()?,
-                wrapper::returns::RustInvocation::new(
-                    function_ident,
-                    conversions.to_vec(),
-                    writebacks.to_vec(),
-                    rust_arguments.to_vec(),
-                ),
-                self.expansion,
-            ),
-        )?;
-        let ffi_parameters = argument_ffi_parameters
-            .iter()
-            .chain(return_tokens.ffi_parameters().iter())
-            .collect::<Vec<_>>();
-        let return_type = return_tokens.return_type();
-        let body = return_tokens.body();
-        let argument_items = wrapper_arguments.items();
-        let return_items = return_tokens.items();
-        let safety = (!ffi_parameters.is_empty()).then(|| quote! { unsafe });
-
-        Ok(quote! {
-            #(#argument_items)*
-            #(#return_items)*
-            #cfg
-            #[unsafe(no_mangle)]
-            #visibility #safety extern "C" fn #export_ident(#(#ffi_parameters),*) #return_type {
-                #body
-            }
-        })
+        export::Renderer::new(
+            function.symbol(),
+            function.callable(),
+            source_signature,
+            export::RustCall::function(function_ident),
+            export::ReceiverTokens::none(),
+            visibility,
+            self.expansion,
+        )
+        .render()
     }
 
     fn function_ident(source: &FunctionDef) -> Result<Ident, Error> {

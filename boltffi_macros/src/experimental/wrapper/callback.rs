@@ -1266,7 +1266,7 @@ impl<'context, 'a, S: CallbackMethodSurface> MethodParameter<'context, 'a, S> {
             (ParameterPassing::Value, _) => {
                 let rust_type = rust_api::TypeTokens::new(&self.source.type_expr)?.into_type();
                 let ffi_type = quote! { <#rust_type as ::boltffi::__private::Passable>::Out };
-                let packed = format_ident!("__boltffi_{}_packed", ident.as_ident());
+                let packed = wrapper::names::Parameter::new(ident.as_ident()).packed();
                 Ok(ForeignMethodParameterTokens::new(
                     ffi_type,
                     vec![quote! {
@@ -1295,9 +1295,10 @@ impl<'context, 'a, S: CallbackMethodSurface> MethodParameter<'context, 'a, S> {
             }
         }
         let ident = RustIdent::new(self.source.name.spelling())?;
-        let buffer = format_ident!("__boltffi_{}_buffer", ident.as_ident());
-        let pointer = format_ident!("__boltffi_{}_ptr", ident.as_ident());
-        let length = format_ident!("__boltffi_{}_len", ident.as_ident());
+        let parameter_names = wrapper::names::Parameter::new(ident.as_ident());
+        let buffer = parameter_names.buffer();
+        let pointer = parameter_names.pointer();
+        let length = parameter_names.length();
         let foreign_value = wrapper::encoded::outgoing::Value::new(codec.root(), self.expansion)
             .buffer(quote! { #ident })?;
         match S::callback_encoded_parameter(shape)? {
@@ -1375,9 +1376,10 @@ impl<'a> NativeOutgoingClosure<'a> {
         let source = rust_api::Closure::new(&self.source.type_expr, self.closure.presence())?;
         let closure = RustOwnedClosure::new(source, self.closure.form())?;
         let ident = RustIdent::new(self.source.name.spelling())?.into_ident();
-        let call = format_ident!("__boltffi_{}_call", ident);
-        let context = format_ident!("__boltffi_{}_context", ident);
-        let release = format_ident!("__boltffi_{}_release", ident);
+        let registration_names = wrapper::names::NativeClosureRegistration::new(&ident);
+        let call = registration_names.call();
+        let context = registration_names.context();
+        let release = registration_names.release();
         let invoke = wrapper::closure::Invoke::<Native>::new(
             self.closure.invoke(),
             source.signature(),
@@ -1468,7 +1470,7 @@ impl<'a> WasmOutgoingClosure<'a> {
         let source = rust_api::Closure::new(&self.source.type_expr, self.closure.presence())?;
         let closure = RustOwnedClosure::new(source, self.closure.form())?;
         let ident = RustIdent::new(self.source.name.spelling())?.into_ident();
-        let handle = format_ident!("__boltffi_{}_handle", ident);
+        let handle = wrapper::names::Parameter::new(&ident).handle();
         let registration = self.closure.registration().shape();
         let call = RustIdent::new(registration.call().name().as_str())?.into_ident();
         let release = RustIdent::new(registration.free().name().as_str())?.into_ident();
@@ -1717,7 +1719,7 @@ impl MethodParameters {
             .iter()
             .enumerate()
             .map(|(index, parameter)| {
-                let ident = format_ident!("__boltffi_arg{index}");
+                let ident = wrapper::names::ClosureArgument::new(index).value();
                 quote! { #ident: #parameter }
             })
             .collect()
@@ -2731,12 +2733,8 @@ where
                 carrier,
                 presence,
             } => {
-                let value = self.local_handle_value(
-                    target,
-                    *carrier,
-                    *presence,
-                    syn::Ident::new("__boltffi_success", Span::call_site()),
-                )?;
+                let success = wrapper::names::Wrapper::new(Span::call_site()).success();
+                let value = self.local_handle_value(target, *carrier, *presence, success)?;
                 Ok(LocalMethodBody::new(quote! {
                     if !__boltffi_success_out.is_null() {
                         unsafe {
@@ -2751,7 +2749,7 @@ where
                     wrapper::returns::closure::WriteInput::success(
                         closure,
                         self.source.fallible()?.ok_closure(closure.presence())?,
-                        syn::Ident::new("__boltffi_success", Span::call_site()),
+                        wrapper::names::Wrapper::new(Span::call_site()).success(),
                         owner,
                         self.expansion,
                     ),

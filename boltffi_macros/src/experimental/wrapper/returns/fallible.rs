@@ -147,7 +147,7 @@ impl<'context, 'a, S: Target> EncodedError<'context, 'a, S> {
                 Output = handle::ValueTokens,
             >,
     {
-        let locals = names::Wrapper::new(self.invocation.function.span());
+        let locals = names::Wrapper::new(self.invocation.span);
         let error_ident = locals.error();
         let error = <encoded::Renderer as Render<S, _>>::render(
             encoded::Renderer,
@@ -170,25 +170,26 @@ impl<'context, 'a, S: Target> EncodedError<'context, 'a, S> {
             SuccessInput::new(
                 self.returns,
                 self.source,
-                self.invocation.function.clone(),
+                self.invocation.owner.clone(),
                 self.expansion,
             ),
         )?;
         let (success_items, success_ffi_parameters, success_pattern, success_body) =
             success.into_parts();
         let RustInvocation {
-            function,
+            span,
+            call,
             conversions,
             writebacks,
-            arguments,
+            ..
         } = self.invocation;
-        let result = names::Wrapper::new(function.span()).result();
+        let result = names::Wrapper::new(span).result();
         let result_value = if writebacks.is_empty() {
-            quote! { #function(#(#arguments),*) }
+            quote! { #call }
         } else {
             quote! {
                 {
-                    let #result = #function(#(#arguments),*);
+                    let #result = #call;
                     #(#writebacks)*
                     #result
                 }
