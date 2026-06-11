@@ -4,7 +4,7 @@ use syn::{Item, ItemEnum, ItemStruct, Type};
 
 use crate::data::analysis::{EnumDataShape, StructDataShape};
 use crate::index::type_paths::TypePathKey;
-use crate::index::{CrateIndex, SourceModule};
+use crate::index::{CrateIndex, PathResolver, SourceModule};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataTypeCategory {
@@ -23,6 +23,7 @@ impl DataTypeCategory {
 pub struct DataTypeRegistry {
     categories_by_path: HashMap<Vec<String>, DataTypeCategory>,
     unique_name_categories: HashMap<String, DataTypeCategory>,
+    path_resolver: PathResolver,
 }
 
 impl DataTypeRegistry {
@@ -55,7 +56,7 @@ impl DataTypeRegistry {
     }
 
     pub fn category_for(&self, ty: &Type) -> Option<DataTypeCategory> {
-        let type_path_key = TypePathKey::from_type(ty)?;
+        let type_path_key = self.type_path_key(ty)?;
         if type_path_key.is_single_segment() {
             return type_path_key
                 .first_segment()
@@ -78,16 +79,43 @@ impl DataTypeRegistry {
         let first = matches.next()?;
         matches.all(|next| next == first).then_some(first)
     }
+
+    fn type_path_key(&self, ty: &Type) -> Option<TypePathKey> {
+        match ty {
+            Type::Path(type_path) if type_path.qself.is_none() => {
+                let resolved_path = self.path_resolver.resolve(&type_path.path).into_path();
+                Some(TypePathKey::from_path(&resolved_path))
+            }
+            Type::Group(group) => self.type_path_key(group.elem.as_ref()),
+            Type::Paren(paren) => self.type_path_key(paren.elem.as_ref()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 impl DataTypeRegistry {
     pub(crate) fn with_entries(entries: &[(&str, DataTypeCategory)]) -> Self {
         let mut registry = DataTypeRegistry::default();
-        for (name, category) in entries {
-            registry.insert(vec![name.to_string()], *category);
-        }
+        entries
+            .iter()
+            .map(|(path, category)| {
+                (
+                    path.split("::").map(str::to_string).collect::<Vec<_>>(),
+                    *category,
+                )
+            })
+            .for_each(|(segments, category)| registry.insert(segments, category));
         registry.finalize_unique_names();
+        registry
+    }
+
+    pub(crate) fn with_entries_and_use_aliases(
+        entries: &[(&str, DataTypeCategory)],
+        aliases: &[(&str, &str)],
+    ) -> Self {
+        let mut registry = Self::with_entries(entries);
+        registry.path_resolver = PathResolver::with_use_aliases(aliases);
         registry
     }
 }
@@ -98,8 +126,12 @@ pub fn registry_for_current_crate() -> syn::Result<DataTypeRegistry> {
 
 pub(super) fn build_data_type_registry(
     source_modules: &[SourceModule],
+    path_resolver: PathResolver,
 ) -> syn::Result<DataTypeRegistry> {
-    let mut registry = DataTypeRegistry::default();
+    let mut registry = DataTypeRegistry {
+        path_resolver,
+        ..DataTypeRegistry::default()
+    };
     collect_root_types(source_modules, &mut registry)?;
 
     registry.finalize_unique_names();

@@ -382,12 +382,13 @@ pub fn transform_method_params_async(
 
 #[cfg(test)]
 mod tests {
-    use super::AsyncParamLowerer;
+    use super::{AsyncParamLowerer, transform_method_params, transform_params};
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::class_types::ClassTypeRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
-    use crate::index::data_types::DataTypeRegistry;
+    use crate::index::data_types::{DataTypeCategory, DataTypeRegistry};
     use crate::lowering::returns::model::ReturnLoweringContext;
+    use quote::quote;
     use syn::parse_quote;
 
     fn async_param_lowerer() -> AsyncParamLowerer<'static> {
@@ -402,6 +403,93 @@ mod tests {
         let callback_registry = Box::leak(Box::new(CallbackTraitRegistry::default()));
         let on_wire_record_error = Box::leak(Box::new(proc_macro2::TokenStream::new()));
         AsyncParamLowerer::new(return_lowering, callback_registry, on_wire_record_error)
+    }
+
+    fn return_lowering(data_types: DataTypeRegistry) -> &'static ReturnLoweringContext<'static> {
+        let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(data_types));
+        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
+        Box::leak(Box::new(ReturnLoweringContext::new(
+            custom_types,
+            data_types,
+            class_types,
+        )))
+    }
+
+    fn callback_registry() -> &'static CallbackTraitRegistry {
+        Box::leak(Box::new(CallbackTraitRegistry::default()))
+    }
+
+    #[test]
+    fn scalar_enum_param_uses_passable_input_for_short_module_path() {
+        let function: syn::ItemFn = parse_quote! {
+            fn demo(provider: parser::RouteProvider) -> i32 {
+                0
+            }
+        };
+        let data_types = DataTypeRegistry::with_entries_and_use_aliases(
+            &[("core::parser::RouteProvider", DataTypeCategory::Scalar)],
+            &[("parser", "crate::core::parser")],
+        );
+        let params = transform_params(
+            &function.sig.inputs,
+            return_lowering(data_types),
+            callback_registry(),
+            &quote! { return ::core::default::Default::default(); },
+        );
+        let rendered_ffi_params = &params.ffi_params;
+        let rendered_conversions = &params.conversions;
+        let ffi_params = quote! { #(#rendered_ffi_params),* }.to_string();
+        let conversions = quote! { #(#rendered_conversions)* }.to_string();
+
+        assert!(ffi_params.contains(
+            "provider : < parser :: RouteProvider as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(!ffi_params.contains("__boltffi_provider_ptr"));
+        assert!(!ffi_params.contains("__boltffi_provider_len"));
+        assert!(conversions.contains(
+            "< parser :: RouteProvider as :: boltffi :: __private :: Passable > :: unpack (provider)"
+        ));
+        assert!(!conversions.contains("wire :: decode"));
+    }
+
+    #[test]
+    fn scalar_enum_method_param_and_return_use_passable_transport() {
+        let method: syn::ImplItemFn = parse_quote! {
+            pub fn horizontal_or(
+                &self,
+                fallback: parser::RouteProvider
+            ) -> parser::RouteProvider {
+                fallback
+            }
+        };
+        let data_types = DataTypeRegistry::with_entries_and_use_aliases(
+            &[("core::parser::RouteProvider", DataTypeCategory::Scalar)],
+            &[("parser", "crate::core::parser")],
+        );
+        let return_lowering = return_lowering(data_types);
+        let params = transform_method_params(
+            method.sig.inputs.iter().cloned(),
+            return_lowering,
+            callback_registry(),
+            &quote! { return ::core::default::Default::default(); },
+        );
+        let return_abi = return_lowering.lower_output(&method.sig.output);
+        let rendered_ffi_params = &params.ffi_params;
+        let rendered_conversions = &params.conversions;
+        let ffi_params = quote! { #(#rendered_ffi_params),* }.to_string();
+        let conversions = quote! { #(#rendered_conversions)* }.to_string();
+
+        assert!(return_abi.is_passable_value());
+        assert!(ffi_params.contains(
+            "fallback : < parser :: RouteProvider as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(!ffi_params.contains("__boltffi_fallback_ptr"));
+        assert!(!ffi_params.contains("__boltffi_fallback_len"));
+        assert!(conversions.contains(
+            "< parser :: RouteProvider as :: boltffi :: __private :: Passable > :: unpack (fallback)"
+        ));
+        assert!(!conversions.contains("wire :: decode"));
     }
 
     #[test]

@@ -591,6 +591,9 @@ public static class DemoTest
         // Extension methods generated on the Methods companion class.
         DemoCase("case:enums.c_style.direction.should_return_opposite_from_method");
         Require(Direction.North.Opposite() == Direction.South, "North.Opposite()");
+        DemoCase("case:enums.c_style.direction.should_return_method_parameter_value");
+        Require(Direction.North.HorizontalOr(Direction.West) == Direction.West, "North.HorizontalOr(West)");
+        Require(Direction.East.HorizontalOr(Direction.West) == Direction.East, "East.HorizontalOr(West)");
         DemoCase("case:enums.c_style.direction.should_identify_horizontal_values");
         Require(Direction.East.IsHorizontal(), "East.IsHorizontal()");
         Require(!Direction.North.IsHorizontal(), "!North.IsHorizontal()");

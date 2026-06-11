@@ -527,6 +527,9 @@ public final class DemoTest {
         assert Direction.fromDegrees(225.0) == Direction.WEST : "Direction.fromDegrees(225)";
         demoCase("case:enums.c_style.direction.should_return_opposite_from_method");
         assert Direction.NORTH.opposite() == Direction.SOUTH : "Direction.opposite";
+        demoCase("case:enums.c_style.direction.should_return_method_parameter_value");
+        assert Direction.NORTH.horizontalOr(Direction.WEST) == Direction.WEST : "Direction.horizontalOr(North, West)";
+        assert Direction.EAST.horizontalOr(Direction.WEST) == Direction.EAST : "Direction.horizontalOr(East, West)";
         demoCase("case:enums.c_style.direction.should_identify_horizontal_values");
         assert Direction.WEST.isHorizontal() : "Direction.isHorizontal(West)";
         assert !Direction.NORTH.isHorizontal() : "Direction.isHorizontal(North)";
