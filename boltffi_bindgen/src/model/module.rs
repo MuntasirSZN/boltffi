@@ -88,6 +88,44 @@ impl Module {
         self
     }
 
+    pub fn merge_exports(&mut self, other: Self) -> Result<(), String> {
+        other
+            .classes
+            .iter()
+            .map(|class| class.name.as_str())
+            .chain(other.records.iter().map(|record| record.name.as_str()))
+            .chain(
+                other
+                    .enums
+                    .iter()
+                    .map(|enumeration| enumeration.name.as_str()),
+            )
+            .chain(
+                other
+                    .callback_traits
+                    .iter()
+                    .map(|callback_trait| callback_trait.name.as_str()),
+            )
+            .chain(
+                other
+                    .custom_types
+                    .iter()
+                    .map(|custom_type| custom_type.name.as_str()),
+            )
+            .try_for_each(|name| self.require_available_type_name(name))?;
+
+        self.classes.extend(other.classes);
+        self.records.extend(other.records);
+        self.enums.extend(other.enums);
+        self.functions.extend(other.functions);
+        self.callback_traits.extend(other.callback_traits);
+        self.custom_types.extend(other.custom_types);
+        self.used_builtins.extend(other.used_builtins);
+        self.closures.extend(other.closures);
+        self.collect_derived_types();
+        Ok(())
+    }
+
     pub fn find_callback_trait(&self, name: &str) -> Option<&CallbackTrait> {
         self.callback_traits
             .iter()
@@ -98,6 +136,27 @@ impl Module {
         self.custom_types
             .iter()
             .find(|custom_type| custom_type.name == name)
+    }
+
+    fn require_available_type_name(&self, name: &str) -> Result<(), String> {
+        let exists = self.classes.iter().any(|class| class.name == name)
+            || self.records.iter().any(|record| record.name == name)
+            || self
+                .enums
+                .iter()
+                .any(|enumeration| enumeration.name == name)
+            || self
+                .callback_traits
+                .iter()
+                .any(|callback_trait| callback_trait.name == name)
+            || self
+                .custom_types
+                .iter()
+                .any(|custom_type| custom_type.name == name);
+
+        (!exists)
+            .then_some(())
+            .ok_or_else(|| format!("duplicate exported type name `{name}` across legacy crates"))
     }
 
     pub fn has_exports(&self) -> bool {

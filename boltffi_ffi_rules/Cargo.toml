@@ -10,10 +10,13 @@ keywords = ["ffi", "encoding", "transport", "bindings"]
 categories = ["development-tools::ffi"]
 
 [features]
-serde = ["dep:serde"]
+serde = []
 
 [dependencies]
-serde = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+syn.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

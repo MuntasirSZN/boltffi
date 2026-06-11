@@ -731,9 +731,9 @@ mod tests {
     use syn::parse_quote;
 
     fn return_lowering() -> ReturnLoweringContext<'static> {
+        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
-        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         ReturnLoweringContext::new(custom_types, data_types, class_types)
     }
 

@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use syn::{Attribute, Item, ItemImpl, Type};
 
+use super::reexports::ReExport;
 use crate::index::type_paths::TypePathKey;
-use crate::index::{CrateIndex, PathResolver, SourceModule};
+use crate::index::{IndexedCrateSource, PathResolver, SourceModule};
 
 #[derive(Default, Clone)]
 pub struct ClassTypeRegistry {
@@ -12,9 +13,32 @@ pub struct ClassTypeRegistry {
     path_resolver: PathResolver,
 }
 
+pub enum ClassParam {
+    SharedRef { rust_type: Type, nullable: bool },
+    MutableRef { rust_type: Type, nullable: bool },
+}
+
 impl ClassTypeRegistry {
     fn insert(&mut self, qualified_path: Vec<String>) {
         self.paths.insert(qualified_path);
+    }
+
+    fn contains_path_segments(&self, path_segments: &[String]) -> bool {
+        if path_segments.len() == 1 {
+            return path_segments
+                .first()
+                .is_some_and(|name| self.unique_names.contains(name));
+        }
+
+        self.paths
+            .iter()
+            .any(|registered_path| registered_path.as_slice() == path_segments)
+            || self
+                .paths
+                .iter()
+                .filter(|registered_path| registered_path.ends_with(path_segments))
+                .count()
+                == 1
     }
 
     fn finalize_unique_names(&mut self) {
@@ -58,6 +82,61 @@ impl ClassTypeRegistry {
         })
     }
 
+    pub fn is_class_type(&self, ty: &Type) -> bool {
+        self.contains(ty)
+    }
+
+    pub fn class_param(&self, ty: &Type) -> Option<ClassParam> {
+        self.required_class_param(ty)
+            .or_else(|| self.optional_class_param(ty))
+    }
+
+    fn required_class_param(&self, ty: &Type) -> Option<ClassParam> {
+        let Type::Reference(reference) = ty else {
+            return None;
+        };
+        self.contains(reference.elem.as_ref()).then(|| {
+            let rust_type = (*reference.elem).clone();
+            if reference.mutability.is_some() {
+                ClassParam::MutableRef {
+                    rust_type,
+                    nullable: false,
+                }
+            } else {
+                ClassParam::SharedRef {
+                    rust_type,
+                    nullable: false,
+                }
+            }
+        })
+    }
+
+    fn optional_class_param(&self, ty: &Type) -> Option<ClassParam> {
+        let Type::Path(type_path) = ty else {
+            return None;
+        };
+        let segment = type_path.path.segments.last()?;
+        if segment.ident != "Option" {
+            return None;
+        }
+        let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+            return None;
+        };
+        let syn::GenericArgument::Type(inner_type) = arguments.args.first()? else {
+            return None;
+        };
+        match self.required_class_param(inner_type)? {
+            ClassParam::SharedRef { rust_type, .. } => Some(ClassParam::SharedRef {
+                rust_type,
+                nullable: true,
+            }),
+            ClassParam::MutableRef { rust_type, .. } => Some(ClassParam::MutableRef {
+                rust_type,
+                nullable: true,
+            }),
+        }
+    }
+
     fn type_path_key(&self, ty: &Type) -> Option<TypePathKey> {
         match ty {
             Type::Path(type_path) if type_path.qself.is_none() => {
@@ -88,32 +167,50 @@ impl ClassTypeRegistry {
         registry.path_resolver = PathResolver::with_use_aliases(aliases);
         registry
     }
-}
 
-pub fn registry_for_current_crate() -> syn::Result<ClassTypeRegistry> {
-    Ok(CrateIndex::for_current_crate()?.class_types().clone())
+    pub fn with_paths(paths: &[&[&str]]) -> Self {
+        let mut registry = Self::default();
+        paths
+            .iter()
+            .map(|path| path.iter().map(|segment| segment.to_string()).collect())
+            .for_each(|segments| registry.insert(segments));
+        registry.finalize_unique_names();
+        registry
+    }
 }
 
 pub fn build_class_type_registry(
-    source_modules: &[SourceModule],
+    sources: &[IndexedCrateSource],
     path_resolver: PathResolver,
 ) -> syn::Result<ClassTypeRegistry> {
     let mut registry = ClassTypeRegistry {
         path_resolver,
         ..ClassTypeRegistry::default()
     };
-    collect_root_types(source_modules, &mut registry)?;
+    sources.iter().try_for_each(|source| {
+        collect_root_types(source.root_path(), source.modules(), &mut registry)
+    })?;
+    registry.finalize_unique_names();
+    sources.iter().try_for_each(|source| {
+        collect_root_reexports(source.root_path(), source.modules(), &mut registry)
+    })?;
     registry.finalize_unique_names();
     Ok(registry)
 }
 
 fn collect_root_types(
+    root_path: &[String],
     source_modules: &[SourceModule],
     registry: &mut ClassTypeRegistry,
 ) -> syn::Result<()> {
     source_modules.iter().try_for_each(|source_module| {
+        let module_path = root_path
+            .iter()
+            .cloned()
+            .chain(source_module.module_path().clone().into_strings())
+            .collect::<Vec<_>>();
         let mut collector = ClassTypeCollector {
-            module_path: source_module.module_path().clone().into_strings(),
+            module_path,
             registry,
         };
         source_module
@@ -121,6 +218,29 @@ fn collect_root_types(
             .items
             .iter()
             .try_for_each(|item| collector.collect_item(item))
+    })
+}
+
+fn collect_root_reexports(
+    root_path: &[String],
+    source_modules: &[SourceModule],
+    registry: &mut ClassTypeRegistry,
+) -> syn::Result<()> {
+    source_modules.iter().try_for_each(|source_module| {
+        let module_path = root_path
+            .iter()
+            .cloned()
+            .chain(source_module.module_path().clone().into_strings())
+            .collect::<Vec<_>>();
+        let mut collector = ClassTypeCollector {
+            module_path,
+            registry,
+        };
+        source_module
+            .syntax()
+            .items
+            .iter()
+            .try_for_each(|item| collector.collect_reexport_item(item))
     })
 }
 
@@ -151,6 +271,29 @@ impl<'a> ClassTypeCollector<'a> {
         }
     }
 
+    fn collect_reexport_item(&mut self, item: &Item) -> syn::Result<()> {
+        match item {
+            Item::Use(_) => {
+                ReExport::from_item(item)
+                    .into_iter()
+                    .for_each(|reexport| self.collect_reexport(reexport));
+                Ok(())
+            }
+            Item::Mod(item_mod) => {
+                let Some((_, items)) = &item_mod.content else {
+                    return Ok(());
+                };
+                self.module_path.push(item_mod.ident.to_string());
+                let collect_result = items
+                    .iter()
+                    .try_for_each(|nested| self.collect_reexport_item(nested));
+                self.module_path.pop();
+                collect_result
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn collect_impl(&mut self, item_impl: &ItemImpl) {
         if !Self::is_class_export_impl(item_impl) {
             return;
@@ -162,6 +305,19 @@ impl<'a> ClassTypeCollector<'a> {
 
         self.registry
             .insert(self.qualified_class_path(type_path_key));
+    }
+
+    fn collect_reexport(&mut self, reexport: ReExport) {
+        if !self.registry.contains_path_segments(reexport.target()) {
+            return;
+        }
+        self.registry.insert(
+            self.module_path
+                .iter()
+                .cloned()
+                .chain(std::iter::once(reexport.alias().to_string()))
+                .collect(),
+        );
     }
 
     fn qualified_class_path(&self, type_path_key: TypePathKey) -> Vec<String> {

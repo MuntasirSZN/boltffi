@@ -6,10 +6,11 @@ use quote::{format_ident, quote};
 use syn::parse::Parse;
 use syn::{GenericArgument, PathArguments, Type};
 
-use crate::index::{CrateIndex, SourceModule};
+use crate::index::{CrateIndex, IndexedCrateSource};
 
 #[derive(Clone)]
 pub struct CustomTypeEntry {
+    root_path: Vec<String>,
     module_path: Vec<String>,
     name: String,
     remote_normalized: String,
@@ -18,6 +19,7 @@ pub struct CustomTypeEntry {
 }
 
 struct TypeQualifier<'a> {
+    root_path: &'a [String],
     module_path: &'a [String],
 }
 
@@ -40,35 +42,52 @@ enum ContainerTypeDescriptor<'a> {
 impl CustomTypeEntry {
     pub fn repr_type(&self) -> syn::Result<syn::Type> {
         let repr = syn::parse_str::<Type>(&self.repr)?;
-        Ok(TypeQualifier::new(&self.module_path).qualify_type(repr))
+        Ok(TypeQualifier::new(&self.root_path, &self.module_path).qualify_type(repr))
     }
 
     pub fn to_fn_path(&self) -> proc_macro2::TokenStream {
         let snake = naming::to_snake_case(&self.name);
         let fn_name = format_ident!("__boltffi_custom_type_{}_into_ffi", snake);
         let module_path = self
-            .module_path
+            .helper_path_segments()
             .iter()
             .map(|segment| syn::Ident::new(segment, Span::call_site()))
             .collect::<Vec<_>>();
-        quote! { crate::#(#module_path::)*#fn_name }
+        quote! { #(#module_path::)*#fn_name }
     }
 
     pub fn try_from_fn_path(&self) -> proc_macro2::TokenStream {
         let snake = naming::to_snake_case(&self.name);
         let fn_name = format_ident!("__boltffi_custom_type_{}_try_from_ffi", snake);
         let module_path = self
-            .module_path
+            .helper_path_segments()
             .iter()
             .map(|segment| syn::Ident::new(segment, Span::call_site()))
             .collect::<Vec<_>>();
-        quote! { crate::#(#module_path::)*#fn_name }
+        quote! { #(#module_path::)*#fn_name }
+    }
+
+    fn helper_path_segments(&self) -> Vec<String> {
+        if self.root_path.is_empty() {
+            std::iter::once("crate".to_string())
+                .chain(self.module_path.iter().cloned())
+                .collect()
+        } else {
+            self.root_path
+                .iter()
+                .cloned()
+                .chain(self.module_path.iter().cloned())
+                .collect()
+        }
     }
 }
 
 impl<'a> TypeQualifier<'a> {
-    fn new(module_path: &'a [String]) -> Self {
-        Self { module_path }
+    fn new(root_path: &'a [String], module_path: &'a [String]) -> Self {
+        Self {
+            root_path,
+            module_path,
+        }
     }
 
     fn qualify_type(&self, rust_type: Type) -> Type {
@@ -125,10 +144,11 @@ impl<'a> TypeQualifier<'a> {
         };
 
         let mut segments = syn::punctuated::Punctuated::<syn::PathSegment, syn::Token![::]>::new();
-        segments.push(syn::PathSegment::from(syn::Ident::new(
-            "crate",
-            Span::call_site(),
-        )));
+        self.root_segments()
+            .into_iter()
+            .map(|segment| syn::Ident::new(&segment, Span::call_site()))
+            .map(syn::PathSegment::from)
+            .for_each(|segment| segments.push(segment));
         self.module_path
             .iter()
             .map(|segment| syn::Ident::new(segment, Span::call_site()))
@@ -202,6 +222,14 @@ impl<'a> TypeQualifier<'a> {
                         "String" | "Vec" | "Option" | "Result" | "Box" | "Arc" | "Rc" | "Cow"
                     )
             })
+    }
+
+    fn root_segments(&self) -> Vec<String> {
+        if self.root_path.is_empty() {
+            vec!["crate".to_string()]
+        } else {
+            self.root_path.to_vec()
+        }
     }
 }
 
@@ -321,6 +349,7 @@ impl Parse for CustomTypeMacroSpec {
 }
 
 struct CustomTypeCollector<'a> {
+    root_path: Vec<String>,
     module_path: Vec<syn::Ident>,
     custom_types: &'a mut CustomTypeRegistry,
 }
@@ -341,6 +370,7 @@ impl<'a> CustomTypeCollector<'a> {
         match item {
             syn::Item::Macro(item_macro) => self.collect_item_macro(item_macro),
             syn::Item::Mod(item_mod) => CustomTypeCollector {
+                root_path: self.root_path.clone(),
                 module_path: self.module_path.clone(),
                 custom_types: self.custom_types,
             }
@@ -366,6 +396,7 @@ impl<'a> CustomTypeCollector<'a> {
         let remote_type_key = RemoteTypeKey::from_type(&spec.remote);
 
         let entry = CustomTypeEntry {
+            root_path: self.root_path.clone(),
             module_path: self.module_path.iter().map(|id| id.to_string()).collect(),
             name,
             remote_normalized: remote_type_key.normalized,
@@ -382,13 +413,25 @@ pub fn registry_for_current_crate() -> syn::Result<CustomTypeRegistry> {
 }
 
 pub(super) fn build_custom_type_registry(
-    source_modules: &[SourceModule],
+    sources: &[IndexedCrateSource],
 ) -> syn::Result<CustomTypeRegistry> {
     let mut registry = CustomTypeRegistry::default();
-    source_modules.iter().try_for_each(|source_module| {
+    sources
+        .iter()
+        .try_for_each(|source| collect_source_custom_types(source, &mut registry))?;
+
+    Ok(registry)
+}
+
+fn collect_source_custom_types(
+    source: &IndexedCrateSource,
+    registry: &mut CustomTypeRegistry,
+) -> syn::Result<()> {
+    source.modules().iter().try_for_each(|source_module| {
         let mut collector = CustomTypeCollector {
+            root_path: source.root_path().to_vec(),
             module_path: source_module.module_path().clone().into_idents(),
-            custom_types: &mut registry,
+            custom_types: registry,
         };
 
         source_module
@@ -396,9 +439,7 @@ pub(super) fn build_custom_type_registry(
             .items
             .iter()
             .try_for_each(|item| collector.collect_item(item))
-    })?;
-
-    Ok(registry)
+    })
 }
 
 pub fn contains_custom_types(ty: &syn::Type, registry: &CustomTypeRegistry) -> bool {
@@ -646,6 +687,7 @@ mod tests {
         };
         let mut registry = CustomTypeRegistry::default();
         CustomTypeCollector {
+            root_path: Vec::new(),
             module_path: Vec::new(),
             custom_types: &mut registry,
         }

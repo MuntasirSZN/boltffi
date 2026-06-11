@@ -121,10 +121,10 @@ impl RecordImplExpansion {
             syn::Error::new_spanned(&input, "#[data(impl)] requires a named type")
         })?;
         let crate_index = CrateIndex::for_current_crate()?;
+        let class_types = Box::leak(Box::new(crate_index.class_types().clone()));
         let custom_types = Box::leak(Box::new(crate_index.custom_types().clone()));
         let callback_registry = crate_index.callback_traits().clone();
         let data_types = Box::leak(Box::new(crate_index.data_types().clone()));
-        let class_types = Box::leak(Box::new(crate_index.class_types().clone()));
         let return_lowering = ReturnLoweringContext::new(custom_types, data_types, class_types);
         let record_name = type_name.to_string();
 
@@ -645,12 +645,12 @@ mod tests {
     }
 
     fn return_lowering() -> ReturnLoweringContext<'static> {
+        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::with_entries(&[
             ("UserProfile", DataTypeCategory::WireEncoded),
             ("Filter", DataTypeCategory::WireEncoded),
         ])));
-        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         ReturnLoweringContext::new(custom_types, data_types, class_types)
     }
 

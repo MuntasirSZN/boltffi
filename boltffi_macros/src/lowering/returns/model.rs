@@ -109,9 +109,9 @@ impl ResolvedReturn {
 
 #[derive(Clone, Copy)]
 pub struct ReturnLoweringContext<'a> {
+    class_types: &'a ClassTypeRegistry,
     custom_types: &'a CustomTypeRegistry,
     data_types: &'a DataTypeRegistry,
-    class_types: &'a ClassTypeRegistry,
     self_type: Option<&'a Type>,
 }
 
@@ -152,9 +152,9 @@ impl<'a> ReturnLoweringContext<'a> {
         class_types: &'a ClassTypeRegistry,
     ) -> Self {
         Self {
+            class_types,
             custom_types,
             data_types,
-            class_types,
             self_type: None,
         }
     }
@@ -169,6 +169,10 @@ impl<'a> ReturnLoweringContext<'a> {
             class_types: self.class_types,
             self_type: Some(self_type),
         }
+    }
+
+    pub fn class_types(&self) -> &'a ClassTypeRegistry {
+        self.class_types
     }
 
     pub fn custom_types(&self) -> &'a CustomTypeRegistry {

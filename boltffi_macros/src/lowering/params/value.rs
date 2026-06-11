@@ -4,8 +4,8 @@ use syn::Ident;
 
 use super::ParamLoweringState;
 use super::transform::{
-    ParamTransform, WireEncodedParam, WireEncodedParamKind, WireEncodedPassing, len_ident,
-    ptr_ident,
+    ClassHandleParam, ClassHandleParamKind, ParamTransform, WireEncodedParam, WireEncodedParamKind,
+    WireEncodedPassing, len_ident, ptr_ident,
 };
 use crate::index::custom_types::{
     CustomTypeRegistry, contains_custom_types, from_wire_expr_owned, wire_type_for,
@@ -639,6 +639,34 @@ impl<'a> ValueParamDecoder<'a> {
         acc.call_args.push(quote! { #name });
     }
 
+    fn lower_sync_class_handle_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        class_param: &ClassHandleParam,
+    ) {
+        let rust_type = &class_param.rust_type;
+        let on_wire_record_error = self.on_wire_record_error;
+        acc.ffi_params.push(quote! { #name: *mut #rust_type });
+        let binding = class_handle_binding(name, class_param, on_wire_record_error);
+        acc.setup.push(binding);
+        acc.call_args.push(quote! { #name });
+    }
+
+    fn lower_async_class_handle_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        class_param: &ClassHandleParam,
+    ) {
+        let rust_type = &class_param.rust_type;
+        let on_wire_record_error = self.on_wire_record_error;
+        acc.ffi_params.push(quote! { #name: *mut #rust_type });
+        let binding = class_handle_binding(name, class_param, on_wire_record_error);
+        acc.setup.push(binding);
+        acc.call_args.push(quote! { #name });
+    }
+
     fn lower_sync_pass_through_param(
         &self,
         acc: &mut ParamLoweringState,
@@ -700,6 +728,10 @@ impl<'a> SyncValueParamLowerer<'a> {
             ParamTransform::VecPassable(inner_type) => {
                 self.decoder
                     .lower_sync_vec_passable_param(acc, name, &inner_type)
+            }
+            ParamTransform::ClassHandle(class_param) => {
+                self.decoder
+                    .lower_sync_class_handle_param(acc, name, &class_param)
             }
             ParamTransform::WireEncoded(wire_param) => {
                 self.decoder
@@ -771,6 +803,9 @@ impl<'a> AsyncValueParamLowerer<'a> {
                 self.decoder
                     .lower_async_vec_passable_param(acc, name, &inner_type)
             }
+            ParamTransform::ClassHandle(class_param) => self
+                .decoder
+                .lower_async_class_handle_param(acc, name, &class_param),
             ParamTransform::WireEncoded(wire_param) => {
                 self.decoder
                     .lower_async_wire_encoded_param(acc, name, &wire_param)
@@ -803,5 +838,51 @@ impl<'a> AsyncValueParamLowerer<'a> {
                 unreachable!("unsupported async params must be rejected before lowering")
             }
         }
+    }
+}
+
+fn class_handle_binding(
+    name: &Ident,
+    class_param: &ClassHandleParam,
+    on_null: &TokenStream,
+) -> TokenStream {
+    let rust_type = &class_param.rust_type;
+    match (class_param.kind, class_param.nullable) {
+        (ClassHandleParamKind::SharedRef, false) => quote! {
+            let #name: &#rust_type = if #name.is_null() {
+                ::boltffi::__private::set_last_error(format!(
+                    "{}: null class handle",
+                    stringify!(#name)
+                ));
+                #on_null
+            } else {
+                unsafe { #name.as_ref().expect("checked non-null class handle") }
+            };
+        },
+        (ClassHandleParamKind::MutableRef, false) => quote! {
+            let #name: &mut #rust_type = if #name.is_null() {
+                ::boltffi::__private::set_last_error(format!(
+                    "{}: null class handle",
+                    stringify!(#name)
+                ));
+                #on_null
+            } else {
+                unsafe { #name.as_mut().expect("checked non-null class handle") }
+            };
+        },
+        (ClassHandleParamKind::SharedRef, true) => quote! {
+            let #name: Option<&#rust_type> = if #name.is_null() {
+                None
+            } else {
+                Some(unsafe { #name.as_ref().expect("checked non-null class handle") })
+            };
+        },
+        (ClassHandleParamKind::MutableRef, true) => quote! {
+            let #name: Option<&mut #rust_type> = if #name.is_null() {
+                None
+            } else {
+                Some(unsafe { #name.as_mut().expect("checked non-null class handle") })
+            };
+        },
     }
 }
