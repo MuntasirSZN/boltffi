@@ -77,7 +77,16 @@ impl DataTypeRegistry {
     }
 
     pub fn category_for(&self, ty: &Type) -> Option<DataTypeCategory> {
-        let type_path_key = self.type_path_key(ty)?;
+        let type_path_key = TypePathKey::from_type(ty)?;
+        self.category_for_key(&type_path_key).or_else(|| {
+            let resolved_type_path_key = self.resolved_type_path_key(ty)?;
+            (resolved_type_path_key != type_path_key)
+                .then(|| self.category_for_key(&resolved_type_path_key))
+                .flatten()
+        })
+    }
+
+    fn category_for_key(&self, type_path_key: &TypePathKey) -> Option<DataTypeCategory> {
         if type_path_key.is_single_segment() {
             return type_path_key
                 .first_segment()
@@ -101,14 +110,14 @@ impl DataTypeRegistry {
         matches.all(|next| next == first).then_some(first)
     }
 
-    fn type_path_key(&self, ty: &Type) -> Option<TypePathKey> {
+    fn resolved_type_path_key(&self, ty: &Type) -> Option<TypePathKey> {
         match ty {
             Type::Path(type_path) if type_path.qself.is_none() => {
                 let resolved_path = self.path_resolver.resolve(&type_path.path).into_path();
                 Some(TypePathKey::from_path(&resolved_path))
             }
-            Type::Group(group) => self.type_path_key(group.elem.as_ref()),
-            Type::Paren(paren) => self.type_path_key(paren.elem.as_ref()),
+            Type::Group(group) => self.resolved_type_path_key(group.elem.as_ref()),
+            Type::Paren(paren) => self.resolved_type_path_key(paren.elem.as_ref()),
             _ => None,
         }
     }
@@ -313,5 +322,41 @@ fn classify_enum_category(item_enum: &ItemEnum) -> DataTypeCategory {
         PassableCategory::Blittable | PassableCategory::WireEncoded => {
             DataTypeCategory::WireEncoded
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::{DataTypeCategory, DataTypeRegistry};
+
+    #[test]
+    fn single_segment_unique_name_wins_over_unrelated_alias() {
+        let registry = DataTypeRegistry::with_entries_and_use_aliases(
+            &[(
+                "records::with_options::UserProfile",
+                DataTypeCategory::WireEncoded,
+            )],
+            &[("UserProfile", "crate::records::UserProfile")],
+        );
+
+        assert_eq!(
+            registry.category_for(&parse_quote!(UserProfile)),
+            Some(DataTypeCategory::WireEncoded)
+        );
+    }
+
+    #[test]
+    fn short_module_path_still_resolves_through_alias() {
+        let registry = DataTypeRegistry::with_entries_and_use_aliases(
+            &[("core::parser::RouteProvider", DataTypeCategory::Scalar)],
+            &[("parser", "crate::core::parser")],
+        );
+
+        assert_eq!(
+            registry.category_for(&parse_quote!(parser::RouteProvider)),
+            Some(DataTypeCategory::Scalar)
+        );
     }
 }
