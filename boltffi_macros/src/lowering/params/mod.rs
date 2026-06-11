@@ -81,6 +81,7 @@ impl<'a> SyncParamLowerer<'a> {
                 callback_registry,
             ),
             param_transform_classifier: ParamTransformClassifier::new(
+                return_lowering.class_types(),
                 return_lowering.named_type_transport_classifier(),
             ),
             value_param_lowerer: SyncValueParamLowerer::new(
@@ -191,6 +192,7 @@ impl<'a> AsyncParamLowerer<'a> {
                 callback_registry,
             ),
             param_transform_classifier: ParamTransformClassifier::new(
+                return_lowering.class_types(),
                 return_lowering.named_type_transport_classifier(),
             ),
             value_param_lowerer: AsyncValueParamLowerer::new(
@@ -244,6 +246,7 @@ impl<'a> AsyncParamLowerer<'a> {
             | ParamTransform::SliceRef(_)
             | ParamTransform::VecPrimitive(_)
             | ParamTransform::VecPassable(_)
+            | ParamTransform::ClassHandle(_)
             | ParamTransform::WireEncoded(_)
             | ParamTransform::Passable(_)
             | ParamTransform::ImplTrait(_)
@@ -322,6 +325,7 @@ fn param_transform_name(param_transform: &ParamTransform) -> &'static str {
         ParamTransform::ImplTrait(_) => "ImplTrait",
         ParamTransform::VecPrimitive(_) => "VecPrimitive",
         ParamTransform::VecPassable(_) => "VecPassable",
+        ParamTransform::ClassHandle(_) => "ClassHandle",
         ParamTransform::WireEncoded(_) => "WireEncoded",
         ParamTransform::Passable(_) => "Passable",
     }
@@ -391,9 +395,9 @@ mod tests {
     use syn::parse_quote;
 
     fn async_param_lowerer() -> AsyncParamLowerer<'static> {
+        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
-        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         let return_lowering = Box::leak(Box::new(ReturnLoweringContext::new(
             custom_types,
             data_types,

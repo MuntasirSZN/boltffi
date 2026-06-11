@@ -65,6 +65,10 @@ pub fn classify_value_return_strategy(
 
     let return_type = ReturnTypeDescriptor::parse(rust_type);
 
+    if return_lowering.class_types().is_class_type(rust_type) {
+        return ValueReturnStrategy::ObjectHandle;
+    }
+
     match return_type.type_descriptor.shape() {
         RustTypeShape::Unit => ValueReturnStrategy::Void,
         RustTypeShape::Utf8String => ValueReturnStrategy::Buffer(EncodedReturnStrategy::Utf8String),

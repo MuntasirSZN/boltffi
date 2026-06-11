@@ -1,6 +1,6 @@
 use boltffi_ffi_rules::callable::{CallableForm, ExecutionKind};
 use boltffi_ffi_rules::naming;
-use boltffi_ffi_rules::transport::EncodedReturnStrategy;
+use boltffi_ffi_rules::transport::{EncodedReturnStrategy, ValueReturnStrategy};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::ItemFn;
@@ -15,7 +15,7 @@ use crate::exports::extern_export::{
     ExternExport, ReceiverParameter,
 };
 use crate::index::callback_traits::CallbackTraitRegistry;
-use crate::index::{CrateIndex, class_types, custom_types, data_types};
+use crate::index::{CrateIndex, custom_types, data_types};
 use crate::lowering::params::{FfiParams, transform_params, transform_params_async};
 use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::model::{
@@ -207,10 +207,10 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
         Ok(crate_index) => crate_index,
         Err(error) => return error.to_compile_error(),
     };
+    let class_types = crate_index.class_types().clone();
     let custom_types = crate_index.custom_types().clone();
     let callback_registry = crate_index.callback_traits().clone();
     let data_types = crate_index.data_types().clone();
-    let class_types = crate_index.class_types().clone();
     let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types, &class_types);
 
     let input = callable.item();
@@ -221,7 +221,8 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
     let fn_vis = &input.vis;
 
     if callable.execution_kind() == ExecutionKind::Async {
-        return generate_async_export(callable, &custom_types, &callback_registry).into();
+        return generate_async_export(callable, &class_types, &custom_types, &callback_registry)
+            .into();
     }
 
     let export_name = format!("{}_{}", naming::ffi_prefix(), fn_name);
@@ -388,6 +389,44 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
                         #body
                     }
                 }
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle
+    ) {
+        let object_handle = return_abi
+            .object_handle()
+            .expect("object handle return must carry handle metadata");
+        let return_type = object_handle.ffi_return_type();
+        let pointer_expression =
+            object_handle.raw_pointer_expression(quote! { #fn_name(#(#call_args),*) });
+        let body = quote! {
+            #(#conversions)*
+            #pointer_expression
+        };
+
+        if has_params {
+            quote! {
+                #input
+
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #export_ident(
+                    #(#ffi_params),*
+                ) #return_type {
+                    #body
+                }
+            }
+        } else {
+            quote! {
+                #input
+
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis extern "C" fn #export_ident() #return_type {
+                    #body
+                }
+            }
         }
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();
@@ -573,6 +612,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
 
 fn generate_async_export(
     callable: FunctionCallable<'_>,
+    class_types: &crate::index::class_types::ClassTypeRegistry,
     custom_types: &custom_types::CustomTypeRegistry,
     callback_registry: &CallbackTraitRegistry,
 ) -> TokenStream {
@@ -588,11 +628,7 @@ fn generate_async_export(
         Ok(registry) => registry,
         Err(error) => return error.to_compile_error().into(),
     };
-    let class_types = match class_types::registry_for_current_crate() {
-        Ok(registry) => registry,
-        Err(error) => return error.to_compile_error().into(),
-    };
-    let return_lowering = ReturnLoweringContext::new(custom_types, &data_types, &class_types);
+    let return_lowering = ReturnLoweringContext::new(custom_types, &data_types, class_types);
     let return_abi = return_lowering.lower_output(fn_output);
 
     let on_wire_record_error = return_abi.async_invalid_arg_early_return_statement();

@@ -1,4 +1,4 @@
-use boltffi_ffi_rules::naming;
+use boltffi_ffi_rules::{cargo_graph, naming};
 use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -49,6 +49,9 @@ pub enum TypeShape {
     Custom {
         repr: MType,
     },
+    ImportedCustom {
+        repr: MType,
+    },
 }
 
 pub struct TypeMeta {
@@ -63,6 +66,70 @@ pub struct TypeRegistry {
 }
 
 impl TypeRegistry {
+    pub fn import_module_exports(&mut self, module: &Module) -> Result<(), String> {
+        module
+            .classes
+            .iter()
+            .map(|class| {
+                (
+                    class.name.clone(),
+                    TypeMeta {
+                        doc: None,
+                        shape: TypeShape::Pending(PendingKind::Class),
+                    },
+                )
+            })
+            .chain(module.records.iter().map(|record| {
+                (
+                    record.name.clone(),
+                    TypeMeta {
+                        doc: None,
+                        shape: TypeShape::Pending(PendingKind::Record),
+                    },
+                )
+            }))
+            .chain(module.enums.iter().map(|enumeration| {
+                (
+                    enumeration.name.clone(),
+                    TypeMeta {
+                        doc: None,
+                        shape: TypeShape::Pending(PendingKind::Enum),
+                    },
+                )
+            }))
+            .chain(module.callback_traits.iter().map(|callback_trait| {
+                (
+                    callback_trait.name.clone(),
+                    TypeMeta {
+                        doc: None,
+                        shape: TypeShape::Pending(PendingKind::Callback),
+                    },
+                )
+            }))
+            .chain(module.custom_types.iter().map(|custom_type| {
+                (
+                    custom_type.name.clone(),
+                    TypeMeta {
+                        doc: None,
+                        shape: TypeShape::ImportedCustom {
+                            repr: custom_type.repr.clone(),
+                        },
+                    },
+                )
+            }))
+            .try_for_each(|(name, meta)| self.import_type(name, meta))
+    }
+
+    fn import_type(&mut self, name: String, meta: TypeMeta) -> Result<(), String> {
+        if self.types.contains_key(&name) {
+            return Err(format!(
+                "duplicate exported type name `{name}` across legacy crates"
+            ));
+        }
+        self.types.insert(name, meta);
+        Ok(())
+    }
+
     pub fn is_enum(&self, name: &str) -> bool {
         self.types.get(name).is_some_and(|meta| {
             matches!(
@@ -217,7 +284,7 @@ impl TypeRegistry {
                 MType::Object(name.to_string())
             }
             TypeShape::Pending(PendingKind::Callback) => MType::BoxedTrait(name.to_string()),
-            TypeShape::Custom { repr } => MType::Custom {
+            TypeShape::Custom { repr } | TypeShape::ImportedCustom { repr } => MType::Custom {
                 name: name.to_string(),
                 repr: Box::new(repr.clone()),
             },
@@ -497,6 +564,10 @@ impl SourceScanner {
             .try_for_each(|path| self.collect_custom_types(path))?;
         files.iter().try_for_each(|path| self.scan_file(path))?;
         Ok(())
+    }
+
+    pub fn import_module_exports(&mut self, module: &Module) -> Result<(), String> {
+        self.type_registry.import_module_exports(module)
     }
 
     fn collect_compiler_type_targets(
@@ -1589,6 +1660,7 @@ impl SourceScanner {
                 TypeShape::Custom { repr } => {
                     module = module.with_custom_type(CustomType::new(name, repr));
                 }
+                TypeShape::ImportedCustom { .. } => {}
                 TypeShape::Pending(_) => {}
             }
         }
@@ -2787,6 +2859,64 @@ fn validate_no_symbol_collisions(module: &Module) -> Result<(), String> {
     Ok(())
 }
 
+struct LegacyPackageScanner<'a> {
+    graph: &'a cargo_graph::PackageGraph,
+    target_pointer_width_bits: Option<u8>,
+    modules: HashMap<cargo_graph::PackageId, Module>,
+}
+
+impl<'a> LegacyPackageScanner<'a> {
+    fn new(graph: &'a cargo_graph::PackageGraph, target_pointer_width_bits: Option<u8>) -> Self {
+        Self {
+            graph,
+            target_pointer_width_bits,
+            modules: HashMap::new(),
+        }
+    }
+
+    fn scan(mut self, module_name: &str) -> Result<Module, String> {
+        let root_id = self.graph.root_id().clone();
+        let mut root_module = self.scan_package(&root_id, module_name)?;
+        self.graph
+            .reachable_exported_dependencies(&root_id)
+            .into_iter()
+            .map(|package| self.scan_package(package.id(), package.module_name()))
+            .try_for_each(|module| root_module.merge_exports(module?))?;
+        Ok(root_module)
+    }
+
+    fn scan_package(
+        &mut self,
+        package_id: &cargo_graph::PackageId,
+        module_name: &str,
+    ) -> Result<Module, String> {
+        if let Some(module) = self.modules.get(package_id) {
+            return Ok(module.clone());
+        }
+
+        let package = self
+            .graph
+            .package(package_id)
+            .ok_or_else(|| "cargo package disappeared during legacy scan".to_string())?;
+        let dependency_modules = self
+            .graph
+            .exported_dependencies(package_id)
+            .into_iter()
+            .map(|dependency| self.scan_package(dependency.id(), dependency.module_name()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut scanner =
+            SourceScanner::new_with_pointer_width(module_name, self.target_pointer_width_bits);
+        dependency_modules
+            .iter()
+            .try_for_each(|module| scanner.import_module_exports(module))?;
+        scanner.scan_directory(package.manifest_dir(), package.source_root())?;
+        let module = scanner.into_module();
+        self.modules.insert(package_id.clone(), module.clone());
+        Ok(module)
+    }
+}
+
 pub fn scan_crate(crate_path: &Path, module_name: &str) -> Result<Module, String> {
     scan_crate_with_pointer_width(crate_path, module_name, None)
 }
@@ -2796,11 +2926,26 @@ pub fn scan_crate_with_pointer_width(
     module_name: &str,
     target_pointer_width_bits: Option<u8>,
 ) -> Result<Module, String> {
+    let target_pointer_width_bits = target_pointer_width_bits.or_else(parse_target_pointer_width);
+    if let Some(graph) = cargo_graph::PackageGraph::load_for_module(crate_path, module_name)
+        .map_err(|error| error.to_string())?
+    {
+        let module =
+            LegacyPackageScanner::new(&graph, target_pointer_width_bits).scan(module_name)?;
+        validate_no_symbol_collisions(&module)?;
+        return Ok(module);
+    }
+
+    scan_single_crate_with_pointer_width(crate_path, module_name, target_pointer_width_bits)
+}
+
+fn scan_single_crate_with_pointer_width(
+    crate_path: &Path,
+    module_name: &str,
+    target_pointer_width_bits: Option<u8>,
+) -> Result<Module, String> {
     let src_path = crate_path.join("src");
-    let mut scanner = SourceScanner::new_with_pointer_width(
-        module_name,
-        target_pointer_width_bits.or_else(parse_target_pointer_width),
-    );
+    let mut scanner = SourceScanner::new_with_pointer_width(module_name, target_pointer_width_bits);
     scanner.scan_directory(crate_path, &src_path)?;
     let module = scanner.into_module();
     validate_no_symbol_collisions(&module)?;
@@ -3520,6 +3665,118 @@ mod tests {
             .to_path_buf();
         let demo_crate_path = repo_root.join("examples").join("demo");
         scan_crate(&demo_crate_path, "demo").unwrap()
+    }
+
+    #[test]
+    fn cargo_metadata_discovers_dependency_exports_for_legacy_scan() {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!(
+            "boltffi_multicrate_scan_{}_{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let root_crate = temp_root.join("root_api");
+        let dependency_crate = temp_root.join("session_api");
+        let root_src = root_crate.join("src");
+        let dependency_src = dependency_crate.join("src");
+
+        fs::create_dir_all(&root_src).expect("create root src");
+        fs::create_dir_all(&dependency_src).expect("create dependency src");
+        fs::write(
+            root_crate.join("Cargo.toml"),
+            r#"
+                [package]
+                name = "root_api"
+                version = "0.1.0"
+                edition = "2024"
+
+                [dependencies]
+                session_api = { path = "../session_api" }
+            "#,
+        )
+        .expect("write root manifest");
+        fs::write(
+            dependency_crate.join("Cargo.toml"),
+            r#"
+                [package]
+                name = "session_api"
+                version = "0.1.0"
+                edition = "2024"
+            "#,
+        )
+        .expect("write dependency manifest");
+        fs::write(
+            dependency_src.join("lib.rs"),
+            r#"
+                #[boltffi::data]
+                pub struct SessionState {
+                    pub code: i32,
+                }
+
+                pub struct Session {
+                    id: u32,
+                }
+
+                #[boltffi::export]
+                impl Session {
+                    pub fn new() -> Self {
+                        Self { id: 7 }
+                    }
+
+                    pub fn id(&self) -> u32 {
+                        self.id
+                    }
+                }
+            "#,
+        )
+        .expect("write dependency source");
+        fs::write(
+            root_src.join("lib.rs"),
+            r#"
+                use session_api::{Session, SessionState};
+
+                #[boltffi::export]
+                pub fn open_session() -> Session {
+                    Session::new()
+                }
+
+                #[boltffi::export]
+                pub fn state_code(state: SessionState) -> i32 {
+                    state.code
+                }
+            "#,
+        )
+        .expect("write root source");
+
+        let module = scan_crate_with_pointer_width(&root_crate, "root_api", None)
+            .expect("multi-crate scan should succeed");
+        fs::remove_dir_all(&temp_root).expect("cleanup");
+
+        assert!(module.find_class("Session").is_some());
+        assert!(module.find_record("SessionState").is_some());
+
+        let open_session = module
+            .functions
+            .iter()
+            .find(|function| function.name == "open_session")
+            .expect("open_session should be exported");
+        assert_eq!(
+            open_session.returns,
+            ReturnType::value(MType::Object("Session".to_string()))
+        );
+
+        let state_code = module
+            .functions
+            .iter()
+            .find(|function| function.name == "state_code")
+            .expect("state_code should be exported");
+        assert!(matches!(
+            state_code.inputs.first().map(|param| &param.param_type),
+            Some(MType::Record(name)) if name == "SessionState"
+        ));
     }
 
     #[test]

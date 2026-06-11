@@ -10,6 +10,12 @@ pub(crate) struct SourceTree {
 }
 
 #[derive(Clone)]
+pub(crate) struct IndexedCrateSource {
+    root_path: Vec<String>,
+    modules: Vec<SourceModule>,
+}
+
+#[derive(Clone)]
 pub(crate) struct SourceFile {
     path: PathBuf,
 }
@@ -30,6 +36,11 @@ impl SourceTree {
         let manifest_dir = env::var("CARGO_MANIFEST_DIR")
             .map(PathBuf::from)
             .map_err(|_| syn::Error::new(Span::call_site(), "CARGO_MANIFEST_DIR not set"))?;
+        Self::for_manifest_dir(manifest_dir)
+    }
+
+    pub(crate) fn for_manifest_dir(manifest_dir: impl Into<PathBuf>) -> syn::Result<Self> {
+        let manifest_dir = manifest_dir.into();
         Ok(Self {
             manifest_dir: manifest_dir.clone(),
             src_root: manifest_dir.join("src"),
@@ -82,6 +93,27 @@ impl SourceTree {
                     .then(|| rust_files.push(path));
                 Ok(())
             })
+    }
+}
+
+impl IndexedCrateSource {
+    pub(crate) fn current(modules: Vec<SourceModule>) -> Self {
+        Self {
+            root_path: Vec::new(),
+            modules,
+        }
+    }
+
+    pub(crate) fn dependency(root_path: Vec<String>, modules: Vec<SourceModule>) -> Self {
+        Self { root_path, modules }
+    }
+
+    pub(crate) fn root_path(&self) -> &[String] {
+        &self.root_path
+    }
+
+    pub(crate) fn modules(&self) -> &[SourceModule] {
+        &self.modules
     }
 }
 

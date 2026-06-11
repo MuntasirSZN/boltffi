@@ -17,10 +17,10 @@ mod tests {
     use syn::parse_quote;
 
     fn empty_return_lowering_context<'a>(
+        class_types: &'a ClassTypeRegistry,
         custom_types: &'a CustomTypeRegistry,
         data_types: &'a DataTypeRegistry,
     ) -> ReturnLoweringContext<'a> {
-        let class_types = Box::leak(Box::new(ClassTypeRegistry::default()));
         ReturnLoweringContext::new(custom_types, data_types, class_types)
     }
 
@@ -37,6 +37,20 @@ mod tests {
     }
 
     #[test]
+    fn dependency_class_return_uses_object_handle() {
+        let class_types = ClassTypeRegistry::with_paths(&[&["session_api", "Session"]]);
+        let custom_types = CustomTypeRegistry::default();
+        let data_types = DataTypeRegistry::default();
+        let context = empty_return_lowering_context(&class_types, &custom_types, &data_types);
+        let rust_type = parse_quote!(session_api::Session);
+
+        assert_eq!(
+            classify_value_return_strategy(&rust_type, &context),
+            ValueReturnStrategy::ObjectHandle
+        );
+    }
+
+    #[test]
     fn wasm_option_i64_is_not_nan_boxed() {
         assert!(
             WasmOptionScalarEncoding::from_option_rust_type(&parse_quote!(Option<i64>)).is_none()
@@ -50,7 +64,8 @@ mod tests {
     fn option_i64_and_u64_return_use_wire_encoding_to_preserve_bigint_payloads() {
         let custom_types = CustomTypeRegistry::default();
         let data_types = DataTypeRegistry::default();
-        let context = empty_return_lowering_context(&custom_types, &data_types);
+        let class_types = ClassTypeRegistry::default();
+        let context = empty_return_lowering_context(&class_types, &custom_types, &data_types);
 
         let i64_strategy = classify_value_return_strategy(&parse_quote!(Option<i64>), &context);
         let u64_strategy = classify_value_return_strategy(&parse_quote!(Option<u64>), &context);
@@ -69,7 +84,8 @@ mod tests {
     fn option_i32_return_keeps_compact_scalar_encoding() {
         let custom_types = CustomTypeRegistry::default();
         let data_types = DataTypeRegistry::default();
-        let context = empty_return_lowering_context(&custom_types, &data_types);
+        let class_types = ClassTypeRegistry::default();
+        let context = empty_return_lowering_context(&class_types, &custom_types, &data_types);
 
         let strategy = classify_value_return_strategy(&parse_quote!(Option<i32>), &context);
 
