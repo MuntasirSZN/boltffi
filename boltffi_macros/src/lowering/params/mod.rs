@@ -386,7 +386,9 @@ pub fn transform_method_params_async(
 
 #[cfg(test)]
 mod tests {
-    use super::{AsyncParamLowerer, transform_method_params, transform_params};
+    use super::{
+        AsyncParamLowerer, transform_method_params, transform_params, transform_params_async,
+    };
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::class_types::ClassTypeRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
@@ -455,6 +457,83 @@ mod tests {
             "< parser :: RouteProvider as :: boltffi :: __private :: Passable > :: unpack (provider)"
         ));
         assert!(!conversions.contains("wire :: decode"));
+    }
+
+    #[test]
+    fn borrowed_scalar_enum_param_uses_passable_storage_for_short_module_path() {
+        let function: syn::ItemFn = parse_quote! {
+            fn demo(provider: &parser::RouteProvider) -> i32 {
+                0
+            }
+        };
+        let data_types = DataTypeRegistry::with_entries_and_use_aliases(
+            &[("core::parser::RouteProvider", DataTypeCategory::Scalar)],
+            &[("parser", "crate::core::parser")],
+        );
+        let params = transform_params(
+            &function.sig.inputs,
+            return_lowering(data_types),
+            callback_registry(),
+            &quote! { return ::core::default::Default::default(); },
+        );
+        let rendered_ffi_params = &params.ffi_params;
+        let rendered_conversions = &params.conversions;
+        let rendered_call_args = &params.call_args;
+        let ffi_params = quote! { #(#rendered_ffi_params),* }.to_string();
+        let conversions = quote! { #(#rendered_conversions)* }.to_string();
+        let call_args = quote! { #(#rendered_call_args),* }.to_string();
+
+        assert!(ffi_params.contains(
+            "provider : < parser :: RouteProvider as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(!ffi_params.contains("__boltffi_provider_ptr"));
+        assert!(!ffi_params.contains("__boltffi_provider_len"));
+        assert!(conversions.contains("let provider_storage : parser :: RouteProvider"));
+        assert!(conversions.contains(
+            "< parser :: RouteProvider as :: boltffi :: __private :: Passable > :: unpack (provider)"
+        ));
+        assert!(conversions.contains("let provider = & provider_storage"));
+        assert!(!conversions.contains("wire :: decode"));
+        assert_eq!(call_args, "provider");
+    }
+
+    #[test]
+    fn async_borrowed_scalar_enum_param_uses_passable_storage_for_short_module_path() {
+        let function: syn::ItemFn = parse_quote! {
+            async fn demo(provider: &parser::RouteProvider) -> i32 {
+                0
+            }
+        };
+        let data_types = DataTypeRegistry::with_entries_and_use_aliases(
+            &[("core::parser::RouteProvider", DataTypeCategory::Scalar)],
+            &[("parser", "crate::core::parser")],
+        );
+        let params = transform_params_async(
+            &function.sig.inputs,
+            return_lowering(data_types),
+            callback_registry(),
+            &quote! { return ::core::default::Default::default(); },
+        )
+        .expect("async params should lower");
+        let rendered_ffi_params = &params.ffi_params;
+        let rendered_pre_spawn = &params.pre_spawn;
+        let rendered_thread_setup = &params.thread_setup;
+        let ffi_params = quote! { #(#rendered_ffi_params),* }.to_string();
+        let pre_spawn = quote! { #(#rendered_pre_spawn)* }.to_string();
+        let thread_setup = quote! { #(#rendered_thread_setup)* }.to_string();
+
+        assert!(ffi_params.contains(
+            "provider : < parser :: RouteProvider as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(!ffi_params.contains("__boltffi_provider_ptr"));
+        assert!(!ffi_params.contains("__boltffi_provider_len"));
+        assert!(pre_spawn.contains("let provider_storage : parser :: RouteProvider"));
+        assert!(pre_spawn.contains(
+            "< parser :: RouteProvider as :: boltffi :: __private :: Passable > :: unpack (provider)"
+        ));
+        assert!(thread_setup.contains("let provider = & provider_storage"));
+        assert!(!pre_spawn.contains("wire :: decode"));
+        assert!(!thread_setup.contains("wire :: decode"));
     }
 
     #[test]
