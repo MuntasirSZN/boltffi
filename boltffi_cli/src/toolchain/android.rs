@@ -21,6 +21,7 @@ pub enum AndroidToolchainError {
 pub struct AndroidNdk {
     root: PathBuf,
     bin_dir: PathBuf,
+    sysroot_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,11 +62,22 @@ impl AndroidToolchain {
         let ar = self.ndk.llvm_ar();
         let triple_env_upper = cargo_env_triple_upper(target.triple());
         let triple_env_lower = cargo_env_triple_lower(target.triple());
+        let sysroot = self.ndk.sysroot();
 
         cargo.env(format!("CARGO_TARGET_{}_LINKER", triple_env_upper), &linker);
         cargo.env(format!("CARGO_TARGET_{}_AR", triple_env_upper), &ar);
         cargo.env(format!("CC_{}", triple_env_lower), &linker);
         cargo.env(format!("AR_{}", triple_env_lower), &ar);
+        cargo.env(
+            format!("BINDGEN_EXTRA_CLANG_ARGS_{}", triple_env_lower),
+            format!(
+                "--sysroot={} -isystem {}/usr/include -isystem {}/usr/include/{}",
+                sysroot.display(),
+                sysroot.display(),
+                sysroot.display(),
+                abi.clang_prefix(),
+            ),
+        );
 
         Ok(())
     }
@@ -89,13 +101,23 @@ impl AndroidToolchain {
 impl AndroidNdk {
     pub fn discover(ndk_version_hint: Option<&str>) -> Result<Self> {
         let root = resolve_ndk_root(ndk_version_hint).ok_or(AndroidToolchainError::NdkNotFound)?;
-        let bin_dir = resolve_prebuilt_bin_dir(&root)?;
+        let prebuilt_dir = resolve_prebuilt_dir(&root)?;
+        let bin_dir = prebuilt_dir.join("bin");
+        let sysroot_dir = prebuilt_dir.join("sysroot");
 
-        Ok(Self { root, bin_dir })
+        Ok(Self {
+            root,
+            sysroot_dir,
+            bin_dir,
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn sysroot(&self) -> &Path {
+        &self.sysroot_dir
     }
 
     pub fn clang_for_abi(&self, abi: AndroidAbi, min_sdk: u32) -> PathBuf {
@@ -249,7 +271,7 @@ impl NdkVersion {
     }
 }
 
-fn resolve_prebuilt_bin_dir(ndk_root: &Path) -> Result<PathBuf> {
+fn resolve_prebuilt_dir(ndk_root: &Path) -> Result<PathBuf> {
     let prebuilt_dir = ndk_root.join("toolchains").join("llvm").join("prebuilt");
     if !prebuilt_dir.exists() {
         return Err(AndroidToolchainError::NdkInvalid {
@@ -278,7 +300,7 @@ fn resolve_prebuilt_bin_dir(ndk_root: &Path) -> Result<PathBuf> {
             })
         })?;
 
-    Ok(matching.join("bin"))
+    Ok(matching)
 }
 
 fn preferred_prebuilt_tags() -> Vec<&'static str> {
