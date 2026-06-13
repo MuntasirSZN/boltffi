@@ -322,8 +322,6 @@ pub struct AppleConfig {
     #[serde(default)]
     pub swift: AppleSwiftConfig,
     #[serde(default)]
-    pub header: HeaderConfig,
-    #[serde(default)]
     pub xcframework: XcframeworkConfig,
     #[serde(default)]
     pub spm: SpmConfig,
@@ -599,7 +597,6 @@ impl Default for AppleConfig {
             simulator_architectures: None,
             macos_architectures: None,
             swift: AppleSwiftConfig::default(),
-            header: HeaderConfig::default(),
             xcframework: XcframeworkConfig::default(),
             spm: SpmConfig::default(),
             debug_symbols: DebugSymbolsConfig::default(),
@@ -1105,12 +1102,7 @@ impl Config {
     }
 
     pub fn apple_header_output(&self) -> PathBuf {
-        self.targets
-            .apple
-            .header
-            .output
-            .clone()
-            .unwrap_or_else(|| self.targets.apple.output.join("include"))
+        self.targets.apple.output.join("include")
     }
 
     pub fn apple_xcframework_output(&self) -> PathBuf {
@@ -1944,6 +1936,24 @@ include_macos = false
 
         assert_eq!(config.targets.apple.deployment_target, "16.0");
         assert!(!config.targets.apple.include_macos);
+    }
+
+    #[test]
+    fn ignores_legacy_apple_header_output() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple.header]
+output = "custom/include"
+"#,
+        );
+
+        assert_eq!(
+            config.apple_header_output(),
+            PathBuf::from("dist/apple/include")
+        );
     }
 
     #[test]

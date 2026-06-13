@@ -17,6 +17,7 @@ pub struct XcframeworkBuilder<'a> {
     libraries: Vec<BuiltLibrary>,
     headers_dir: PathBuf,
     output_dir: PathBuf,
+    scratch_dir: PathBuf,
 }
 
 pub struct XcframeworkOutput {
@@ -26,13 +27,19 @@ pub struct XcframeworkOutput {
 }
 
 impl<'a> XcframeworkBuilder<'a> {
-    pub fn new(config: &'a Config, libraries: Vec<BuiltLibrary>, headers_dir: PathBuf) -> Self {
+    pub fn new(
+        config: &'a Config,
+        libraries: Vec<BuiltLibrary>,
+        headers_dir: PathBuf,
+        scratch_dir: PathBuf,
+    ) -> Self {
         Self {
             config,
             names: AppleNames::from_config(config),
             libraries,
             headers_dir,
             output_dir: config.apple_xcframework_output(),
+            scratch_dir,
         }
     }
 
@@ -41,11 +48,19 @@ impl<'a> XcframeworkBuilder<'a> {
             path: self.output_dir.clone(),
             source,
         })?;
+        remove_directory_if_exists(&self.scratch_dir)?;
+        fs::create_dir_all(&self.scratch_dir).map_err(|source| {
+            CliError::CreateDirectoryFailed {
+                path: self.scratch_dir.clone(),
+                source,
+            }
+        })?;
 
         let library_groups = AppleLibraryGroups::from_config(self.config, &self.libraries);
         let library_slices = self.resolve_library_slices(&library_groups)?;
         let plan = XcframeworkPlan::new(
             &self.output_dir,
+            &self.scratch_dir,
             &self.names,
             self.headers_dir.clone(),
             library_slices,
@@ -89,7 +104,10 @@ impl<'a> XcframeworkBuilder<'a> {
             return Ok(Some(libs[0].path.clone()));
         }
 
-        let fat_dir = self.output_dir.join(slice_kind.fat_output_directory_name());
+        let fat_dir = self
+            .scratch_dir
+            .join("fat")
+            .join(slice_kind.fat_directory_name());
         fs::create_dir_all(&fat_dir).map_err(|source| CliError::CreateDirectoryFailed {
             path: fat_dir.clone(),
             source,
@@ -219,7 +237,7 @@ enum AppleLibrarySliceKind {
 }
 
 impl AppleLibrarySliceKind {
-    fn fat_output_directory_name(self) -> &'static str {
+    fn fat_directory_name(self) -> &'static str {
         match self {
             Self::IosDevice => "ios-device-fat",
             Self::IosSimulator => "ios-simulator-fat",
@@ -269,7 +287,7 @@ impl AppleLibrarySlice {
 
 struct XcframeworkPlan {
     xcframework_path: PathBuf,
-    legacy_headers_staging_dir: PathBuf,
+    legacy_output_staging_dirs: Vec<PathBuf>,
     framework_staging_dir: PathBuf,
     framework_plans: Vec<StaticFrameworkBundlePlan>,
 }
@@ -277,14 +295,30 @@ struct XcframeworkPlan {
 impl XcframeworkPlan {
     fn new(
         output_dir: &Path,
+        scratch_dir: &Path,
         names: &AppleNames,
         headers_dir: PathBuf,
         library_slices: Vec<AppleLibrarySlice>,
     ) -> Self {
         let xcframework_path = output_dir.join(format!("{}.xcframework", names.xcframework_name()));
-        let framework_staging_dir = output_dir.join("framework_staging");
+        let framework_staging_dir = scratch_dir.join("frameworks");
         let framework_name = names.ffi_module_name().to_string();
         let library_name = names.library_name().to_string();
+        let legacy_output_staging_dirs = [
+            output_dir.join("headers_staging"),
+            output_dir.join("framework_staging"),
+        ]
+        .into_iter()
+        .chain(
+            [
+                AppleLibrarySliceKind::IosDevice,
+                AppleLibrarySliceKind::IosSimulator,
+                AppleLibrarySliceKind::MacOs,
+            ]
+            .into_iter()
+            .map(|slice_kind| output_dir.join(slice_kind.fat_directory_name())),
+        )
+        .collect();
 
         let framework_plans = library_slices
             .into_iter()
@@ -305,7 +339,7 @@ impl XcframeworkPlan {
 
         Self {
             xcframework_path,
-            legacy_headers_staging_dir: output_dir.join("headers_staging"),
+            legacy_output_staging_dirs,
             framework_staging_dir,
             framework_plans,
         }
@@ -313,7 +347,9 @@ impl XcframeworkPlan {
 
     fn prepare_output(&self) -> Result<()> {
         remove_directory_if_exists(&self.xcframework_path)?;
-        remove_directory_if_exists(&self.legacy_headers_staging_dir)?;
+        self.legacy_output_staging_dirs
+            .iter()
+            .try_for_each(|path| remove_directory_if_exists(path))?;
         remove_directory_if_exists(&self.framework_staging_dir)?;
 
         fs::create_dir_all(&self.framework_staging_dir).map_err(|source| {
@@ -616,7 +652,11 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::StaticFrameworkBundlePlan;
+    use super::{
+        AppleLibrarySlice, AppleLibrarySliceKind, AppleNames, StaticFrameworkBundlePlan,
+        XcframeworkPlan,
+    };
+    use crate::config::{Config, PackageConfig, TargetsConfig};
 
     struct TemporaryDirectory {
         path: PathBuf,
@@ -642,6 +682,129 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    fn config() -> Config {
+        Config {
+            experimental: Vec::new(),
+            cargo: Default::default(),
+            package: PackageConfig {
+                name: "demo".to_string(),
+                crate_name: None,
+                version: None,
+                description: None,
+                license: None,
+                repository: None,
+            },
+            targets: TargetsConfig::default(),
+        }
+    }
+
+    #[test]
+    fn stages_xcframework_inputs_under_scratch_directory() {
+        let temporary_directory = TemporaryDirectory::new("boltffi-xcframework-plan");
+        let output_dir = temporary_directory.path().join("dist").join("apple");
+        let scratch_dir = temporary_directory
+            .path()
+            .join("target")
+            .join("boltffi")
+            .join("pack")
+            .join("apple")
+            .join("xcframework");
+        let headers_path = temporary_directory.path().join("headers");
+        let library_path = temporary_directory.path().join("libdemo.a");
+        let names = AppleNames::from_config(&config());
+
+        let plan = XcframeworkPlan::new(
+            &output_dir,
+            &scratch_dir,
+            &names,
+            headers_path,
+            vec![AppleLibrarySlice::resolved(
+                AppleLibrarySliceKind::IosSimulator,
+                library_path,
+            )],
+        );
+
+        assert_eq!(plan.framework_staging_dir, scratch_dir.join("frameworks"));
+        assert!(
+            plan.framework_plans
+                .iter()
+                .all(|framework_plan| framework_plan.framework_path.starts_with(&scratch_dir))
+        );
+        assert_eq!(
+            plan.xcframework_path,
+            output_dir.join(format!("{}.xcframework", names.xcframework_name()))
+        );
+    }
+
+    #[test]
+    fn prepare_output_removes_legacy_public_staging_directories() {
+        let temporary_directory = TemporaryDirectory::new("boltffi-xcframework-cleanup");
+        let output_dir = temporary_directory.path().join("dist").join("apple");
+        let scratch_dir = temporary_directory
+            .path()
+            .join("target")
+            .join("apple-scratch");
+        let names = AppleNames::from_config(&config());
+
+        [
+            output_dir.join("headers_staging"),
+            output_dir.join("framework_staging"),
+            output_dir.join("ios-device-fat"),
+            output_dir.join("ios-simulator-fat"),
+            output_dir.join("macos-fat"),
+            output_dir.join(format!("{}.xcframework", names.xcframework_name())),
+            scratch_dir.join("frameworks"),
+        ]
+        .into_iter()
+        .try_for_each(fs::create_dir_all)
+        .expect("create stale directories");
+
+        let plan = XcframeworkPlan::new(
+            &output_dir,
+            &scratch_dir,
+            &names,
+            output_dir.join("headers"),
+            Vec::new(),
+        );
+        plan.prepare_output().expect("prepare xcframework output");
+
+        [
+            temporary_directory
+                .path()
+                .join("dist")
+                .join("apple")
+                .join("headers_staging"),
+            temporary_directory
+                .path()
+                .join("dist")
+                .join("apple")
+                .join("framework_staging"),
+            temporary_directory
+                .path()
+                .join("dist")
+                .join("apple")
+                .join("ios-device-fat"),
+            temporary_directory
+                .path()
+                .join("dist")
+                .join("apple")
+                .join("ios-simulator-fat"),
+            temporary_directory
+                .path()
+                .join("dist")
+                .join("apple")
+                .join("macos-fat"),
+            temporary_directory
+                .path()
+                .join("dist")
+                .join("apple")
+                .join(format!("{}.xcframework", names.xcframework_name())),
+        ]
+        .into_iter()
+        .for_each(|path| assert!(!path.exists()));
+        assert!(scratch_dir.join("frameworks").is_dir());
     }
 
     #[test]

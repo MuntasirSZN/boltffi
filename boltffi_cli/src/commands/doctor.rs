@@ -206,10 +206,6 @@ fn print_config_summary(summary: &ConfigSummary, config_path: &Path, overlay_pat
                 config.apple_swift_output().display()
             );
             println!(
-                "  targets.apple.header.output: {}",
-                config.apple_header_output().display()
-            );
-            println!(
                 "  targets.apple.xcframework.output: {}",
                 config.apple_xcframework_output().display()
             );

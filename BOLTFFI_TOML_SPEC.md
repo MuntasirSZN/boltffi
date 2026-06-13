@@ -111,11 +111,6 @@ Example:
 Uuid = { type = "UUID", conversion = "uuid_string" }
 ```
 
-### `[targets.apple.header]` (optional)
-
-- `output` (path, optional): Where the generated C header is written.
-  - Default: `{targets.apple.output}/include`
-
 ### `[targets.apple.xcframework]` (optional)
 
 - `output` (path, optional): Where `{Name}.xcframework` and `{Name}.xcframework.zip` are written.
