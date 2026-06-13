@@ -21,6 +21,7 @@ pub enum AndroidToolchainError {
 pub struct AndroidNdk {
     root: PathBuf,
     bin_dir: PathBuf,
+    sysroot_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,6 +68,28 @@ impl AndroidToolchain {
         cargo.env(format!("CC_{}", triple_env_lower), &linker);
         cargo.env(format!("AR_{}", triple_env_lower), &ar);
 
+        let sysroot = self.ndk.sysroot();
+        let include_target = android_sysroot_target(target.triple());
+
+        let bindgen_key = format!("BINDGEN_EXTRA_CLANG_ARGS_{}", triple_env_lower);
+        let bindgen_args = format!(
+            "--sysroot={} -isystem {}/usr/include -isystem {}/usr/include/{}",
+            sysroot.display(),
+            sysroot.display(),
+            sysroot.display(),
+            include_target,
+        );
+        let bindgen_clang_args = bindgen_args.replace('\\', "/");
+
+        let merged_args = match std::env::var(&bindgen_key) {
+            Ok(existing) if !existing.trim().is_empty() => {
+                format!("{bindgen_clang_args} {existing}")
+            }
+            _ => bindgen_clang_args,
+        };
+
+        cargo.env(bindgen_key, merged_args);
+
         Ok(())
     }
 
@@ -89,13 +112,23 @@ impl AndroidToolchain {
 impl AndroidNdk {
     pub fn discover(ndk_version_hint: Option<&str>) -> Result<Self> {
         let root = resolve_ndk_root(ndk_version_hint).ok_or(AndroidToolchainError::NdkNotFound)?;
-        let bin_dir = resolve_prebuilt_bin_dir(&root)?;
+        let prebuilt_dir = resolve_prebuilt_dir(&root)?;
+        let bin_dir = prebuilt_dir.join("bin");
+        let sysroot_dir = prebuilt_dir.join("sysroot");
 
-        Ok(Self { root, bin_dir })
+        Ok(Self {
+            root,
+            sysroot_dir,
+            bin_dir,
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn sysroot(&self) -> &Path {
+        &self.sysroot_dir
     }
 
     pub fn clang_for_abi(&self, abi: AndroidAbi, min_sdk: u32) -> PathBuf {
@@ -249,7 +282,7 @@ impl NdkVersion {
     }
 }
 
-fn resolve_prebuilt_bin_dir(ndk_root: &Path) -> Result<PathBuf> {
+fn resolve_prebuilt_dir(ndk_root: &Path) -> Result<PathBuf> {
     let prebuilt_dir = ndk_root.join("toolchains").join("llvm").join("prebuilt");
     if !prebuilt_dir.exists() {
         return Err(AndroidToolchainError::NdkInvalid {
@@ -278,7 +311,7 @@ fn resolve_prebuilt_bin_dir(ndk_root: &Path) -> Result<PathBuf> {
             })
         })?;
 
-    Ok(matching.join("bin"))
+    Ok(matching)
 }
 
 fn preferred_prebuilt_tags() -> Vec<&'static str> {
@@ -289,5 +322,12 @@ fn preferred_prebuilt_tags() -> Vec<&'static str> {
         ("linux", "aarch64") => vec!["linux-aarch64", "linux-x86_64"],
         ("windows", "x86_64") => vec!["windows-x86_64"],
         _ => Vec::new(),
+    }
+}
+
+fn android_sysroot_target(triple: &str) -> &str {
+    match triple {
+        "armv7-linux-androideabi" => "arm-linux-androideabi",
+        _ => triple,
     }
 }
