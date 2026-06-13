@@ -3,7 +3,7 @@ use boltffi_bindgen::render::kotlin::{
     KotlinApiStyle as BindgenKotlinApiStyle, KotlinDesktopLoader as BindgenKotlinDesktopLoader,
     KotlinEmitter, KotlinLowerer,
 };
-use boltffi_bindgen::{FactoryStyle as BindgenFactoryStyle, KotlinOptions};
+use boltffi_bindgen::{CHeaderLowerer, FactoryStyle as BindgenFactoryStyle, KotlinOptions};
 
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{
@@ -84,6 +84,13 @@ impl LanguageGenerator for KotlinGenerator {
         let kotlin_path = kotlin_directory.join(format!("{module_name}.kt"));
 
         request.write_output(&kotlin_path, kotlin_source)?;
+
+        let header_source =
+            CHeaderLowerer::new(&lowered_crate.ffi_contract, &lowered_crate.abi_contract)
+                .generate();
+        let header_path = jni_directory.join(format!("{}.h", request.config().library_name()));
+
+        request.write_output(&header_path, header_source)?;
 
         let jni_module = JniLowerer::new(
             &lowered_crate.ffi_contract,

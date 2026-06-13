@@ -58,32 +58,13 @@ val generateKotlinBindings = tasks.register<Exec>("generateKotlinBindings") {
     )
 }
 
-val generateHeader = tasks.register<Exec>("generateHeader") {
-    workingDir = demoDir
-    commandLine(
-        "cargo",
-        "run",
-        "-q",
-        "--manifest-path",
-        workspaceManifest.absolutePath,
-        "-p",
-        "boltffi_cli",
-        "--",
-        "generate",
-        "header",
-        "--experimental",
-        "--output",
-        generatedJniDir.absolutePath,
-    )
-}
-
 val buildDemoLibrary = tasks.register<Exec>("buildDemoLibrary") {
     workingDir = demoDir
     commandLine("cargo", "build", "-q")
 }
 
 val buildJvmJniBridge = tasks.register("buildJvmJniBridge") {
-    dependsOn(generateKotlinBindings, generateHeader, buildDemoLibrary)
+    dependsOn(generateKotlinBindings, buildDemoLibrary)
 
     doLast {
         val nativeDirectory = nativeBuildDir.get().asFile.apply { mkdirs() }
