@@ -1325,7 +1325,10 @@ mod enums {
         buf.copy_from_slice(&99i32.to_le_bytes());
 
         let result = Binary::decode_from(&buf);
-        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(DecodeError::InvalidValue(InvalidWireValue::EnumTag))
+        ));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use boltffi_ast::{FieldDef, MethodDef, Path as SourcePath, RecordDef, TypeExpr, Visibility};
+use boltffi_ast::{FieldDef, MethodDef, Path as SourcePath, RecordDef, TypeExpr};
 use boltffi_binding::{
     CanonicalName, CodecNode, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, ExecutionDecl,
     ExportedCallable, ExportedMethodDecl, FieldKey, InitializerDecl, NativeSymbol, Receive,
@@ -6,7 +6,7 @@ use boltffi_binding::{
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Ident, Path, Type, parse_str};
+use syn::{Ident, Type, parse_str};
 
 use crate::experimental::{
     error::Error,
@@ -558,22 +558,7 @@ where
     }
 
     fn source_method(&self, name: &CanonicalName) -> Result<&'lowered MethodDef, Error> {
-        let binding_name = name.as_path_string();
-        let matches = self
-            .source
-            .methods
-            .iter()
-            .filter(|method| method.name.as_path_string() == binding_name)
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [method] => Ok(*method),
-            [] => Err(Error::SourceSyntaxMismatch(
-                "source record method is missing for binding method",
-            )),
-            _ => Err(Error::SourceSyntaxMismatch(
-                "source record method name is ambiguous",
-            )),
-        }
+        rust_api::MethodDeclarations::record(self.source).resolve(name)
     }
 }
 
@@ -622,7 +607,8 @@ where
                     source_signature,
                     rust_call,
                     receiver,
-                    visibility(self.source_method)?,
+                    rust_api::VisibilityTokens::new(&self.source_method.source.visibility)
+                        .into_tokens()?,
                     self.expansion,
                 ),
             );
@@ -633,7 +619,7 @@ where
             source_signature,
             rust_call,
             receiver,
-            visibility(self.source_method)?,
+            rust_api::VisibilityTokens::new(&self.source_method.source.visibility).into_tokens()?,
             self.expansion,
         )
         .render()
@@ -789,17 +775,4 @@ fn field_ident(source: &FieldDef) -> Result<Ident, Error> {
 
 fn layout_size(bytes: u64) -> Result<usize, Error> {
     usize::try_from(bytes).map_err(|_| Error::SourceSyntaxMismatch("record layout is too large"))
-}
-
-fn visibility(method: &MethodDef) -> Result<TokenStream, Error> {
-    match &method.source.visibility {
-        Visibility::Private => Ok(TokenStream::new()),
-        Visibility::Public => Ok(quote! { pub }),
-        Visibility::Restricted(path) => {
-            let path = parse_str::<Path>(path).map_err(|_| {
-                Error::SourceSyntaxMismatch("source visibility path is not Rust path")
-            })?;
-            Ok(quote! { pub(in #path) })
-        }
-    }
 }

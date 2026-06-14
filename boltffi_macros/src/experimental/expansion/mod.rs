@@ -1,10 +1,10 @@
 mod index;
 mod pair;
 
-use boltffi_ast::{FunctionDef, RecordDef, TraitDef};
+use boltffi_ast::{EnumDef, FunctionDef, RecordDef, TraitDef};
 use boltffi_binding::{
-    CallbackDecl, CallbackId, CustomTypeDecl, CustomTypeId, EncodedRecordDecl, FunctionDecl,
-    LoweredBindings, RecordDecl, RecordId, Surface,
+    CallbackDecl, CallbackId, CustomTypeDecl, CustomTypeId, EncodedRecordDecl, EnumDecl,
+    FunctionDecl, LoweredBindings, RecordDecl, RecordId, Surface,
 };
 
 use self::index::ExpansionIndex;
@@ -79,6 +79,20 @@ impl<'lowered, S: Surface> Expansion<'lowered, S> {
         }
     }
 
+    /// Returns the lowered enum declaration paired with the scanned source enum.
+    pub fn enumeration(
+        &self,
+        source: &'lowered EnumDef,
+    ) -> Result<DeclarationPair<'lowered, EnumDef, EnumDecl<S>>, Error> {
+        match self
+            .index
+            .paired(self.lowered, SourceDeclaration::Enum(source))?
+        {
+            PairedDeclaration::Enum(pair) => Ok(pair),
+            _ => Err(Error::WrongDeclaration),
+        }
+    }
+
     /// Returns the lowered function declaration paired with the scanned source function.
     pub fn function(
         &self,
@@ -98,10 +112,11 @@ impl<'lowered, S: Surface> Expansion<'lowered, S> {
 mod tests {
     use boltffi_ast::{
         CanonicalName, ClassDef, ClassId, CustomRemoteType, CustomTypeConverter,
-        CustomTypeConverters, CustomTypeDef, CustomTypeId, ExecutionKind, FieldDef, FnSig, FnTrait,
-        FnTraitKind, FunctionDef, FunctionId, MethodDef, MethodId, PackageInfo, ParameterDef,
-        ParameterPassing, Path, Primitive, Receiver, RecordDef, RecordId, ReprAttr, ReprItem,
-        ReturnDef, Source, SourceContract, SourceName, TraitDef, TraitId, TypeExpr, Visibility,
+        CustomTypeConverters, CustomTypeDef, CustomTypeId, EnumDef, EnumId, ExecutionKind,
+        FieldDef, FnSig, FnTrait, FnTraitKind, FunctionDef, FunctionId, MethodDef, MethodId,
+        PackageInfo, ParameterDef, ParameterPassing, Path, Primitive, Receiver, RecordDef,
+        RecordId, ReprAttr, ReprItem, ReturnDef, Source, SourceContract, SourceName, TraitDef,
+        TraitId, TypeExpr, VariantDef, VariantPayload, Visibility,
     };
     use boltffi_binding::{Native, Wasm32, lower_with_declarations};
     use proc_macro2::TokenStream;
@@ -197,6 +212,43 @@ mod tests {
             >,
     {
         wrapper::record::Renderer::new(expansion.record(source)?, expansion).render()
+    }
+
+    fn expand_enumeration<'lowered, S>(
+        expansion: &Expansion<'lowered, S>,
+        source: &'lowered EnumDef,
+    ) -> Result<TokenStream, Error>
+    where
+        S: Target,
+        for<'expansion> wrapper::arguments::SyncRenderer: wrapper::Render<
+                S,
+                wrapper::arguments::Input<'expansion, 'lowered, S>,
+                Output = wrapper::arguments::Tokens,
+            >,
+        for<'expansion> wrapper::returns::Failure: wrapper::Render<
+                S,
+                wrapper::returns::FailureInput<'expansion, 'lowered, S>,
+                Output = TokenStream,
+            >,
+        for<'expansion> wrapper::returns::Renderer: wrapper::Render<
+                S,
+                wrapper::returns::Input<'expansion, 'lowered, S>,
+                Output = wrapper::returns::Tokens,
+            >,
+        for<'expansion> wrapper::async_call::Renderer: wrapper::Render<
+                S,
+                wrapper::async_call::Input<'expansion, 'lowered, S>,
+                Output = TokenStream,
+            >,
+        for<'ty> wrapper::param::direct::Renderer:
+            wrapper::Render<S, wrapper::param::direct::Input<'ty>, Output = wrapper::param::Tokens>,
+        for<'expansion> wrapper::param::encoded::Renderer: wrapper::Render<
+                S,
+                wrapper::param::encoded::Input<'expansion, 'lowered, S>,
+                Output = wrapper::param::Tokens,
+            >,
+    {
+        wrapper::enumeration::Renderer::new(expansion.enumeration(source)?, expansion).render()
     }
 
     fn source_contract() -> SourceContract {
@@ -476,6 +528,58 @@ mod tests {
         let mut record = profile_record();
         record.methods.push(method);
         record
+    }
+
+    fn status_enum() -> EnumDef {
+        let mut enumeration =
+            EnumDef::new(EnumId::new("demo::Status"), CanonicalName::single("Status"));
+        enumeration.variants = vec![
+            VariantDef::unit(SourceName::new("Ready", CanonicalName::single("Ready"))),
+            VariantDef::unit(SourceName::new("Failed", CanonicalName::single("Failed"))),
+        ];
+        enumeration
+    }
+
+    fn status_enum_with_method(method: MethodDef) -> EnumDef {
+        let mut enumeration = status_enum();
+        enumeration.methods.push(method);
+        enumeration
+    }
+
+    fn event_enum() -> EnumDef {
+        let mut enumeration =
+            EnumDef::new(EnumId::new("demo::Event"), CanonicalName::single("Event"));
+        enumeration.variants = vec![
+            VariantDef::unit(SourceName::new("Empty", CanonicalName::single("Empty"))),
+            VariantDef {
+                name: SourceName::new("Count", CanonicalName::single("Count")),
+                discriminant: None,
+                payload: VariantPayload::Tuple(vec![TypeExpr::Primitive(Primitive::U32)]),
+                doc: None,
+                user_attrs: Vec::new(),
+                source: Source::exported(),
+                source_span: None,
+            },
+            VariantDef {
+                name: SourceName::new("Named", CanonicalName::single("Named")),
+                discriminant: None,
+                payload: VariantPayload::Struct(vec![FieldDef::new(
+                    CanonicalName::single("name"),
+                    TypeExpr::String,
+                )]),
+                doc: None,
+                user_attrs: Vec::new(),
+                source: Source::exported(),
+                source_span: None,
+            },
+        ];
+        enumeration
+    }
+
+    fn event_enum_with_method(method: MethodDef) -> EnumDef {
+        let mut enumeration = event_enum();
+        enumeration.methods.push(method);
+        enumeration
     }
 
     fn profile_record() -> RecordDef {
@@ -1973,6 +2077,434 @@ mod tests {
         assert!(rendered.contains("__boltffi_receiver_len : usize"));
         assert!(rendered.contains("__boltffi_receiver . display_name ()"));
         assert!(rendered.contains("into_packed"));
+    }
+
+    #[test]
+    fn native_c_style_enum_expansion_emits_scalar_transport_traits() {
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(status_enum());
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Status {
+                Ready,
+                Failed,
+            }
+
+            #tokens
+        })
+        .expect("c-style enum expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("unsafe impl :: boltffi :: __private :: Passable for Status"));
+        assert!(rendered.contains("type In = i32"));
+        assert!(rendered.contains("impl :: boltffi :: __private :: wire :: WireEncode for Status"));
+        assert!(rendered.contains("impl :: boltffi :: __private :: wire :: WireDecode for Status"));
+        assert!(rendered.contains("impl :: boltffi :: __private :: VecTransport for Status"));
+        assert!(rendered.contains("Status :: Ready as i32"));
+        assert!(rendered.contains("Status :: Failed as i32"));
+        assert!(rendered.contains("InvalidWireValue :: EnumTag"));
+    }
+
+    #[test]
+    fn native_c_style_enum_expansion_emits_instance_method_wrapper() {
+        let method = record_method(
+            "is_ready",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::Bool)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(status_enum_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Status {
+                Ready,
+                Failed,
+            }
+
+            impl Status {
+                pub fn is_ready(&self) -> bool {
+                    matches!(self, Self::Ready)
+                }
+            }
+
+            #tokens
+        })
+        .expect("c-style enum method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_enum_demo_status_is_ready"));
+        assert!(rendered.contains(
+            "__boltffi_receiver : < Status as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(rendered.contains("__boltffi_receiver . is_ready ()"));
+    }
+
+    #[test]
+    fn native_c_style_enum_expansion_emits_static_method_wrapper() {
+        let method = record_method(
+            "count",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(status_enum_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Status {
+                Ready,
+                Failed,
+            }
+
+            impl Status {
+                pub fn count() -> u32 {
+                    2
+                }
+            }
+
+            #tokens
+        })
+        .expect("c-style enum static method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_enum_demo_status_count"));
+        assert!(!rendered.contains("fn boltffi_init_enum_demo_status_count"));
+        assert!(!rendered.contains("__boltffi_receiver"));
+        assert!(rendered.contains("Status :: count ()"));
+    }
+
+    #[test]
+    fn native_c_style_enum_expansion_emits_initializer_wrapper() {
+        let initializer = record_method(
+            "default_status",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(status_enum_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Status {
+                Ready,
+                Failed,
+            }
+
+            impl Status {
+                pub fn default_status() -> Self {
+                    Self::Ready
+                }
+            }
+
+            #tokens
+        })
+        .expect("c-style enum initializer expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_enum_demo_status_default_status"));
+        assert!(!rendered.contains("fn boltffi_method_enum_demo_status_default_status"));
+        assert!(rendered.contains("Status :: default_status ()"));
+        assert!(rendered.contains("-> < Status as :: boltffi :: __private :: Passable > :: Out"));
+    }
+
+    #[test]
+    fn native_c_style_enum_expansion_emits_async_initializer_wrapper() {
+        let mut initializer = record_method(
+            "load",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        initializer.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(status_enum_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Status {
+                Ready,
+                Failed,
+            }
+
+            impl Status {
+                pub async fn load() -> Self {
+                    Self::Ready
+                }
+            }
+
+            #tokens
+        })
+        .expect("c-style enum async initializer expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_enum_demo_status_load"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: rustfuture :: rust_future_new (async move { Status :: load () . await })"
+        ));
+        assert!(rendered.contains("fn boltffi_async_init_enum_demo_status_load_poll"));
+        assert!(rendered.contains("fn boltffi_async_init_enum_demo_status_load_complete"));
+    }
+
+    #[test]
+    fn wasm_c_style_enum_expansion_emits_async_initializer_wrapper() {
+        let mut initializer = record_method(
+            "load",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        initializer.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(status_enum_with_method(initializer));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_init_enum_demo_status_load"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: rustfuture :: rust_future_new (async move { Status :: load () . await })"
+        ));
+        assert!(rendered.contains("fn boltffi_async_init_enum_demo_status_load_poll_sync"));
+        assert!(rendered.contains("fn boltffi_async_init_enum_demo_status_load_complete"));
+    }
+
+    #[test]
+    fn native_c_style_enum_method_returning_self_renders_concrete_enum_type() {
+        let method = record_method(
+            "clone_status",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(status_enum_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_enum_demo_status_clone_status"));
+        assert!(rendered.contains("-> < Status as :: boltffi :: __private :: Passable > :: Out"));
+        assert!(rendered.contains("__boltffi_receiver . clone_status ()"));
+    }
+
+    #[test]
+    fn native_data_enum_expansion_emits_wire_traits_for_payload_variants() {
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum());
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Event {
+                Empty,
+                Count(u32),
+                Named { name: String },
+            }
+
+            #tokens
+        })
+        .expect("data enum expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("unsafe impl :: boltffi :: __private :: WirePassable for Event"));
+        assert!(rendered.contains("impl :: boltffi :: __private :: wire :: WireEncode for Event"));
+        assert!(rendered.contains("impl :: boltffi :: __private :: wire :: WireDecode for Event"));
+        assert!(rendered.contains("Event :: Empty => 4usize"));
+        assert!(rendered.contains("Event :: Count (__boltffi_payload0)"));
+        assert!(rendered.contains("Event :: Named { name }"));
+        assert!(
+            rendered
+                .contains("buffer [0 .. 4] . copy_from_slice (& (1i32 as i32) . to_le_bytes ())")
+        );
+        assert!(rendered.contains("InvalidWireValue :: EnumTag"));
+        assert!(rendered.contains("let (__boltffi_payload0_decoded , __boltffi_payload0_used)"));
+        assert!(rendered.contains("let (__boltffi_name_decoded , __boltffi_name_used)"));
+    }
+
+    #[test]
+    fn native_data_enum_expansion_emits_encoded_instance_method_wrapper() {
+        let method = record_method(
+            "label",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::String),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_enum_demo_event_label"));
+        assert!(rendered.contains("__boltffi_receiver_ptr : * const u8"));
+        assert!(rendered.contains("__boltffi_receiver_len : usize"));
+        assert!(rendered.contains("let __boltffi_receiver_storage : Event ="));
+        assert!(rendered.contains("let __boltffi_receiver = & __boltffi_receiver_storage ;"));
+        assert!(rendered.contains("__boltffi_receiver . label ()"));
+    }
+
+    #[test]
+    fn native_data_enum_expansion_emits_static_method_wrapper() {
+        let method = record_method(
+            "kind_count",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Event {
+                Empty,
+                Count(u32),
+                Named { name: String },
+            }
+
+            impl Event {
+                pub fn kind_count() -> u32 {
+                    3
+                }
+            }
+
+            #tokens
+        })
+        .expect("data enum static method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_enum_demo_event_kind_count"));
+        assert!(!rendered.contains("fn boltffi_init_enum_demo_event_kind_count"));
+        assert!(!rendered.contains("__boltffi_receiver"));
+        assert!(rendered.contains("Event :: kind_count ()"));
+    }
+
+    #[test]
+    fn native_data_enum_expansion_emits_initializer_wrapper() {
+        let initializer = record_method(
+            "empty_event",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Event {
+                Empty,
+                Count(u32),
+                Named { name: String },
+            }
+
+            impl Event {
+                pub fn empty_event() -> Self {
+                    Self::Empty
+                }
+            }
+
+            #tokens
+        })
+        .expect("data enum initializer expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_enum_demo_event_empty_event"));
+        assert!(!rendered.contains("fn boltffi_method_enum_demo_event_empty_event"));
+        assert!(rendered.contains("Event :: empty_event ()"));
+        assert!(rendered.contains(":: boltffi :: __private :: FfiBuf :: wire_encode"));
+    }
+
+    #[test]
+    fn wasm_data_enum_expansion_emits_initializer_wrapper() {
+        let initializer = record_method(
+            "empty_event",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum_with_method(initializer));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_init_enum_demo_event_empty_event"));
+        assert!(rendered.contains("Event :: empty_event ()"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_result) . into_packed ()"
+        ));
+    }
+
+    #[test]
+    fn native_data_enum_expansion_emits_async_initializer_wrapper() {
+        let mut initializer = record_method(
+            "load",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        initializer.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Event {
+                Empty,
+                Count(u32),
+                Named { name: String },
+            }
+
+            impl Event {
+                pub async fn load() -> Self {
+                    Self::Empty
+                }
+            }
+
+            #tokens
+        })
+        .expect("data enum async initializer expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_enum_demo_event_load"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: rustfuture :: rust_future_new (async move { Event :: load () . await })"
+        ));
+        assert!(rendered.contains("fn boltffi_async_init_enum_demo_event_load_poll"));
+        assert!(rendered.contains("fn boltffi_async_init_enum_demo_event_load_complete"));
     }
 
     #[test]
@@ -5297,7 +5829,8 @@ mod tests {
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_numbers() {
                     let __boltffi_result = numbers();
-                    let __boltffi_buf = ::boltffi::__private::FfiBuf::from_vec(__boltffi_result);
+                    let __boltffi_buf =
+                        <_ as ::boltffi::__private::VecTransport>::pack_vec(__boltffi_result);
                     ::boltffi::__private::write_return_slot(
                         __boltffi_buf.as_ptr() as u32,
                         __boltffi_buf.len() as u32,

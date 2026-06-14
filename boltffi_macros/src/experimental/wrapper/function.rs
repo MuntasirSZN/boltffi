@@ -1,8 +1,7 @@
-use boltffi_ast::{FunctionDef, Visibility};
+use boltffi_ast::FunctionDef;
 use boltffi_binding::{ExecutionDecl, FunctionDecl};
 use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{Ident, Path, parse_str};
+use syn::{Ident, parse_str};
 
 use crate::experimental::{
     error::Error,
@@ -55,7 +54,8 @@ where
         let source = self.pair.source();
         let source_signature = rust_api::Callable::function(source);
         let function_ident = Self::function_ident(source)?;
-        let visibility = Self::visibility(source)?;
+        let visibility =
+            rust_api::VisibilityTokens::new(&source.source.visibility).into_tokens()?;
         if matches!(
             function.callable().execution(),
             ExecutionDecl::Asynchronous(_)
@@ -88,18 +88,5 @@ where
         parse_str(source.name.spelling()).map_err(|_| {
             Error::SourceSyntaxMismatch("source function name is not a Rust identifier")
         })
-    }
-
-    fn visibility(source: &FunctionDef) -> Result<TokenStream, Error> {
-        match &source.source.visibility {
-            Visibility::Private => Ok(TokenStream::new()),
-            Visibility::Public => Ok(quote! { pub }),
-            Visibility::Restricted(path) => {
-                let path = parse_str::<Path>(path).map_err(|_| {
-                    Error::SourceSyntaxMismatch("source visibility path is not a Rust path")
-                })?;
-                Ok(quote! { pub(in #path) })
-            }
-        }
     }
 }

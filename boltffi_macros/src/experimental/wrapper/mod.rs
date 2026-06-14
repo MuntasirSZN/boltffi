@@ -7,6 +7,7 @@ pub mod arguments;
 pub mod async_call;
 pub mod callback;
 pub mod encoded;
+pub mod enumeration;
 pub mod function;
 pub mod handle;
 pub mod param;
