@@ -91,7 +91,6 @@ fn create_default_config(package_name: &str) -> Config {
                     error_style: ErrorStyle::default(),
                     type_mappings: Default::default(),
                 },
-                header: HeaderConfig { output: None },
                 xcframework: XcframeworkConfig {
                     output: None,
                     name: None,

@@ -19,7 +19,7 @@ use crate::target::{BuiltLibrary, Platform};
 
 use super::{
     discover_built_libraries_for_targets, missing_built_libraries, print_cargo_line,
-    resolve_build_cargo_args,
+    resolve_build_cargo_args, scratch,
 };
 
 pub(crate) use self::spm::SpmPackageGenerator;
@@ -80,10 +80,13 @@ pub(crate) fn pack_apple(
 
     let layout = options.layout.unwrap_or_else(|| config.apple_spm_layout());
     let package_root = config.apple_spm_output();
+    let scratch_directory = scratch::Directory::for_target("apple")?;
+    let headers_dir = scratch_directory.join("headers");
 
     if options.execution.regenerate {
+        scratch_directory.recreate()?;
         let step = reporter.step("Generating Apple bindings");
-        generate_apple_bindings(config, layout, &package_root)?;
+        generate_apple_bindings(config, layout, &package_root, &headers_dir)?;
         step.finish_success();
     }
 
@@ -116,7 +119,6 @@ pub(crate) fn pack_apple(
         )?;
     }
 
-    let headers_dir = config.apple_header_output();
     if !headers_dir.exists() {
         return Err(CliError::FileNotFound(headers_dir));
     }
@@ -126,8 +128,13 @@ pub(crate) fn pack_apple(
 
     let xcframework_output = if should_build_xcframework {
         let step = reporter.step("Creating xcframework");
-        let output = XcframeworkBuilder::new(config, apple_libraries.clone(), headers_dir.clone())
-            .build_with_zip()?;
+        let output = XcframeworkBuilder::new(
+            config,
+            apple_libraries.clone(),
+            headers_dir.clone(),
+            scratch_directory.join("xcframework"),
+        )
+        .build_with_zip()?;
         step.finish_success();
         Some(output)
     } else {
@@ -221,7 +228,12 @@ fn build_apple_targets(
     Err(PackError::BuildFailed { targets: failed }.into())
 }
 
-fn generate_apple_bindings(config: &Config, layout: SpmLayout, package_root: &Path) -> Result<()> {
+fn generate_apple_bindings(
+    config: &Config,
+    layout: SpmLayout,
+    package_root: &Path,
+    header_output_directory: &Path,
+) -> Result<()> {
     let swift_output_directory = match layout {
         SpmLayout::Bundled => config
             .apple_spm_wrapper_sources()
@@ -244,12 +256,10 @@ fn generate_apple_bindings(config: &Config, layout: SpmLayout, package_root: &Pa
         config,
         GenerateOptions {
             target: GenerateTarget::Header,
-            output: Some(config.apple_header_output()),
+            output: Some(header_output_directory.to_path_buf()),
             experimental: false,
         },
-    )?;
-
-    Ok(())
+    )
 }
 
 fn existing_xcframework_checksum(config: &Config) -> Result<String> {
