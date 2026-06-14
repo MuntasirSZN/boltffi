@@ -108,19 +108,19 @@ impl<'source> MarkedItems<'source> {
                 self.impls.push(Marked::new(scope, marker, item));
                 Ok(())
             }
-            (Marker::Export, syn::Item::Fn(item)) => {
+            (Marker::Export(export), syn::Item::Fn(item)) if !export.requires_class_impl() => {
                 self.functions.push(Marked::new(scope, marker, item));
                 Ok(())
             }
-            (Marker::Export, syn::Item::Trait(item)) => {
+            (Marker::Export(export), syn::Item::Trait(item)) if !export.requires_class_impl() => {
                 self.traits.push(Marked::new(scope, marker, item));
                 Ok(())
             }
-            (Marker::Export, syn::Item::Impl(item)) => {
+            (Marker::Export(_), syn::Item::Impl(item)) => {
                 self.classes.push(Marked::new(scope, marker, item));
                 Ok(())
             }
-            (Marker::Export, syn::Item::Const(item)) => {
+            (Marker::Export(export), syn::Item::Const(item)) if !export.requires_class_impl() => {
                 self.constants.push(Marked::new(scope, marker, item));
                 Ok(())
             }
@@ -297,6 +297,24 @@ mod tests {
             ScanError::InvalidMarkerPlacement {
                 marker: "export".to_owned(),
                 item: "struct".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_class_export_options_on_non_class_items() {
+        let tree = tree("#[export(single_threaded)] fn answer() -> u32 { 42 }");
+
+        let error = match MarkedItems::collect(&tree) {
+            Ok(_) => panic!("class-only export option must reject on functions"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            ScanError::InvalidMarkerPlacement {
+                marker: "export".to_owned(),
+                item: "function".to_owned()
             }
         );
     }

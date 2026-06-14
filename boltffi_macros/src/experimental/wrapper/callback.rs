@@ -1975,7 +1975,7 @@ where
                 &self.direct_source_type()?,
                 quote! { unsafe { __boltffi_result.as_byte_slice() } },
                 quote! {
-                    panic!("async callback return conversion failed: {}", error)
+                    panic!("async callback return conversion failed: {:?}", error)
                 },
             ),
         )
@@ -1990,7 +1990,7 @@ where
                 &self.direct_source_type()?,
                 quote! { __boltffi_completion.data.as_slice() },
                 quote! {
-                    panic!("async callback return conversion failed: {}", error)
+                    panic!("async callback return conversion failed: {:?}", error)
                 },
             ),
         )
@@ -2826,7 +2826,7 @@ where
                     }
                 })
             }
-            rust_api::HandleReturn::Class => Err(Error::UnsupportedExpansion(
+            rust_api::HandleReturn::Class(_) => Err(Error::UnsupportedExpansion(
                 "callback method class handle return",
             )),
         }
@@ -3287,7 +3287,7 @@ impl CallbackMethodSurface for Native {
                     &rust_type,
                     quote! { unsafe { #value.as_byte_slice() } },
                     quote! {
-                        panic!("callback method success conversion failed: {}", error)
+                        panic!("callback method success conversion failed: {:?}", error)
                     },
                 )),
             native::BufferShape::Slice | native::BufferShape::BufferPointer => Err(
@@ -3548,7 +3548,7 @@ impl CallbackMethodSurface for Wasm32 {
                 rust_type,
                 expansion,
                 quote! {
-                    panic!("callback method success conversion failed: {}", error)
+                    panic!("callback method success conversion failed: {:?}", error)
                 },
             ),
             wasm32::BufferShape::Slice => Err(Error::UnsupportedExpansion(
@@ -3633,7 +3633,7 @@ impl CallbackEncodedError {
                     &rust_type,
                     quote! { unsafe { #value.as_byte_slice() } },
                     quote! {
-                        panic!("callback method error conversion failed: {}", error)
+                        panic!("callback method error conversion failed: {:?}", error)
                     },
                 )),
             Self::WasmPacked => packed_encoded_value(
@@ -3642,7 +3642,7 @@ impl CallbackEncodedError {
                 rust_type,
                 expansion,
                 quote! {
-                    panic!("callback method error conversion failed: {}", error)
+                    panic!("callback method error conversion failed: {:?}", error)
                 },
             ),
         }
@@ -3714,7 +3714,7 @@ impl CallbackEncodedReturn {
                         &rust_type,
                         quote! { __boltffi_bytes },
                         quote! {
-                            panic!("callback method return conversion failed: {}", error)
+                            panic!("callback method return conversion failed: {:?}", error)
                         },
                     ),
                 )?;
@@ -3739,7 +3739,7 @@ impl CallbackEncodedReturn {
                         &rust_type,
                         quote! { __boltffi_bytes },
                         quote! {
-                            panic!("callback method return conversion failed: {}", error)
+                            panic!("callback method return conversion failed: {:?}", error)
                         },
                     ),
                 )?;
@@ -3774,7 +3774,7 @@ impl CallbackEncodedReturn {
                         &rust_type,
                         quote! { __boltffi_bytes },
                         quote! {
-                            panic!("callback method return conversion failed: {}", error)
+                            panic!("callback method return conversion failed: {:?}", error)
                         },
                     ),
                 )?;
@@ -3799,7 +3799,7 @@ impl CallbackEncodedReturn {
                 rust_type,
                 expansion,
                 quote! {
-                    panic!("callback method return conversion failed: {}", error)
+                    panic!("callback method return conversion failed: {:?}", error)
                 },
             ),
         }

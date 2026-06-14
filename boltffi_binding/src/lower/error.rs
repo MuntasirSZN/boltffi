@@ -292,6 +292,10 @@ pub enum UnsupportedType {
     BorrowedCallbackParameter,
     /// An owned class receiver has no handle-transfer protocol yet.
     OwnedClassReceiver,
+    /// A mutable class receiver needs the class to be exported as unsafe
+    /// single-threaded because `Send + Sync` does not make concurrent mutable
+    /// borrows sound.
+    MutableClassReceiverRequiresUnsafeSingleThreaded,
     /// An inline closure appeared inside a value-shaped position
     /// (record field, vec element, tuple element, map key or value,
     /// `Option` inner, ...). Closures cross at callable parameter
@@ -321,6 +325,9 @@ impl fmt::Display for UnsupportedType {
             Self::InvalidCallbackReceiver => "callback method receiver",
             Self::BorrowedCallbackParameter => "borrowed callback parameter",
             Self::OwnedClassReceiver => "owned class receiver",
+            Self::MutableClassReceiverRequiresUnsafeSingleThreaded => {
+                "mutable class receiver without unsafe single-threaded export"
+            }
             Self::ClosureInValuePosition => "closure in a value-shaped position",
             Self::OpaqueRustContainer => "opaque Rust pointer container",
             Self::StreamItem => "stream item type",

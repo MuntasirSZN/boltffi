@@ -190,7 +190,7 @@ impl<'decode> Input<'decode> {
                     Ok(value) => value,
                     Err(error) => {
                         ::boltffi::__private::set_last_error(format!(
-                            "{}: custom conversion failed: {} (buf_len={})",
+                            "{}: custom conversion failed: {:?} (buf_len={})",
                             stringify!(#binding),
                             error,
                             #length

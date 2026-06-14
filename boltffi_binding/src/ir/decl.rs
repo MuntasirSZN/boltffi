@@ -7,7 +7,7 @@ use crate::{
     CanonicalName, ClassId, CodecPlan, ConstantId, CustomTypeConverters, CustomTypeId, DeclMeta,
     DeclarationId, DefaultValue, ElementMeta, EnumId, ExportedCallable, FunctionId,
     ImportedCallable, InitializerId, IntegerRepr, IntegerValue, MethodId, NamePart, NativeSymbol,
-    ReadPlan, RecordId, RecordLayout, ReturnTypeRef, RustBody, StreamId, Surface, TypeRef,
+    ReadPlan, Receive, RecordId, RecordLayout, ReturnTypeRef, RustBody, StreamId, Surface, TypeRef,
     WritePlan,
 };
 
@@ -918,29 +918,105 @@ pub struct ClassDecl<S: Surface> {
     meta: DeclMeta,
     handle: S::HandleCarrier,
     release: NativeSymbol,
+    #[serde(flatten)]
+    callables: ClassCallables<S>,
+}
+
+pub(crate) struct ClassDeclParts<S: Surface> {
+    pub(crate) id: ClassId,
+    pub(crate) name: CanonicalName,
+    pub(crate) meta: DeclMeta,
+    pub(crate) thread_safety: ClassThreadSafety,
+    pub(crate) handle: S::HandleCarrier,
+    pub(crate) release: NativeSymbol,
+    pub(crate) initializers: Vec<InitializerDecl<S>>,
+    pub(crate) methods: Vec<ExportedMethodDecl<S, NativeSymbol>>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "S::BufferShape: Serialize, S::HandleCarrier: Serialize, S::AsyncProtocol: Serialize",
+    deserialize = "S::BufferShape: serde::de::DeserializeOwned, S::HandleCarrier: serde::de::DeserializeOwned, S::AsyncProtocol: serde::de::DeserializeOwned"
+))]
+struct ClassCallables<S: Surface> {
+    #[serde(default)]
+    thread_safety: ClassThreadSafety,
     initializers: Vec<InitializerDecl<S>>,
     methods: Vec<ExportedMethodDecl<S, NativeSymbol>>,
 }
 
-impl<S: Surface> ClassDecl<S> {
-    pub(crate) fn new(
-        id: ClassId,
-        name: CanonicalName,
-        meta: DeclMeta,
-        handle: S::HandleCarrier,
-        release: NativeSymbol,
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum InvalidClassDecl {
+    MutableReceiverRequiresUnsafeSingleThreaded,
+}
+
+/// Thread-safety requirement for an exported class handle.
+///
+/// Exported class handles require `Send + Sync` unless the source contract
+/// explicitly declares single-threaded access.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum ClassThreadSafety {
+    /// The exported class type must implement `Send + Sync`.
+    #[default]
+    RequireSendSync,
+    /// The exported class type is allowed without a `Send + Sync` assertion.
+    UnsafeSingleThreaded,
+}
+
+impl ClassThreadSafety {
+    /// Returns whether class exports require a `Send + Sync` assertion.
+    pub const fn requires_send_sync(self) -> bool {
+        matches!(self, Self::RequireSendSync)
+    }
+}
+
+impl<S: Surface> ClassCallables<S> {
+    fn new(
+        thread_safety: ClassThreadSafety,
         initializers: Vec<InitializerDecl<S>>,
         methods: Vec<ExportedMethodDecl<S, NativeSymbol>>,
-    ) -> Self {
-        Self {
-            id,
-            name,
-            meta,
-            handle,
-            release,
+    ) -> Result<Self, InvalidClassDecl> {
+        let callables = Self {
+            thread_safety,
             initializers,
             methods,
+        };
+        match callables.invalid() {
+            Some(error) => Err(error),
+            None => Ok(callables),
         }
+    }
+
+    fn invalid(&self) -> Option<InvalidClassDecl> {
+        (self.thread_safety.requires_send_sync()
+            && self
+                .methods
+                .iter()
+                .any(|method| method.callable().receiver() == Some(Receive::ByMutRef)))
+        .then_some(InvalidClassDecl::MutableReceiverRequiresUnsafeSingleThreaded)
+    }
+
+    fn validate(&self) -> Result<(), crate::BindingError> {
+        match self.invalid() {
+            Some(error) => Err(crate::BindingError::from(error)),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<S: Surface> ClassDecl<S> {
+    pub(crate) fn new(parts: ClassDeclParts<S>) -> Result<Self, InvalidClassDecl> {
+        let callables =
+            ClassCallables::new(parts.thread_safety, parts.initializers, parts.methods)?;
+
+        Ok(Self {
+            id: parts.id,
+            name: parts.name,
+            meta: parts.meta,
+            handle: parts.handle,
+            release: parts.release,
+            callables,
+        })
     }
 
     /// Returns the class id.
@@ -958,6 +1034,15 @@ impl<S: Surface> ClassDecl<S> {
         &self.meta
     }
 
+    /// Returns the class thread-safety policy.
+    pub const fn thread_safety(&self) -> ClassThreadSafety {
+        self.callables.thread_safety
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), crate::BindingError> {
+        self.callables.validate()
+    }
+
     /// Returns the handle carrier.
     pub fn handle(&self) -> S::HandleCarrier {
         self.handle
@@ -970,12 +1055,22 @@ impl<S: Surface> ClassDecl<S> {
 
     /// Returns the initializers.
     pub fn initializers(&self) -> &[InitializerDecl<S>] {
-        &self.initializers
+        &self.callables.initializers
     }
 
     /// Returns the methods.
     pub fn methods(&self) -> &[ExportedMethodDecl<S, NativeSymbol>] {
-        &self.methods
+        &self.callables.methods
+    }
+}
+
+impl From<InvalidClassDecl> for crate::BindingError {
+    fn from(value: InvalidClassDecl) -> Self {
+        match value {
+            InvalidClassDecl::MutableReceiverRequiresUnsafeSingleThreaded => {
+                Self::new(crate::BindingErrorKind::MutableClassReceiverRequiresUnsafeSingleThreaded)
+            }
+        }
     }
 }
 

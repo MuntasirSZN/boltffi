@@ -35,7 +35,7 @@ pub use callable::{
     CallableForm, ExecutionKind, FunctionDef, MethodDef, ParameterDef, ParameterPassing, Receiver,
     ReturnDef,
 };
-pub use class::ClassDef;
+pub use class::{ClassDef, ClassThreadSafety};
 pub use constant::ConstantDef;
 pub use contract::{PackageInfo, SourceContract};
 pub use custom::{

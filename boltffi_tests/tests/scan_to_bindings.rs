@@ -49,7 +49,7 @@ const SOURCE: &str = "
 
     pub struct Engine;
 
-    #[export]
+    #[export(single_threaded)]
     impl Engine {
         pub fn new(seed: u64) -> Self {
             todo!()

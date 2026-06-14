@@ -1,4 +1,4 @@
-use boltffi_ast::{ClassDef, ClassId};
+use boltffi_ast::{ClassDef, ClassId, ClassThreadSafety};
 use syn::spanned::Spanned;
 
 use crate::attributes::Attributes;
@@ -17,12 +17,24 @@ pub fn scan(
     marked
         .iter()
         .try_fold(Vec::<ClassDef>::new(), |mut classes, marked| {
-            let class = build(marked.item(), marked.scope(), declared_types)?;
+            let class = build(
+                marked.item(),
+                marked.scope(),
+                declared_types,
+                marked
+                    .marker()
+                    .export()
+                    .expect("class scanner only receives export markers")
+                    .class_thread_safety(),
+            )?;
             match classes
                 .iter_mut()
                 .find(|candidate| candidate.id == class.id)
             {
-                Some(existing) => existing.methods.extend(class.methods),
+                Some(existing) => {
+                    existing.thread_safety = existing.thread_safety.merge(class.thread_safety);
+                    existing.methods.extend(class.methods);
+                }
                 None => classes.push(class),
             }
             Ok(classes)
@@ -33,6 +45,7 @@ fn build(
     item: &syn::ItemImpl,
     scope: &ModuleScope,
     declared_types: &DeclaredTypes,
+    thread_safety: ClassThreadSafety,
 ) -> Result<ClassDef, ScanError> {
     let target = impl_target::Target::class(item)?;
     let id = resolve_target_id(&target, scope, declared_types)?;
@@ -47,6 +60,7 @@ fn build(
     class.deprecated = attrs.deprecated()?;
     class.user_attrs = attrs.user_attrs();
     class.methods = impl_methods::class_methods(item, class.id.as_str(), scope, declared_types)?;
+    class.thread_safety = thread_safety;
     Ok(class)
 }
 
@@ -76,6 +90,7 @@ fn resolve_target_id(
 mod tests {
     use super::*;
     use crate::declared_types::DeclaredTypes;
+    use crate::marker::Marker;
     use boltffi_ast::{
         CanonicalName, ClassId, MethodId, NamePart, Primitive, Receiver, ReturnDef, TypeExpr,
     };
@@ -91,7 +106,17 @@ mod tests {
     fn scan(source: &str) -> Result<ClassDef, ScanError> {
         let mut declared_types = DeclaredTypes::new();
         declared_types.register_class(ClassId::new("demo::Engine"));
-        build(&parse(source), &ModuleScope::root("demo"), &declared_types)
+        let item = parse(source);
+        let thread_safety = Marker::detect(&item.attrs)?
+            .and_then(Marker::export)
+            .map(|export| export.class_thread_safety())
+            .unwrap_or_default();
+        build(
+            &item,
+            &ModuleScope::root("demo"),
+            &declared_types,
+            thread_safety,
+        )
     }
 
     #[test]
@@ -134,11 +159,47 @@ mod tests {
             &parse("impl crate::runtime::Engine { pub fn start(&self) {} }"),
             &ModuleScope::root("demo"),
             &declared_types,
+            ClassThreadSafety::default(),
         )
         .expect("scan");
 
         assert_eq!(class.id, ClassId::new("demo::runtime::Engine"));
         assert_eq!(class.name.canonical(), &name(&["engine"]));
+    }
+
+    #[test]
+    fn scans_single_threaded_class_export_policy() {
+        let class = scan("#[export(single_threaded)] impl Engine { pub fn start(&mut self) {} }")
+            .expect("scan");
+
+        assert_eq!(class.thread_safety, ClassThreadSafety::UnsafeSingleThreaded);
+    }
+
+    #[test]
+    fn default_impl_keeps_class_thread_safety_assertion() {
+        let mut declared_types = DeclaredTypes::new();
+        declared_types.register_class(ClassId::new("demo::Engine"));
+        let scope = ModuleScope::root("demo");
+        let mut mutable = build(
+            &parse("#[export(single_threaded)] impl Engine { pub fn start(&mut self) {} }"),
+            &scope,
+            &declared_types,
+            ClassThreadSafety::UnsafeSingleThreaded,
+        )
+        .expect("scan mutable impl");
+        let static_methods = build(
+            &parse("#[export] impl Engine { pub fn version() -> u32 { 1 } }"),
+            &scope,
+            &declared_types,
+            ClassThreadSafety::RequireSendSync,
+        )
+        .expect("scan static impl");
+
+        mutable.thread_safety = mutable.thread_safety.merge(static_methods.thread_safety);
+        mutable.methods.extend(static_methods.methods);
+
+        assert_eq!(mutable.thread_safety, ClassThreadSafety::RequireSendSync);
+        assert_eq!(mutable.methods.len(), 2);
     }
 
     #[test]

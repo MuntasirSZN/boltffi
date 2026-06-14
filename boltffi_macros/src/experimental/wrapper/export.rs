@@ -1,4 +1,4 @@
-use boltffi_binding::{ExecutionDecl, ExportedCallable, NativeSymbol};
+use boltffi_binding::{ExecutionDecl, ExportedCallable, NativeSymbol, Receive};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -42,6 +42,18 @@ enum RustCallTarget {
         receiver: syn::Ident,
         method: syn::Ident,
     },
+    ClassMethod {
+        class: syn::Ident,
+        handle: syn::Ident,
+        receiver: ClassReceiverBinding,
+        receive: Receive,
+        method: syn::Ident,
+    },
+}
+
+pub enum ClassReceiverBinding {
+    Raw(syn::Ident),
+    Retained(syn::Ident),
 }
 
 impl<'expansion, 'lowered, S> Renderer<'expansion, 'lowered, S>
@@ -191,6 +203,29 @@ impl RustCall {
         }
     }
 
+    pub fn class_method(
+        class: syn::Ident,
+        handle: syn::Ident,
+        receiver: ClassReceiverBinding,
+        receive: Receive,
+        method: syn::Ident,
+    ) -> Result<Self, Error> {
+        match receive {
+            Receive::ByRef | Receive::ByMutRef => Ok(Self {
+                owner: method.clone(),
+                target: RustCallTarget::ClassMethod {
+                    class,
+                    handle,
+                    receiver,
+                    receive,
+                    method,
+                },
+            }),
+            Receive::ByValue => Err(Error::UnsupportedExpansion("owned class receiver")),
+            _ => Err(Error::UnsupportedExpansion("unknown class receiver mode")),
+        }
+    }
+
     pub fn expression(&self, arguments: &[TokenStream]) -> TokenStream {
         match &self.target {
             RustCallTarget::Function(function) => quote! { #function(#(#arguments),*) },
@@ -200,6 +235,57 @@ impl RustCall {
             RustCallTarget::Method { receiver, method } => {
                 quote! { #receiver.#method(#(#arguments),*) }
             }
+            RustCallTarget::ClassMethod {
+                class,
+                handle,
+                receiver,
+                receive,
+                method,
+            } => {
+                Self::class_method_expression(*receive, class, handle, receiver, method, arguments)
+            }
+        }
+    }
+
+    fn class_method_expression(
+        receive: Receive,
+        class: &syn::Ident,
+        handle: &syn::Ident,
+        receiver: &ClassReceiverBinding,
+        method: &syn::Ident,
+        arguments: &[TokenStream],
+    ) -> TokenStream {
+        let receiver = receiver.access(receive, class, handle);
+        quote! {
+            {
+                #receiver
+                #handle.#method(#(#arguments),*)
+            }
+        }
+    }
+}
+
+impl ClassReceiverBinding {
+    fn access(&self, receive: Receive, class: &syn::Ident, receiver: &syn::Ident) -> TokenStream {
+        match (self, receive) {
+            (Self::Raw(handle), Receive::ByRef) => quote! {
+                let #receiver: &#class = unsafe {
+                    #handle::shared(#receiver as usize as *mut #handle)
+                };
+            },
+            (Self::Raw(handle), Receive::ByMutRef) => quote! {
+                let #receiver: &mut #class = unsafe {
+                    #handle::mutable(#receiver as usize as *mut #handle)
+                };
+            },
+            (Self::Retained(handle), Receive::ByRef) => quote! {
+                let #receiver: &#class = #handle.shared();
+            },
+            (Self::Retained(handle), Receive::ByMutRef) => quote! {
+                let mut #handle = #handle;
+                let #receiver: &mut #class = #handle.mutable();
+            },
+            _ => unreachable!("class receiver mode is validated before RustCall construction"),
         }
     }
 }

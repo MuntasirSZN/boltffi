@@ -3,7 +3,7 @@ use boltffi_binding::{
     ExecutionDecl, ExportedCallable, ExportedMethodDecl, InitializerDecl, NativeSymbol,
 };
 use proc_macro2::TokenStream;
-use syn::{Ident, parse_str};
+use syn::{Ident, parse_quote, parse_str};
 
 use crate::experimental::{
     error::Error,
@@ -20,10 +20,22 @@ pub trait Owner<'expansion, 'lowered, S: Target> {
 
     fn receiver(
         &self,
-        callable: &'lowered ExportedCallable<S>,
-        method: Ident,
-        expansion: &'expansion Expansion<'lowered, S>,
+        export: ReceiverExport<'expansion, 'lowered, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error>;
+}
+
+pub struct ReceiverExport<'expansion, 'lowered, S: Target> {
+    callable: &'lowered ExportedCallable<S>,
+    method: Ident,
+    failure: ReceiverFailure<'expansion, 'lowered, S>,
+    expansion: &'expansion Expansion<'lowered, S>,
+}
+
+#[derive(Clone, Copy)]
+pub struct ReceiverFailure<'expansion, 'lowered, S: Target> {
+    callable: &'lowered ExportedCallable<S>,
+    source: rust_api::Callable<'lowered>,
+    expansion: &'expansion Expansion<'lowered, S>,
 }
 
 pub struct Renderer<'expansion, 'lowered, S: Target, O> {
@@ -102,6 +114,79 @@ impl<'expansion, 'lowered, S: Target, O> Renderer<'expansion, 'lowered, S, O> {
     }
 }
 
+impl<'expansion, 'lowered, S: Target> ReceiverExport<'expansion, 'lowered, S> {
+    pub fn new(
+        callable: &'lowered ExportedCallable<S>,
+        method: Ident,
+        failure: ReceiverFailure<'expansion, 'lowered, S>,
+        expansion: &'expansion Expansion<'lowered, S>,
+    ) -> Self {
+        Self {
+            callable,
+            method,
+            failure,
+            expansion,
+        }
+    }
+
+    pub fn callable(&self) -> &'lowered ExportedCallable<S> {
+        self.callable
+    }
+
+    pub fn method(&self) -> &Ident {
+        &self.method
+    }
+
+    pub fn failure(&self) -> ReceiverFailure<'expansion, 'lowered, S> {
+        self.failure
+    }
+
+    pub fn expansion(&self) -> &'expansion Expansion<'lowered, S> {
+        self.expansion
+    }
+}
+
+impl<'expansion, 'lowered, S: Target> ReceiverFailure<'expansion, 'lowered, S> {
+    pub fn new(
+        callable: &'lowered ExportedCallable<S>,
+        source: rust_api::Callable<'lowered>,
+        expansion: &'expansion Expansion<'lowered, S>,
+    ) -> Self {
+        Self {
+            callable,
+            source,
+            expansion,
+        }
+    }
+
+    pub fn render(self) -> Result<TokenStream, Error>
+    where
+        wrapper::returns::Failure: Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
+    {
+        match self.callable.execution() {
+            ExecutionDecl::Synchronous(_) => <wrapper::returns::Failure as Render<S, _>>::render(
+                wrapper::returns::Failure,
+                wrapper::returns::FailureInput::new(
+                    self.callable.returns(),
+                    self.callable.error(),
+                    self.expansion,
+                ),
+            ),
+            ExecutionDecl::Asynchronous(_) => {
+                let rust_return_type = self
+                    .source
+                    .returns()
+                    .written_type()?
+                    .unwrap_or_else(|| parse_quote! { () });
+                Ok(quote::quote! {
+                    return ::boltffi::__private::rustfuture::rust_future_invalid_arg::<#rust_return_type>();
+                })
+            }
+            _ => Err(Error::UnsupportedExpansion("unknown execution mode")),
+        }
+    }
+}
+
 impl<'lowered, S: Target> Export<'lowered, S> {
     fn initializer(
         initializer: &'lowered InitializerDecl<S>,
@@ -155,8 +240,13 @@ impl<'lowered, S: Target> Export<'lowered, S> {
         }
 
         let method = method_ident(self.source_method)?;
-        let (receiver, rust_call) = owner.receiver(self.callable, method, expansion)?;
         let source_callable = owner.source_callable(self.source_method);
+        let (receiver, rust_call) = owner.receiver(ReceiverExport::new(
+            self.callable,
+            method,
+            ReceiverFailure::new(self.callable, source_callable, expansion),
+            expansion,
+        ))?;
         let visibility =
             rust_api::VisibilityTokens::new(&self.source_method.source.visibility).into_tokens()?;
 

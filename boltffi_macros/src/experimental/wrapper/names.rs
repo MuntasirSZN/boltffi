@@ -1,9 +1,15 @@
 use proc_macro2::Span;
 use quote::format_ident;
-use syn::Ident;
+use syn::{Ident, Type};
+
+use crate::experimental::error::Error;
 
 pub struct Wrapper {
     span: Span,
+}
+
+pub struct Class<'source> {
+    source: &'source Ident,
 }
 
 impl Wrapper {
@@ -45,6 +51,36 @@ impl Wrapper {
 
     pub fn success_out(&self) -> Ident {
         Ident::new("__boltffi_success_out", self.span)
+    }
+}
+
+impl<'source> Class<'source> {
+    pub const fn new(source: &'source Ident) -> Self {
+        Self { source }
+    }
+
+    pub fn from_local_type(class: &'source Type) -> Result<Self, Error> {
+        let Type::Path(path) = class else {
+            return Err(Error::SourceSyntaxMismatch("class type is not a path"));
+        };
+        if path.qself.is_some() || path.path.segments.len() != 1 {
+            return Err(Error::SourceSyntaxMismatch(
+                "class type is not a local identifier",
+            ));
+        }
+        Ok(Self::new(&path.path.segments[0].ident))
+    }
+
+    pub fn handle(&self) -> Ident {
+        format_ident!("__Boltffi{}Handle", self.source, span = self.source.span())
+    }
+
+    pub fn retained_handle(&self) -> Ident {
+        format_ident!(
+            "__Boltffi{}RetainedHandle",
+            self.source,
+            span = self.source.span()
+        )
     }
 }
 

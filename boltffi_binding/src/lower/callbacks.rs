@@ -722,7 +722,7 @@ mod tests {
         let mut contract = package();
         contract.traits.push(listener_callback());
         let mut class = ClassDef::new("demo::Engine".into(), name("Engine"));
-        let mut take_listener = method("take_listener", Receiver::Mutable);
+        let mut take_listener = method("take_listener", Receiver::Shared);
         take_listener.returns = ReturnDef::value(listener_type);
         class.methods.push(take_listener);
         contract.classes.push(class);

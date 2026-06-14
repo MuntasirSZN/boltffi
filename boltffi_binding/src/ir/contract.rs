@@ -108,11 +108,23 @@ impl PackageInfo {
 /// value. A backend typed against `Bindings<S>` cannot accidentally
 /// receive a `Bindings<S2>` for a different surface.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "UncheckedBindings<S>")]
 #[serde(bound(
     serialize = "S::BufferShape: Serialize, S::HandleCarrier: Serialize, S::AsyncProtocol: Serialize, S::CallbackProtocol: Serialize",
     deserialize = "S::BufferShape: serde::de::DeserializeOwned, S::HandleCarrier: serde::de::DeserializeOwned, S::AsyncProtocol: serde::de::DeserializeOwned, S::CallbackProtocol: serde::de::DeserializeOwned"
 ))]
 pub struct Bindings<S: Surface> {
+    version: ContractVersion,
+    package: PackageInfo,
+    decls: Vec<Decl<S>>,
+    symbols: NativeSymbolTable,
+}
+
+#[derive(Deserialize)]
+#[serde(bound(
+    deserialize = "S::BufferShape: serde::de::DeserializeOwned, S::HandleCarrier: serde::de::DeserializeOwned, S::AsyncProtocol: serde::de::DeserializeOwned, S::CallbackProtocol: serde::de::DeserializeOwned"
+))]
+struct UncheckedBindings<S: Surface> {
     version: ContractVersion,
     package: PackageInfo,
     decls: Vec<Decl<S>>,
@@ -178,6 +190,7 @@ impl<S: Surface> Bindings<S> {
         self.symbols.validate()?;
         self.validate_unique_decl_ids()?;
         self.validate_streams()?;
+        self.validate_classes()?;
         self.validate_callables()?;
         self.validate_symbol_membership()
     }
@@ -236,6 +249,13 @@ impl<S: Surface> Bindings<S> {
         Ok(())
     }
 
+    fn validate_classes(&self) -> Result<(), BindingError> {
+        self.decls.iter().try_for_each(|decl| match decl {
+            Decl::Class(class) => class.validate(),
+            _ => Ok(()),
+        })
+    }
+
     fn validate_symbol_membership(&self) -> Result<(), BindingError> {
         let registered: HashSet<&NativeSymbol> = self.symbols.symbols().iter().collect();
         self.decls
@@ -250,6 +270,21 @@ impl<S: Surface> Bindings<S> {
                     )))
                 }
             })
+    }
+}
+
+impl<S: Surface> TryFrom<UncheckedBindings<S>> for Bindings<S> {
+    type Error = BindingError;
+
+    fn try_from(unchecked: UncheckedBindings<S>) -> Result<Self, Self::Error> {
+        let bindings = Self {
+            version: unchecked.version,
+            package: unchecked.package,
+            decls: unchecked.decls,
+            symbols: unchecked.symbols,
+        };
+        bindings.validate()?;
+        Ok(bindings)
     }
 }
 

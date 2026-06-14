@@ -1,9 +1,9 @@
 mod index;
 mod pair;
 
-use boltffi_ast::{EnumDef, FunctionDef, RecordDef, TraitDef};
+use boltffi_ast::{ClassDef, EnumDef, FunctionDef, RecordDef, TraitDef};
 use boltffi_binding::{
-    CallbackDecl, CallbackId, CustomTypeDecl, CustomTypeId, EncodedRecordDecl, EnumDecl,
+    CallbackDecl, CallbackId, ClassDecl, CustomTypeDecl, CustomTypeId, EncodedRecordDecl, EnumDecl,
     FunctionDecl, LoweredBindings, RecordDecl, RecordId, Surface,
 };
 
@@ -93,6 +93,20 @@ impl<'lowered, S: Surface> Expansion<'lowered, S> {
         }
     }
 
+    /// Returns the lowered class declaration paired with the scanned source class.
+    pub fn class(
+        &self,
+        source: &'lowered ClassDef,
+    ) -> Result<DeclarationPair<'lowered, ClassDef, ClassDecl<S>>, Error> {
+        match self
+            .index
+            .paired(self.lowered, SourceDeclaration::Class(source))?
+        {
+            PairedDeclaration::Class(pair) => Ok(pair),
+            _ => Err(Error::WrongDeclaration),
+        }
+    }
+
     /// Returns the lowered function declaration paired with the scanned source function.
     pub fn function(
         &self,
@@ -110,8 +124,13 @@ impl<'lowered, S: Surface> Expansion<'lowered, S> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path as FsPath, PathBuf};
+    use std::process::Command;
+
     use boltffi_ast::{
-        CanonicalName, ClassDef, ClassId, CustomRemoteType, CustomTypeConverter,
+        CanonicalName, ClassDef, ClassId, ClassThreadSafety, CustomRemoteType, CustomTypeConverter,
         CustomTypeConverters, CustomTypeDef, CustomTypeId, EnumDef, EnumId, ExecutionKind,
         FieldDef, FnSig, FnTrait, FnTraitKind, FunctionDef, FunctionId, MethodDef, MethodId,
         PackageInfo, ParameterDef, ParameterPassing, Path, Primitive, Receiver, RecordDef,
@@ -126,6 +145,86 @@ mod tests {
     use super::Expansion;
     use crate::experimental::target::Target;
     use crate::experimental::{error::Error, wrapper};
+
+    struct GeneratedCrate {
+        root: PathBuf,
+    }
+
+    impl GeneratedCrate {
+        fn create(name: &str) -> Self {
+            if cfg!(miri) {
+                return Self {
+                    root: PathBuf::new(),
+                };
+            }
+            let root = workspace_root()
+                .join("target")
+                .join("experimental-wrapper-checks")
+                .join(format!("{}-{}", name, std::process::id()));
+            if root.exists() {
+                fs::remove_dir_all(&root).expect("remove old generated crate");
+            }
+            fs::create_dir_all(root.join("src")).expect("create generated crate");
+            Self { root }
+        }
+
+        fn write(&self, code: TokenStream) {
+            if cfg!(miri) {
+                return;
+            }
+            fs::write(self.root.join("Cargo.toml"), self.manifest()).expect("write Cargo.toml");
+            fs::write(self.root.join("src/lib.rs"), code.to_string()).expect("write lib.rs");
+        }
+
+        fn check(&self) {
+            if cfg!(miri) {
+                return;
+            }
+            let output = Command::new(cargo())
+                .arg("check")
+                .arg("--quiet")
+                .arg("--manifest-path")
+                .arg(self.root.join("Cargo.toml"))
+                .env(
+                    "CARGO_TARGET_DIR",
+                    workspace_root()
+                        .join("target")
+                        .join("experimental-wrapper-checks-target"),
+                )
+                .output()
+                .expect("run cargo check for generated crate");
+            assert!(
+                output.status.success(),
+                "generated crate failed to check\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        fn manifest(&self) -> String {
+            format!(
+                "[package]\nname = \"generated_wrapper_check\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[workspace]\n\n[dependencies]\nboltffi = {{ path = \"{}\" }}\n",
+                workspace_root().join("boltffi").display()
+            )
+        }
+    }
+
+    fn assert_generated_crate_checks(name: &str, code: TokenStream) {
+        let generated_crate = GeneratedCrate::create(name);
+        generated_crate.write(code);
+        generated_crate.check();
+    }
+
+    fn workspace_root() -> PathBuf {
+        FsPath::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    fn cargo() -> OsString {
+        std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
+    }
 
     fn expand_function<'lowered, S>(
         expansion: &Expansion<'lowered, S>,
@@ -249,6 +348,41 @@ mod tests {
             >,
     {
         wrapper::enumeration::Renderer::new(expansion.enumeration(source)?, expansion).render()
+    }
+
+    fn expand_class<'lowered, S>(
+        expansion: &Expansion<'lowered, S>,
+        source: &'lowered ClassDef,
+    ) -> Result<TokenStream, Error>
+    where
+        S: Target,
+        wrapper::handle::Carrier: wrapper::Render<
+                S,
+                wrapper::handle::CarrierInput<S::HandleCarrier>,
+                Output = wrapper::handle::CarrierTokens,
+            >,
+        for<'expansion> wrapper::arguments::SyncRenderer: wrapper::Render<
+                S,
+                wrapper::arguments::Input<'expansion, 'lowered, S>,
+                Output = wrapper::arguments::Tokens,
+            >,
+        for<'expansion> wrapper::returns::Failure: wrapper::Render<
+                S,
+                wrapper::returns::FailureInput<'expansion, 'lowered, S>,
+                Output = TokenStream,
+            >,
+        for<'expansion> wrapper::returns::Renderer: wrapper::Render<
+                S,
+                wrapper::returns::Input<'expansion, 'lowered, S>,
+                Output = wrapper::returns::Tokens,
+            >,
+        for<'expansion> wrapper::async_call::Renderer: wrapper::Render<
+                S,
+                wrapper::async_call::Input<'expansion, 'lowered, S>,
+                Output = TokenStream,
+            >,
+    {
+        wrapper::class::Renderer::new(expansion.class(source)?, expansion).render()
     }
 
     fn source_contract() -> SourceContract {
@@ -614,6 +748,12 @@ mod tests {
 
     fn engine_class() -> ClassDef {
         ClassDef::new("demo::Engine".into(), CanonicalName::single("Engine"))
+    }
+
+    fn engine_class_with_method(method: MethodDef) -> ClassDef {
+        let mut class = engine_class();
+        class.methods.push(method);
+        class
     }
 
     fn listener_trait() -> TraitDef {
@@ -1699,7 +1839,7 @@ mod tests {
                             Ok(value) => value,
                             Err(error) => {
                                 ::boltffi::__private::set_last_error(format!(
-                                    "{}: custom conversion failed: {} (buf_len={})",
+                                    "{}: custom conversion failed: {:?} (buf_len={})",
                                     stringify!(when),
                                     error,
                                     __boltffi_when_len
@@ -2746,11 +2886,13 @@ mod tests {
                     callback_data: u64,
                     callback: ::boltffi::__private::RustFutureContinuationCallback,
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_poll::<u32>(
-                        handle,
-                        callback,
-                        callback_data
-                    )
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_poll::<u32>(
+                            handle,
+                            callback,
+                            callback_data
+                        )
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
@@ -2758,16 +2900,20 @@ mod tests {
                     handle: ::boltffi::__private::RustFutureHandle,
                     out_status: *mut ::boltffi::__private::FfiStatus,
                 ) -> u32 {
-                    match ::boltffi::__private::rustfuture::rust_future_complete::<u32>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<u32>(handle) } {
                         Ok(result) => {
                             if !out_status.is_null() {
-                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                                unsafe {
+                                    *out_status = ::boltffi::__private::FfiStatus::OK;
+                                }
                             }
                             result
                         }
                         Err(status) => {
                             if !out_status.is_null() {
-                                *out_status = status;
+                                unsafe {
+                                    *out_status = status;
+                                }
                             }
                             Default::default()
                         }
@@ -2778,7 +2924,7 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_answer_panic_message(
                     handle: ::boltffi::__private::RustFutureHandle,
                 ) -> ::boltffi::__private::FfiBuf {
-                    match ::boltffi::__private::rustfuture::rust_future_panic_message::<u32>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_panic_message::<u32>(handle) } {
                         Some(message) => ::boltffi::__private::FfiBuf::wire_encode(&message),
                         None => ::boltffi::__private::FfiBuf::empty(),
                     }
@@ -2788,14 +2934,18 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_answer_cancel(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_cancel::<u32>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_cancel::<u32>(handle)
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub unsafe extern "C" fn boltffi_async_function_demo_answer_free(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_free::<u32>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_free::<u32>(handle)
+                    }
                 }
             }
             .to_string()
@@ -2836,11 +2986,13 @@ mod tests {
                     callback_data: u64,
                     callback: ::boltffi::__private::RustFutureContinuationCallback,
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_poll::<String>(
-                        handle,
-                        callback,
-                        callback_data
-                    )
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_poll::<String>(
+                            handle,
+                            callback,
+                            callback_data
+                        )
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
@@ -2848,16 +3000,20 @@ mod tests {
                     handle: ::boltffi::__private::RustFutureHandle,
                     out_status: *mut ::boltffi::__private::FfiStatus,
                 ) -> ::boltffi::__private::FfiBuf {
-                    match ::boltffi::__private::rustfuture::rust_future_complete::<String>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<String>(handle) } {
                         Ok(__boltffi_result) => {
                             if !out_status.is_null() {
-                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                                unsafe {
+                                    *out_status = ::boltffi::__private::FfiStatus::OK;
+                                }
                             }
                             ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result)
                         }
                         Err(status) => {
                             if !out_status.is_null() {
-                                *out_status = status;
+                                unsafe {
+                                    *out_status = status;
+                                }
                             }
                             ::boltffi::__private::FfiBuf::default()
                         }
@@ -2868,7 +3024,7 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_greet_panic_message(
                     handle: ::boltffi::__private::RustFutureHandle,
                 ) -> ::boltffi::__private::FfiBuf {
-                    match ::boltffi::__private::rustfuture::rust_future_panic_message::<String>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_panic_message::<String>(handle) } {
                         Some(message) => ::boltffi::__private::FfiBuf::wire_encode(&message),
                         None => ::boltffi::__private::FfiBuf::empty(),
                     }
@@ -2878,14 +3034,18 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_greet_cancel(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_cancel::<String>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_cancel::<String>(handle)
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub unsafe extern "C" fn boltffi_async_function_demo_greet_free(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_free::<String>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_free::<String>(handle)
+                    }
                 }
             }
             .to_string()
@@ -2927,11 +3087,13 @@ mod tests {
                     callback_data: u64,
                     callback: ::boltffi::__private::RustFutureContinuationCallback,
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_poll::<#rust_return_type>(
-                        handle,
-                        callback,
-                        callback_data
-                    )
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_poll::<#rust_return_type>(
+                            handle,
+                            callback,
+                            callback_data
+                        )
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
@@ -2940,10 +3102,12 @@ mod tests {
                     out_status: *mut ::boltffi::__private::FfiStatus,
                     __boltffi_return_out: *mut i32
                 ) -> ::boltffi::__private::FfiBuf {
-                    match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) } {
                         Ok(Ok(__boltffi_success)) => {
                             if !out_status.is_null() {
-                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                                unsafe {
+                                    *out_status = ::boltffi::__private::FfiStatus::OK;
+                                }
                             }
                             if !__boltffi_return_out.is_null() {
                                 unsafe {
@@ -2954,13 +3118,17 @@ mod tests {
                         }
                         Ok(Err(__boltffi_error)) => {
                             if !out_status.is_null() {
-                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                                unsafe {
+                                    *out_status = ::boltffi::__private::FfiStatus::OK;
+                                }
                             }
                             ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_error)
                         }
                         Err(status) => {
                             if !out_status.is_null() {
-                                *out_status = status;
+                                unsafe {
+                                    *out_status = status;
+                                }
                             }
                             ::boltffi::__private::FfiBuf::default()
                         }
@@ -2971,7 +3139,7 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_try_count_panic_message(
                     handle: ::boltffi::__private::RustFutureHandle,
                 ) -> ::boltffi::__private::FfiBuf {
-                    match ::boltffi::__private::rustfuture::rust_future_panic_message::<#rust_return_type>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_panic_message::<#rust_return_type>(handle) } {
                         Some(message) => ::boltffi::__private::FfiBuf::wire_encode(&message),
                         None => ::boltffi::__private::FfiBuf::empty(),
                     }
@@ -2981,14 +3149,18 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_try_count_cancel(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle)
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub unsafe extern "C" fn boltffi_async_function_demo_try_count_free(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_free::<#rust_return_type>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_free::<#rust_return_type>(handle)
+                    }
                 }
             }
             .to_string()
@@ -3023,7 +3195,9 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_ping_poll_sync(
                     handle: ::boltffi::__private::RustFutureHandle,
                 ) -> i32 {
-                    ::boltffi::__private::rust_future_poll_sync::<()>(handle)
+                    unsafe {
+                        ::boltffi::__private::rust_future_poll_sync::<()>(handle)
+                    }
                 }
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(no_mangle)]
@@ -3031,15 +3205,19 @@ mod tests {
                     handle: ::boltffi::__private::RustFutureHandle,
                     out_status: *mut ::boltffi::__private::FfiStatus,
                 ) {
-                    match ::boltffi::__private::rustfuture::rust_future_complete::<()>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<()>(handle) } {
                         Ok(_) => {
                             if !out_status.is_null() {
-                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                                unsafe {
+                                    *out_status = ::boltffi::__private::FfiStatus::OK;
+                                }
                             }
                         }
                         Err(status) => {
                             if !out_status.is_null() {
-                                *out_status = status;
+                                unsafe {
+                                    *out_status = status;
+                                }
                             }
                         }
                     }
@@ -3049,7 +3227,7 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_ping_panic_message(
                     handle: ::boltffi::__private::RustFutureHandle,
                 ) -> ::boltffi::__private::FfiBuf {
-                    match ::boltffi::__private::rustfuture::rust_future_panic_message::<()>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_panic_message::<()>(handle) } {
                         Some(message) => ::boltffi::__private::FfiBuf::wire_encode(&message),
                         None => ::boltffi::__private::FfiBuf::empty(),
                     }
@@ -3059,14 +3237,18 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_ping_cancel(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_cancel::<()>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_cancel::<()>(handle)
+                    }
                 }
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(no_mangle)]
                 pub unsafe extern "C" fn boltffi_async_function_demo_ping_free(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_free::<()>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_free::<()>(handle)
+                    }
                 }
             }
             .to_string()
@@ -3142,11 +3324,13 @@ mod tests {
                     callback_data: u64,
                     callback: ::boltffi::__private::RustFutureContinuationCallback,
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_poll::<u32>(
-                        handle,
-                        callback,
-                        callback_data
-                    )
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_poll::<u32>(
+                            handle,
+                            callback,
+                            callback_data
+                        )
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
@@ -3154,16 +3338,20 @@ mod tests {
                     handle: ::boltffi::__private::RustFutureHandle,
                     out_status: *mut ::boltffi::__private::FfiStatus,
                 ) -> u32 {
-                    match ::boltffi::__private::rustfuture::rust_future_complete::<u32>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<u32>(handle) } {
                         Ok(result) => {
                             if !out_status.is_null() {
-                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                                unsafe {
+                                    *out_status = ::boltffi::__private::FfiStatus::OK;
+                                }
                             }
                             result
                         }
                         Err(status) => {
                             if !out_status.is_null() {
-                                *out_status = status;
+                                unsafe {
+                                    *out_status = status;
+                                }
                             }
                             Default::default()
                         }
@@ -3174,7 +3362,7 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_name_len_panic_message(
                     handle: ::boltffi::__private::RustFutureHandle,
                 ) -> ::boltffi::__private::FfiBuf {
-                    match ::boltffi::__private::rustfuture::rust_future_panic_message::<u32>(handle) {
+                    match unsafe { ::boltffi::__private::rustfuture::rust_future_panic_message::<u32>(handle) } {
                         Some(message) => ::boltffi::__private::FfiBuf::wire_encode(&message),
                         None => ::boltffi::__private::FfiBuf::empty(),
                     }
@@ -3184,14 +3372,18 @@ mod tests {
                 pub unsafe extern "C" fn boltffi_async_function_demo_name_len_cancel(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_cancel::<u32>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_cancel::<u32>(handle)
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub unsafe extern "C" fn boltffi_async_function_demo_name_len_free(
                     handle: ::boltffi::__private::RustFutureHandle
                 ) {
-                    ::boltffi::__private::rustfuture::rust_future_free::<u32>(handle)
+                    unsafe {
+                        ::boltffi::__private::rustfuture::rust_future_free::<u32>(handle)
+                    }
                 }
             }
             .to_string()
@@ -3995,13 +4187,22 @@ mod tests {
                         ));
                         return 0;
                     }
-                    let engine: Engine = unsafe {
-                        *Box::from_raw(engine as usize as *mut Engine)
+                    let engine: Engine = match unsafe {
+                        __BoltffiEngineHandle::take(engine as usize as *mut __BoltffiEngineHandle)
+                    } {
+                        Some(value) => value,
+                        None => {
+                            ::boltffi::__private::set_last_error(format!(
+                                "{}: released class handle",
+                                stringify!(engine)
+                            ));
+                            return 0;
+                        }
                     };
                     let __boltffi_result: Option<Engine> = open(engine);
                     match __boltffi_result {
                         Some(__boltffi_value) => {
-                            Box::into_raw(Box::new(__boltffi_value)) as usize as u64
+                            __BoltffiEngineHandle::new(__boltffi_value) as usize as u64
                         }
                         None => 0,
                     }
@@ -4009,6 +4210,585 @@ mod tests {
             }
             .to_string()
         );
+    }
+
+    #[test]
+    fn native_class_expansion_emits_release_function() {
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class());
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            #tokens
+        })
+        .expect("class release expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_release_class_demo_engine"));
+        assert!(rendered.contains("handle : u64"));
+        assert!(rendered.contains("if handle != 0"));
+        assert!(rendered.contains(
+            "__BoltffiEngineHandle :: release (handle as usize as * mut __BoltffiEngineHandle)"
+        ));
+    }
+
+    #[test]
+    fn native_class_expansion_emits_initializer_and_static_method_wrappers() {
+        let initializer = record_method(
+            "new",
+            Receiver::None,
+            vec![parameter("seed", TypeExpr::Primitive(Primitive::U64))],
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let static_method = record_method(
+            "count",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+        );
+        let mut class = engine_class_with_method(initializer);
+        class.methods.push(static_method);
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(class);
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn new(seed: u64) -> Self {
+                    Self
+                }
+
+                pub fn count() -> u32 {
+                    1
+                }
+            }
+
+            #tokens
+        })
+        .expect("class static exports parse");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_class_demo_engine_new"));
+        assert!(rendered.contains("Engine :: new (seed)"));
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_count"));
+        assert!(rendered.contains("Engine :: count ()"));
+        assert!(rendered.contains("trait BoltFFIThreadSafe : Send + Sync"));
+        assert!(!rendered.contains("fn boltffi_init_class_demo_engine_count"));
+    }
+
+    #[test]
+    fn native_class_expansion_emits_instance_method_wrapper() {
+        let method = record_method("start", Receiver::Shared, Vec::new(), ReturnDef::Void);
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn start(&self) {}
+            }
+
+            #tokens
+        })
+        .expect("class instance method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_start"));
+        assert!(rendered.contains("__boltffi_receiver : u64"));
+        assert!(rendered.contains("if __boltffi_receiver == 0"));
+        assert!(rendered.contains("let __boltffi_receiver : & Engine = unsafe"));
+        assert!(rendered.contains("__boltffi_receiver . start ()"));
+        assert!(rendered.contains("trait BoltFFIThreadSafe : Send + Sync"));
+        assert!(rendered.contains("_assert :: < Engine > ()"));
+    }
+
+    #[test]
+    fn native_single_threaded_class_expansion_omits_thread_safety_assertion() {
+        let method = record_method("start", Receiver::Mutable, Vec::new(), ReturnDef::Void);
+        let mut class = engine_class_with_method(method);
+        class.thread_safety = ClassThreadSafety::UnsafeSingleThreaded;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(class);
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn start(&mut self) {}
+            }
+
+            #tokens
+        })
+        .expect("single-threaded class instance method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_start"));
+        assert!(!rendered.contains("BoltFFIThreadSafe"));
+    }
+
+    #[test]
+    fn native_class_method_returning_self_renders_concrete_class_type() {
+        let method = record_method(
+            "clone_engine",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn clone_engine(&self) -> Self {
+                    Self
+                }
+            }
+
+            #tokens
+        })
+        .expect("class self-returning method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_clone_engine"));
+        assert!(rendered.contains("let __boltffi_result : Engine ="));
+        assert!(!rendered.contains("let __boltffi_result : Self"));
+        assert!(rendered.contains("__BoltffiEngineHandle :: new (__boltffi_result)"));
+    }
+
+    #[test]
+    fn native_class_expansion_emits_async_instance_method_wrapper() {
+        let mut method = record_method(
+            "compute",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+        );
+        method.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        let generated = quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub async fn compute(&self) -> u32 {
+                    7
+                }
+            }
+
+            #tokens
+        };
+        syn::parse2::<syn::File>(generated.clone()).expect("class async method expansion parses");
+        assert_generated_crate_checks("native_class_async_method", generated);
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_compute"));
+        assert!(rendered.contains("fn boltffi_async_method_class_demo_engine_compute_poll"));
+        assert!(rendered.contains("rust_future_new (async move"));
+        assert!(rendered.contains(
+            "let __boltffi_receiver_handle = match unsafe { __BoltffiEngineHandle :: retain"
+        ));
+        assert!(
+            rendered.contains(
+                "let __boltffi_receiver : & Engine = __boltffi_receiver_handle . shared ()"
+            )
+        );
+        assert!(rendered.contains("__boltffi_receiver . compute ()"));
+    }
+
+    #[test]
+    fn wasm_class_expansion_uses_wasm_handle_carrier() {
+        let method = record_method(
+            "id",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_release_class_demo_engine (handle : u32)"));
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_id"));
+        assert!(rendered.contains("__boltffi_receiver : u32"));
+        assert!(rendered.contains("__boltffi_receiver . id ()"));
+    }
+
+    #[test]
+    fn native_class_initializer_with_closure_param_expands() {
+        let initializer = record_method(
+            "new",
+            Receiver::None,
+            vec![parameter(
+                "build",
+                impl_closure(
+                    vec![TypeExpr::Primitive(Primitive::U32)],
+                    ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+                ),
+            )],
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn new(build: impl Fn(u32) -> u32) -> Self {
+                    let _ = build(1);
+                    Self
+                }
+            }
+
+            #tokens
+        })
+        .expect("class closure-param initializer parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_class_demo_engine_new"));
+        assert!(rendered.contains("NativeCallbackOwner :: new"));
+        assert!(rendered.contains("Engine :: new (build)"));
+        assert_generated_crate_checks(
+            "native_class_initializer_with_closure_param",
+            quote! {
+                pub struct Engine;
+
+                impl Engine {
+                    pub fn new(build: impl Fn(u32) -> u32) -> Self {
+                        let _ = build(1);
+                        Self
+                    }
+                }
+
+                #tokens
+            },
+        );
+    }
+
+    #[test]
+    fn native_class_method_returning_closure_expands() {
+        let method = record_method(
+            "handler",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(impl_closure(
+                vec![TypeExpr::Primitive(Primitive::U32)],
+                ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+            )),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn handler(&self) -> impl Fn(u32) -> u32 {
+                    |value| value + 1
+                }
+            }
+
+            #tokens
+        })
+        .expect("class closure-return method parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_handler"));
+        assert!(rendered.contains("__boltffi_return_out : * mut :: core :: ffi :: c_void"));
+        assert!(rendered.contains("__boltffi_handler_closure_call"));
+        assert!(rendered.contains("__boltffi_receiver . handler ()"));
+    }
+
+    #[test]
+    fn native_class_method_with_callback_param_and_return_expands() {
+        let method = record_method(
+            "replace",
+            Receiver::Shared,
+            vec![parameter("listener", boxed_listener())],
+            ReturnDef::value(boxed_listener()),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener_trait_with_method());
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+        let callback_tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+
+        syn::parse2::<syn::File>(quote! {
+            pub trait Listener {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            pub struct Engine;
+
+            impl Engine {
+                pub fn replace(&self, listener: Box<dyn Listener>) -> Box<dyn Listener> {
+                    listener
+                }
+            }
+
+            #callback_tokens
+            #tokens
+        })
+        .expect("class callback handle method with callback protocol parses");
+        let rendered = quote! {
+            #callback_tokens
+            #tokens
+        }
+        .to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_replace"));
+        assert!(rendered.contains("BoxFromCallbackHandle"));
+        assert!(rendered.contains("pub struct ListenerVTable"));
+        assert!(
+            rendered.contains("pub unsafe extern \"C\" fn boltffi_register_callback_demo_listener")
+        );
+        assert!(rendered.contains("crate :: __boltffi_local_demo_listener_handle"));
+        assert!(rendered.contains("__boltffi_receiver . replace (listener)"));
+        assert_generated_crate_checks(
+            "native_class_method_with_callback_param_and_return",
+            quote! {
+                pub trait Listener {
+                    fn on_value(&self, value: u32) -> u32;
+                }
+
+                pub struct Engine;
+
+                impl Engine {
+                    pub fn replace(&self, listener: Box<dyn Listener>) -> Box<dyn Listener> {
+                        listener
+                    }
+                }
+
+                #callback_tokens
+                #tokens
+            },
+        );
+    }
+
+    #[test]
+    fn native_class_method_with_custom_param_and_return_expands() {
+        let method = record_method(
+            "stamp",
+            Receiver::Shared,
+            vec![parameter("when", custom_timestamp())],
+            ReturnDef::value(custom_timestamp()),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Timestamp(i64);
+
+            fn timestamp_into_ffi(value: &Timestamp) -> i64 {
+                value.0
+            }
+
+            fn timestamp_try_from_ffi(value: i64) -> Result<Timestamp, ()> {
+                Ok(Timestamp(value))
+            }
+
+            pub struct Engine;
+
+            impl Engine {
+                pub fn stamp(&self, when: Timestamp) -> Timestamp {
+                    when
+                }
+            }
+
+            #tokens
+        })
+        .expect("class custom method parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_stamp"));
+        assert!(rendered.contains("timestamp_try_from_ffi"));
+        assert!(
+            rendered.contains("let __boltffi_wire = (timestamp_into_ffi) (& __boltffi_result)")
+        );
+        assert!(rendered.contains("__boltffi_receiver . stamp (when)"));
+        assert_generated_crate_checks(
+            "native_class_method_with_custom_param_and_return",
+            quote! {
+                pub struct Timestamp(i64);
+
+                fn timestamp_into_ffi(value: &Timestamp) -> i64 {
+                    value.0
+                }
+
+                fn timestamp_try_from_ffi(value: i64) -> Result<Timestamp, ()> {
+                    Ok(Timestamp(value))
+                }
+
+                pub struct Engine;
+
+                impl Engine {
+                    pub fn stamp(&self, when: Timestamp) -> Timestamp {
+                        when
+                    }
+                }
+
+                #tokens
+            },
+        );
+    }
+
+    #[test]
+    fn wasm_class_method_with_custom_param_and_return_expands() {
+        let method = record_method(
+            "stamp",
+            Receiver::Shared,
+            vec![parameter("when", custom_timestamp())],
+            ReturnDef::value(custom_timestamp()),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Timestamp(i64);
+
+            fn timestamp_into_ffi(value: &Timestamp) -> i64 {
+                value.0
+            }
+
+            fn timestamp_try_from_ffi(value: i64) -> Result<Timestamp, ()> {
+                Ok(Timestamp(value))
+            }
+
+            pub struct Engine;
+
+            impl Engine {
+                pub fn stamp(&self, when: Timestamp) -> Timestamp {
+                    when
+                }
+            }
+
+            #tokens
+        })
+        .expect("wasm class custom method parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_stamp"));
+        assert!(rendered.contains("__boltffi_receiver : u32"));
+        assert!(rendered.contains("timestamp_try_from_ffi"));
+        assert!(
+            rendered.contains("let __boltffi_wire = (timestamp_into_ffi) (& __boltffi_result)")
+        );
+        assert!(rendered.contains("__boltffi_receiver . stamp (when)"));
+    }
+
+    #[test]
+    fn native_class_result_self_initializer_expands() {
+        let initializer = record_method(
+            "try_new",
+            Receiver::None,
+            Vec::new(),
+            result_return(TypeExpr::SelfType, TypeExpr::String),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn try_new() -> Result<Self, String> {
+                    Ok(Self)
+                }
+            }
+
+            #tokens
+        })
+        .expect("class fallible initializer parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_class_demo_engine_try_new"));
+        assert!(rendered.contains("__boltffi_return_out : * mut u64"));
+        assert!(rendered.contains("Engine :: try_new ()"));
+        assert!(rendered.contains("* __boltffi_return_out = __BoltffiEngineHandle :: new"));
+    }
+
+    #[test]
+    fn native_class_method_returning_nullable_self_expands() {
+        let method = record_method(
+            "maybe_self",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::option(TypeExpr::SelfType)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.classes.push(engine_class_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_class(&expansion, &source.classes[0]).expect("expanded class");
+
+        syn::parse2::<syn::File>(quote! {
+            pub struct Engine;
+
+            impl Engine {
+                pub fn maybe_self(&self) -> Option<Self> {
+                    None
+                }
+            }
+
+            #tokens
+        })
+        .expect("class nullable self-return method parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_class_demo_engine_maybe_self"));
+        assert!(rendered.contains("let __boltffi_result : Option < Engine >"));
+        assert!(rendered.contains("Some (__boltffi_value)"));
+        assert!(rendered.contains("None => 0"));
     }
 
     #[test]
@@ -4660,7 +5440,7 @@ mod tests {
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub unsafe extern "C" fn boltffi_function_demo_apply(
-                    __boltffi_callback_call: extern "C" fn(*mut ::core::ffi::c_void, u32) -> u32,
+                    __boltffi_callback_call: unsafe extern "C" fn(*mut ::core::ffi::c_void, u32) -> u32,
                     __boltffi_callback_context: *mut ::core::ffi::c_void,
                     __boltffi_callback_release: unsafe extern "C" fn(*mut ::core::ffi::c_void)
                 ) -> u32 {
@@ -5117,7 +5897,7 @@ mod tests {
         let rendered = tokens.to_string();
 
         assert!(rendered.contains(
-            "unsafe extern \"C\" fn __boltffi_make_runner_closure_call (__boltffi_context : * mut :: core :: ffi :: c_void , __boltffi_arg0_call : extern \"C\" fn (* mut :: core :: ffi :: c_void , u32) -> u32 , __boltffi_arg0_context : * mut :: core :: ffi :: c_void , __boltffi_arg0_release : unsafe extern \"C\" fn (* mut :: core :: ffi :: c_void)) -> u32"
+            "unsafe extern \"C\" fn __boltffi_make_runner_closure_call (__boltffi_context : * mut :: core :: ffi :: c_void , __boltffi_arg0_call : unsafe extern \"C\" fn (* mut :: core :: ffi :: c_void , u32) -> u32 , __boltffi_arg0_context : * mut :: core :: ffi :: c_void , __boltffi_arg0_release : unsafe extern \"C\" fn (* mut :: core :: ffi :: c_void)) -> u32"
         ));
         assert!(rendered.contains(
             "let __boltffi_arg0 : Box < dyn Fn (u32) -> u32 > = Box :: new (move | __boltffi_arg0 : u32 |"
@@ -5366,7 +6146,7 @@ mod tests {
                         return ::core::default::Default::default();
                     }
                     let engine: &Engine = unsafe {
-                        &*(engine as usize as *const Engine)
+                        __BoltffiEngineHandle::shared(engine as usize as *mut __BoltffiEngineHandle)
                     };
                     engine_id(engine)
                 }
@@ -5405,7 +6185,7 @@ mod tests {
                             if !__boltffi_return_out.is_null() {
                                 unsafe {
                                     *__boltffi_return_out =
-                                        Box::into_raw(Box::new(__boltffi_success)) as usize as u64;
+                                        __BoltffiEngineHandle::new(__boltffi_success) as usize as u64;
                                 }
                             }
                             ::boltffi::__private::FfiBuf::default()
