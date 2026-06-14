@@ -48,7 +48,7 @@ where
             TypeRef::Primitive(primitive) => {
                 PrimitiveVec::new(*primitive, input.ident).tokens::<S>()
             }
-            TypeRef::Record(_) => {
+            TypeRef::Record(_) | TypeRef::Enum(_) => {
                 let rust_element = input.rust_element;
                 PassableVec::new(rust_element, input.ident, input.failure).tokens()
             }

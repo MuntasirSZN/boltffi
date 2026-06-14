@@ -915,7 +915,9 @@ impl<'a> EnumWireExpansion<'a> {
                     let discriminant = i32::from_le_bytes(disc_bytes);
                     match discriminant {
                         #(#decode_arms),*,
-                        _ => Err(::boltffi::__private::wire::DecodeError::BufferTooSmall)
+                        _ => Err(::boltffi::__private::wire::DecodeError::InvalidValue(
+                            ::boltffi::__private::wire::InvalidWireValue::EnumTag
+                        ))
                     }
                 }
             }

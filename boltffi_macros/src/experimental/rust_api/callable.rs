@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
 use boltffi_ast::{
-    BaseTrait, FnSig, FunctionDef, MapKind, MethodDef, ParameterDef, ParameterPassing,
+    BaseTrait, EnumDef, FnSig, FunctionDef, MapKind, MethodDef, ParameterDef, ParameterPassing,
     Path as SourcePath, RecordDef, ReturnDef, TraitBounds, TypeExpr,
 };
-use boltffi_binding::{HandlePresence, HandleTarget, Primitive, Receive};
+use boltffi_binding::{CanonicalName, HandlePresence, HandleTarget, Primitive, Receive};
 use syn::{Ident, Type, parse_str};
 
 use super::{Closure, DecodeTarget, TypeTokens};
@@ -14,7 +14,24 @@ use crate::experimental::error::Error;
 pub struct Callable<'source> {
     parameters: &'source [ParameterDef],
     returns: &'source ReturnDef,
-    self_record: Option<&'source RecordDef>,
+    owner: Option<CallableOwner<'source>>,
+}
+
+#[derive(Clone, Copy)]
+enum CallableOwner<'source> {
+    Record(&'source RecordDef),
+    Enum(&'source EnumDef),
+}
+
+pub struct MethodDeclarations<'source> {
+    owner: MethodOwner,
+    methods: &'source [MethodDef],
+}
+
+#[derive(Clone, Copy)]
+enum MethodOwner {
+    Record,
+    Enum,
 }
 
 impl<'source> Callable<'source> {
@@ -22,7 +39,7 @@ impl<'source> Callable<'source> {
         Self {
             parameters: &function.parameters,
             returns: &function.returns,
-            self_record: None,
+            owner: None,
         }
     }
 
@@ -30,7 +47,7 @@ impl<'source> Callable<'source> {
         Self {
             parameters: &method.parameters,
             returns: &method.returns,
-            self_record: None,
+            owner: None,
         }
     }
 
@@ -38,7 +55,15 @@ impl<'source> Callable<'source> {
         Self {
             parameters: &method.parameters,
             returns: &method.returns,
-            self_record: Some(record),
+            owner: Some(CallableOwner::Record(record)),
+        }
+    }
+
+    pub fn enum_method(method: &'source MethodDef, enumeration: &'source EnumDef) -> Self {
+        Self {
+            parameters: &method.parameters,
+            returns: &method.returns,
+            owner: Some(CallableOwner::Enum(enumeration)),
         }
     }
 
@@ -49,36 +74,78 @@ impl<'source> Callable<'source> {
     pub fn parameters(&self) -> impl Iterator<Item = Parameter<'source>> + '_ {
         self.parameters
             .iter()
-            .map(|definition| Parameter::with_self_record(definition, self.self_record))
+            .map(|definition| Parameter::with_owner(definition, self.owner))
     }
 
     pub fn returns(&self) -> Return<'source> {
-        Return::with_self_record(self.returns, self.self_record)
+        Return::with_owner(self.returns, self.owner)
+    }
+}
+
+impl<'source> MethodDeclarations<'source> {
+    pub fn record(record: &'source RecordDef) -> Self {
+        Self {
+            owner: MethodOwner::Record,
+            methods: &record.methods,
+        }
+    }
+
+    pub fn enumeration(enumeration: &'source EnumDef) -> Self {
+        Self {
+            owner: MethodOwner::Enum,
+            methods: &enumeration.methods,
+        }
+    }
+
+    pub fn resolve(&self, name: &CanonicalName) -> Result<&'source MethodDef, Error> {
+        let binding_name = name.as_path_string();
+        let mut matches = self
+            .methods
+            .iter()
+            .filter(|method| method.name.as_path_string() == binding_name);
+        match (matches.next(), matches.next()) {
+            (Some(method), None) => Ok(method),
+            (None, _) => Err(Error::SourceSyntaxMismatch(self.owner.missing_message())),
+            (Some(_), Some(_)) => Err(Error::SourceSyntaxMismatch(self.owner.ambiguous_message())),
+        }
+    }
+}
+
+impl MethodOwner {
+    fn missing_message(self) -> &'static str {
+        match self {
+            Self::Record => "source record method is missing for binding method",
+            Self::Enum => "source enum method is missing for binding method",
+        }
+    }
+
+    fn ambiguous_message(self) -> &'static str {
+        match self {
+            Self::Record => "source record method name is ambiguous",
+            Self::Enum => "source enum method name is ambiguous",
+        }
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct Parameter<'source> {
     definition: &'source ParameterDef,
-    self_record: Option<&'source RecordDef>,
+    owner: Option<CallableOwner<'source>>,
 }
 
 impl<'source> Parameter<'source> {
     pub fn new(definition: &'source ParameterDef) -> Self {
         Self {
             definition,
-            self_record: None,
+            owner: None,
         }
     }
 
-    fn with_self_record(
+    fn with_owner(
         definition: &'source ParameterDef,
-        self_record: Option<&'source RecordDef>,
+        owner: Option<CallableOwner<'source>>,
     ) -> Self {
-        Self {
-            definition,
-            self_record,
-        }
+        Self { definition, owner }
     }
 
     pub fn ident(self) -> Result<Ident, Error> {
@@ -194,7 +261,7 @@ impl<'source> Parameter<'source> {
     }
 
     fn type_expr(&self) -> Cow<'source, TypeExpr> {
-        let self_type = self.self_record.map(record_self_type);
+        let self_type = self.owner.map(CallableOwner::self_type);
         substituted_type(&self.definition.type_expr, self_type.as_ref())
     }
 }
@@ -326,25 +393,19 @@ impl CallbackReturn {
 #[derive(Clone, Copy)]
 pub struct Return<'source> {
     definition: &'source ReturnDef,
-    self_record: Option<&'source RecordDef>,
+    owner: Option<CallableOwner<'source>>,
 }
 
 impl<'source> Return<'source> {
     pub fn new(definition: &'source ReturnDef) -> Self {
         Self {
             definition,
-            self_record: None,
+            owner: None,
         }
     }
 
-    fn with_self_record(
-        definition: &'source ReturnDef,
-        self_record: Option<&'source RecordDef>,
-    ) -> Self {
-        Self {
-            definition,
-            self_record,
-        }
+    fn with_owner(definition: &'source ReturnDef, owner: Option<CallableOwner<'source>>) -> Self {
+        Self { definition, owner }
     }
 
     pub fn written_type(self) -> Result<Option<Type>, Error> {
@@ -431,7 +492,7 @@ impl<'source> Return<'source> {
     }
 
     fn return_def(&self) -> Cow<'source, ReturnDef> {
-        let self_type = self.self_record.map(record_self_type);
+        let self_type = self.owner.map(CallableOwner::self_type);
         substituted_return(self.definition, self_type.as_ref())
     }
 }
@@ -489,11 +550,19 @@ impl<'source> Fallible<'source> {
     }
 }
 
-fn record_self_type(record: &RecordDef) -> TypeExpr {
-    TypeExpr::record(
-        record.id.clone(),
-        SourcePath::single(record.name.spelling()),
-    )
+impl CallableOwner<'_> {
+    fn self_type(self) -> TypeExpr {
+        match self {
+            Self::Record(record) => TypeExpr::record(
+                record.id.clone(),
+                SourcePath::single(record.name.spelling()),
+            ),
+            Self::Enum(enumeration) => TypeExpr::enumeration(
+                enumeration.id.clone(),
+                SourcePath::single(enumeration.name.spelling()),
+            ),
+        }
+    }
 }
 
 fn substituted_return<'source>(

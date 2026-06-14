@@ -244,3 +244,36 @@ impl<'source> RecordField<'source> {
         )
     }
 }
+
+pub struct PayloadField {
+    index: usize,
+}
+
+impl PayloadField {
+    pub const fn new(index: usize) -> Self {
+        Self { index }
+    }
+
+    pub fn value(&self) -> Ident {
+        self.ident(None)
+    }
+
+    pub fn decoded(&self) -> Ident {
+        self.ident(Some("decoded"))
+    }
+
+    pub fn used(&self) -> Ident {
+        self.ident(Some("used"))
+    }
+
+    pub fn wire(&self) -> Ident {
+        self.ident(Some("wire"))
+    }
+
+    fn ident(&self, role: Option<&str>) -> Ident {
+        match role {
+            Some(role) => format_ident!("__boltffi_payload{}_{}", self.index, role),
+            None => format_ident!("__boltffi_payload{}", self.index),
+        }
+    }
+}

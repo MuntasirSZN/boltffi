@@ -47,7 +47,7 @@ impl Render<Wasm32, Input> for Renderer {
             ffi_parameters: Vec::new(),
             return_type: quote! {},
             body: quote! {
-                let __boltffi_buf = ::boltffi::__private::FfiBuf::from_vec(#value);
+                let __boltffi_buf = <_ as ::boltffi::__private::VecTransport>::pack_vec(#value);
                 ::boltffi::__private::write_return_slot(
                     __boltffi_buf.as_ptr() as u32,
                     __boltffi_buf.len() as u32,
