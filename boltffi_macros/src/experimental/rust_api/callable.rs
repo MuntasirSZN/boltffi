@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
 use boltffi_ast::{
-    BaseTrait, EnumDef, FnSig, FunctionDef, MapKind, MethodDef, ParameterDef, ParameterPassing,
-    Path as SourcePath, RecordDef, ReturnDef, TraitBounds, TypeExpr,
+    BaseTrait, ClassDef, EnumDef, FnSig, FunctionDef, MapKind, MethodDef, ParameterDef,
+    ParameterPassing, Path as SourcePath, RecordDef, ReturnDef, TraitBounds, TypeExpr,
 };
 use boltffi_binding::{CanonicalName, HandlePresence, HandleTarget, Primitive, Receive};
 use syn::{Ident, Type, parse_str};
@@ -21,17 +21,11 @@ pub struct Callable<'source> {
 enum CallableOwner<'source> {
     Record(&'source RecordDef),
     Enum(&'source EnumDef),
+    Class(&'source ClassDef),
 }
 
 pub struct MethodDeclarations<'source> {
-    owner: MethodOwner,
-    methods: &'source [MethodDef],
-}
-
-#[derive(Clone, Copy)]
-enum MethodOwner {
-    Record,
-    Enum,
+    owner: CallableOwner<'source>,
 }
 
 impl<'source> Callable<'source> {
@@ -67,6 +61,14 @@ impl<'source> Callable<'source> {
         }
     }
 
+    pub fn class_method(method: &'source MethodDef, class: &'source ClassDef) -> Self {
+        Self {
+            parameters: &method.parameters,
+            returns: &method.returns,
+            owner: Some(CallableOwner::Class(class)),
+        }
+    }
+
     pub fn parameter_count(&self) -> usize {
         self.parameters.len()
     }
@@ -85,44 +87,33 @@ impl<'source> Callable<'source> {
 impl<'source> MethodDeclarations<'source> {
     pub fn record(record: &'source RecordDef) -> Self {
         Self {
-            owner: MethodOwner::Record,
-            methods: &record.methods,
+            owner: CallableOwner::Record(record),
         }
     }
 
     pub fn enumeration(enumeration: &'source EnumDef) -> Self {
         Self {
-            owner: MethodOwner::Enum,
-            methods: &enumeration.methods,
+            owner: CallableOwner::Enum(enumeration),
+        }
+    }
+
+    pub fn class(class: &'source ClassDef) -> Self {
+        Self {
+            owner: CallableOwner::Class(class),
         }
     }
 
     pub fn resolve(&self, name: &CanonicalName) -> Result<&'source MethodDef, Error> {
         let binding_name = name.as_path_string();
         let mut matches = self
-            .methods
+            .owner
+            .methods()
             .iter()
             .filter(|method| method.name.as_path_string() == binding_name);
         match (matches.next(), matches.next()) {
             (Some(method), None) => Ok(method),
             (None, _) => Err(Error::SourceSyntaxMismatch(self.owner.missing_message())),
             (Some(_), Some(_)) => Err(Error::SourceSyntaxMismatch(self.owner.ambiguous_message())),
-        }
-    }
-}
-
-impl MethodOwner {
-    fn missing_message(self) -> &'static str {
-        match self {
-            Self::Record => "source record method is missing for binding method",
-            Self::Enum => "source enum method is missing for binding method",
-        }
-    }
-
-    fn ambiguous_message(self) -> &'static str {
-        match self {
-            Self::Record => "source record method name is ambiguous",
-            Self::Enum => "source enum method name is ambiguous",
         }
     }
 }
@@ -355,7 +346,7 @@ impl CallbackObject {
 }
 
 pub enum HandleReturn {
-    Class,
+    Class(Box<Type>),
     Callback(Box<CallbackReturn>),
 }
 
@@ -550,7 +541,31 @@ impl<'source> Fallible<'source> {
     }
 }
 
-impl CallableOwner<'_> {
+impl<'source> CallableOwner<'source> {
+    fn methods(self) -> &'source [MethodDef] {
+        match self {
+            Self::Record(record) => &record.methods,
+            Self::Enum(enumeration) => &enumeration.methods,
+            Self::Class(class) => &class.methods,
+        }
+    }
+
+    fn missing_message(self) -> &'static str {
+        match self {
+            Self::Record(_) => "source record method is missing for binding method",
+            Self::Enum(_) => "source enum method is missing for binding method",
+            Self::Class(_) => "source class method is missing for binding method",
+        }
+    }
+
+    fn ambiguous_message(self) -> &'static str {
+        match self {
+            Self::Record(_) => "source record method name is ambiguous",
+            Self::Enum(_) => "source enum method name is ambiguous",
+            Self::Class(_) => "source class method name is ambiguous",
+        }
+    }
+
     fn self_type(self) -> TypeExpr {
         match self {
             Self::Record(record) => TypeExpr::record(
@@ -561,6 +576,9 @@ impl CallableOwner<'_> {
                 enumeration.id.clone(),
                 SourcePath::single(enumeration.name.spelling()),
             ),
+            Self::Class(class) => {
+                TypeExpr::class(class.id.clone(), SourcePath::single(class.name.spelling()))
+            }
         }
     }
 }
@@ -746,7 +764,18 @@ impl<'source> Handle<'source> {
         presence: HandlePresence,
     ) -> Result<HandleReturn, Error> {
         match target {
-            HandleTarget::Class(_) => self.matches(target, presence).map(|()| HandleReturn::Class),
+            HandleTarget::Class(_) => {
+                let type_expr = match presence {
+                    HandlePresence::Required => self.source,
+                    HandlePresence::Nullable => option_inner(self.source)?,
+                    _ => return Err(Error::UnsupportedExpansion("unknown handle presence")),
+                };
+                self.matches(target, presence)?;
+                TypeTokens::new(type_expr)
+                    .map(TypeTokens::into_type)
+                    .map(Box::new)
+                    .map(HandleReturn::Class)
+            }
             HandleTarget::Callback(_) => {
                 let type_expr = match presence {
                     HandlePresence::Required => self.source,

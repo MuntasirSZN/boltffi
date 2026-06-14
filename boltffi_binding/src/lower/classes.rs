@@ -1,9 +1,10 @@
-use boltffi_ast::ClassDef as SourceClass;
+use boltffi_ast::{ClassDef as SourceClass, ClassThreadSafety as SourceClassThreadSafety};
 
-use crate::{CanonicalName, ClassDecl};
+use crate::{CanonicalName, ClassDecl, ClassDeclParts, ClassThreadSafety, InvalidClassDecl};
 
 use super::{
     LowerError,
+    error::UnsupportedType,
     ids::DeclarationIds,
     index::Index,
     metadata, methods,
@@ -42,34 +43,57 @@ fn lower_one<S: SurfaceLower>(
     let initializers = methods::lower_class_initializers::<S>(idx, ids, allocator, class)?;
     let class_methods = methods::lower_class_methods::<S>(idx, ids, allocator, class)?;
 
-    Ok(ClassDecl::new(
-        class_id,
-        canonical,
-        metadata::decl_meta(class.doc.as_ref(), class.deprecated.as_ref()),
-        S::class_handle_carrier(),
+    ClassDecl::new(ClassDeclParts {
+        id: class_id,
+        name: canonical,
+        meta: metadata::decl_meta(class.doc.as_ref(), class.deprecated.as_ref()),
+        thread_safety: ClassThreadSafety::from(class.thread_safety),
+        handle: S::class_handle_carrier(),
         release,
         initializers,
-        class_methods,
-    ))
+        methods: class_methods,
+    })
+    .map_err(lower_invalid_class)
+}
+
+impl From<SourceClassThreadSafety> for ClassThreadSafety {
+    fn from(value: SourceClassThreadSafety) -> Self {
+        match value {
+            SourceClassThreadSafety::RequireSendSync => Self::RequireSendSync,
+            SourceClassThreadSafety::UnsafeSingleThreaded => Self::UnsafeSingleThreaded,
+        }
+    }
+}
+
+fn lower_invalid_class(error: InvalidClassDecl) -> LowerError {
+    match error {
+        InvalidClassDecl::MutableReceiverRequiresUnsafeSingleThreaded => {
+            LowerError::unsupported_type(
+                UnsupportedType::MutableClassReceiverRequiresUnsafeSingleThreaded,
+            )
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{
-        CanonicalName as SourceName, ClassDef, DeprecationInfo as SourceDeprecationInfo,
-        DocComment as SourceDocComment, EnumDef, FieldDef, MethodDef, MethodId as SourceMethodId,
-        PackageInfo as SourcePackage, ParameterDef, Path as SourcePath, Primitive, Receiver,
-        RecordDef, ReprAttr, ReprItem, ReturnDef, SourceContract, TypeExpr, VariantDef,
+        CanonicalName as SourceName, ClassDef, ClassThreadSafety as SourceClassThreadSafety,
+        DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, EnumDef,
+        FieldDef, MethodDef, MethodId as SourceMethodId, PackageInfo as SourcePackage,
+        ParameterDef, Path as SourcePath, Primitive, Receiver, RecordDef, ReprAttr, ReprItem,
+        ReturnDef, SourceContract, TypeExpr, VariantDef,
     };
 
     use crate::lower::lower;
     use crate::{
-        BindingErrorKind, Bindings, CanonicalName, ClassDecl, ClassId, CodecNode, Decl, EnumId,
-        ErrorDecl, ExecutionDecl, HandlePresence, HandleTarget, InitializerId, LowerError,
-        LowerErrorKind, MethodId, Native, NativeSymbol, ParamPlan, Primitive as BindingPrimitive,
-        Receive, RecordId, ReturnPlan, ReturnTypeRef, Surface, SurfaceLower, TypeRef,
-        UnsupportedType, Wasm32, native, wasm32,
+        BindingErrorKind, Bindings, CanonicalName, ClassDecl, ClassId, ClassThreadSafety,
+        CodecNode, Decl, EnumId, ErrorDecl, ExecutionDecl, HandlePresence, HandleTarget,
+        InitializerId, LowerError, LowerErrorKind, MethodId, Native, NativeSymbol, ParamPlan,
+        Primitive as BindingPrimitive, Receive, RecordId, ReturnPlan, ReturnTypeRef, Surface,
+        SurfaceLower, TypeRef, UnsupportedType, Wasm32, native, wasm32,
     };
+    use serde_json::{Value, json};
 
     fn package() -> SourceContract {
         SourceContract::new(SourcePackage::new("demo", Some("0.1.0".to_owned())))
@@ -167,6 +191,7 @@ mod tests {
             .push(param("seed", TypeExpr::Primitive(Primitive::U64)));
         let start = method("start", Receiver::Mutable, ReturnDef::Void);
         let mut source = class("demo::Engine", "Engine", vec![new, start]);
+        source.thread_safety = SourceClassThreadSafety::UnsafeSingleThreaded;
         source.doc = Some(SourceDocComment::new("Runs work."));
         source.deprecated = Some(SourceDeprecationInfo::new(
             Some("use Runtime".to_owned()),
@@ -250,6 +275,24 @@ mod tests {
         );
         assert_eq!(class_method.callable().receiver(), Some(Receive::ByMutRef));
         assert_eq!(class_method.callable().returns().plan(), &ReturnPlan::Void);
+    }
+
+    #[test]
+    fn lowers_class_thread_safety_policy() {
+        let mut source = class(
+            "demo::Engine",
+            "Engine",
+            vec![method("start", Receiver::Mutable, ReturnDef::Void)],
+        );
+        source.thread_safety = SourceClassThreadSafety::UnsafeSingleThreaded;
+
+        let bindings = lower_class::<Native>(source);
+        let class = class_by_id(&bindings, ClassId::from_raw(0));
+
+        assert_eq!(
+            class.thread_safety(),
+            ClassThreadSafety::UnsafeSingleThreaded
+        );
     }
 
     #[test]
@@ -471,14 +514,16 @@ mod tests {
     fn duplicate_class_method_symbols_fail_with_exact_name() {
         let error = lower_contract::<Native>({
             let mut contract = package();
-            contract.classes.push(class(
+            let mut class = class(
                 "demo::Engine",
                 "Engine",
                 vec![
                     method("start", Receiver::Shared, ReturnDef::Void),
                     method("start", Receiver::Mutable, ReturnDef::Void),
                 ],
-            ));
+            );
+            class.thread_safety = SourceClassThreadSafety::UnsafeSingleThreaded;
+            contract.classes.push(class);
             contract
         })
         .expect_err("duplicate method symbols should fail");
@@ -511,6 +556,79 @@ mod tests {
             error.kind(),
             LowerErrorKind::UnsupportedType(UnsupportedType::OwnedClassReceiver)
         ));
+    }
+
+    #[test]
+    fn rejects_mutable_class_receiver_without_unsafe_single_threaded_export() {
+        let error = lower_contract::<Native>({
+            let mut contract = package();
+            contract.classes.push(class(
+                "demo::Engine",
+                "Engine",
+                vec![method("start", Receiver::Mutable, ReturnDef::Void)],
+            ));
+            contract
+        })
+        .expect_err("default class export should reject mutable receiver methods");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::UnsupportedType(
+                UnsupportedType::MutableClassReceiverRequiresUnsafeSingleThreaded
+            )
+        ));
+    }
+
+    #[test]
+    fn deserialized_bindings_reject_mutable_class_receiver_without_unsafe_single_threaded_export() {
+        let bindings = lower_class::<Native>({
+            let mut class = class(
+                "demo::Engine",
+                "Engine",
+                vec![method("start", Receiver::Mutable, ReturnDef::Void)],
+            );
+            class.thread_safety = SourceClassThreadSafety::UnsafeSingleThreaded;
+            class
+        });
+        let mut value = serde_json::to_value(&bindings).expect("bindings serialize");
+        let Value::Array(decls) = &mut value["decls"] else {
+            panic!("serialized bindings decls must be an array");
+        };
+        let class = decls
+            .iter_mut()
+            .find_map(|decl| decl.get_mut("Class"))
+            .expect("serialized class declaration");
+        class["thread_safety"] = json!("RequireSendSync");
+
+        let error =
+            serde_json::from_value::<Bindings<Native>>(value).expect_err("invalid contract");
+
+        assert!(
+            error
+                .to_string()
+                .contains("mutable class receivers require")
+        );
+    }
+
+    #[test]
+    fn serialized_class_callables_stay_top_level_for_version_compatibility() {
+        let bindings = lower_class::<Native>(class(
+            "demo::Engine",
+            "Engine",
+            vec![method("version", Receiver::Shared, ReturnDef::Void)],
+        ));
+
+        let value = serde_json::to_value(&bindings).expect("bindings serialize");
+        let class = value["decls"]
+            .as_array()
+            .and_then(|decls| decls.iter().find_map(|decl| decl.get("Class")))
+            .expect("serialized class declaration");
+
+        assert!(class.get("callables").is_none());
+        assert!(class.get("thread_safety").is_some());
+        assert!(class.get("initializers").is_some());
+        assert!(class.get("methods").is_some());
+        serde_json::from_value::<Bindings<Native>>(value).expect("top-level class shape reads");
     }
 
     #[test]
@@ -582,7 +700,7 @@ mod tests {
     #[test]
     fn class_param_with_required_presence_lowers_to_required_handle() {
         let driver = class("demo::Driver", "Driver", Vec::new());
-        let mut method = method("install", Receiver::Mutable, ReturnDef::Void);
+        let mut method = method("install", Receiver::Shared, ReturnDef::Void);
         method
             .parameters
             .push(param("driver", class_type("demo::Driver", "Driver")));
@@ -615,7 +733,7 @@ mod tests {
     #[test]
     fn class_param_with_nullable_presence_lowers_to_nullable_handle() {
         let driver = class("demo::Driver", "Driver", Vec::new());
-        let mut method = method("attach", Receiver::Mutable, ReturnDef::Void);
+        let mut method = method("attach", Receiver::Shared, ReturnDef::Void);
         method.parameters.push(param(
             "driver",
             nullable_class_type("demo::Driver", "Driver"),
@@ -725,11 +843,11 @@ mod tests {
     #[test]
     fn nullable_class_param_uses_same_carrier_as_required() {
         let driver = class("demo::Driver", "Driver", Vec::new());
-        let mut required_method = method("install", Receiver::Mutable, ReturnDef::Void);
+        let mut required_method = method("install", Receiver::Shared, ReturnDef::Void);
         required_method
             .parameters
             .push(param("driver", class_type("demo::Driver", "Driver")));
-        let mut nullable_method = method("attach", Receiver::Mutable, ReturnDef::Void);
+        let mut nullable_method = method("attach", Receiver::Shared, ReturnDef::Void);
         nullable_method.parameters.push(param(
             "driver",
             nullable_class_type("demo::Driver", "Driver"),
@@ -759,7 +877,7 @@ mod tests {
     #[test]
     fn nullable_class_param_uses_u32_carrier_on_wasm32() {
         let driver = class("demo::Driver", "Driver", Vec::new());
-        let mut method = method("attach", Receiver::Mutable, ReturnDef::Void);
+        let mut method = method("attach", Receiver::Shared, ReturnDef::Void);
         method.parameters.push(param(
             "driver",
             nullable_class_type("demo::Driver", "Driver"),

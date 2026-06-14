@@ -1,4 +1,4 @@
-use boltffi_ast::{AttributeInput, Path, UserAttr};
+use boltffi_ast::{AttributeInput, ClassThreadSafety, Path, UserAttr};
 use syn::parse::Parser;
 
 use crate::ScanError;
@@ -8,8 +8,13 @@ pub enum Marker {
     Data,
     DataImpl,
     Error,
-    Export,
+    Export(ExportMarker),
     Skip,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExportMarker {
+    class_thread_safety: Option<ClassThreadSafety>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,8 +52,15 @@ impl Marker {
             Self::Data => "data",
             Self::DataImpl => "data(impl)",
             Self::Error => "error",
-            Self::Export => "export",
+            Self::Export(_) => "export",
             Self::Skip => "skip",
+        }
+    }
+
+    pub fn export(self) -> Option<ExportMarker> {
+        match self {
+            Self::Export(export) => Some(export),
+            _ => None,
         }
     }
 
@@ -95,12 +107,28 @@ impl Marker {
 
     fn from_export(attr: &syn::Attribute) -> Result<Self, ScanError> {
         match &attr.meta {
-            syn::Meta::Path(_) => Ok(Self::Export),
+            syn::Meta::Path(_) => Ok(Self::Export(ExportMarker::default())),
             syn::Meta::List(list) => parse_export_args
                 .parse2(list.tokens.clone())
-                .map(|_| Self::Export)
+                .map(Self::Export)
                 .map_err(|_| invalid(attr)),
             _ => Err(invalid(attr)),
+        }
+    }
+}
+
+impl ExportMarker {
+    pub fn class_thread_safety(self) -> ClassThreadSafety {
+        self.class_thread_safety.unwrap_or_default()
+    }
+
+    pub fn requires_class_impl(self) -> bool {
+        self.class_thread_safety.is_some()
+    }
+
+    fn single_threaded() -> Self {
+        Self {
+            class_thread_safety: Some(ClassThreadSafety::UnsafeSingleThreaded),
         }
     }
 }
@@ -110,14 +138,14 @@ fn parse_data_impl(input: syn::parse::ParseStream<'_>) -> syn::Result<()> {
     Ok(())
 }
 
-fn parse_export_args(input: syn::parse::ParseStream<'_>) -> syn::Result<()> {
+fn parse_export_args(input: syn::parse::ParseStream<'_>) -> syn::Result<ExportMarker> {
     let args = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated(input)?;
     if !args.is_empty()
         && args
             .iter()
             .all(|ident| ident == "single_threaded" || ident == "thread_unsafe")
     {
-        Ok(())
+        Ok(ExportMarker::single_threaded())
     } else {
         Err(input.error("unsupported export marker arguments"))
     }
@@ -258,16 +286,16 @@ mod tests {
     fn detects_export_on_exported_items() {
         assert_eq!(
             Marker::detect(&fn_attrs("#[export] fn f() {}")),
-            Ok(Some(Marker::Export))
+            Ok(Some(Marker::Export(ExportMarker::default())))
         );
         assert_eq!(
             Marker::detect(&fn_attrs("#[boltffi::export] fn f() {}")),
-            Ok(Some(Marker::Export))
+            Ok(Some(Marker::Export(ExportMarker::default())))
         );
         assert_eq!(Marker::detect(&fn_attrs("fn f() {}")), Ok(None));
         assert_eq!(
             Marker::detect(&const_attrs("#[export] const ANSWER: u32 = 42;")),
-            Ok(Some(Marker::Export))
+            Ok(Some(Marker::Export(ExportMarker::default())))
         );
     }
 
@@ -275,11 +303,11 @@ mod tests {
     fn detects_export_with_class_threading_marker() {
         assert_eq!(
             Marker::detect(&impl_attrs("#[export(single_threaded)] impl S {}")),
-            Ok(Some(Marker::Export))
+            Ok(Some(Marker::Export(ExportMarker::single_threaded())))
         );
         assert_eq!(
             Marker::detect(&impl_attrs("#[boltffi::export(thread_unsafe)] impl S {}")),
-            Ok(Some(Marker::Export))
+            Ok(Some(Marker::Export(ExportMarker::single_threaded())))
         );
     }
 

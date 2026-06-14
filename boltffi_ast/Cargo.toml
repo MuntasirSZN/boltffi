@@ -12,5 +12,8 @@ categories = ["development-tools::ffi"]
 [dependencies]
 serde.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

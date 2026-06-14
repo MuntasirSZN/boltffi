@@ -67,6 +67,8 @@ impl fmt::Display for BindingError {
             BindingErrorKind::SliceInReturnPosition => formatter.write_str(
                 "BufferShape::Slice cannot appear on a return or error encoded crossing",
             ),
+            BindingErrorKind::MutableClassReceiverRequiresUnsafeSingleThreaded => formatter
+                .write_str("mutable class receivers require UnsafeSingleThreaded class export"),
         }
     }
 }
@@ -112,4 +114,6 @@ pub enum BindingErrorKind {
     /// `BufferShape::Slice`, but a borrowed slice cannot be returned to
     /// foreign code with no owner to free it.
     SliceInReturnPosition,
+    /// A class requires `Send + Sync` but exposes a `&mut self` method.
+    MutableClassReceiverRequiresUnsafeSingleThreaded,
 }

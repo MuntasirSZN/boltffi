@@ -223,10 +223,10 @@ impl ClosureBinding {
     ) -> Result<TokenStream, Error> {
         match self {
             Self::NullableBoxed(_, _) => Ok(quote! {
-                Option<extern "C" fn(*mut ::core::ffi::c_void #(, #ffi_parameter_types)*) #return_type>
+                Option<unsafe extern "C" fn(*mut ::core::ffi::c_void #(, #ffi_parameter_types)*) #return_type>
             }),
             _ => Ok(quote! {
-                extern "C" fn(*mut ::core::ffi::c_void #(, #ffi_parameter_types)*) #return_type
+                unsafe extern "C" fn(*mut ::core::ffi::c_void #(, #ffi_parameter_types)*) #return_type
             }),
         }
     }
@@ -591,7 +591,7 @@ impl<'expansion, 'lowered, 'rust, S: Target> ForeignClosureReturn<'expansion, 'l
             encoded::incoming::Bytes::new(
                 rust_type,
                 bytes,
-                quote! { panic!("closure encoded return conversion failed: {}", error) },
+                quote! { panic!("closure encoded return conversion failed: {:?}", error) },
             ),
         )
     }

@@ -1,6 +1,7 @@
 use boltffi_binding::{HandlePresence, HandleTarget, Native, Wasm32, native, wasm32};
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::Type;
 
 use crate::experimental::{
     error::Error,
@@ -127,7 +128,7 @@ impl<'expansion, 'lowered> NativeReturn<'expansion, 'lowered> {
         let ty = carrier.ty().clone();
         let zero = carrier.zero();
         let value = match self.input.handle_return {
-            rust_api::HandleReturn::Class => self.class_value(&ty, zero)?,
+            rust_api::HandleReturn::Class(ref class) => self.class_value(class, &ty, zero)?,
             rust_api::HandleReturn::Callback(ref callback) => {
                 self.callback_value(callback, zero)?
             }
@@ -136,19 +137,25 @@ impl<'expansion, 'lowered> NativeReturn<'expansion, 'lowered> {
         Ok(ValueTokens { ty, value })
     }
 
-    fn class_value(&self, ty: &TokenStream, zero: &TokenStream) -> Result<TokenStream, Error> {
+    fn class_value(
+        &self,
+        class: &Type,
+        ty: &TokenStream,
+        zero: &TokenStream,
+    ) -> Result<TokenStream, Error> {
         if !matches!(self.input.target, HandleTarget::Class(_)) {
             return Err(Error::UnsupportedExpansion("non-class handle return"));
         }
+        let handle = wrapper::names::Class::from_local_type(class)?.handle();
         let value = &self.input.value;
         match self.input.presence {
             HandlePresence::Required => Ok(quote! {
-                Box::into_raw(Box::new(#value)) as usize as #ty
+                #handle::new(#value) as usize as #ty
             }),
             HandlePresence::Nullable => Ok(quote! {
                 match #value {
                     Some(__boltffi_value) => {
-                        Box::into_raw(Box::new(__boltffi_value)) as usize as #ty
+                        #handle::new(__boltffi_value) as usize as #ty
                     }
                     None => #zero,
                 }
@@ -219,7 +226,7 @@ impl<'expansion, 'lowered> WasmReturn<'expansion, 'lowered> {
         let ty = carrier.ty().clone();
         let zero = carrier.zero();
         let value = match self.input.handle_return {
-            rust_api::HandleReturn::Class => self.class_value(&ty, zero)?,
+            rust_api::HandleReturn::Class(ref class) => self.class_value(class, &ty, zero)?,
             rust_api::HandleReturn::Callback(ref callback) => {
                 self.callback_value(callback, zero)?
             }
@@ -228,19 +235,25 @@ impl<'expansion, 'lowered> WasmReturn<'expansion, 'lowered> {
         Ok(ValueTokens { ty, value })
     }
 
-    fn class_value(&self, ty: &TokenStream, zero: &TokenStream) -> Result<TokenStream, Error> {
+    fn class_value(
+        &self,
+        class: &Type,
+        ty: &TokenStream,
+        zero: &TokenStream,
+    ) -> Result<TokenStream, Error> {
         if !matches!(self.input.target, HandleTarget::Class(_)) {
             return Err(Error::UnsupportedExpansion("non-class handle return"));
         }
+        let handle = wrapper::names::Class::from_local_type(class)?.handle();
         let value = &self.input.value;
         match self.input.presence {
             HandlePresence::Required => Ok(quote! {
-                Box::into_raw(Box::new(#value)) as usize as #ty
+                #handle::new(#value) as usize as #ty
             }),
             HandlePresence::Nullable => Ok(quote! {
                 match #value {
                     Some(__boltffi_value) => {
-                        Box::into_raw(Box::new(__boltffi_value)) as usize as #ty
+                        #handle::new(__boltffi_value) as usize as #ty
                     }
                     None => #zero,
                 }

@@ -1,7 +1,6 @@
 use boltffi_ast::{EnumDef, MethodDef, Path as SourcePath, TypeExpr};
 use boltffi_binding::{
-    ExportedCallable, ExportedMethodDecl, InitializerDecl, NativeSymbol, Receive, TypeRef,
-    WritePlan,
+    ExportedMethodDecl, InitializerDecl, NativeSymbol, Receive, TypeRef, WritePlan,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -97,8 +96,6 @@ impl<'expansion, 'lowered, S> associated_fn::Owner<'expansion, 'lowered, S> for 
 where
     'lowered: 'expansion,
     S: Target,
-    wrapper::returns::Failure:
-        Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
     for<'ty> wrapper::param::direct::Renderer:
         Render<S, wrapper::param::direct::Input<'ty>, Output = wrapper::param::Tokens>,
     wrapper::param::encoded::Renderer: Render<
@@ -106,6 +103,8 @@ where
             wrapper::param::encoded::Input<'expansion, 'lowered, S>,
             Output = wrapper::param::Tokens,
         >,
+    wrapper::returns::Failure:
+        Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
 {
     fn declarations(&self) -> rust_api::MethodDeclarations<'lowered> {
         rust_api::MethodDeclarations::enumeration(self.source)
@@ -117,23 +116,23 @@ where
 
     fn receiver(
         &self,
-        callable: &'lowered ExportedCallable<S>,
-        method: Ident,
-        expansion: &'expansion Expansion<'lowered, S>,
+        export: associated_fn::ReceiverExport<'expansion, 'lowered, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error> {
-        match callable.receiver() {
+        match export.callable().receiver() {
             None => {
                 let enumeration = &self.enumeration;
                 Ok((
                     export::ReceiverTokens::none(),
-                    export::RustCall::associated(quote! { #enumeration }, method),
+                    export::RustCall::associated(quote! { #enumeration }, export.method().clone()),
                 ))
             }
-            Some(receive) => {
-                self.receiver
-                    .clone()
-                    .render(self.source, callable, receive, method, expansion)
-            }
+            Some(receive) => self.receiver.clone().render(
+                self.source,
+                receive,
+                export.method().clone(),
+                export.failure(),
+                export.expansion(),
+            ),
         }
     }
 }
@@ -142,14 +141,13 @@ impl<'lowered> Receiver<'lowered> {
     fn render<'expansion, S>(
         self,
         source: &'lowered EnumDef,
-        callable: &'lowered ExportedCallable<S>,
         receive: Receive,
         method: Ident,
+        failure: associated_fn::ReceiverFailure<'expansion, 'lowered, S>,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error>
     where
         S: Target,
-        wrapper::returns::Failure: Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
         for<'ty> wrapper::param::direct::Renderer:
             Render<S, wrapper::param::direct::Input<'ty>, Output = wrapper::param::Tokens>,
         wrapper::param::encoded::Renderer: Render<
@@ -157,11 +155,12 @@ impl<'lowered> Receiver<'lowered> {
                 wrapper::param::encoded::Input<'expansion, 'lowered, S>,
                 Output = wrapper::param::Tokens,
             >,
+        wrapper::returns::Failure: Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
     {
         match self {
             Self::Direct { ty } => Self::render_direct::<S>(source, &ty, receive, method),
             Self::Encoded { codec } => {
-                Self::render_encoded::<S>(source, callable, codec, receive, method, expansion)
+                Self::render_encoded::<S>(source, codec, receive, method, failure, expansion)
             }
         }
     }
@@ -207,20 +206,20 @@ impl<'lowered> Receiver<'lowered> {
 
     fn render_encoded<'expansion, S>(
         source: &'lowered EnumDef,
-        callable: &'lowered ExportedCallable<S>,
         codec: &'lowered WritePlan,
         receive: Receive,
         method: Ident,
+        failure: associated_fn::ReceiverFailure<'expansion, 'lowered, S>,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error>
     where
         S: Target,
-        wrapper::returns::Failure: Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
         wrapper::param::encoded::Renderer: Render<
                 S,
                 wrapper::param::encoded::Input<'expansion, 'lowered, S>,
                 Output = wrapper::param::Tokens,
             >,
+        wrapper::returns::Failure: Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
     {
         if receive == Receive::ByMutRef {
             return Err(Error::UnsupportedExpansion(
@@ -232,10 +231,6 @@ impl<'lowered> Receiver<'lowered> {
             source.id.clone(),
             SourcePath::single(source.name.spelling()),
         );
-        let failure = <wrapper::returns::Failure as Render<S, _>>::render(
-            wrapper::returns::Failure,
-            wrapper::returns::FailureInput::new(callable.returns(), callable.error(), expansion),
-        )?;
         let tokens = <wrapper::param::encoded::Renderer as Render<S, _>>::render(
             wrapper::param::encoded::Renderer,
             wrapper::param::encoded::Input::new(
@@ -243,7 +238,7 @@ impl<'lowered> Receiver<'lowered> {
                 <S as boltffi_binding::SurfaceLower>::encoded_param_shape(),
                 rust_api::DecodeTarget::received(receive, &source_type)?,
                 receiver.clone(),
-                failure,
+                failure.render()?,
                 expansion,
             ),
         )?;

@@ -198,8 +198,8 @@ impl<'lowered, C> ClassParam<'lowered, C> {
     ) -> Result<TokenStream, Error> {
         let ident = &self.input.ident;
         let ty = class.ty();
-        let mutable_pointer = quote! { #ident as usize as *mut #ty };
-        let const_pointer = quote! { #ident as usize as *const #ty };
+        let handle_type = names::Class::from_local_type(ty)?.handle();
+        let handle_pointer = quote! { #ident as usize as *mut #handle_type };
         let failure = &self.input.failure;
         let null_check = matches!(self.input.plan.presence, HandlePresence::Required).then(|| {
             quote! {
@@ -216,29 +216,43 @@ impl<'lowered, C> ClassParam<'lowered, C> {
         Ok(match (self.input.plan.receive, class.presence()) {
             (Receive::ByValue, HandlePresence::Required) => quote! {
                 #null_check
-                let #ident: #ty = unsafe {
-                    *Box::from_raw(#mutable_pointer)
+                let #ident: #ty = match unsafe { #handle_type::take(#handle_pointer) } {
+                    Some(value) => value,
+                    None => {
+                        ::boltffi::__private::set_last_error(format!(
+                            "{}: released class handle",
+                            stringify!(#ident)
+                        ));
+                        #failure
+                    }
                 };
             },
             (Receive::ByValue, HandlePresence::Nullable) => quote! {
                 let #ident: Option<#ty> = if #ident == #zero {
                     None
                 } else {
-                    Some(unsafe {
-                        *Box::from_raw(#mutable_pointer)
+                    Some(match unsafe { #handle_type::take(#handle_pointer) } {
+                        Some(value) => value,
+                        None => {
+                            ::boltffi::__private::set_last_error(format!(
+                                "{}: released class handle",
+                                stringify!(#ident)
+                            ));
+                            #failure
+                        }
                     })
                 };
             },
             (Receive::ByRef, HandlePresence::Required) => quote! {
                 #null_check
                 let #ident: &#ty = unsafe {
-                    &*(#const_pointer)
+                    #handle_type::shared(#handle_pointer)
                 };
             },
             (Receive::ByMutRef, HandlePresence::Required) => quote! {
                 #null_check
                 let #ident: &mut #ty = unsafe {
-                    &mut *(#mutable_pointer)
+                    #handle_type::mutable(#handle_pointer)
                 };
             },
             (Receive::ByRef | Receive::ByMutRef, HandlePresence::Nullable) => {

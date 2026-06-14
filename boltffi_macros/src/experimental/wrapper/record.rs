@@ -1,7 +1,7 @@
 use boltffi_ast::{FieldDef, MethodDef, Path as SourcePath, RecordDef, TypeExpr};
 use boltffi_binding::{
-    CanonicalName, CodecNode, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl,
-    ExportedCallable, FieldKey, Receive, RecordDecl, SurfaceLower, WritePlan,
+    CanonicalName, CodecNode, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, FieldKey,
+    Receive, RecordDecl, SurfaceLower, WritePlan,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -139,6 +139,8 @@ where
             wrapper::param::encoded::Input<'expansion, 'lowered, S>,
             Output = wrapper::param::Tokens,
         >,
+    wrapper::returns::Failure:
+        Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
 {
     fn render(self) -> Result<TokenStream, Error> {
         let record = record_ident(self.source)?;
@@ -250,6 +252,8 @@ where
             wrapper::param::encoded::Input<'expansion, 'lowered, S>,
             Output = wrapper::param::Tokens,
         >,
+    wrapper::returns::Failure:
+        Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
 {
     fn render(self) -> Result<TokenStream, Error> {
         let record = record_ident(self.source)?;
@@ -486,8 +490,6 @@ impl<'expansion, 'lowered, S> associated_fn::Owner<'expansion, 'lowered, S>
 where
     'lowered: 'expansion,
     S: Target,
-    wrapper::returns::Failure:
-        Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
     wrapper::param::direct::Record:
         Render<S, wrapper::param::direct::RecordInput, Output = wrapper::param::Tokens>,
     wrapper::param::encoded::Renderer: Render<
@@ -495,6 +497,8 @@ where
             wrapper::param::encoded::Input<'expansion, 'lowered, S>,
             Output = wrapper::param::Tokens,
         >,
+    wrapper::returns::Failure:
+        Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
 {
     fn declarations(&self) -> rust_api::MethodDeclarations<'lowered> {
         rust_api::MethodDeclarations::record(self.source)
@@ -506,17 +510,15 @@ where
 
     fn receiver(
         &self,
-        callable: &'lowered ExportedCallable<S>,
-        method: Ident,
-        expansion: &'expansion Expansion<'lowered, S>,
+        export: associated_fn::ReceiverExport<'expansion, 'lowered, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error> {
         self.receiver.render(
             self.source,
             &self.record,
-            callable,
-            callable.receiver(),
-            method,
-            expansion,
+            export.callable().receiver(),
+            export.method().clone(),
+            export.failure(),
+            export.expansion(),
         )
     }
 }
@@ -526,24 +528,24 @@ impl<'receiver> ReceiverKind<'receiver> {
         self,
         source: &'receiver RecordDef,
         record: &Ident,
-        callable: &'receiver ExportedCallable<S>,
         receive: Option<Receive>,
         method: Ident,
+        failure: associated_fn::ReceiverFailure<'expansion, 'receiver, S>,
         expansion: &'expansion Expansion<'receiver, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error>
     where
         S: Target,
-        wrapper::returns::Failure: Render<
-                S,
-                wrapper::returns::FailureInput<'expansion, 'receiver, S>,
-                Output = TokenStream,
-            >,
         wrapper::param::direct::Record:
             Render<S, wrapper::param::direct::RecordInput, Output = wrapper::param::Tokens>,
         wrapper::param::encoded::Renderer: Render<
                 S,
                 wrapper::param::encoded::Input<'expansion, 'receiver, S>,
                 Output = wrapper::param::Tokens,
+            >,
+        wrapper::returns::Failure: Render<
+                S,
+                wrapper::returns::FailureInput<'expansion, 'receiver, S>,
+                Output = TokenStream,
             >,
     {
         match (self, receive) {
@@ -559,16 +561,10 @@ impl<'receiver> ReceiverKind<'receiver> {
                 let receiver = names::Wrapper::new(method.span()).receiver();
                 let requires_failure_return =
                     matches!(S::DIRECT_RECORD_PARAMS, DirectRecordCrossing::Pointer);
-                let failure = match requires_failure_return {
-                    true => <wrapper::returns::Failure as Render<S, _>>::render(
-                        wrapper::returns::Failure,
-                        wrapper::returns::FailureInput::new(
-                            callable.returns(),
-                            callable.error(),
-                            expansion,
-                        ),
-                    )?,
-                    false => TokenStream::new(),
+                let failure = if requires_failure_return {
+                    failure.render()?
+                } else {
+                    TokenStream::new()
                 };
                 let tokens = <wrapper::param::direct::Record as Render<S, _>>::render(
                     wrapper::param::direct::Record,
@@ -604,14 +600,6 @@ impl<'receiver> ReceiverKind<'receiver> {
                     SourcePath::single(source.name.spelling()),
                 );
                 let receiver = names::Wrapper::new(method.span()).receiver();
-                let failure = <wrapper::returns::Failure as Render<S, _>>::render(
-                    wrapper::returns::Failure,
-                    wrapper::returns::FailureInput::new(
-                        callable.returns(),
-                        callable.error(),
-                        expansion,
-                    ),
-                )?;
                 let tokens = <wrapper::param::encoded::Renderer as Render<S, _>>::render(
                     wrapper::param::encoded::Renderer,
                     wrapper::param::encoded::Input::new(
@@ -619,7 +607,7 @@ impl<'receiver> ReceiverKind<'receiver> {
                         <S as SurfaceLower>::encoded_param_shape(),
                         rust_api::DecodeTarget::received(receive, &source_type)?,
                         receiver.clone(),
-                        failure,
+                        failure.render()?,
                         expansion,
                     ),
                 )?;

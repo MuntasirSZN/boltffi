@@ -393,11 +393,13 @@ impl AsyncProtocol for NativeProtocol<'_> {
                 callback_data: u64,
                 callback: ::boltffi::__private::RustFutureContinuationCallback,
             ) {
-                ::boltffi::__private::rustfuture::rust_future_poll::<#rust_return_type>(
-                    handle,
-                    callback,
-                    callback_data
-                )
+                unsafe {
+                    ::boltffi::__private::rustfuture::rust_future_poll::<#rust_return_type>(
+                        handle,
+                        callback,
+                        callback_data
+                    )
+                }
             }
         }
     }
@@ -450,7 +452,9 @@ impl AsyncProtocol for WasmProtocol<'_> {
             #visibility unsafe extern "C" fn #ident(
                 handle: ::boltffi::__private::RustFutureHandle,
             ) -> i32 {
-                ::boltffi::__private::rust_future_poll_sync::<#rust_return_type>(handle)
+                unsafe {
+                    ::boltffi::__private::rust_future_poll_sync::<#rust_return_type>(handle)
+                }
             }
         }
     }
@@ -722,16 +726,20 @@ impl PlainComplete {
                 handle: ::boltffi::__private::RustFutureHandle,
                 out_status: *mut ::boltffi::__private::FfiStatus,
             ) #return_type {
-                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) } {
                     Ok(#ok_pattern) => {
                         if !out_status.is_null() {
-                            *out_status = ::boltffi::__private::FfiStatus::OK;
+                            unsafe {
+                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                            }
                         }
                         #ok_body
                     }
                     Err(status) => {
                         if !out_status.is_null() {
-                            *out_status = status;
+                            unsafe {
+                                *out_status = status;
+                            }
                         }
                         #err_body
                     }
@@ -802,23 +810,29 @@ impl FallibleComplete {
             ffi_parameters,
             return_type,
             body: quote! {
-                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) } {
                     Ok(Ok(#success_pattern)) => {
                         if !out_status.is_null() {
-                            *out_status = ::boltffi::__private::FfiStatus::OK;
+                            unsafe {
+                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                            }
                         }
                         #success_body
                         #empty_error_value
                     }
                     Ok(Err(#error)) => {
                         if !out_status.is_null() {
-                            *out_status = ::boltffi::__private::FfiStatus::OK;
+                            unsafe {
+                                *out_status = ::boltffi::__private::FfiStatus::OK;
+                            }
                         }
                         #error_value
                     }
                     Err(status) => {
                         if !out_status.is_null() {
-                            *out_status = status;
+                            unsafe {
+                                *out_status = status;
+                            }
                         }
                         #empty_error_value
                     }
@@ -860,7 +874,7 @@ fn panic_message<S: Target>(
         #visibility unsafe extern "C" fn #ident(
             handle: ::boltffi::__private::RustFutureHandle,
         ) -> ::boltffi::__private::FfiBuf {
-            match ::boltffi::__private::rustfuture::rust_future_panic_message::<#rust_return_type>(handle) {
+            match unsafe { ::boltffi::__private::rustfuture::rust_future_panic_message::<#rust_return_type>(handle) } {
                 Some(message) => ::boltffi::__private::FfiBuf::wire_encode(&message),
                 None => ::boltffi::__private::FfiBuf::empty(),
             }
@@ -878,7 +892,9 @@ fn cancel<S: Target>(
         #cfg
         #[unsafe(no_mangle)]
         #visibility unsafe extern "C" fn #ident(handle: ::boltffi::__private::RustFutureHandle) {
-            ::boltffi::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle)
+            unsafe {
+                ::boltffi::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle)
+            }
         }
     }
 }
@@ -893,7 +909,9 @@ fn free<S: Target>(
         #cfg
         #[unsafe(no_mangle)]
         #visibility unsafe extern "C" fn #ident(handle: ::boltffi::__private::RustFutureHandle) {
-            ::boltffi::__private::rustfuture::rust_future_free::<#rust_return_type>(handle)
+            unsafe {
+                ::boltffi::__private::rustfuture::rust_future_free::<#rust_return_type>(handle)
+            }
         }
     }
 }
