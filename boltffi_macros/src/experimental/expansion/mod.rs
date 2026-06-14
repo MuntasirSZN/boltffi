@@ -2001,6 +2001,89 @@ mod tests {
     }
 
     #[test]
+    fn native_direct_record_expansion_emits_static_method_wrapper() {
+        let method = record_method(
+            "origin_x",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
+        );
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(direct_point_record_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        syn::parse2::<syn::File>(quote! {
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Point {
+                pub x: f64,
+            }
+
+            impl Point {
+                pub fn origin_x() -> f64 {
+                    0.0
+                }
+            }
+
+            #tokens
+        })
+        .expect("direct record static method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_record_demo_point_origin_x"));
+        assert!(!rendered.contains("fn boltffi_init_record_demo_point_origin_x"));
+        assert!(!rendered.contains("__boltffi_receiver"));
+        assert!(rendered.contains("Point :: origin_x ()"));
+    }
+
+    #[test]
+    fn native_direct_record_expansion_emits_async_initializer_wrapper() {
+        let mut initializer = record_method(
+            "load",
+            Receiver::None,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::SelfType),
+        );
+        initializer.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source
+            .records
+            .push(direct_point_record_with_method(initializer));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        let generated = quote! {
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Point {
+                pub x: f64,
+            }
+
+            impl Point {
+                pub async fn load() -> Self {
+                    Self { x: 1.0 }
+                }
+            }
+
+            #tokens
+        };
+        syn::parse2::<syn::File>(generated.clone())
+            .expect("direct record async initializer parses");
+        assert_generated_crate_checks("native_direct_record_async_initializer", generated);
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_init_record_demo_point_load"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: rustfuture :: rust_future_new (async move { Point :: load () . await })"
+        ));
+        assert!(rendered.contains("fn boltffi_async_init_record_demo_point_load_poll"));
+        assert!(rendered.contains("fn boltffi_async_init_record_demo_point_load_complete"));
+    }
+
+    #[test]
     fn native_direct_record_expansion_emits_instance_method_wrapper() {
         let method = record_method(
             "norm",
@@ -2105,6 +2188,48 @@ mod tests {
     }
 
     #[test]
+    fn wasm_direct_record_expansion_emits_async_instance_method_wrapper() {
+        let mut method = record_method(
+            "compute",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::Primitive(Primitive::F64)),
+        );
+        method.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(direct_point_record_with_method(method));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        syn::parse2::<syn::File>(quote! {
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Point {
+                pub x: f64,
+            }
+
+            impl Point {
+                pub async fn compute(&self) -> f64 {
+                    self.x
+                }
+            }
+
+            #tokens
+        })
+        .expect("wasm direct record async method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_method_record_demo_point_compute"));
+        assert!(rendered.contains("__boltffi_receiver : * const u8"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: rustfuture :: rust_future_new (async move { __boltffi_receiver . compute () . await })"
+        ));
+        assert!(rendered.contains("fn boltffi_async_method_record_demo_point_compute_poll_sync"));
+    }
+
+    #[test]
     fn native_direct_record_expansion_rejects_mutable_receiver_without_writeback() {
         let method = record_method(
             "shift",
@@ -2193,6 +2318,47 @@ mod tests {
         assert!(rendered.contains("let __boltffi_receiver_storage : Profile ="));
         assert!(rendered.contains("let __boltffi_receiver = & __boltffi_receiver_storage ;"));
         assert!(rendered.contains("__boltffi_receiver . display_name ()"));
+    }
+
+    #[test]
+    fn native_encoded_record_expansion_emits_async_instance_method_wrapper() {
+        let mut method = record_method(
+            "display_name",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::String),
+        );
+        method.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.records.push(profile_record_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
+
+        let generated = quote! {
+            pub struct Profile {
+                pub name: String,
+            }
+
+            impl Profile {
+                pub async fn display_name(&self) -> String {
+                    self.name.clone()
+                }
+            }
+
+            #tokens
+        };
+        syn::parse2::<syn::File>(generated.clone())
+            .expect("encoded record async method expansion parses");
+        assert_generated_crate_checks("native_encoded_record_async_method", generated);
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_record_demo_profile_display_name"));
+        assert!(rendered.contains("fn boltffi_async_method_record_demo_profile_display_name_poll"));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: rustfuture :: rust_future_new (async move")
+        );
     }
 
     #[test]
@@ -2506,6 +2672,93 @@ mod tests {
         assert!(rendered.contains("let __boltffi_receiver_storage : Event ="));
         assert!(rendered.contains("let __boltffi_receiver = & __boltffi_receiver_storage ;"));
         assert!(rendered.contains("__boltffi_receiver . label ()"));
+    }
+
+    #[test]
+    fn native_data_enum_expansion_emits_async_instance_method_wrapper() {
+        let mut method = record_method(
+            "label",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::String),
+        );
+        method.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum_with_method(method));
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        let generated = quote! {
+            pub enum Event {
+                Empty,
+                Count(u32),
+                Named { name: String },
+            }
+
+            impl Event {
+                pub async fn label(&self) -> String {
+                    String::new()
+                }
+            }
+
+            #tokens
+        };
+        syn::parse2::<syn::File>(generated.clone())
+            .expect("data enum async method expansion parses");
+        assert_generated_crate_checks("native_data_enum_async_method", generated);
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_enum_demo_event_label"));
+        assert!(rendered.contains("fn boltffi_async_method_enum_demo_event_label_poll"));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: rustfuture :: rust_future_new (async move")
+        );
+    }
+
+    #[test]
+    fn wasm_data_enum_expansion_emits_async_instance_method_wrapper() {
+        let mut method = record_method(
+            "label",
+            Receiver::Shared,
+            Vec::new(),
+            ReturnDef::value(TypeExpr::String),
+        );
+        method.execution = ExecutionKind::Async;
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.enums.push(event_enum_with_method(method));
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_enumeration(&expansion, &source.enums[0]).expect("expanded enum");
+
+        syn::parse2::<syn::File>(quote! {
+            pub enum Event {
+                Empty,
+                Count(u32),
+                Named { name: String },
+            }
+
+            impl Event {
+                pub async fn label(&self) -> String {
+                    String::new()
+                }
+            }
+
+            #tokens
+        })
+        .expect("wasm data enum async method expansion parses");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_method_enum_demo_event_label"));
+        assert!(rendered.contains("__boltffi_receiver_ptr : * const u8"));
+        assert!(rendered.contains("__boltffi_receiver_len : usize"));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: rustfuture :: rust_future_new (async move")
+        );
+        assert!(rendered.contains("fn boltffi_async_method_enum_demo_event_label_poll_sync"));
     }
 
     #[test]
