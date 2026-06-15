@@ -5,6 +5,7 @@
 
 pub mod artifact;
 pub mod ir;
+pub mod metadata;
 pub mod model;
 pub mod render;
 pub mod scan;
