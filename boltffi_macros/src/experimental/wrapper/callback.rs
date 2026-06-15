@@ -1970,9 +1970,12 @@ where
         &self,
         codec: &boltffi_binding::CodecNode,
     ) -> Result<TokenStream, Error> {
+        let source = self.source.value_type()?;
+        let rust_type = rust_api::TypeTokens::new(source.as_ref())?.into_type();
         wrapper::encoded::incoming::Value::new(codec, self.expansion).expression(
             wrapper::encoded::incoming::Bytes::new(
-                &self.direct_source_type()?,
+                &rust_type,
+                source.as_ref(),
                 quote! { unsafe { __boltffi_result.as_byte_slice() } },
                 quote! {
                     panic!("async callback return conversion failed: {:?}", error)
@@ -1985,9 +1988,12 @@ where
         &self,
         codec: &boltffi_binding::CodecNode,
     ) -> Result<TokenStream, Error> {
+        let source = self.source.value_type()?;
+        let rust_type = rust_api::TypeTokens::new(source.as_ref())?.into_type();
         wrapper::encoded::incoming::Value::new(codec, self.expansion).expression(
             wrapper::encoded::incoming::Bytes::new(
-                &self.direct_source_type()?,
+                &rust_type,
+                source.as_ref(),
                 quote! { __boltffi_completion.data.as_slice() },
                 quote! {
                     panic!("async callback return conversion failed: {:?}", error)
@@ -2276,10 +2282,13 @@ where
                 })
             }
             ReturnPlan::EncodedViaReturnSlot { codec, shape, ty } => {
+                let source = self.source.value_type()?;
+                let rust_type = rust_api::TypeTokens::new(source.as_ref())?.into_type();
                 S::callback_encoded_return(*shape, ty)?.foreign_body(
                     call,
                     codec.root(),
-                    self.direct_source_type()?,
+                    rust_type,
+                    source.as_ref(),
                     self.expansion,
                 )
             }
@@ -2321,10 +2330,13 @@ where
                 })
             }
             ReturnPlan::EncodedViaReturnSlot { codec, shape, ty } => {
+                let source = self.source.value_type()?;
+                let rust_type = rust_api::TypeTokens::new(source.as_ref())?.into_type();
                 S::callback_encoded_return(*shape, ty)?.local_proxy_body(
                     call,
                     codec.root(),
-                    self.direct_source_type()?,
+                    rust_type,
+                    source.as_ref(),
                     self.expansion,
                 )
             }
@@ -2355,11 +2367,13 @@ where
         error_shape: S::BufferShape,
     ) -> Result<TokenStream, Error> {
         let error_slot = S::callback_encoded_error(error_shape)?;
-        let error_type = self.source.fallible()?.error_written_type()?;
+        let fallible = self.source.fallible()?;
+        let error_type = fallible.error_written_type()?;
         let error_value = error_slot.decode(
             quote! { __boltffi_error },
             error_codec,
             error_type,
+            fallible.error(),
             self.expansion,
         )?;
         let success = self.foreign_success_value()?;
@@ -2385,11 +2399,13 @@ where
         error_shape: S::BufferShape,
     ) -> Result<TokenStream, Error> {
         let error_slot = S::callback_encoded_error(error_shape)?;
-        let error_type = self.source.fallible()?.error_written_type()?;
+        let fallible = self.source.fallible()?;
+        let error_type = fallible.error_written_type()?;
         let error_value = error_slot.decode(
             quote! { __boltffi_error },
             error_codec,
             error_type,
+            fallible.error(),
             self.expansion,
         )?;
         let success = self.local_proxy_success_value()?;
@@ -2560,12 +2576,14 @@ where
                 })
             }
             ReturnPlan::EncodedViaOutPointer { codec, shape, .. } => {
-                let ok = self.source.fallible()?.ok_written_type()?;
+                let fallible = self.source.fallible()?;
+                let ok = fallible.ok_written_type()?;
                 S::decode_callback_encoded_out_pointer(
                     *shape,
                     quote! { unsafe { __boltffi_success_out.assume_init() } },
                     codec.root(),
                     ok,
+                    fallible.ok(),
                     self.expansion,
                 )
             }
@@ -2660,12 +2678,14 @@ where
                 })
             }
             ReturnPlan::EncodedViaOutPointer { codec, shape, .. } => {
-                let ok = self.source.fallible()?.ok_written_type()?;
+                let fallible = self.source.fallible()?;
+                let ok = fallible.ok_written_type()?;
                 S::decode_callback_encoded_out_pointer(
                     *shape,
                     quote! { unsafe { __boltffi_success_out.assume_init() } },
                     codec.root(),
                     ok,
+                    fallible.ok(),
                     self.expansion,
                 )
             }
@@ -2975,6 +2995,7 @@ trait CallbackMethodSurface: Target {
         value: TokenStream,
         codec: &'lowered boltffi_binding::CodecNode,
         rust_type: Type,
+        source: &'lowered TypeExpr,
         expansion: &Expansion<'lowered, Self>,
     ) -> Result<TokenStream, Error>;
 
@@ -3279,12 +3300,14 @@ impl CallbackMethodSurface for Native {
         value: TokenStream,
         codec: &'lowered boltffi_binding::CodecNode,
         rust_type: Type,
+        source: &'lowered TypeExpr,
         expansion: &Expansion<'lowered, Self>,
     ) -> Result<TokenStream, Error> {
         match shape {
             native::BufferShape::Buffer => wrapper::encoded::incoming::Value::new(codec, expansion)
                 .expression(wrapper::encoded::incoming::Bytes::new(
                     &rust_type,
+                    source,
                     quote! { unsafe { #value.as_byte_slice() } },
                     quote! {
                         panic!("callback method success conversion failed: {:?}", error)
@@ -3539,6 +3562,7 @@ impl CallbackMethodSurface for Wasm32 {
         value: TokenStream,
         codec: &'lowered boltffi_binding::CodecNode,
         rust_type: Type,
+        source: &'lowered TypeExpr,
         expansion: &Expansion<'lowered, Self>,
     ) -> Result<TokenStream, Error> {
         match shape {
@@ -3546,6 +3570,7 @@ impl CallbackMethodSurface for Wasm32 {
                 value,
                 codec,
                 rust_type,
+                source,
                 expansion,
                 quote! {
                     panic!("callback method success conversion failed: {:?}", error)
@@ -3625,12 +3650,14 @@ impl CallbackEncodedError {
         value: TokenStream,
         codec: &boltffi_binding::CodecNode,
         rust_type: Type,
+        source: &TypeExpr,
         expansion: &Expansion<'_, S>,
     ) -> Result<TokenStream, Error> {
         match self {
             Self::NativeBuffer => wrapper::encoded::incoming::Value::new(codec, expansion)
                 .expression(wrapper::encoded::incoming::Bytes::new(
                     &rust_type,
+                    source,
                     quote! { unsafe { #value.as_byte_slice() } },
                     quote! {
                         panic!("callback method error conversion failed: {:?}", error)
@@ -3640,6 +3667,7 @@ impl CallbackEncodedError {
                 value,
                 codec,
                 rust_type,
+                source,
                 expansion,
                 quote! {
                     panic!("callback method error conversion failed: {:?}", error)
@@ -3705,6 +3733,7 @@ impl CallbackEncodedReturn {
         call: TokenStream,
         codec: &boltffi_binding::CodecNode,
         rust_type: Type,
+        source: &TypeExpr,
         expansion: &Expansion<'_, S>,
     ) -> Result<TokenStream, Error> {
         match self {
@@ -3712,6 +3741,7 @@ impl CallbackEncodedReturn {
                 let value = wrapper::encoded::incoming::Value::new(codec, expansion).expression(
                     wrapper::encoded::incoming::Bytes::new(
                         &rust_type,
+                        source,
                         quote! { __boltffi_bytes },
                         quote! {
                             panic!("callback method return conversion failed: {:?}", error)
@@ -3737,6 +3767,7 @@ impl CallbackEncodedReturn {
                 let value = wrapper::encoded::incoming::Value::new(codec, expansion).expression(
                     wrapper::encoded::incoming::Bytes::new(
                         &rust_type,
+                        source,
                         quote! { __boltffi_bytes },
                         quote! {
                             panic!("callback method return conversion failed: {:?}", error)
@@ -3765,6 +3796,7 @@ impl CallbackEncodedReturn {
         call: TokenStream,
         codec: &boltffi_binding::CodecNode,
         rust_type: Type,
+        source: &TypeExpr,
         expansion: &Expansion<'_, S>,
     ) -> Result<TokenStream, Error> {
         match self {
@@ -3772,6 +3804,7 @@ impl CallbackEncodedReturn {
                 let value = wrapper::encoded::incoming::Value::new(codec, expansion).expression(
                     wrapper::encoded::incoming::Bytes::new(
                         &rust_type,
+                        source,
                         quote! { __boltffi_bytes },
                         quote! {
                             panic!("callback method return conversion failed: {:?}", error)
@@ -3797,6 +3830,7 @@ impl CallbackEncodedReturn {
                 call,
                 codec,
                 rust_type,
+                source,
                 expansion,
                 quote! {
                     panic!("callback method return conversion failed: {:?}", error)
@@ -3954,12 +3988,14 @@ fn packed_encoded_value<S: Target>(
     packed: TokenStream,
     codec: &boltffi_binding::CodecNode,
     rust_type: Type,
+    source: &TypeExpr,
     expansion: &Expansion<'_, S>,
     failure: TokenStream,
 ) -> Result<TokenStream, Error> {
     let decoded = wrapper::encoded::incoming::Value::new(codec, expansion).expression(
         wrapper::encoded::incoming::Bytes::new(
             &rust_type,
+            source,
             quote! { __boltffi_packed_bytes.as_slice() },
             failure,
         ),

@@ -1,3 +1,4 @@
+use boltffi_ast::TypeExpr;
 use boltffi_binding::CodecNode;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -22,6 +23,7 @@ pub struct Input<'decode> {
 
 pub struct Bytes<'rust> {
     rust_type: &'rust Type,
+    source: &'rust TypeExpr,
     bytes: TokenStream,
     failure: TokenStream,
 }
@@ -36,6 +38,7 @@ impl<'expansion, 'lowered, S: Target> Value<'expansion, 'lowered, S> {
 
     pub fn decode(&self, input: Input<'_>) -> Result<TokenStream, Error> {
         super::require_runtime_wire(self.codec)?;
+        input.target.incoming_encoded_type().require_supported()?;
         match input.target.borrow() {
             rust_api::DecodeBorrow::Owned => input.owned(
                 self.codec,
@@ -50,11 +53,12 @@ impl<'expansion, 'lowered, S: Target> Value<'expansion, 'lowered, S> {
 
     pub fn expression(&self, bytes: Bytes<'_>) -> Result<TokenStream, Error> {
         super::require_runtime_wire(self.codec)?;
+        rust_api::IncomingEncodedType::new(bytes.source).require_supported()?;
         let incoming = super::custom::Incoming::new(self.codec, self.expansion);
         let converted = incoming.convert(quote! { __boltffi_decoded })?;
         let rust_type = bytes.rust_type;
         let decode_type = incoming
-            .decoded_type()?
+            .decoded_type(bytes.source)?
             .unwrap_or_else(|| quote! { #rust_type });
         let bytes_expr = bytes.bytes;
         let failure = bytes.failure;
@@ -90,9 +94,15 @@ impl<'expansion, 'lowered, S: Target> Value<'expansion, 'lowered, S> {
 }
 
 impl<'rust> Bytes<'rust> {
-    pub fn new(rust_type: &'rust Type, bytes: TokenStream, failure: TokenStream) -> Self {
+    pub fn new(
+        rust_type: &'rust Type,
+        source: &'rust TypeExpr,
+        bytes: TokenStream,
+        failure: TokenStream,
+    ) -> Self {
         Self {
             rust_type,
+            source,
             bytes,
             failure,
         }
@@ -203,9 +213,12 @@ impl<'decode> Input<'decode> {
             let converted_value = converted.tokens();
             quote! { #converted_value }
         };
-        let decode_type = incoming.decoded_type()?.ok_or(Error::UnsupportedExpansion(
-            "custom codec representation type",
-        ))?;
+        let decode_type =
+            incoming
+                .decoded_type(self.target.source())?
+                .ok_or(Error::UnsupportedExpansion(
+                    "custom codec representation type",
+                ))?;
         Ok(quote! {
             let #mutability #binding: #rust_type = {
                 if #pointer.is_null() && #length > 0 {

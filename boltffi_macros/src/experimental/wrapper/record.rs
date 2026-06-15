@@ -364,9 +364,17 @@ impl<'expansion, 'lowered, S: Target> EncodedField<'expansion, 'lowered, S> {
         let rust_type = rust_api::TypeTokens::new(&self.source.type_expr)?.into_type();
         let codec = self.binding.codec().write().root();
         encoded::require_runtime_wire(codec)?;
+        rust_api::IncomingEncodedType::new(&self.source.type_expr).require_supported()?;
         let wire_size = self.wire_size(&field, &wire, codec)?;
         let encode_to = self.encode_to(&field, &wire, codec)?;
-        let decode_from = self.decode_from(&field, &decoded, &used, &rust_type, codec)?;
+        let decode_from = self.decode_from(
+            &field,
+            &decoded,
+            &used,
+            &rust_type,
+            &self.source.type_expr,
+            codec,
+        )?;
         Ok(EncodedFieldTokens {
             wire_size,
             encode_to,
@@ -447,11 +455,12 @@ impl<'expansion, 'lowered, S: Target> EncodedField<'expansion, 'lowered, S> {
         decoded: &Ident,
         used: &Ident,
         rust_type: &Type,
+        source: &TypeExpr,
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let incoming = encoded::Incoming::new(codec, self.expansion);
         let decoded_type = incoming
-            .decoded_type()?
+            .decoded_type(source)?
             .unwrap_or_else(|| quote! { #rust_type });
         let converted = incoming.convert(quote! { #decoded })?;
         let value = match converted.changed() {

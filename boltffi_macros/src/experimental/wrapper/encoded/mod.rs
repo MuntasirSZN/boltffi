@@ -10,29 +10,52 @@ mod custom;
 pub use self::custom::{BorrowedOutgoing, Incoming};
 
 pub fn require_runtime_wire(codec: &CodecNode) -> Result<(), Error> {
-    if uses_runtime_wire(codec) {
-        Ok(())
-    } else {
-        Err(Error::UnsupportedExpansion("codec node"))
-    }
+    RuntimeWireCodec::new(codec).require_supported()
 }
 
-fn uses_runtime_wire(codec: &CodecNode) -> bool {
-    match codec {
-        CodecNode::Primitive(_)
-        | CodecNode::String
-        | CodecNode::Bytes
-        | CodecNode::DirectRecord(_)
-        | CodecNode::EncodedRecord(_)
-        | CodecNode::CStyleEnum(_)
-        | CodecNode::DataEnum(_)
-        | CodecNode::Custom(_) => true,
-        CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
-            uses_runtime_wire(inner)
+struct RuntimeWireCodec<'codec> {
+    codec: &'codec CodecNode,
+}
+
+impl<'codec> RuntimeWireCodec<'codec> {
+    const MAX_TUPLE_ARITY: usize = 12;
+
+    const fn new(codec: &'codec CodecNode) -> Self {
+        Self { codec }
+    }
+
+    fn require_supported(self) -> Result<(), Error> {
+        self.require_supported_codec(self.codec)
+    }
+
+    fn require_supported_codec(&self, codec: &CodecNode) -> Result<(), Error> {
+        match codec {
+            CodecNode::Primitive(_)
+            | CodecNode::String
+            | CodecNode::Bytes
+            | CodecNode::DirectRecord(_)
+            | CodecNode::EncodedRecord(_)
+            | CodecNode::CStyleEnum(_)
+            | CodecNode::DataEnum(_)
+            | CodecNode::Custom(_) => Ok(()),
+            CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
+                self.require_supported_codec(inner)
+            }
+            CodecNode::Result { ok, err } => {
+                self.require_supported_codec(ok)?;
+                self.require_supported_codec(err)
+            }
+            CodecNode::Tuple(elements) if elements.len() <= Self::MAX_TUPLE_ARITY => elements
+                .iter()
+                .try_for_each(|element| self.require_supported_codec(element)),
+            CodecNode::Tuple(_) => Err(Error::UnsupportedExpansion("encoded tuple arity")),
+            CodecNode::Map { key, value } => {
+                self.require_supported_codec(key)?;
+                self.require_supported_codec(value)
+            }
+            CodecNode::ClassHandle(_) | CodecNode::CallbackHandle(_) | _ => {
+                Err(Error::UnsupportedExpansion("codec node"))
+            }
         }
-        CodecNode::Result { ok, err } => uses_runtime_wire(ok) && uses_runtime_wire(err),
-        CodecNode::Tuple(elements) => elements.iter().all(uses_runtime_wire),
-        CodecNode::Map { key, value } => uses_runtime_wire(key) && uses_runtime_wire(value),
-        CodecNode::ClassHandle(_) | CodecNode::CallbackHandle(_) | _ => false,
     }
 }

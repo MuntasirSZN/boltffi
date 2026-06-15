@@ -587,9 +587,15 @@ impl<'expansion, 'lowered, 'rust, S: Target> ForeignClosureReturn<'expansion, 'l
         rust_type: &Type,
         bytes: TokenStream,
     ) -> Result<TokenStream, Error> {
+        let ReturnDef::Value(source_type) = self.source else {
+            return Err(Error::SourceSyntaxMismatch(
+                "closure encoded return requires source return type",
+            ));
+        };
         encoded::incoming::Value::new(codec.root(), self.expansion).expression(
             encoded::incoming::Bytes::new(
                 rust_type,
+                source_type,
                 bytes,
                 quote! { panic!("closure encoded return conversion failed: {:?}", error) },
             ),
