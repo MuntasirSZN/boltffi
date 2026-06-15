@@ -8,5 +8,5 @@ pub use callable::{
     MethodDeclarations, Parameter, Return,
 };
 pub use closure::{Closure, ClosureSourceForm};
-pub use ty::{DecodeBorrow, DecodeTarget, TypeTokens};
+pub use ty::{DecodeBorrow, DecodeTarget, IncomingEncodedType, TypeTokens};
 pub use visibility::VisibilityTokens;

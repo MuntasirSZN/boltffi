@@ -1,6 +1,6 @@
 use boltffi_ast::{
     AdditionalBound, BaseTrait, ConstExpr, FnSig, GenericArgument, Literal, MapKind,
-    ParameterPassing, Path, PathRoot, ReturnDef, TraitBounds, TypeExpr,
+    ParameterPassing, Path, PathRoot, Primitive, ReturnDef, TraitBounds, TypeExpr,
 };
 use boltffi_binding::Receive;
 use proc_macro2::TokenStream;
@@ -45,6 +45,7 @@ pub struct DecodeTarget {
     parameter: Type,
     owned: Type,
     borrow: DecodeBorrow,
+    source: TypeExpr,
 }
 
 impl DecodeTarget {
@@ -60,6 +61,7 @@ impl DecodeTarget {
                     parameter: ty.clone(),
                     owned: ty,
                     borrow: DecodeBorrow::Owned,
+                    source: type_expr.clone(),
                 })
             }
             (ParameterPassing::Ref, Receive::ByRef) => Ok(Self::borrowed(
@@ -108,6 +110,14 @@ impl DecodeTarget {
         self.borrow
     }
 
+    pub fn source(&self) -> &TypeExpr {
+        &self.source
+    }
+
+    pub fn incoming_encoded_type(&self) -> IncomingEncodedType<'_> {
+        IncomingEncodedType::new(&self.source)
+    }
+
     fn borrowed(parameter: Type, type_expr: &TypeExpr, mutable: bool) -> Result<Self, Error> {
         let (owned, borrow) = match type_expr {
             TypeExpr::Str => (
@@ -127,7 +137,83 @@ impl DecodeTarget {
             parameter,
             owned,
             borrow,
+            source: type_expr.clone(),
         })
+    }
+}
+
+pub struct IncomingEncodedType<'source> {
+    type_expr: &'source TypeExpr,
+}
+
+impl<'source> IncomingEncodedType<'source> {
+    pub const fn new(type_expr: &'source TypeExpr) -> Self {
+        Self { type_expr }
+    }
+
+    pub fn require_supported(self) -> Result<(), Error> {
+        self.require_supported_type(self.type_expr)
+    }
+
+    fn require_supported_type(&self, type_expr: &TypeExpr) -> Result<(), Error> {
+        match type_expr {
+            TypeExpr::Option(inner)
+            | TypeExpr::Vec(inner)
+            | TypeExpr::Slice(inner)
+            | TypeExpr::Boxed(inner)
+            | TypeExpr::Arc(inner) => self.require_supported_type(inner),
+            TypeExpr::Result { ok, err } => {
+                self.require_supported_type(ok)?;
+                self.require_supported_type(err)
+            }
+            TypeExpr::Tuple(elements) => elements
+                .iter()
+                .try_for_each(|element| self.require_supported_type(element)),
+            TypeExpr::Map { key, value, .. } => {
+                MapKey::new(key).require_supported()?;
+                self.require_supported_type(value)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+struct MapKey<'source> {
+    type_expr: &'source TypeExpr,
+}
+
+impl<'source> MapKey<'source> {
+    const fn new(type_expr: &'source TypeExpr) -> Self {
+        Self { type_expr }
+    }
+
+    fn require_supported(self) -> Result<(), Error> {
+        self.require_key_type(self.type_expr)
+    }
+
+    fn require_key_type(&self, type_expr: &TypeExpr) -> Result<(), Error> {
+        match type_expr {
+            TypeExpr::Primitive(Primitive::F32 | Primitive::F64) => Err(
+                Error::UnsupportedExpansion("floating-point encoded map key"),
+            ),
+            TypeExpr::Custom { .. } => Err(Error::UnsupportedExpansion("custom encoded map key")),
+            TypeExpr::Str | TypeExpr::Slice(_) => {
+                Err(Error::UnsupportedExpansion("unsized encoded map key"))
+            }
+            TypeExpr::Option(inner)
+            | TypeExpr::Vec(inner)
+            | TypeExpr::Boxed(inner)
+            | TypeExpr::Arc(inner) => self.require_key_type(inner),
+            TypeExpr::Result { ok, err } => {
+                self.require_key_type(ok)?;
+                self.require_key_type(err)
+            }
+            TypeExpr::Tuple(elements) => elements
+                .iter()
+                .try_for_each(|element| self.require_key_type(element)),
+            TypeExpr::Map { .. } => Err(Error::UnsupportedExpansion("nested encoded map key")),
+            _ => Ok(()),
+        }
     }
 }
 

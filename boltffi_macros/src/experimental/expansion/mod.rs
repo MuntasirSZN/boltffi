@@ -1,10 +1,11 @@
 mod index;
 mod pair;
 
-use boltffi_ast::{ClassDef, EnumDef, FunctionDef, RecordDef, StreamDef, TraitDef};
+use boltffi_ast::{ClassDef, ConstantDef, EnumDef, FunctionDef, RecordDef, StreamDef, TraitDef};
 use boltffi_binding::{
-    CallbackDecl, CallbackId, ClassDecl, CustomTypeDecl, CustomTypeId, EncodedRecordDecl, EnumDecl,
-    FunctionDecl, LoweredBindings, RecordDecl, RecordId, StreamDecl, Surface,
+    CallbackDecl, CallbackId, ClassDecl, ConstantDecl, CustomTypeDecl, CustomTypeId,
+    EncodedRecordDecl, EnumDecl, FunctionDecl, LoweredBindings, RecordDecl, RecordId, StreamDecl,
+    Surface,
 };
 
 use self::index::ExpansionIndex;
@@ -121,6 +122,20 @@ impl<'lowered, S: Surface> Expansion<'lowered, S> {
         }
     }
 
+    /// Returns the lowered constant declaration paired with the scanned source constant.
+    pub fn constant(
+        &self,
+        source: &'lowered ConstantDef,
+    ) -> Result<DeclarationPair<'lowered, ConstantDef, ConstantDecl<S>>, Error> {
+        match self
+            .index
+            .paired(self.lowered, SourceDeclaration::Constant(source))?
+        {
+            PairedDeclaration::Constant(pair) => Ok(pair),
+            _ => Err(Error::WrongDeclaration),
+        }
+    }
+
     /// Returns the lowered function declaration paired with the scanned source function.
     pub fn function(
         &self,
@@ -144,12 +159,13 @@ mod tests {
     use std::process::Command;
 
     use boltffi_ast::{
-        CanonicalName, ClassDef, ClassId, ClassThreadSafety, CustomRemoteType, CustomTypeConverter,
-        CustomTypeConverters, CustomTypeDef, CustomTypeId, EnumDef, EnumId, ExecutionKind,
-        FieldDef, FnSig, FnTrait, FnTraitKind, FunctionDef, FunctionId, MethodDef, MethodId,
-        PackageInfo, ParameterDef, ParameterPassing, Path, Primitive, Receiver, RecordDef,
-        RecordId, ReprAttr, ReprItem, ReturnDef, Source, SourceContract, SourceName, StreamDef,
-        StreamId, TraitDef, TraitId, TypeExpr, VariantDef, VariantPayload, Visibility,
+        CanonicalName, ClassDef, ClassId, ClassThreadSafety, ConstExpr, ConstantDef, ConstantId,
+        CustomRemoteType, CustomTypeConverter, CustomTypeConverters, CustomTypeDef, CustomTypeId,
+        EnumDef, EnumId, ExecutionKind, FieldDef, FnSig, FnTrait, FnTraitKind, FunctionDef,
+        FunctionId, IntegerLiteral, Literal, MethodDef, MethodId, PackageInfo, ParameterDef,
+        ParameterPassing, Path, Primitive, Receiver, RecordDef, RecordId, ReprAttr, ReprItem,
+        ReturnDef, Source, SourceContract, SourceName, StreamDef, StreamId, TraitDef, TraitId,
+        TypeExpr, VariantDef, VariantPayload, Visibility,
     };
     use boltffi_binding::{Native, Wasm32, lower_with_declarations};
     use proc_macro2::TokenStream;
@@ -482,6 +498,36 @@ mod tests {
         .render()
     }
 
+    fn expand_constant<'lowered, S>(
+        expansion: &Expansion<'lowered, S>,
+        source: &'lowered ConstantDef,
+    ) -> Result<TokenStream, Error>
+    where
+        S: Target,
+        for<'expansion> wrapper::arguments::SyncRenderer: wrapper::Render<
+                S,
+                wrapper::arguments::Input<'expansion, 'lowered, S>,
+                Output = wrapper::arguments::Tokens,
+            >,
+        for<'expansion> wrapper::returns::Failure: wrapper::Render<
+                S,
+                wrapper::returns::FailureInput<'expansion, 'lowered, S>,
+                Output = TokenStream,
+            >,
+        for<'expansion> wrapper::returns::Renderer: wrapper::Render<
+                S,
+                wrapper::returns::Input<'expansion, 'lowered, S>,
+                Output = wrapper::returns::Tokens,
+            >,
+        for<'expansion> wrapper::async_call::Renderer: wrapper::Render<
+                S,
+                wrapper::async_call::Input<'expansion, 'lowered, S>,
+                Output = TokenStream,
+            >,
+    {
+        wrapper::constant::Renderer::new(expansion.constant(source)?, expansion).render()
+    }
+
     fn source_contract() -> SourceContract {
         let mut function = FunctionDef::new(
             FunctionId::new("demo::answer"),
@@ -532,6 +578,22 @@ mod tests {
 
         let mut source = SourceContract::new(PackageInfo::new("demo", None));
         source.functions.push(function);
+        source
+    }
+
+    fn constant_contract(
+        id: &str,
+        name: &str,
+        type_expr: TypeExpr,
+        value: ConstExpr,
+    ) -> SourceContract {
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.constants.push(ConstantDef::new(
+            ConstantId::new(id),
+            SourceName::new(name, CanonicalName::single(name)),
+            type_expr,
+            value,
+        ));
         source
     }
 
@@ -1796,6 +1858,58 @@ mod tests {
         source
     }
 
+    fn custom_map_key_param_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::map_years"),
+            CanonicalName::single("map_years"),
+        );
+        function.parameters = vec![parameter(
+            "values",
+            TypeExpr::hash_map(custom_timestamp(), TypeExpr::Primitive(Primitive::U32)),
+        )];
+        function.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::U32));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.customs.push(timestamp_custom_def());
+        source.functions.push(function);
+        source
+    }
+
+    fn floating_point_map_key_param_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::sum_values"),
+            CanonicalName::single("sum_values"),
+        );
+        function.parameters = vec![parameter(
+            "values",
+            TypeExpr::hash_map(
+                TypeExpr::Primitive(Primitive::F32),
+                TypeExpr::Primitive(Primitive::U32),
+            ),
+        )];
+        function.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::U32));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.functions.push(function);
+        source
+    }
+
+    fn oversized_tuple_param_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::sum_tuple"),
+            CanonicalName::single("sum_tuple"),
+        );
+        function.parameters = vec![parameter(
+            "values",
+            TypeExpr::tuple(std::iter::repeat_n(TypeExpr::Primitive(Primitive::U32), 13).collect()),
+        )];
+        function.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::U32));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.functions.push(function);
+        source
+    }
+
     fn custom_return_contract() -> SourceContract {
         let mut function = FunctionDef::new(
             FunctionId::new("demo::stamp"),
@@ -1833,6 +1947,80 @@ mod tests {
         source.customs.push(timestamp_custom_def());
         source.functions.push(function);
         source
+    }
+
+    #[test]
+    fn native_inline_constant_expansion_emits_no_wrapper() {
+        let source = constant_contract(
+            "demo::ANSWER",
+            "ANSWER",
+            TypeExpr::Primitive(Primitive::U32),
+            ConstExpr::Literal(Literal::Integer(IntegerLiteral::new(42, "42"))),
+        );
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_constant(&expansion, &source.constants[0]).expect("expanded constant");
+
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn native_bytes_constant_expansion_emits_accessor() {
+        let source = constant_contract(
+            "demo::MAGIC",
+            "MAGIC",
+            byte_slice(),
+            ConstExpr::Literal(Literal::Bytes(b"ffi".to_vec())),
+        );
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_constant(&expansion, &source.constants[0]).expect("expanded constant");
+        let generated = quote! {
+            pub const MAGIC: &[u8] = b"ffi";
+
+            #tokens
+        };
+
+        syn::parse2::<syn::File>(generated.clone()).expect("bytes constant expansion parses");
+        assert_generated_crate_checks("native_bytes_constant", generated);
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_const_demo_magic"));
+        assert!(rendered.contains("let __boltffi_result : & [u8] = MAGIC"));
+        assert!(rendered.contains("FfiBuf :: wire_encode (& __boltffi_result)"));
+    }
+
+    #[test]
+    fn wasm_bytes_constant_expansion_emits_packed_accessor() {
+        let source = constant_contract(
+            "demo::MAGIC",
+            "MAGIC",
+            byte_slice(),
+            ConstExpr::Literal(Literal::Bytes(b"ffi".to_vec())),
+        );
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expand_constant(&expansion, &source.constants[0]).expect("expanded constant");
+        let generated = quote! {
+            pub const MAGIC: &[u8] = b"ffi";
+
+            #tokens
+        };
+
+        syn::parse2::<syn::File>(generated.clone()).expect("wasm bytes constant expansion parses");
+        assert_generated_crate_checks_target(
+            "wasm_bytes_constant",
+            "wasm32-unknown-unknown",
+            generated,
+        );
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("# [cfg (target_arch = \"wasm32\")]"));
+        assert!(rendered.contains("fn boltffi_const_demo_magic"));
+        assert!(rendered.contains(") -> u64"));
+        assert!(rendered.contains("let __boltffi_result : & [u8] = MAGIC"));
+        assert!(rendered.contains("into_packed"));
     }
 
     #[test]
@@ -2110,6 +2298,74 @@ mod tests {
                 #tokens
             },
         );
+
+        let rendered = tokens.to_string();
+        assert!(
+            rendered.contains(
+                "wire :: decode :: < :: std :: collections :: HashMap < String , i64 > >"
+            )
+        );
+        assert!(!rendered.contains("Vec < (String , i64) >"));
+    }
+
+    #[test]
+    fn native_custom_map_key_param_expansion_rejects_identity_losing_conversion() {
+        let source = custom_map_key_param_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn map_years(values: HashMap<Timestamp, u32>) -> u32 {
+                values.into_values().sum()
+            }
+        };
+
+        let error = expand_function(&expansion, &source.functions[0], syntax)
+            .expect_err("custom map keys must reject");
+
+        assert!(matches!(
+            error,
+            Error::UnsupportedExpansion("custom encoded map key")
+        ));
+    }
+
+    #[test]
+    fn native_floating_point_map_key_param_expansion_rejects_generated_trait_failure() {
+        let source = floating_point_map_key_param_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn sum_values(values: HashMap<f32, u32>) -> u32 {
+                values.into_values().sum()
+            }
+        };
+
+        let error = expand_function(&expansion, &source.functions[0], syntax)
+            .expect_err("floating-point map keys must reject");
+
+        assert!(matches!(
+            error,
+            Error::UnsupportedExpansion("floating-point encoded map key")
+        ));
+    }
+
+    #[test]
+    fn native_oversized_tuple_param_expansion_rejects_missing_runtime_wire_impl() {
+        let source = oversized_tuple_param_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn sum_tuple(values: (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)) -> u32 {
+                values.0
+            }
+        };
+
+        let error = expand_function(&expansion, &source.functions[0], syntax)
+            .expect_err("oversized tuple must reject");
+
+        assert!(matches!(
+            error,
+            Error::UnsupportedExpansion("encoded tuple arity")
+        ));
     }
 
     #[test]

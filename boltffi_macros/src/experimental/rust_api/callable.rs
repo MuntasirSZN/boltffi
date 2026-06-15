@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 
 use boltffi_ast::{
-    BaseTrait, ClassDef, EnumDef, FnSig, FunctionDef, MapKind, MethodDef, ParameterDef,
-    ParameterPassing, Path as SourcePath, RecordDef, ReturnDef, TraitBounds, TypeExpr,
+    BaseTrait, ClassDef, ConstantDef, EnumDef, FnSig, FunctionDef, MapKind, MethodDef,
+    ParameterDef, ParameterPassing, Path as SourcePath, RecordDef, ReturnDef, TraitBounds,
+    TypeExpr,
 };
 use boltffi_binding::{CanonicalName, HandlePresence, HandleTarget, Primitive, Receive};
 use syn::{Ident, Type, parse_str};
@@ -13,7 +14,7 @@ use crate::experimental::error::Error;
 #[derive(Clone, Copy)]
 pub struct Callable<'source> {
     parameters: &'source [ParameterDef],
-    returns: &'source ReturnDef,
+    returns: CallableReturn<'source>,
     owner: Option<CallableOwner<'source>>,
 }
 
@@ -24,6 +25,12 @@ enum CallableOwner<'source> {
     Class(&'source ClassDef),
 }
 
+#[derive(Clone, Copy)]
+enum CallableReturn<'source> {
+    Declaration(&'source ReturnDef),
+    Constant(&'source TypeExpr),
+}
+
 pub struct MethodDeclarations<'source> {
     owner: CallableOwner<'source>,
 }
@@ -32,7 +39,15 @@ impl<'source> Callable<'source> {
     pub fn function(function: &'source FunctionDef) -> Self {
         Self {
             parameters: &function.parameters,
-            returns: &function.returns,
+            returns: CallableReturn::Declaration(&function.returns),
+            owner: None,
+        }
+    }
+
+    pub fn constant(constant: &'source ConstantDef) -> Self {
+        Self {
+            parameters: &[],
+            returns: CallableReturn::Constant(&constant.type_expr),
             owner: None,
         }
     }
@@ -40,7 +55,7 @@ impl<'source> Callable<'source> {
     pub fn method(method: &'source MethodDef) -> Self {
         Self {
             parameters: &method.parameters,
-            returns: &method.returns,
+            returns: CallableReturn::Declaration(&method.returns),
             owner: None,
         }
     }
@@ -48,7 +63,7 @@ impl<'source> Callable<'source> {
     pub fn record_method(method: &'source MethodDef, record: &'source RecordDef) -> Self {
         Self {
             parameters: &method.parameters,
-            returns: &method.returns,
+            returns: CallableReturn::Declaration(&method.returns),
             owner: Some(CallableOwner::Record(record)),
         }
     }
@@ -56,7 +71,7 @@ impl<'source> Callable<'source> {
     pub fn enum_method(method: &'source MethodDef, enumeration: &'source EnumDef) -> Self {
         Self {
             parameters: &method.parameters,
-            returns: &method.returns,
+            returns: CallableReturn::Declaration(&method.returns),
             owner: Some(CallableOwner::Enum(enumeration)),
         }
     }
@@ -64,7 +79,7 @@ impl<'source> Callable<'source> {
     pub fn class_method(method: &'source MethodDef, class: &'source ClassDef) -> Self {
         Self {
             parameters: &method.parameters,
-            returns: &method.returns,
+            returns: CallableReturn::Declaration(&method.returns),
             owner: Some(CallableOwner::Class(class)),
         }
     }
@@ -383,49 +398,68 @@ impl CallbackReturn {
 
 #[derive(Clone, Copy)]
 pub struct Return<'source> {
-    definition: &'source ReturnDef,
+    definition: CallableReturn<'source>,
     owner: Option<CallableOwner<'source>>,
 }
 
 impl<'source> Return<'source> {
     pub fn new(definition: &'source ReturnDef) -> Self {
         Self {
-            definition,
+            definition: CallableReturn::Declaration(definition),
             owner: None,
         }
     }
 
-    fn with_owner(definition: &'source ReturnDef, owner: Option<CallableOwner<'source>>) -> Self {
+    fn with_owner(
+        definition: CallableReturn<'source>,
+        owner: Option<CallableOwner<'source>>,
+    ) -> Self {
         Self { definition, owner }
     }
 
     pub fn written_type(self) -> Result<Option<Type>, Error> {
-        let return_def = self.return_def();
-        match return_def.as_ref() {
-            ReturnDef::Void => Ok(None),
-            ReturnDef::Value(type_expr) => TypeTokens::new(type_expr)
+        if matches!(
+            self.definition,
+            CallableReturn::Declaration(ReturnDef::Void)
+        ) {
+            return Ok(None);
+        }
+        if let CallableReturn::Constant(TypeExpr::Str | TypeExpr::Slice(_)) = self.definition {
+            let type_expr = self.value_type()?;
+            return TypeTokens::parameter(ParameterPassing::Ref, type_expr.as_ref())
+                .map(TypeTokens::into_type)
+                .map(Some);
+        }
+        match self.value_type() {
+            Ok(type_expr) => TypeTokens::new(type_expr.as_ref())
                 .map(TypeTokens::into_type)
                 .map(Some),
+            Err(error) => Err(error),
         }
     }
 
     pub fn value_type(self) -> Result<Cow<'source, TypeExpr>, Error> {
-        match self.return_def() {
-            Cow::Borrowed(ReturnDef::Value(type_expr)) => Ok(Cow::Borrowed(type_expr)),
-            Cow::Owned(ReturnDef::Value(type_expr)) => Ok(Cow::Owned(type_expr)),
-            _ => Err(Error::SourceSyntaxMismatch(
+        let self_type = self.owner.map(CallableOwner::self_type);
+        match self.definition {
+            CallableReturn::Declaration(ReturnDef::Value(type_expr)) => {
+                Ok(substituted_type(type_expr, self_type.as_ref()))
+            }
+            CallableReturn::Declaration(ReturnDef::Void) => Err(Error::SourceSyntaxMismatch(
                 "source return does not have a value type",
             )),
+            CallableReturn::Constant(type_expr) => {
+                Ok(substituted_type(type_expr, self_type.as_ref()))
+            }
         }
     }
 
     pub fn closure(self, presence: HandlePresence) -> Result<Closure<'source>, Error> {
-        let ReturnDef::Value(type_expr) = self.definition else {
-            return Err(Error::SourceSyntaxMismatch(
-                "source return is not an inline closure",
-            ));
-        };
-        Closure::new(type_expr, presence)
+        match self.value_type()? {
+            Cow::Borrowed(type_expr) => Closure::new(type_expr, presence),
+            Cow::Owned(_) => Err(Error::UnsupportedExpansion(
+                "self-referential closure return",
+            )),
+        }
     }
 
     pub fn handle_return(
@@ -433,18 +467,13 @@ impl<'source> Return<'source> {
         target: &HandleTarget,
         presence: HandlePresence,
     ) -> Result<HandleReturn, Error> {
-        let return_def = self.return_def();
-        let ReturnDef::Value(value) = return_def.as_ref() else {
-            return Err(Error::SourceSyntaxMismatch(
-                "source return is not a handle value",
-            ));
-        };
-        Handle::new(value).return_shape(target, presence)
+        let value = self.value_type()?;
+        Handle::new(value.as_ref()).return_shape(target, presence)
     }
 
     pub fn scalar_option(self, primitive: Primitive) -> Result<(), Error> {
-        let return_def = self.return_def();
-        let ReturnDef::Value(TypeExpr::Option(inner)) = return_def.as_ref() else {
+        let type_expr = self.value_type()?;
+        let TypeExpr::Option(inner) = type_expr.as_ref() else {
             return Err(Error::SourceSyntaxMismatch(
                 "source return is not an optional scalar",
             ));
@@ -462,8 +491,8 @@ impl<'source> Return<'source> {
     }
 
     pub fn direct_vec(self) -> Result<(), Error> {
-        match self.return_def().as_ref() {
-            ReturnDef::Value(TypeExpr::Vec(_)) => Ok(()),
+        match self.value_type()?.as_ref() {
+            TypeExpr::Vec(_) => Ok(()),
             _ => Err(Error::SourceSyntaxMismatch(
                 "source return is not a direct vector",
             )),
@@ -471,20 +500,11 @@ impl<'source> Return<'source> {
     }
 
     pub fn fallible(self) -> Result<Fallible<'source>, Error> {
-        match self.return_def() {
-            Cow::Borrowed(ReturnDef::Value(TypeExpr::Result { ok, err })) => {
-                Ok(Fallible::Borrowed { ok, err })
-            }
-            Cow::Owned(ReturnDef::Value(TypeExpr::Result { ok, err })) => {
-                Ok(Fallible::Owned { ok: *ok, err: *err })
-            }
+        match self.value_type()? {
+            Cow::Borrowed(TypeExpr::Result { ok, err }) => Ok(Fallible::Borrowed { ok, err }),
+            Cow::Owned(TypeExpr::Result { ok, err }) => Ok(Fallible::Owned { ok: *ok, err: *err }),
             _ => Err(Error::SourceSyntaxMismatch("source return is not a Result")),
         }
-    }
-
-    fn return_def(&self) -> Cow<'source, ReturnDef> {
-        let self_type = self.owner.map(CallableOwner::self_type);
-        substituted_return(self.definition, self_type.as_ref())
     }
 }
 

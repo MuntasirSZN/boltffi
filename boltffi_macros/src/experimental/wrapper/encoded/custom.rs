@@ -1,3 +1,4 @@
+use boltffi_ast::{MapKind, TypeExpr};
 use boltffi_binding::{
     CodecNode, CustomConverterPath, CustomConverterPathRoot, CustomTypeConverter,
 };
@@ -80,9 +81,9 @@ impl<'expansion, 'lowered, S: Target> Incoming<'expansion, 'lowered, S> {
         self.convert_node(self.codec, value)
     }
 
-    pub fn decoded_type(&self) -> Result<Option<TokenStream>, Error> {
+    pub fn decoded_type(&self, source: &TypeExpr) -> Result<Option<TokenStream>, Error> {
         match contains_custom(self.codec, self.expansion)? {
-            true => representation_type(self.codec, self.expansion).map(Some),
+            true => representation_type(self.codec, source, self.expansion).map(Some),
             false => Ok(None),
         }
     }
@@ -519,6 +520,7 @@ impl<'lowered> PathRenderer<'lowered> {
 
 fn representation_type<S: Target>(
     codec: &CodecNode,
+    source: &TypeExpr,
     expansion: &Expansion<'_, S>,
 ) -> Result<TokenStream, Error> {
     match codec {
@@ -539,29 +541,78 @@ fn representation_type<S: Target>(
             )
         }
         CodecNode::Optional(inner) => {
-            let inner = representation_type(inner, expansion)?;
+            let TypeExpr::Option(source) = source else {
+                return Err(Error::SourceSyntaxMismatch(
+                    "optional codec does not match source type",
+                ));
+            };
+            let inner = representation_type(inner, source, expansion)?;
             Ok(quote! { Option<#inner> })
         }
         CodecNode::Sequence { element, .. } => {
-            let element = representation_type(element, expansion)?;
+            let source = match source {
+                TypeExpr::Vec(element) | TypeExpr::Slice(element) => element.as_ref(),
+                _ => {
+                    return Err(Error::SourceSyntaxMismatch(
+                        "sequence codec does not match source type",
+                    ));
+                }
+            };
+            let element = representation_type(element, source, expansion)?;
             Ok(quote! { Vec<#element> })
         }
         CodecNode::Result { ok, err } => {
-            let ok = representation_type(ok, expansion)?;
-            let err = representation_type(err, expansion)?;
+            let TypeExpr::Result {
+                ok: source_ok,
+                err: source_err,
+            } = source
+            else {
+                return Err(Error::SourceSyntaxMismatch(
+                    "result codec does not match source type",
+                ));
+            };
+            let ok = representation_type(ok, source_ok, expansion)?;
+            let err = representation_type(err, source_err, expansion)?;
             Ok(quote! { Result<#ok, #err> })
         }
         CodecNode::Tuple(elements) => {
+            let TypeExpr::Tuple(source_elements) = source else {
+                return Err(Error::SourceSyntaxMismatch(
+                    "tuple codec does not match source type",
+                ));
+            };
+            if elements.len() != source_elements.len() {
+                return Err(Error::SourceSyntaxMismatch(
+                    "tuple codec arity does not match source type",
+                ));
+            }
             let elements = elements
                 .iter()
-                .map(|element| representation_type(element, expansion))
+                .zip(source_elements)
+                .map(|(element, source)| representation_type(element, source, expansion))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(quote! { (#(#elements,)*) })
         }
         CodecNode::Map { key, value } => {
-            let key = representation_type(key, expansion)?;
-            let value = representation_type(value, expansion)?;
-            Ok(quote! { Vec<(#key, #value)> })
+            if contains_custom(key, expansion)? {
+                return Err(Error::UnsupportedExpansion("custom encoded map key"));
+            }
+            let TypeExpr::Map {
+                kind,
+                key: source_key,
+                value: source_value,
+            } = source
+            else {
+                return Err(Error::SourceSyntaxMismatch(
+                    "map codec does not match source type",
+                ));
+            };
+            let key = representation_type(key, source_key, expansion)?;
+            let value = representation_type(value, source_value, expansion)?;
+            match kind {
+                MapKind::Hash => Ok(quote! { ::std::collections::HashMap<#key, #value> }),
+                MapKind::BTree => Ok(quote! { ::std::collections::BTreeMap<#key, #value> }),
+            }
         }
         CodecNode::EncodedRecord(_) => Err(Error::UnsupportedExpansion(
             "encoded record representation type",

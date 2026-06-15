@@ -489,13 +489,22 @@ impl<'expansion, 'lowered, S: Target> DataField<'expansion, 'lowered, S> {
         let used = names.used();
         let wire = names.wire();
         let rust_type = rust_api::TypeTokens::new(self.source.type_expr()?)?.into_type();
+        let source_type = self.source.type_expr()?;
         let codec = self.binding.codec().write().root();
         wrapper::encoded::require_runtime_wire(codec)?;
+        rust_api::IncomingEncodedType::new(source_type).require_supported()?;
         Ok(DataFieldTokens {
             binding: binding.clone(),
             wire_size: self.wire_size(&binding, &wire, codec)?,
             encode_to: self.encode_to(&binding, &wire, codec)?,
-            decode_from: self.decode_from(&binding, &decoded, &used, &rust_type, codec)?,
+            decode_from: self.decode_from(
+                &binding,
+                &decoded,
+                &used,
+                &rust_type,
+                source_type,
+                codec,
+            )?,
         })
     }
 
@@ -561,11 +570,12 @@ impl<'expansion, 'lowered, S: Target> DataField<'expansion, 'lowered, S> {
         decoded: &Ident,
         used: &Ident,
         rust_type: &Type,
+        source: &TypeExpr,
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let incoming = wrapper::encoded::Incoming::new(codec, self.expansion);
         let decoded_type = incoming
-            .decoded_type()?
+            .decoded_type(source)?
             .unwrap_or_else(|| quote! { #rust_type });
         let converted = incoming.convert(quote! { #decoded })?;
         let value = match converted.changed() {
