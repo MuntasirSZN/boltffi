@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Error, Result};
+use crate::core::{Error, Result};
 
 /// Path of one generated backend output file.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -147,15 +147,63 @@ impl Emitted {
     }
 }
 
+/// Layout policy for generated backend files.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub struct FileLayout;
+
+impl FileLayout {
+    /// Creates a file layout.
+    pub const fn new() -> Self {
+        Self
+    }
+
+    /// Assembles emitted fragments into generated output.
+    pub fn assemble(self, emitted: Emitted) -> GeneratedOutput {
+        let (fragments, diagnostics) = emitted.into_parts();
+        GeneratedOutput::new(GeneratedFile::assemble(fragments), diagnostics)
+    }
+}
+
+/// Generated backend output assembled from bridge and host render fragments.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct GeneratedOutput {
+    files: Vec<GeneratedFile>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl GeneratedOutput {
+    /// Creates generated backend output.
+    pub fn new(files: Vec<GeneratedFile>, diagnostics: Vec<Diagnostic>) -> Self {
+        Self { files, diagnostics }
+    }
+
+    /// Returns generated files.
+    pub fn files(&self) -> &[GeneratedFile] {
+        &self.files
+    }
+
+    /// Returns non-fatal render diagnostics.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    /// Splits this output into generated files and diagnostics.
+    pub fn into_parts(self) -> (Vec<GeneratedFile>, Vec<Diagnostic>) {
+        (self.files, self.diagnostics)
+    }
+}
+
 /// One complete generated backend file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct File {
+pub struct GeneratedFile {
     path: FilePath,
     contents: String,
 }
 
-impl File {
+impl GeneratedFile {
     /// Creates a generated file.
     pub fn new(path: FilePath, contents: impl Into<String>) -> Self {
         Self {
@@ -174,8 +222,7 @@ impl File {
         &self.contents
     }
 
-    /// Assembles fragments into generated files.
-    pub fn assemble(fragments: impl IntoIterator<Item = Fragment>) -> Vec<Self> {
+    fn assemble(fragments: impl IntoIterator<Item = Fragment>) -> Vec<Self> {
         fragments
             .into_iter()
             .fold(Vec::new(), |mut files, fragment| {

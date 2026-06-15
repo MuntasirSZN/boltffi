@@ -45,6 +45,46 @@ pub enum Decl<S: Surface> {
     CustomType(Box<CustomTypeDecl>),
 }
 
+/// Borrowed view of a classified declaration.
+///
+/// This view lists the declaration families a renderer must handle. Unlike
+/// [`Decl`], it is intentionally exhaustive: adding a declaration family must
+/// update every consumer that pattern-matches this type.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DeclarationRef<'a, S: Surface> {
+    /// Record declaration.
+    Record(&'a RecordDecl<S>),
+    /// Enum declaration.
+    Enum(&'a EnumDecl<S>),
+    /// Free function declaration.
+    Function(&'a FunctionDecl<S>),
+    /// Class-style object declaration.
+    Class(&'a ClassDecl<S>),
+    /// Callback trait declaration.
+    Callback(&'a CallbackDecl<S>),
+    /// Stream declaration.
+    Stream(&'a StreamDecl<S>),
+    /// Constant declaration.
+    Constant(&'a ConstantDecl<S>),
+    /// Custom type declaration.
+    CustomType(&'a CustomTypeDecl),
+}
+
+impl<'a, S: Surface> From<&'a Decl<S>> for DeclarationRef<'a, S> {
+    fn from(decl: &'a Decl<S>) -> Self {
+        match decl {
+            Decl::Record(record) => Self::Record(record.as_ref()),
+            Decl::Enum(enum_decl) => Self::Enum(enum_decl.as_ref()),
+            Decl::Function(function) => Self::Function(function.as_ref()),
+            Decl::Class(class) => Self::Class(class.as_ref()),
+            Decl::Callback(callback) => Self::Callback(callback.as_ref()),
+            Decl::Stream(stream) => Self::Stream(stream.as_ref()),
+            Decl::Constant(constant) => Self::Constant(constant.as_ref()),
+            Decl::CustomType(custom) => Self::CustomType(custom.as_ref()),
+        }
+    }
+}
+
 impl<S: Surface> Decl<S> {
     /// Returns the typed identity of this declaration.
     pub fn id(&self) -> DeclarationId {
