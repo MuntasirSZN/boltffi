@@ -13,7 +13,8 @@ use boltffi_binding::{
     BindingMetadataEnvelope, BindingMetadataError, BindingMetadataHash, BindingMetadataSection,
     BindingMetadataSectionBytes,
 };
-use object::read::archive::ArchiveFile;
+use object::read::archive::{ArchiveFile, ArchiveMember};
+use object::read::macho::{FatArch, MachOFatFile};
 use object::{File, FileKind, Object, ObjectSection};
 use thiserror::Error;
 
@@ -132,6 +133,8 @@ impl<'artifact> ArtifactImage<'artifact> {
     fn envelopes(self) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataReadError> {
         match FileKind::parse(self.bytes).map_err(|source| self.parse_error(source))? {
             FileKind::Archive => self.archive_envelopes(),
+            FileKind::MachOFat32 => self.macho_fat32_envelopes(),
+            FileKind::MachOFat64 => self.macho_fat64_envelopes(),
             _ => self.object_envelopes(self.bytes),
         }
     }
@@ -143,12 +146,7 @@ impl<'artifact> ArtifactImage<'artifact> {
             .map(|member| {
                 member
                     .map_err(|source| self.parse_error(source))
-                    .and_then(|member| {
-                        member
-                            .data(self.bytes)
-                            .map_err(|source| self.parse_error(source))
-                    })
-                    .and_then(|bytes| self.archive_member_envelopes(bytes))
+                    .and_then(|member| self.archive_member_envelopes(member))
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|members| members.into_iter().flatten().collect())
@@ -156,15 +154,78 @@ impl<'artifact> ArtifactImage<'artifact> {
 
     fn archive_member_envelopes(
         self,
+        member: ArchiveMember<'artifact>,
+    ) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataReadError> {
+        if member.is_thin() {
+            return self.thin_archive_member_envelopes(member.name());
+        }
+        let bytes = member
+            .data(self.bytes)
+            .map_err(|source| self.parse_error(source))?;
+        self.nested_envelopes(bytes)
+    }
+
+    fn thin_archive_member_envelopes(
+        self,
+        name: &[u8],
+    ) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataReadError> {
+        let path = ThinArchiveMember::new(self.path, name)?.path();
+        fs::read(&path)
+            .map_err(|source| BindingMetadataReadError::Read {
+                path: path.clone(),
+                source,
+            })
+            .and_then(|bytes| ArtifactImage::new(&path, &bytes).envelopes())
+    }
+
+    fn nested_envelopes(
+        self,
         bytes: &'artifact [u8],
     ) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataReadError> {
         match FileKind::parse(bytes) {
             Ok(FileKind::Archive) => ArtifactImage::new(self.path, bytes).archive_envelopes(),
+            Ok(FileKind::MachOFat32) => {
+                ArtifactImage::new(self.path, bytes).macho_fat32_envelopes()
+            }
+            Ok(FileKind::MachOFat64) => {
+                ArtifactImage::new(self.path, bytes).macho_fat64_envelopes()
+            }
             Ok(file_kind) if ArchiveMemberKind::from(file_kind).is_object() => {
                 self.object_envelopes(bytes)
             }
             Ok(_) | Err(_) => Ok(Vec::new()),
         }
+    }
+
+    fn macho_fat32_envelopes(
+        self,
+    ) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataReadError> {
+        self.macho_fat_envelopes::<object::macho::FatArch32>()
+    }
+
+    fn macho_fat64_envelopes(
+        self,
+    ) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataReadError> {
+        self.macho_fat_envelopes::<object::macho::FatArch64>()
+    }
+
+    fn macho_fat_envelopes<Fat>(
+        self,
+    ) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataReadError>
+    where
+        Fat: FatArch,
+    {
+        MachOFatFile::<Fat>::parse(self.bytes)
+            .map_err(|source| self.parse_error(source))?
+            .arches()
+            .iter()
+            .map(|arch| {
+                arch.data(self.bytes)
+                    .map_err(|source| self.parse_error(source))
+                    .and_then(|bytes| ArtifactImage::new(self.path, bytes).envelopes())
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|arches| arches.into_iter().flatten().collect())
     }
 
     fn object_envelopes(
@@ -231,6 +292,36 @@ impl<'artifact> ArtifactImage<'artifact> {
         BindingMetadataReadError::Metadata {
             path: self.path.to_path_buf(),
             source,
+        }
+    }
+}
+
+struct ThinArchiveMember {
+    archive: PathBuf,
+    member: PathBuf,
+}
+
+impl ThinArchiveMember {
+    fn new(archive: &Path, name: &[u8]) -> Result<Self, BindingMetadataReadError> {
+        let member = std::str::from_utf8(name)
+            .map(PathBuf::from)
+            .map_err(|source| BindingMetadataReadError::Read {
+                path: archive.to_path_buf(),
+                source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+            })?;
+        Ok(Self {
+            archive: archive.to_path_buf(),
+            member,
+        })
+    }
+
+    fn path(self) -> PathBuf {
+        if self.member.is_absolute() {
+            self.member
+        } else if let Some(parent) = self.archive.parent() {
+            parent.join(self.member)
+        } else {
+            self.member
         }
     }
 }
@@ -353,6 +444,34 @@ mod tests {
         assert!(matches!(error, BindingMetadataReadError::NoMetadata { .. }));
     }
 
+    #[test]
+    fn mach_o_fat_artifact_reads_metadata_from_arch_slice() {
+        let artifact = MetadataArtifact::compile();
+        let bytes = fs::read(artifact.path()).expect("read metadata artifact");
+        let fat = RawArtifact::new("libdemo-universal", mach_o_fat32(&bytes));
+
+        let envelopes = BindingMetadataReader::new([fat.path()])
+            .read_required()
+            .expect("fat artifact metadata reads");
+
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].package().name().as_path_string(), "demo");
+    }
+
+    #[test]
+    fn thin_archive_member_is_read_from_archive_directory() {
+        let object = MetadataArtifact::compile_object();
+        let object_bytes = fs::read(object.path()).expect("read metadata object");
+        let archive = ThinArchive::new("metadata.o", object_bytes);
+
+        let envelopes = BindingMetadataReader::new([archive.path()])
+            .read_required()
+            .expect("thin archive metadata reads");
+
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].package().name().as_path_string(), "demo");
+    }
+
     struct MetadataArtifact {
         root: PathBuf,
         path: PathBuf,
@@ -371,7 +490,15 @@ mod tests {
             Self::compile_with_records(0)
         }
 
+        fn compile_object() -> Self {
+            Self::compile_with_records_and_kind(1, ArtifactKind::Object)
+        }
+
         fn compile_with_records(records: usize) -> Self {
+            Self::compile_with_records_and_kind(records, ArtifactKind::StaticLibrary)
+        }
+
+        fn compile_with_records_and_kind(records: usize, kind: ArtifactKind) -> Self {
             let root = std::env::temp_dir().join(format!(
                 "boltffi-bindgen-metadata-{}",
                 SystemTime::now()
@@ -381,15 +508,14 @@ mod tests {
             ));
             fs::create_dir_all(&root).expect("create metadata fixture root");
             let source = root.join("lib.rs");
-            let artifact = root.join("libdemo.a");
+            let artifact = root.join(kind.file_name());
             fs::write(&source, Self::source(records)).expect("write metadata fixture source");
 
             let output = Command::new(rustc())
                 .arg("--crate-name")
                 .arg("demo")
-                .arg("--crate-type")
-                .arg("staticlib")
                 .arg("--edition=2024")
+                .args(kind.rustc_args())
                 .arg(&source)
                 .arg("-o")
                 .arg(&artifact)
@@ -433,6 +559,28 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum ArtifactKind {
+        Object,
+        StaticLibrary,
+    }
+
+    impl ArtifactKind {
+        const fn file_name(self) -> &'static str {
+            match self {
+                Self::Object => "metadata.o",
+                Self::StaticLibrary => "libdemo.a",
+            }
+        }
+
+        fn rustc_args(self) -> &'static [&'static str] {
+            match self {
+                Self::Object => &["--crate-type", "lib", "--emit=obj"],
+                Self::StaticLibrary => &["--crate-type", "staticlib"],
+            }
+        }
+    }
+
     impl Drop for MetadataArtifact {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
@@ -464,6 +612,34 @@ mod tests {
         }
     }
 
+    struct ThinArchive {
+        root: PathBuf,
+        path: PathBuf,
+    }
+
+    impl ThinArchive {
+        fn new(member_name: &str, member_bytes: Vec<u8>) -> Self {
+            let root = temp_root("boltffi-bindgen-thin-archive");
+            fs::create_dir_all(&root).expect("create thin archive root");
+            let member = root.join(member_name);
+            let path = root.join("libthin.a");
+            fs::write(member, &member_bytes).expect("write thin archive member");
+            fs::write(&path, thin_archive(member_name, member_bytes.len()))
+                .expect("write thin archive");
+            Self { root, path }
+        }
+
+        fn path(&self) -> PathBuf {
+            self.path.clone()
+        }
+    }
+
+    impl Drop for ThinArchive {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
     fn metadata_record() -> Vec<u8> {
         let source = SourceContract::new(PackageInfo::new("demo", None));
         let lowered = lower_with_declarations::<Native>(&source).expect("empty source lowers");
@@ -479,7 +655,7 @@ mod tests {
     }
 
     fn non_object_binary_archive_member() -> Vec<u8> {
-        let payload = b"\xca\xfe\xba\xbeNOT_AN_OBJECT";
+        let payload = b"dyld_v1 NOT_AN_OBJECT";
         archive_member("fat.o/", payload)
     }
 
@@ -489,6 +665,28 @@ mod tests {
             payload.len()
         );
         [b"!<arch>\n".as_slice(), header.as_bytes(), payload].concat()
+    }
+
+    fn thin_archive(name: &str, member_size: usize) -> Vec<u8> {
+        let name = format!("{name}/");
+        let header = format!("{name:<16}0           0     0     100644  {member_size:<10}`\n");
+        [b"!<thin>\n".as_slice(), header.as_bytes()].concat()
+    }
+
+    fn mach_o_fat32(bytes: &[u8]) -> Vec<u8> {
+        let offset = 32u32;
+        [
+            0xcafebabe_u32.to_be_bytes().as_slice(),
+            1u32.to_be_bytes().as_slice(),
+            0x01000007u32.to_be_bytes().as_slice(),
+            3u32.to_be_bytes().as_slice(),
+            offset.to_be_bytes().as_slice(),
+            (bytes.len() as u32).to_be_bytes().as_slice(),
+            0u32.to_be_bytes().as_slice(),
+            &[0; 4],
+            bytes,
+        ]
+        .concat()
     }
 
     fn temp_root(prefix: &str) -> PathBuf {
