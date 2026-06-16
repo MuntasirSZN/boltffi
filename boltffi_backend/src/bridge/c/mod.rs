@@ -6,11 +6,14 @@
 
 mod contract;
 mod header;
-mod identifier;
+pub(crate) mod identifier;
 mod name;
+pub(crate) mod syntax;
 mod template;
 
-pub use contract::{CBridgeContract, Callback, Enum, Field, Function, Parameter, Record, Type};
+pub use contract::{
+    CBridgeContract, Callback, Enum, Field, Function, Parameter, Record, SupportFunctions, Type,
+};
 pub use header::CBridge;
 
 #[cfg(test)]
