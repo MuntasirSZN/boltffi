@@ -51,11 +51,9 @@ typedef struct {
     uint64_t handle;
     const void *vtable;
 } BoltFFICallbackHandle;
-
-void boltffi_free_string(FfiString string);
-void boltffi_free_buf(FfiBuf_u8 buf);
-FfiStatus boltffi_last_error_message(FfiString *out);
-void boltffi_clear_last_error(void);
+{% for function in support_functions %}
+{{ function.declaration }};
+{%- endfor %}
 
 {%- for record in records %}
 typedef struct {

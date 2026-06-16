@@ -56,6 +56,12 @@ pub enum BackendError {
         /// Invalid identifier text.
         identifier: String,
     },
+    /// A generated CPython method name was invalid.
+    #[error("invalid CPython method name `{name}`")]
+    InvalidPythonMethodName {
+        /// Invalid method name text.
+        name: String,
+    },
     /// A backend template failed to render.
     #[error("template rendering failed: {message}")]
     Template {

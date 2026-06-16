@@ -20,6 +20,7 @@ use super::name;
 #[non_exhaustive]
 pub struct CBridgeContract {
     capabilities: BridgeCapabilities,
+    support: SupportFunctions,
     records: Vec<Record>,
     enums: Vec<Enum>,
     callbacks: Vec<Callback>,
@@ -40,6 +41,13 @@ pub struct Record {
 pub struct Field {
     name: String,
     ty: Type,
+}
+
+/// C ABI support functions supplied by the BoltFFI runtime.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct SupportFunctions {
+    functions: Vec<Function>,
 }
 
 /// A C enum typedef with integer-valued variants.
@@ -258,6 +266,7 @@ impl CBridgeContract {
 
         Ok(Self {
             capabilities: BridgeCapabilities::new().stable(BridgeCapability::CAbi),
+            support: SupportFunctions::new(),
             records,
             enums,
             callbacks,
@@ -268,6 +277,11 @@ impl CBridgeContract {
     /// Returns C record declarations.
     pub fn records(&self) -> &[Record] {
         &self.records
+    }
+
+    /// Returns C ABI support functions.
+    pub fn support(&self) -> &SupportFunctions {
+        &self.support
     }
 
     /// Returns C enum declarations.
@@ -353,6 +367,46 @@ impl Field {
             name: name.into(),
             ty,
         }
+    }
+}
+
+impl SupportFunctions {
+    /// Creates the C ABI support function set.
+    pub fn new() -> Self {
+        Self {
+            functions: vec![
+                Function::new(
+                    "boltffi_free_string",
+                    vec![Parameter::new("string", Type::String)],
+                    Type::Void,
+                ),
+                Function::new(
+                    "boltffi_free_buf",
+                    vec![Parameter::new("buf", Type::Buffer)],
+                    Type::Void,
+                ),
+                Function::new(
+                    "boltffi_last_error_message",
+                    vec![Parameter::new(
+                        "out",
+                        Type::MutPointer(Box::new(Type::String)),
+                    )],
+                    Type::Status,
+                ),
+                Function::new("boltffi_clear_last_error", Vec::new(), Type::Void),
+            ],
+        }
+    }
+
+    /// Returns C ABI support functions.
+    pub fn functions(&self) -> &[Function] {
+        &self.functions
+    }
+}
+
+impl Default for SupportFunctions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
