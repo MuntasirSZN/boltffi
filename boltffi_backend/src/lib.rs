@@ -15,18 +15,11 @@
 #![deny(missing_docs)]
 
 pub mod bridge;
-mod capability;
-mod context;
-mod error;
-pub mod host;
-mod output;
-mod sealed;
-mod target;
+pub mod core;
+pub mod target;
 
-pub use capability::{
-    BindingCapability, BridgeCapability, CapabilityRequirements, CapabilitySet, CapabilityStatus,
+pub use core::{
+    BackendError, BindingCapability, BridgeCapabilities, BridgeCapability, CapabilityRequirements,
+    CapabilitySet, CapabilityStatus, Diagnostic, Emitted, Error, FileLayout, FilePath, Fragment,
+    GeneratedFile, GeneratedOutput, HostCapabilities, RenderContext, Result, Target,
 };
-pub use context::RenderContext;
-pub use error::{Error, Result};
-pub use output::{Diagnostic, Emitted, File, FilePath, Fragment};
-pub use target::Target;

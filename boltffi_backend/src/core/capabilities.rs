@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use boltffi_binding::{Bindings, Decl, Surface};
+use boltffi_binding::{Bindings, Decl, DeclarationRef, Surface};
 
-use crate::{Error, Result};
+use crate::core::{Error, Result};
 
 /// A binding-contract feature a host renderer may or may not support.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -87,6 +87,12 @@ pub struct CapabilityRequirements<C> {
     capabilities: BTreeSet<C>,
 }
 
+/// Capability table advertised by a host backend.
+pub type HostCapabilities = CapabilitySet<BindingCapability>;
+
+/// Capability table advertised by a bridge contract.
+pub type BridgeCapabilities = CapabilitySet<BridgeCapability>;
+
 impl<C> Default for CapabilityRequirements<C> {
     fn default() -> Self {
         Self {
@@ -123,13 +129,12 @@ where
 
 impl CapabilityRequirements<BindingCapability> {
     /// Builds binding requirements from the declarations in a contract.
-    pub fn from_bindings<S: Surface>(target: &'static str, bindings: &Bindings<S>) -> Result<Self> {
+    pub fn from_bindings<S: Surface>(bindings: &Bindings<S>) -> Self {
         bindings
             .decls()
             .iter()
-            .try_fold(Self::new(), |requirements, decl| {
-                BindingCapability::from_decl(target, decl)
-                    .map(|capability| requirements.require(capability))
+            .fold(Self::new(), |requirements, decl| {
+                requirements.require(BindingCapability::from_decl(decl))
             })
     }
 }
@@ -234,20 +239,16 @@ impl CapabilitySet<BridgeCapability> {
 }
 
 impl BindingCapability {
-    fn from_decl<S: Surface>(target: &'static str, decl: &Decl<S>) -> Result<Self> {
-        match decl {
-            Decl::Record(_) => Ok(Self::Records),
-            Decl::Enum(_) => Ok(Self::Enums),
-            Decl::Function(_) => Ok(Self::Functions),
-            Decl::Class(_) => Ok(Self::Classes),
-            Decl::Callback(_) => Ok(Self::Callbacks),
-            Decl::Stream(_) => Ok(Self::Streams),
-            Decl::Constant(_) => Ok(Self::Constants),
-            Decl::CustomType(_) => Ok(Self::CustomTypes),
-            _ => Err(Error::UnsupportedDeclaration {
-                target,
-                declaration: decl.id(),
-            }),
+    fn from_decl<S: Surface>(decl: &Decl<S>) -> Self {
+        match DeclarationRef::from(decl) {
+            DeclarationRef::Record(_) => Self::Records,
+            DeclarationRef::Enum(_) => Self::Enums,
+            DeclarationRef::Function(_) => Self::Functions,
+            DeclarationRef::Class(_) => Self::Classes,
+            DeclarationRef::Callback(_) => Self::Callbacks,
+            DeclarationRef::Stream(_) => Self::Streams,
+            DeclarationRef::Constant(_) => Self::Constants,
+            DeclarationRef::CustomType(_) => Self::CustomTypes,
         }
     }
 }

@@ -1,0 +1,310 @@
+use boltffi_binding::{Bindings, Decl, DeclarationRef, Surface};
+
+use crate::core::{
+    BridgeContract, CapabilityRequirements, Emitted, GeneratedOutput, RenderContext, Result,
+    bridge, contract::sealed, host,
+};
+
+/// A bridge layer stacked above another bridge stack.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub struct BridgeLayer<Lower, Upper> {
+    lower: Lower,
+    upper: Upper,
+}
+
+impl<Lower, Upper> BridgeLayer<Lower, Upper> {
+    /// Creates a layered bridge stack.
+    pub const fn new(lower: Lower, upper: Upper) -> Self {
+        Self { lower, upper }
+    }
+
+    /// Returns the lower bridge stack.
+    pub const fn lower(&self) -> &Lower {
+        &self.lower
+    }
+
+    /// Returns the upper bridge layer.
+    pub const fn upper(&self) -> &Upper {
+        &self.upper
+    }
+}
+
+impl<B, S> sealed::BridgeStack for B
+where
+    B: bridge::BridgeBackend<Input = Bindings<S>, Surface = S>,
+    S: Surface,
+{
+}
+
+impl<B, S> bridge::BridgeStack for B
+where
+    B: bridge::BridgeBackend<Input = Bindings<S>, Surface = S>,
+    S: Surface,
+{
+    type Surface = S;
+    type Contract = B::Contract;
+
+    fn build(
+        &self,
+        bindings: &Bindings<Self::Surface>,
+    ) -> Result<bridge::BridgeOutput<Self::Contract>> {
+        let contract = self.build_contract(bindings)?;
+        let emitted = self.render_bridge(bindings, &contract)?;
+        Ok(bridge::BridgeOutput::new(contract, emitted))
+    }
+}
+
+impl<Lower, Upper> sealed::BridgeStack for BridgeLayer<Lower, Upper>
+where
+    Lower: bridge::BridgeStack,
+    Upper: bridge::BridgeBackend<Input = Lower::Contract, Surface = Lower::Surface>,
+{
+}
+
+impl<Lower, Upper> bridge::BridgeStack for BridgeLayer<Lower, Upper>
+where
+    Lower: bridge::BridgeStack,
+    Upper: bridge::BridgeBackend<Input = Lower::Contract, Surface = Lower::Surface>,
+{
+    type Surface = Lower::Surface;
+    type Contract = Upper::Contract;
+
+    fn build(
+        &self,
+        bindings: &Bindings<Self::Surface>,
+    ) -> Result<bridge::BridgeOutput<Self::Contract>> {
+        let lower = self.lower.build(bindings)?;
+        let (lower_contract, mut emitted) = lower.into_parts();
+        let contract = self.upper.build_contract(&lower_contract)?;
+        emitted.append(self.upper.render_bridge(&lower_contract, &contract)?);
+        Ok(bridge::BridgeOutput::new(contract, emitted))
+    }
+}
+
+/// A host renderer paired with the bridge stack it requires.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub struct Target<H, S> {
+    host: H,
+    stack: S,
+}
+
+impl<H, S> Target<H, S>
+where
+    H: host::HostBackend<Bridge = S::Contract, Surface = S::Surface>,
+    S: bridge::BridgeStack,
+{
+    /// Creates a target from a host renderer and bridge stack.
+    pub const fn new(host: H, stack: S) -> Self {
+        Self { host, stack }
+    }
+
+    /// Returns the host renderer.
+    pub const fn host(&self) -> &H {
+        &self.host
+    }
+
+    /// Returns the bridge stack.
+    pub const fn stack(&self) -> &S {
+        &self.stack
+    }
+
+    /// Renders a binding contract through the paired bridge and host.
+    pub fn render(&self, bindings: &Bindings<S::Surface>) -> Result<GeneratedOutput> {
+        let bridge = self.stack.build(bindings)?;
+        let (contract, bridge_emitted) = bridge.into_parts();
+        let binding_requirements = CapabilityRequirements::from_bindings(bindings);
+        self.host
+            .binding_capabilities()
+            .require_binding(self.host.name(), &binding_requirements)?;
+        contract
+            .capabilities()
+            .require_bridge(self.host.name(), &self.host.bridge_capabilities())?;
+        let context = RenderContext::new(bindings, self.host.name());
+        let host_emitted = bindings
+            .decls()
+            .iter()
+            .map(|decl| self.render_declaration(decl, &contract, &context))
+            .collect::<Result<Vec<_>>>()
+            .map(Emitted::combine)?;
+        let mut emitted = bridge_emitted;
+        emitted.append(host_emitted);
+        Ok(self.host.file_layout(bindings).assemble(emitted))
+    }
+
+    fn render_declaration(
+        &self,
+        decl: &Decl<S::Surface>,
+        bridge: &S::Contract,
+        context: &RenderContext<S::Surface>,
+    ) -> Result<Emitted> {
+        match DeclarationRef::from(decl) {
+            DeclarationRef::Record(record) => self.host.record(record, bridge, context),
+            DeclarationRef::Enum(enumeration) => {
+                self.host.enumeration(enumeration, bridge, context)
+            }
+            DeclarationRef::Function(function) => self.host.function(function, bridge, context),
+            DeclarationRef::Class(class) => self.host.class(class, bridge, context),
+            DeclarationRef::Callback(callback) => self.host.callback(callback, bridge, context),
+            DeclarationRef::Stream(stream) => self.host.stream(stream, bridge, context),
+            DeclarationRef::Constant(constant) => self.host.constant(constant, bridge, context),
+            DeclarationRef::CustomType(custom_type) => {
+                self.host.custom_type(custom_type, bridge, context)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use boltffi_binding::{Bindings, Native};
+
+    use crate::core::{
+        BridgeCapabilities, BridgeCapability, BridgeContract, CapabilityRequirements, Emitted,
+        FileLayout, HostCapabilities, RenderContext, Result, bridge, contract::sealed, host,
+    };
+
+    #[derive(Clone)]
+    struct NativeContract {
+        capabilities: BridgeCapabilities,
+    }
+
+    impl BridgeContract for NativeContract {
+        type Surface = Native;
+
+        fn capabilities(&self) -> &BridgeCapabilities {
+            &self.capabilities
+        }
+    }
+
+    impl sealed::BridgeContract for NativeContract {}
+
+    #[derive(Clone, Copy)]
+    struct NativeBridge;
+
+    impl bridge::BridgeBackend for NativeBridge {
+        type Surface = Native;
+        type Input = Bindings<Native>;
+        type Contract = NativeContract;
+
+        fn build_contract(&self, _input: &Self::Input) -> Result<Self::Contract> {
+            Ok(NativeContract {
+                capabilities: BridgeCapabilities::new().stable(BridgeCapability::CAbi),
+            })
+        }
+
+        fn render_bridge(
+            &self,
+            _input: &Self::Input,
+            _contract: &Self::Contract,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+    }
+
+    impl sealed::BridgeBackend for NativeBridge {}
+
+    #[derive(Clone, Copy)]
+    struct SwiftHost;
+
+    impl host::HostBackend for SwiftHost {
+        type Surface = Native;
+        type Bridge = NativeContract;
+
+        fn name(&self) -> &'static str {
+            "swift"
+        }
+
+        fn binding_capabilities(&self) -> HostCapabilities {
+            HostCapabilities::new()
+        }
+
+        fn bridge_capabilities(&self) -> CapabilityRequirements<BridgeCapability> {
+            CapabilityRequirements::new().require(BridgeCapability::CAbi)
+        }
+
+        fn record(
+            &self,
+            _decl: &boltffi_binding::RecordDecl<Self::Surface>,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn enumeration(
+            &self,
+            _decl: &boltffi_binding::EnumDecl<Self::Surface>,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn function(
+            &self,
+            _decl: &boltffi_binding::FunctionDecl<Self::Surface>,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn class(
+            &self,
+            _decl: &boltffi_binding::ClassDecl<Self::Surface>,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn callback(
+            &self,
+            _decl: &boltffi_binding::CallbackDecl<Self::Surface>,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn stream(
+            &self,
+            _decl: &boltffi_binding::StreamDecl<Self::Surface>,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn constant(
+            &self,
+            _decl: &boltffi_binding::ConstantDecl<Self::Surface>,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn custom_type(
+            &self,
+            _decl: &boltffi_binding::CustomTypeDecl,
+            _bridge: &Self::Bridge,
+            _context: &RenderContext<Self::Surface>,
+        ) -> Result<Emitted> {
+            Ok(Emitted::empty())
+        }
+
+        fn file_layout(&self, _bindings: &Bindings<Self::Surface>) -> FileLayout {
+            FileLayout::new()
+        }
+    }
+
+    impl sealed::HostBackend for SwiftHost {}
+
+    #[test]
+    fn target_accepts_host_with_matching_bridge_contract() {
+        let _target = super::Target::new(SwiftHost, NativeBridge);
+    }
+}

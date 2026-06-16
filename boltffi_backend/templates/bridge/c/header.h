@@ -1,0 +1,103 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    int32_t code;
+} FfiStatus;
+
+#define FFI_STATUS_OK ((FfiStatus){0})
+#define FFI_STATUS_NULL_POINTER ((FfiStatus){1})
+#define FFI_STATUS_BUFFER_TOO_SMALL ((FfiStatus){2})
+#define FFI_STATUS_INVALID_ARG ((FfiStatus){3})
+#define FFI_STATUS_CANCELLED ((FfiStatus){4})
+#define FFI_STATUS_INTERNAL_ERROR ((FfiStatus){100})
+
+typedef struct {
+    uint8_t *ptr;
+    uintptr_t len;
+    uintptr_t cap;
+    uintptr_t align;
+} FfiBuf_u8;
+
+typedef struct {
+    uint8_t *ptr;
+    uintptr_t len;
+    uintptr_t cap;
+} FfiString;
+
+typedef struct {
+    FfiString message;
+} FfiError;
+
+typedef struct {
+    const uint8_t *ptr;
+    uintptr_t len;
+} FfiSpan;
+
+typedef const void *RustFutureHandle;
+typedef int8_t StreamPollResult;
+typedef int32_t WaitResult;
+typedef void (*RustFutureContinuationCallback)(uint64_t callback_data, int8_t poll_result);
+typedef void (*StreamContinuationCallback)(uint64_t callback_data, StreamPollResult result);
+
+typedef struct {
+    uint64_t handle;
+    const void *vtable;
+} BoltFFICallbackHandle;
+
+void boltffi_free_string(FfiString string);
+void boltffi_free_buf(FfiBuf_u8 buf);
+FfiStatus boltffi_last_error_message(FfiString *out);
+void boltffi_clear_last_error(void);
+
+{%- for record in records %}
+typedef struct {
+{%- if record.fields.is_empty() %}
+    uint8_t _unused;
+{%- else %}
+{%- for field in record.fields %}
+    {{ field.declaration }};
+{%- endfor %}
+{%- endif %}
+} {{ record.name }};
+
+{%- endfor %}
+{%- for c_enum in enums %}
+typedef {{ c_enum.repr }} {{ c_enum.name }};
+{%- for variant in c_enum.variants %}
+#define {{ variant.name }} (({{ variant.ty }}){{ variant.value }})
+{%- endfor %}
+
+{%- endfor %}
+{%- for vtable in callback_vtables %}
+typedef struct {
+{%- if vtable.fields.is_empty() %}
+    uint8_t _unused;
+{%- else %}
+{%- for field in vtable.fields %}
+    {{ field.declaration }};
+{%- endfor %}
+{%- endif %}
+} {{ vtable.name }};
+
+{%- endfor %}
+{%- for function in callback_functions %}
+{{ function.declaration }};
+{%- endfor %}
+{%- if callback_functions.len() > 0 %}
+
+{%- endif %}
+{%- for function in functions %}
+{{ function.declaration }};
+{%- endfor %}
+
+#ifdef __cplusplus
+}
+#endif
