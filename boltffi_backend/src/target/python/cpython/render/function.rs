@@ -1,5 +1,7 @@
 use askama::Template as AskamaTemplate;
-use boltffi_binding::{ErrorDecl, ExecutionDecl, FunctionDecl, Native};
+use boltffi_binding::{
+    ErrorDecl, ExecutionDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol,
+};
 
 use crate::{
     bridge::python_cext::{ExtensionMethod, MethodFlags, PythonCExtBridgeContract},
@@ -37,53 +39,63 @@ impl Wrapper {
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        if matches!(
-            declaration.callable().execution(),
-            ExecutionDecl::Asynchronous(_)
-        ) {
+        Self::from_export(
+            Name::new(declaration.name()).function(),
+            declaration.symbol(),
+            declaration.callable(),
+            Vec::new(),
+            bridge,
+            context,
+        )
+    }
+
+    pub fn from_export(
+        python_name: String,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        receiver_args: Vec<argument::Conversion>,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        if matches!(callable.execution(), ExecutionDecl::Asynchronous(_)) {
             return Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "async function",
             });
         }
-        if !matches!(declaration.callable().error(), ErrorDecl::None(_)) {
+        if !matches!(callable.error(), ErrorDecl::None(_)) {
             return Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "fallible function",
             });
         }
-        let loaded =
-            bridge
-                .loaded_function(declaration.symbol())
-                .ok_or(Error::UnsupportedTarget {
-                    target: "python",
-                    shape: "function without C bridge symbol",
-                })?;
-        let python_name = Name::new(declaration.name()).function();
-        let wrapper = format!(
-            "boltffi_python_callable_wrapper_{}",
-            declaration.symbol().name().as_str()
-        );
+        let loaded = bridge
+            .loaded_function(symbol)
+            .ok_or(Error::UnsupportedTarget {
+                target: "python",
+                shape: "function without C bridge symbol",
+            })?;
+        let wrapper = format!("boltffi_python_callable_wrapper_{}", symbol.name().as_str());
         let method =
             ExtensionMethod::new(python_name.clone(), wrapper.clone(), MethodFlags::FastCall)?;
-        let params = declaration
-            .callable()
+        let value_args = callable
             .params()
             .iter()
             .enumerate()
-            .map(|(index, parameter)| {
+            .map(|(offset, parameter)| {
+                let index = receiver_args.len() + offset;
                 argument::Conversion::from_parameter(index, parameter, bridge, context)
             })
             .collect::<Result<Vec<_>>>()?;
+        let params = receiver_args
+            .into_iter()
+            .chain(value_args)
+            .collect::<Vec<_>>();
         let call_args = params
             .iter()
             .flat_map(argument::Conversion::call_args)
             .collect();
-        let returns = result::Conversion::from_plan(
-            declaration.callable().returns().plan(),
-            bridge,
-            context,
-        )?;
+        let returns = result::Conversion::from_plan(callable.returns().plan(), bridge, context)?;
         Ok(Self {
             python_name,
             wrapper,

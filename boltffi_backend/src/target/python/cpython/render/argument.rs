@@ -1,13 +1,13 @@
 use boltffi_binding::{
-    EnumId, IncomingParam, IntoRust, Native, ParamDecl, ParamPlan, Receive, RecordId, TypeRef,
-    native,
+    EnumId, HandlePresence, HandleTarget, IncomingParam, IntoRust, Native, ParamDecl, ParamPlan,
+    Receive, RecordId, TypeRef, native,
 };
 
 use crate::{
     bridge::{c::identifier::Identifier, python_cext::PythonCExtBridgeContract},
     core::{Error, RenderContext, Result},
     target::python::{
-        cpython::render::{enumeration, primitive, record},
+        cpython::render::{enumeration, handle, primitive, record},
         name_style::Name,
     },
 };
@@ -51,6 +51,12 @@ impl Conversion {
                 receive,
                 ..
             }) => Self::encoded(index, parameter, *receive, Encoded::Bytes),
+            IncomingParam::Value(ParamPlan::Handle {
+                target: HandleTarget::Class(_),
+                carrier,
+                presence: HandlePresence::Required,
+                receive: Receive::ByValue,
+            }) => Self::from_handle(index, parameter, *carrier),
             IncomingParam::Closure(_) => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "closure parameter",
@@ -80,6 +86,10 @@ impl Conversion {
 
     pub fn primitive(&self) -> Option<primitive::Runtime> {
         self.primitive
+    }
+
+    pub fn class_receiver(carrier: native::HandleCarrier) -> Result<Self> {
+        Self::handle_with_name(0, "receiver", carrier)
     }
 
     pub fn call_args(&self) -> Vec<String> {
@@ -194,6 +204,33 @@ impl Conversion {
                 parser: symbols.parser().to_owned(),
             }),
             primitive: None,
+        })
+    }
+
+    fn from_handle(
+        index: usize,
+        parameter: &ParamDecl<Native, IntoRust>,
+        carrier: native::HandleCarrier,
+    ) -> Result<Self> {
+        let name = Identifier::escape(Name::new(parameter.name()).function())?.to_string();
+        Self::handle_with_name(index, name, carrier)
+    }
+
+    fn handle_with_name(
+        index: usize,
+        name: impl Into<String>,
+        carrier: native::HandleCarrier,
+    ) -> Result<Self> {
+        let name = name.into();
+        let carrier = handle::Carrier::new(carrier)?;
+        Ok(Self {
+            index,
+            name,
+            kind: Kind::Direct(Direct {
+                c_type: carrier.c_type()?.to_owned(),
+                parser: carrier.parser()?.to_owned(),
+            }),
+            primitive: Some(carrier.primitive()),
         })
     }
 

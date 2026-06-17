@@ -1,9 +1,11 @@
-use boltffi_binding::{Native, OutOfRust, ReturnPlan, TypeRef, native};
+use boltffi_binding::{
+    HandlePresence, HandleTarget, Native, OutOfRust, ReturnPlan, TypeRef, native,
+};
 
 use crate::{
     bridge::python_cext::PythonCExtBridgeContract,
     core::{Error, RenderContext, Result},
-    target::python::cpython::render::{enumeration, primitive, record},
+    target::python::cpython::render::{enumeration, handle, primitive, record},
 };
 
 pub struct Conversion {
@@ -67,6 +69,19 @@ impl Conversion {
                 shape: native::BufferShape::Buffer,
                 ..
             } => Ok(Self::from_owned_buffer(OwnedBuffer::Bytes)),
+            ReturnPlan::HandleViaReturnSlot {
+                target: HandleTarget::Class(_),
+                carrier,
+                presence: HandlePresence::Required,
+            } => {
+                let carrier = handle::Carrier::new(*carrier)?;
+                Ok(Self {
+                    void: false,
+                    converter: carrier.boxer()?.to_owned(),
+                    primitive: Some(carrier.primitive()),
+                    owned_buffer: None,
+                })
+            }
             ReturnPlan::DirectViaReturnSlot { .. }
             | ReturnPlan::EncodedViaReturnSlot { .. }
             | ReturnPlan::HandleViaReturnSlot { .. }

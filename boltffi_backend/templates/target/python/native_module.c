@@ -522,11 +522,14 @@ static PyObject *{{ primitive.boxer }}(double value) {
 }
 {% endif %}
 {% endfor %}
-{% for record in records %}
+{% for record in direct_records %}
 {{ record }}
 {% endfor %}
 {% for enumeration in enums %}
 {{ enumeration }}
+{% endfor %}
+{% for class in classes %}
+{{ class }}
 {% endfor %}
 static void boltffi_python_release_host_state(void) {
 {%- for cleanup in cleanup %}

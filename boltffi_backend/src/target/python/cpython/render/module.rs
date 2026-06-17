@@ -8,7 +8,9 @@ use crate::{
     core::{
         Emitted, Error, FileLayout, GeneratedOutput, RenderContext, RenderedDeclaration, Result,
     },
-    target::python::cpython::render::{enumeration, function, method, primitive, record, result},
+    target::python::cpython::render::{
+        class, enumeration, function, method, primitive, record, result,
+    },
 };
 
 #[derive(AskamaTemplate)]
@@ -20,8 +22,9 @@ struct NativeModuleTemplate {
     free_function: String,
     init_function: String,
     support: ModuleSupport,
-    records: Vec<String>,
+    direct_records: Vec<String>,
     enums: Vec<String>,
+    classes: Vec<String>,
     functions: Vec<String>,
     methods: Vec<method::Entry>,
     cleanup: Vec<String>,
@@ -48,22 +51,25 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
 
     pub fn render(self) -> Result<GeneratedOutput> {
         let bridge = self.bridge;
-        let records = self.records()?;
+        let direct_records = self.direct_records()?;
         let enums = self.enums()?;
+        let classes = self.classes()?;
         let functions = self.functions()?;
         let methods = self
             .bridge
             .methods()
             .iter()
-            .chain(records.iter().map(|record| record.wrapper.method()))
+            .chain(direct_records.iter().map(|record| record.wrapper.method()))
             .chain(enums.iter().map(|enumeration| enumeration.wrapper.method()))
+            .chain(classes.iter().flat_map(|class| class.wrapper.methods()))
             .chain(functions.iter().map(|function| function.wrapper.method()))
             .map(method::Entry::from_method)
             .collect();
         let support = ModuleSupport::new(
             bridge,
-            records.iter().map(|record| &record.wrapper),
+            direct_records.iter().map(|record| &record.wrapper),
             enums.iter().map(|enumeration| &enumeration.wrapper),
+            classes.iter().map(|class| &class.wrapper),
             functions.iter().map(|function| &function.wrapper),
         )?;
         let source = NativeModuleTemplate {
@@ -73,17 +79,21 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
             free_function: bridge.symbols().free_function().to_owned(),
             init_function: bridge.symbols().init_function().to_owned(),
             support,
-            records: records.iter().map(|record| record.source.clone()).collect(),
+            direct_records: direct_records
+                .iter()
+                .map(|record| record.source.clone())
+                .collect(),
             enums: enums
                 .iter()
                 .map(|enumeration| enumeration.source.clone())
                 .collect(),
+            classes: classes.iter().map(|class| class.source.clone()).collect(),
             functions: functions
                 .into_iter()
                 .map(|function| function.source)
                 .collect(),
             methods,
-            cleanup: records
+            cleanup: direct_records
                 .iter()
                 .map(|record| record.wrapper.cleanup())
                 .chain(
@@ -97,7 +107,7 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
         FileLayout::single(bridge.source_path().clone()).assemble([Emitted::primary(source)])
     }
 
-    fn records(&self) -> Result<Vec<RenderedRecord>> {
+    fn direct_records(&self) -> Result<Vec<RenderedDirectRecord>> {
         self.declarations
             .iter()
             .filter_map(|declaration| match declaration.declaration() {
@@ -112,7 +122,7 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
             })
             .map(|(record, emitted)| {
                 let wrapper = record::Wrapper::from_declaration(record, self.bridge)?;
-                Ok(RenderedRecord {
+                Ok(RenderedDirectRecord {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
                 })
@@ -166,6 +176,30 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
             })
             .collect()
     }
+
+    fn classes(&self) -> Result<Vec<RenderedClass>> {
+        self.declarations
+            .iter()
+            .filter_map(|declaration| match declaration.declaration() {
+                DeclarationRef::Class(class) => Some((class, declaration.emitted())),
+                DeclarationRef::Record(_)
+                | DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|(declaration, emitted)| {
+                let wrapper =
+                    class::Wrapper::from_declaration(declaration, self.bridge, self.context)?;
+                Ok(RenderedClass {
+                    wrapper,
+                    source: emitted.primary_chunk().as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
 }
 
 struct RenderedFunction {
@@ -173,13 +207,18 @@ struct RenderedFunction {
     source: String,
 }
 
-struct RenderedRecord {
+struct RenderedDirectRecord {
     wrapper: record::Wrapper,
     source: String,
 }
 
 struct RenderedEnum {
     wrapper: enumeration::Wrapper,
+    source: String,
+}
+
+struct RenderedClass {
+    wrapper: class::Wrapper,
     source: String,
 }
 
@@ -195,18 +234,21 @@ struct ModuleSupport {
 }
 
 impl ModuleSupport {
-    fn new<'record, 'enumeration, 'function>(
+    fn new<'record, 'enumeration, 'class, 'function>(
         bridge: &PythonCExtBridgeContract,
         records: impl Iterator<Item = &'record record::Wrapper>,
         enums: impl Iterator<Item = &'enumeration enumeration::Wrapper>,
+        classes: impl Iterator<Item = &'class class::Wrapper>,
         functions: impl Iterator<Item = &'function function::Wrapper>,
     ) -> Result<Self> {
         let records = records.collect::<Vec<_>>();
         let enums = enums.collect::<Vec<_>>();
+        let classes = classes.collect::<Vec<_>>();
         let functions = functions.collect::<Vec<_>>();
         let primitives = functions
             .iter()
             .flat_map(|function| function.primitives())
+            .chain(classes.iter().flat_map(|class| class.primitives()))
             .chain(records.iter().flat_map(|record| record.primitives()))
             .chain(enums.iter().map(|enumeration| enumeration.primitive()))
             .collect::<BTreeSet<_>>()
@@ -216,16 +258,21 @@ impl ModuleSupport {
         let owned_buffers = functions
             .iter()
             .filter_map(|function| function.owned_buffer())
+            .chain(classes.iter().flat_map(|class| class.owned_buffers()))
             .collect::<BTreeSet<_>>();
+        let string_arguments = functions
+            .iter()
+            .any(|function| function.has_string_argument())
+            || classes.iter().any(|class| class.has_string_argument());
+        let bytes_arguments = functions
+            .iter()
+            .any(|function| function.has_bytes_argument())
+            || classes.iter().any(|class| class.has_bytes_argument());
         Ok(Self {
             primitives,
             free_buffer: Self::free_buffer_storage(bridge)?,
-            string_arguments: functions
-                .iter()
-                .any(|function| function.has_string_argument()),
-            bytes_arguments: functions
-                .iter()
-                .any(|function| function.has_bytes_argument()),
+            string_arguments,
+            bytes_arguments,
             string_returns: owned_buffers.contains(&result::OwnedBuffer::String),
             bytes_returns: owned_buffers.contains(&result::OwnedBuffer::Bytes),
             direct_records: !records.is_empty(),

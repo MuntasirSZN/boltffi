@@ -2,16 +2,17 @@ use std::path::PathBuf;
 
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    Bindings, CStyleEnumDecl, DeclarationRef, DirectFieldDecl, DirectRecordDecl, EnumDecl, EnumId,
-    ErrorDecl, FieldKey, FunctionDecl, IncomingParam, IntoRust, Native, OutOfRust, ParamDecl,
-    ParamPlan, Primitive, RecordDecl, RecordId, ReturnPlan, TypeRef, native,
+    Bindings, CStyleEnumDecl, ClassDecl, ClassId, DeclarationRef, DirectFieldDecl,
+    DirectRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedMethodDecl, FieldKey, FunctionDecl,
+    HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native, NativeSymbol,
+    OutOfRust, ParamDecl, ParamPlan, Primitive, RecordDecl, RecordId, ReturnPlan, TypeRef, native,
 };
 
 use crate::{
     bridge::python_cext::PythonCExtBridgeContract,
     core::{Error, FilePath, GeneratedFile, GeneratedOutput, Result},
     target::python::{
-        cpython::render::{enumeration, record},
+        cpython::render::{class, enumeration, record},
         name_style::Name,
     },
 };
@@ -23,16 +24,18 @@ struct InitTemplate {
     package_name_literal: String,
     package_version_literal: String,
     library_name: String,
-    records: Vec<RecordClass>,
+    direct_records: Vec<DirectRecordClass>,
     enums: Vec<EnumClass>,
+    classes: Vec<Class>,
     functions: Vec<String>,
 }
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/python/package.pyi", escape = "none")]
 struct StubTemplate {
-    records: Vec<RecordClass>,
+    direct_records: Vec<DirectRecordClass>,
     enums: Vec<EnumClass>,
+    classes: Vec<Class>,
     functions: Vec<FunctionStub>,
 }
 
@@ -67,8 +70,9 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
         let module = self.module_name();
         let package = self.package_name();
         let version = self.package_version();
-        let records = self.records()?;
+        let direct_records = self.direct_records()?;
         let enums = self.enums()?;
+        let classes = self.classes()?;
         let functions = self.functions();
         let stubs = functions
             .iter()
@@ -110,8 +114,9 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                             .map(Self::literal)
                             .unwrap_or_else(|| "None".to_owned()),
                         library_name: module.clone(),
-                        records: records.clone(),
+                        direct_records: direct_records.clone(),
                         enums: enums.clone(),
+                        classes: classes.clone(),
                         functions: names,
                     }
                     .render()?,
@@ -119,8 +124,9 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                 self.file(
                     PathBuf::from(&module).join("__init__.pyi"),
                     StubTemplate {
-                        records,
+                        direct_records,
                         enums,
+                        classes,
                         functions: stubs,
                     }
                     .render()?,
@@ -160,7 +166,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .collect()
     }
 
-    fn records(&self) -> Result<Vec<RecordClass>> {
+    fn direct_records(&self) -> Result<Vec<DirectRecordClass>> {
         self.bindings
             .decls()
             .iter()
@@ -175,7 +181,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                 | DeclarationRef::CustomType(_) => None,
             })
             .map(|record| match record {
-                RecordDecl::Direct(record) => RecordClass::from_direct(record, self.bridge),
+                RecordDecl::Direct(record) => DirectRecordClass::from_direct(record, self.bridge),
                 RecordDecl::Encoded(_) => Err(Error::UnsupportedTarget {
                     target: "python",
                     shape: "encoded record package",
@@ -213,6 +219,24 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                     shape: "unknown enum package",
                 }),
             })
+            .collect()
+    }
+
+    fn classes(&self) -> Result<Vec<Class>> {
+        self.bindings
+            .decls()
+            .iter()
+            .filter_map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Class(class) => Some(class),
+                DeclarationRef::Record(_)
+                | DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|class| Class::from_declaration(class, self))
             .collect()
     }
 
@@ -266,6 +290,28 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             })
     }
 
+    fn class_name(&self, class_id: &ClassId) -> Result<String> {
+        self.bindings
+            .decls()
+            .iter()
+            .find_map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Class(class) if class.id() == *class_id => Some(class),
+                DeclarationRef::Record(_)
+                | DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|class| Name::new(class.name()).class())
+            .ok_or(Error::UnsupportedTarget {
+                target: "python",
+                shape: "class type hint without declaration",
+            })
+    }
+
     fn file(&self, path: impl Into<PathBuf>, contents: impl Into<String>) -> Result<GeneratedFile> {
         Ok(GeneratedFile::new(FilePath::new(path.into())?, contents))
     }
@@ -311,13 +357,13 @@ impl FunctionStub {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RecordClass {
+struct DirectRecordClass {
     class_name: String,
     register_method: String,
     fields: Vec<RecordField>,
 }
 
-impl RecordClass {
+impl DirectRecordClass {
     fn from_direct(
         record: &DirectRecordDecl<Native>,
         bridge: &PythonCExtBridgeContract,
@@ -417,9 +463,153 @@ impl EnumVariant {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct Class {
+    class_name: String,
+    release_method: String,
+    init: Vec<ClassCallable>,
+    constructors: Vec<ClassCallable>,
+    static_methods: Vec<ClassCallable>,
+    instance_methods: Vec<ClassCallable>,
+}
+
+impl Class {
+    fn from_declaration(
+        declaration: &ClassDecl<Native>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        let symbols = class::Symbols::new(declaration);
+        let class_name = symbols.class_name().to_owned();
+        let constructors = declaration
+            .initializers()
+            .iter()
+            .map(|initializer| ClassCallable::from_initializer(initializer, &symbols, package))
+            .collect::<Result<Vec<_>>>()?;
+        let init = constructors
+            .iter()
+            .filter(|constructor| constructor.python_name == "new")
+            .cloned()
+            .collect::<Vec<_>>();
+        let constructors = constructors
+            .into_iter()
+            .filter(|constructor| constructor.python_name != "new")
+            .collect::<Vec<_>>();
+        let methods = declaration
+            .methods()
+            .iter()
+            .map(|method| ClassCallable::from_method(method, &symbols, package))
+            .collect::<Result<Vec<_>>>()?;
+        let (instance_methods, static_methods): (Vec<_>, Vec<_>) =
+            methods.into_iter().partition(|method| method.receiver);
+        Ok(Self {
+            class_name,
+            release_method: symbols.release(),
+            init,
+            constructors,
+            static_methods,
+            instance_methods,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ClassCallable {
+    receiver: bool,
+    python_name: String,
+    native_name: String,
+    parameters: Vec<ParameterStub>,
+    arguments: String,
+    return_annotation: String,
+    returns_value: bool,
+    return_class: String,
+    wraps_return_handle: bool,
+}
+
+impl ClassCallable {
+    fn from_initializer(
+        initializer: &InitializerDecl<Native>,
+        symbols: &class::Symbols,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        let parameters = initializer
+            .callable()
+            .params()
+            .iter()
+            .map(|parameter| ParameterStub::from_declaration(parameter, package))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            receiver: false,
+            python_name: Name::new(initializer.name()).function(),
+            native_name: symbols.initializer(initializer.name()),
+            arguments: Self::arguments(None, &parameters),
+            return_annotation: symbols.class_name().to_owned(),
+            parameters,
+            returns_value: true,
+            return_class: symbols.class_name().to_owned(),
+            wraps_return_handle: true,
+        })
+    }
+
+    fn from_method(
+        method: &ExportedMethodDecl<Native, NativeSymbol>,
+        symbols: &class::Symbols,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        let receiver = method.callable().receiver().is_some();
+        let parameters = method
+            .callable()
+            .params()
+            .iter()
+            .map(|parameter| ParameterStub::from_declaration(parameter, package))
+            .collect::<Result<Vec<_>>>()?;
+        let return_class = match method.callable().returns().plan() {
+            ReturnPlan::HandleViaReturnSlot {
+                target: HandleTarget::Class(class_id),
+                presence: HandlePresence::Required,
+                ..
+            } => Some(package.class_name(class_id)?),
+            ReturnPlan::HandleViaReturnSlot { .. } => {
+                return Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unsupported class method handle return",
+                });
+            }
+            _ => None,
+        };
+        let return_annotation =
+            PythonTypeHint::from_return(method.callable().returns().plan(), package)?.into_string();
+        let wraps_return_handle = return_class.is_some();
+        Ok(Self {
+            receiver,
+            python_name: Name::new(method.name()).function(),
+            native_name: symbols.method(method.name()),
+            arguments: Self::arguments(receiver.then_some("self._handle"), &parameters),
+            parameters,
+            return_annotation,
+            returns_value: !matches!(method.callable().returns().plan(), ReturnPlan::Void),
+            return_class: return_class.unwrap_or_default(),
+            wraps_return_handle,
+        })
+    }
+
+    fn arguments(receiver: Option<&str>, parameters: &[ParameterStub]) -> String {
+        receiver
+            .into_iter()
+            .map(str::to_owned)
+            .chain(
+                parameters
+                    .iter()
+                    .map(|parameter| parameter.argument.clone()),
+            )
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ParameterStub {
     name: String,
     annotation: String,
+    argument: String,
 }
 
 impl ParameterStub {
@@ -436,7 +626,23 @@ impl ParameterStub {
         Ok(Self {
             name: Name::new(parameter.name()).function(),
             annotation: PythonTypeHint::from_parameter(plan, package)?.into_string(),
+            argument: Self::argument(plan, parameter.name()),
         })
+    }
+
+    fn argument(
+        plan: &ParamPlan<Native, IntoRust>,
+        name: &boltffi_binding::CanonicalName,
+    ) -> String {
+        let name = Name::new(name).function();
+        match plan {
+            ParamPlan::Handle {
+                target: HandleTarget::Class(_),
+                presence: HandlePresence::Required,
+                ..
+            } => format!("{name}._handle"),
+            _ => name,
+        }
     }
 }
 
@@ -465,6 +671,13 @@ impl PythonTypeHint {
                 ..
             } => Ok(Self {
                 annotation: package.enum_name(*enumeration)?,
+            }),
+            ParamPlan::Handle {
+                target: HandleTarget::Class(class_id),
+                presence: HandlePresence::Required,
+                ..
+            } => Ok(Self {
+                annotation: package.class_name(class_id)?,
             }),
             ParamPlan::Encoded {
                 ty: TypeRef::String,
@@ -509,6 +722,13 @@ impl PythonTypeHint {
                 ty: TypeRef::Enum(enumeration),
             } => Ok(Self {
                 annotation: package.enum_name(*enumeration)?,
+            }),
+            ReturnPlan::HandleViaReturnSlot {
+                target: HandleTarget::Class(class_id),
+                presence: HandlePresence::Required,
+                ..
+            } => Ok(Self {
+                annotation: package.class_name(class_id)?,
             }),
             ReturnPlan::EncodedViaReturnSlot {
                 ty: TypeRef::String,

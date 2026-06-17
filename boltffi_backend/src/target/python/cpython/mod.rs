@@ -39,10 +39,7 @@ impl host::HostBackend for PythonCExtHost {
             .stable(BindingCapability::Records)
             .stable(BindingCapability::Enums)
             .stable(BindingCapability::Functions)
-            .unsupported(
-                BindingCapability::Classes,
-                "Python classes are not migrated yet",
-            )
+            .stable(BindingCapability::Classes)
             .unsupported(
                 BindingCapability::Callbacks,
                 "Python callbacks are not migrated yet",
@@ -94,14 +91,11 @@ impl host::HostBackend for PythonCExtHost {
 
     fn class(
         &self,
-        _decl: &ClassDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        decl: &ClassDecl<Self::Surface>,
+        bridge: &Self::Bridge,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Error::UnsupportedTarget {
-            target: self.name(),
-            shape: "class",
-        })
+        render::ClassWrapper::from_declaration(decl, bridge, context)?.render()
     }
 
     fn callback(
@@ -390,6 +384,107 @@ mod tests {
         assert!(init.contains("_native._register_status(Status)"));
         assert!(stub.contains("class Status(IntEnum):"));
         assert!(stub.contains("def echo_status(value: Status) -> Status: ..."));
+    }
+
+    #[test]
+    fn python_target_renders_class_package_and_native_handle_wrappers() {
+        let output = target()
+            .render(&bindings(
+                r#"
+                pub struct Marker {
+                    value: u32,
+                }
+
+                #[export(single_threaded)]
+                impl Marker {
+                    pub fn value(&self) -> u32 {
+                        self.value
+                    }
+                }
+
+                pub struct Engine {
+                    value: u32,
+                }
+
+                #[export(single_threaded)]
+                impl Engine {
+                    pub fn new(value: u32) -> Self {
+                        Self { value }
+                    }
+
+                    pub fn value(&self) -> u32 {
+                        self.value
+                    }
+
+                    pub fn reset(&mut self) {
+                        self.value = 0;
+                    }
+
+                    pub fn marker(&self) -> Marker {
+                        Marker { value: self.value }
+                    }
+
+                    pub fn make_marker(value: u32) -> Marker {
+                        Marker { value }
+                    }
+                }
+                "#,
+            ))
+            .expect("Python target should render");
+        let extension = extension(&output);
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
+
+        assert!(extension.contains(
+            "static PyObject *boltffi_python_callable_wrapper_boltffi_release_class_demo_engine"
+        ));
+        assert!(extension.contains(
+            "static PyObject *boltffi_python_callable_wrapper_boltffi_init_class_demo_engine_new"
+        ));
+        assert!(extension.contains("static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_demo_engine_value"));
+        assert!(extension.contains("static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_demo_engine_reset"));
+        assert!(extension.contains("static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_demo_engine_marker"));
+        assert!(extension.contains("static PyObject *boltffi_python_callable_wrapper_boltffi_method_class_demo_engine_make_marker"));
+        assert!(extension.contains("boltffi_python_parse_u64(args[0], &receiver)"));
+        assert!(
+            extension.contains("boltffi_python_boltffi_method_class_demo_engine_value(receiver)")
+        );
+        assert!(
+            extension.contains("boltffi_python_boltffi_method_class_demo_engine_reset(receiver)")
+        );
+        assert!(extension.contains(
+            "{\"_boltffi_engine_release\", (PyCFunction)boltffi_python_callable_wrapper_boltffi_release_class_demo_engine, METH_FASTCALL, NULL}"
+        ));
+        assert!(extension.contains(
+            "{\"_boltffi_engine_new\", (PyCFunction)boltffi_python_callable_wrapper_boltffi_init_class_demo_engine_new, METH_FASTCALL, NULL}"
+        ));
+        assert!(init.contains("class Engine:"));
+        assert!(init.contains("__slots__ = (\"_handle\",)"));
+        assert!(init.contains("def __init__(self, value: int) -> None:"));
+        assert!(init.contains("self._handle = _native._boltffi_engine_new(value)"));
+        assert!(init.contains("def __del__(self) -> None:"));
+        assert!(init.contains("_native._boltffi_engine_release(handle)"));
+        assert!(init.contains("def value(self) -> int:"));
+        assert!(init.contains("return _native._boltffi_engine_value(self._handle)"));
+        assert!(init.contains("def reset(self) -> None:"));
+        assert!(init.contains("_native._boltffi_engine_reset(self._handle)"));
+        assert!(init.contains("def marker(self) -> Marker:"));
+        assert!(
+            init.contains(
+                "return Marker._from_handle(_native._boltffi_engine_marker(self._handle))"
+            )
+        );
+        assert!(init.contains("def make_marker(value: int) -> Marker:"));
+        assert!(
+            init.contains("return Marker._from_handle(_native._boltffi_engine_make_marker(value))")
+        );
+        assert!(stub.contains("class Engine:"));
+        assert!(stub.contains("_handle: int"));
+        assert!(stub.contains("def __init__(self, value: int) -> None: ..."));
+        assert!(stub.contains("def value(self) -> int: ..."));
+        assert!(stub.contains("def reset(self) -> None: ..."));
+        assert!(stub.contains("def marker(self) -> Marker: ..."));
+        assert!(stub.contains("def make_marker(value: int) -> Marker: ..."));
     }
 
     #[test]
