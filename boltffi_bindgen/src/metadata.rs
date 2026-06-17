@@ -482,7 +482,7 @@ mod tests {
 
     use boltffi_ast::{PackageInfo, SourceContract};
     use boltffi_binding::{
-        BindingMetadataEnvelope, BindingMetadataSection, Native, SerializedBindings,
+        BindingMetadataEnvelope, BindingMetadataSection, Decl, Native, SerializedBindings,
         lower_with_declarations,
     };
 
@@ -523,6 +523,44 @@ mod tests {
     }
 
     #[test]
+    fn cargo_build_reads_macro_emitted_metadata_without_expanding_wrappers() {
+        if cfg!(miri) {
+            return;
+        }
+
+        let fixture = FixtureCrate::with_boltffi_macros();
+
+        let envelopes = BindingMetadataBuild::new(fixture.manifest())
+            .read()
+            .expect("cargo metadata build reads");
+
+        assert_eq!(envelopes.len(), 1);
+        let SerializedBindings::Native(bindings) = envelopes[0].bindings() else {
+            panic!("expected native metadata");
+        };
+        assert_eq!(
+            bindings.package().name().as_path_string(),
+            "metadata_fixture"
+        );
+        assert_eq!(
+            bindings
+                .decls()
+                .iter()
+                .filter(|decl| matches!(decl, Decl::Record(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            bindings
+                .decls()
+                .iter()
+                .filter(|decl| matches!(decl, Decl::Function(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn cargo_build_rejects_crate_without_metadata() {
         if cfg!(miri) {
             return;
@@ -548,6 +586,10 @@ mod tests {
     impl FixtureCrate {
         fn with_metadata(envelope: &BindingMetadataEnvelope) -> Self {
             Self::write(Source::with_metadata(envelope), Dependency::None)
+        }
+
+        fn with_boltffi_macros() -> Self {
+            Self::write(Source::with_boltffi_macros(), Dependency::Boltffi)
         }
 
         fn with_metadata_dependency(
@@ -589,6 +631,7 @@ mod tests {
     }
 
     enum Dependency<'envelope> {
+        Boltffi,
         Metadata(&'envelope BindingMetadataEnvelope),
         None,
     }
@@ -596,10 +639,15 @@ mod tests {
     impl Dependency<'_> {
         fn root_manifest(&self) -> String {
             let dependency = match self {
+                Self::Boltffi => format!(
+                    "\n[dependencies]\nboltffi = {{ path = \"{}\" }}\n",
+                    workspace_crate("boltffi").display()
+                ),
                 Self::Metadata(_) => {
                     "\n[dependencies]\nmetadata_dependency = { path = \"metadata_dependency\" }\n"
+                        .to_owned()
                 }
-                Self::None => "",
+                Self::None => String::new(),
             };
             format!(
                 "[package]\nname = \"metadata_fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n{dependency}"
@@ -633,6 +681,33 @@ mod tests {
     impl Source {
         fn with_metadata(envelope: &BindingMetadataEnvelope) -> Self {
             Self::with_metadata_and_body(envelope, "pub fn exported() -> u32 { 1 }\n")
+        }
+
+        fn with_boltffi_macros() -> Self {
+            Self {
+                code: r#"
+pub mod domain {
+    use boltffi::data;
+
+    #[data]
+    pub struct Point {
+        pub x: f64,
+    }
+}
+
+pub mod api {
+    use boltffi::export;
+
+    use crate::domain::Point;
+
+    #[export]
+    pub fn origin() -> Point {
+        Point { x: 0.0 }
+    }
+}
+"#
+                .to_owned(),
+            }
         }
 
         fn with_dependency_metadata(envelope: &BindingMetadataEnvelope) -> Self {
@@ -675,6 +750,13 @@ mod tests {
         let lowered = lower_with_declarations::<Native>(&source).expect("empty source lowers");
         BindingMetadataEnvelope::new(SerializedBindings::native(lowered.into_bindings()))
             .expect("metadata envelope")
+    }
+
+    fn workspace_crate(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join(name)
     }
 
     fn temp_root(prefix: &str) -> PathBuf {
