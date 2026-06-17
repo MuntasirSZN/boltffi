@@ -6143,7 +6143,7 @@ mod tests {
         assert!(
             rendered.contains("pub unsafe extern \"C\" fn boltffi_register_callback_demo_listener")
         );
-        assert!(rendered.contains("crate :: __boltffi_local_demo_listener_handle"));
+        assert!(rendered.contains("__boltffi_local_demo_listener_handle"));
         assert!(rendered.contains("__boltffi_receiver . replace (listener)"));
         assert_generated_crate_checks(
             "native_class_method_with_callback_param_and_return",
@@ -7094,7 +7094,7 @@ mod tests {
             "box_from_callback_handle (unsafe { __boltffi_success_out . assume_init () })"
         ));
         assert!(rendered.contains(
-            "* __boltffi_success_out = crate :: __boltffi_local_demo_listener_handle (:: std :: sync :: Arc :: from (__boltffi_success))"
+            "* __boltffi_success_out = __boltffi_local_demo_listener_handle (:: std :: sync :: Arc :: from (__boltffi_success))"
         ));
         assert!(!rendered.contains("boltffi_create_callback_demo_listener (__boltffi_success)"));
     }
@@ -7169,7 +7169,7 @@ mod tests {
                     -> ::boltffi::__private::CallbackHandle
                 {
                     let __boltffi_result: Box<dyn Listener> = make_listener();
-                    crate::__boltffi_local_demo_listener_handle(::std::sync::Arc::from(__boltffi_result))
+                    __boltffi_local_demo_listener_handle(::std::sync::Arc::from(__boltffi_result))
                 }
             }
             .to_string()
@@ -7202,7 +7202,7 @@ mod tests {
                     -> ::boltffi::__private::CallbackHandle
                 {
                     let __boltffi_result: ::std::sync::Arc<dyn Listener> = shared_listener();
-                    crate::__boltffi_local_demo_listener_handle(__boltffi_result)
+                    __boltffi_local_demo_listener_handle(__boltffi_result)
                 }
             }
             .to_string()
@@ -7236,7 +7236,7 @@ mod tests {
                         maybe_listener();
                     __boltffi_result
                         .map(|__boltffi_callback|
-                            crate::__boltffi_local_demo_listener_handle(__boltffi_callback).handle() as u32
+                            __boltffi_local_demo_listener_handle(__boltffi_callback).handle() as u32
                         )
                         .unwrap_or(0)
                 }
@@ -7271,7 +7271,7 @@ mod tests {
                     let __boltffi_result: Option<Box<dyn Listener> > = maybe_boxed_listener();
                     __boltffi_result
                         .map(|__boltffi_callback| {
-                            crate::__boltffi_local_demo_listener_handle(
+                            __boltffi_local_demo_listener_handle(
                                 ::std::sync::Arc::from(__boltffi_callback)
                             ).handle() as u32
                         })
@@ -7312,7 +7312,7 @@ mod tests {
                             if !__boltffi_return_out.is_null() {
                                 unsafe {
                                     *__boltffi_return_out =
-                                        crate::__boltffi_local_demo_listener_handle(
+                                        __boltffi_local_demo_listener_handle(
                                             ::std::sync::Arc::from(__boltffi_success)
                                         );
                                 }
