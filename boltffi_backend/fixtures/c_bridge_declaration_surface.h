@@ -70,7 +70,7 @@ typedef struct {
     void (*free)(uint64_t);
     uint64_t (*clone)(uint64_t);
     void (*notify)(uint64_t, uint32_t);
-    int64_t (*value)(uint64_t, uint32_t);
+    int64_t (*on_value)(uint64_t, uint32_t);
     void (*load)(uint64_t, uint32_t, void (*)(void *, FfiStatus, FfiBuf_u8), void *);
 } ___ListenerVTable;
 void boltffi_register_callback_demo_listener(const ___ListenerVTable *vtable);

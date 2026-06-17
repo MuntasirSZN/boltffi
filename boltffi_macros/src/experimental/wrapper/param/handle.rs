@@ -313,21 +313,21 @@ impl rust_api::CallbackObject {
     }
 
     fn value_from_handle(&self, handle: &TokenStream) -> Result<TokenStream, Error> {
-        let object = self.object();
+        let proxy = self.proxy();
         Ok(match self.form() {
             rust_api::CallbackCarrier::BoxedDyn => {
                 quote! {
-                    <#object as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
+                    <#proxy as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
                 }
             }
             rust_api::CallbackCarrier::ArcDyn => {
                 quote! {
-                    <#object as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#handle)
+                    <#proxy as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#handle)
                 }
             }
             rust_api::CallbackCarrier::ImplTrait => {
                 quote! {
-                    *<#object as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
+                    *<#proxy as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
                 }
             }
         })
