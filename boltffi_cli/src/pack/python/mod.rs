@@ -6,7 +6,7 @@ mod wheel;
 use boltffi_bindgen::target::Target;
 
 use crate::cli::{CliError, Result};
-use crate::commands::generate::run_generate_python_with_output_from_source_dir;
+use crate::commands::generate::run_generate_python_with_manifest;
 use crate::commands::pack::PackPythonOptions;
 use crate::config::Config;
 use crate::reporter::Reporter;
@@ -50,11 +50,10 @@ pub(crate) fn pack_python(
 
     if options.execution.regenerate {
         let step = reporter.step("Generating Python sources");
-        run_generate_python_with_output_from_source_dir(
+        run_generate_python_with_manifest(
             config,
             Some(plan.layout.root_directory.clone()),
-            plan.generation_source_directory()?,
-            plan.generation_crate_name(),
+            plan.cargo_context.manifest_path.clone(),
         )?;
         step.finish_success();
     }

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use boltffi_bindgen::generate::{Generation, GenerationError};
 use boltffi_bindgen::target::Target;
 
@@ -47,6 +49,27 @@ fn generate_python(config: &Config, options: &GenerateOptions) -> Result<()> {
         .clone()
         .unwrap_or_else(|| config.python_output());
 
+    write_python(config, output_directory, manifest_path)
+}
+
+pub fn run_python_generation(
+    config: &Config,
+    output: Option<PathBuf>,
+    manifest_path: PathBuf,
+) -> Result<()> {
+    if !config.is_python_enabled() {
+        return Err(CliError::CommandFailed {
+            command: "targets.python.enabled = false".to_string(),
+            status: None,
+        });
+    }
+
+    let output_directory = output.unwrap_or_else(|| config.python_output());
+
+    write_python(config, output_directory, manifest_path)
+}
+
+fn write_python(config: &Config, output_directory: PathBuf, manifest_path: PathBuf) -> Result<()> {
     Generation::new(manifest_path)
         .python_module_name(config.python_module_name())
         .write(Target::Python, &output_directory)
@@ -56,7 +79,7 @@ fn generate_python(config: &Config, options: &GenerateOptions) -> Result<()> {
 
 fn generation_error(error: GenerationError) -> CliError {
     CliError::CommandFailed {
-        command: format!("generate python --ir: {error}"),
+        command: format!("generate python: {error}"),
         status: None,
     }
 }

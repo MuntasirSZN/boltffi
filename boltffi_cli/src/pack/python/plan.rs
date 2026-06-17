@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, PathBuf};
 
 use crate::build::{CargoBuildProfile, resolve_build_profile};
 use crate::cargo::Cargo;
@@ -164,22 +164,6 @@ impl PythonPackagingPlan {
             .packaged_shared_library_path(self.host_platform, &self.cargo_context.artifact_name)
     }
 
-    pub fn generation_source_directory(&self) -> Result<&Path> {
-        self.cargo_context
-            .manifest_path
-            .parent()
-            .ok_or_else(|| CliError::CommandFailed {
-                command:
-                    "could not resolve selected Cargo package source directory for Python generation"
-                        .to_string(),
-                status: None,
-            })
-    }
-
-    pub fn generation_crate_name(&self) -> &str {
-        &self.cargo_context.artifact_name
-    }
-
     fn resolve_interpreters(
         config: &Config,
         cli_python_interpreters: &[String],
@@ -244,7 +228,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use super::{
         PythonCargoContext, PythonInterpreterSelection, PythonPackageLayout, PythonPackagingPlan,
@@ -359,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_generation_inputs_from_selected_package_manifest() {
+    fn retains_selected_package_manifest_for_python_generation() {
         let host_platform = NativeHostPlatform::current().expect("supported current host");
         let plan = PythonPackagingPlan {
             distribution_name: "demo-package".to_string(),
@@ -382,11 +366,9 @@ mod tests {
         };
 
         assert_eq!(
-            plan.generation_source_directory()
-                .expect("selected python generation source directory"),
-            Path::new("/tmp/workspace/member")
+            plan.cargo_context.manifest_path,
+            PathBuf::from("/tmp/workspace/member/Cargo.toml")
         );
-        assert_eq!(plan.generation_crate_name(), "workspace_member_ffi");
     }
 
     #[test]

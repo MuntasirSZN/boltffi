@@ -9,8 +9,8 @@ use boltffi_bindgen::CHeaderLowerer;
 use generator::{GenerateRequest, ScanPointerWidth, run_generator};
 use header::HeaderGenerator;
 use languages::{
-    CSharpGenerator, DartGenerator, JavaGenerator, KMPGenerator, KotlinGenerator, PythonGenerator,
-    SwiftGenerator, TypeScriptGenerator,
+    CSharpGenerator, DartGenerator, JavaGenerator, KMPGenerator, KotlinGenerator, SwiftGenerator,
+    TypeScriptGenerator,
 };
 
 use boltffi_bindgen::target::Target;
@@ -44,23 +44,37 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
         return ir::run_ir_generation(config, &options);
     }
 
-    let request = GenerateRequest::for_current_crate(config, options.output);
+    let legacy_request = || GenerateRequest::for_current_crate(config, options.output.clone());
 
-    match options.target {
-        GenerateTarget::Swift => run_generator::<SwiftGenerator>(&request, options.experimental),
-        GenerateTarget::Kotlin => run_generator::<KotlinGenerator>(&request, options.experimental),
+    match &options.target {
+        GenerateTarget::Swift => {
+            run_generator::<SwiftGenerator>(&legacy_request(), options.experimental)
+        }
+        GenerateTarget::Kotlin => {
+            run_generator::<KotlinGenerator>(&legacy_request(), options.experimental)
+        }
         GenerateTarget::KotlinMultiplatform => {
-            run_generator::<KMPGenerator>(&request, options.experimental)
+            run_generator::<KMPGenerator>(&legacy_request(), options.experimental)
         }
-        GenerateTarget::Java => run_generator::<JavaGenerator>(&request, options.experimental),
-        GenerateTarget::Header => run_generator::<HeaderGenerator>(&request, options.experimental),
+        GenerateTarget::Java => {
+            run_generator::<JavaGenerator>(&legacy_request(), options.experimental)
+        }
+        GenerateTarget::Header => {
+            run_generator::<HeaderGenerator>(&legacy_request(), options.experimental)
+        }
         GenerateTarget::Typescript => {
-            run_generator::<TypeScriptGenerator>(&request, options.experimental)
+            run_generator::<TypeScriptGenerator>(&legacy_request(), options.experimental)
         }
-        GenerateTarget::Dart => run_generator::<DartGenerator>(&request, options.experimental),
-        GenerateTarget::Python => run_generator::<PythonGenerator>(&request, options.experimental),
-        GenerateTarget::CSharp => run_generator::<CSharpGenerator>(&request, options.experimental),
+        GenerateTarget::Dart => {
+            run_generator::<DartGenerator>(&legacy_request(), options.experimental)
+        }
+        GenerateTarget::Python => ir::run_ir_generation(config, &options),
+        GenerateTarget::CSharp => {
+            run_generator::<CSharpGenerator>(&legacy_request(), options.experimental)
+        }
         GenerateTarget::All => {
+            let request = legacy_request();
+
             if config.should_process(Target::Swift, options.experimental) {
                 run_generator::<SwiftGenerator>(&request, options.experimental)?;
             }
@@ -86,7 +100,16 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::Python, options.experimental) {
-                run_generator::<PythonGenerator>(&request, options.experimental)?;
+                ir::run_ir_generation(
+                    config,
+                    &GenerateOptions {
+                        target: GenerateTarget::Python,
+                        output: options.output.clone(),
+                        experimental: options.experimental,
+                        ir: true,
+                        cargo_args: options.cargo_args.clone(),
+                    },
+                )?;
             }
 
             if config.should_process(Target::CSharp, options.experimental) {
@@ -149,13 +172,12 @@ pub fn run_generate_header_with_output_from_source_dir(
     request.write_output(&output_path, header_source)
 }
 
-pub fn run_generate_python_with_output_from_source_dir(
+pub fn run_generate_python_with_manifest(
     config: &Config,
     output: Option<PathBuf>,
-    source_directory: &Path,
-    crate_name: &str,
+    manifest_path: PathBuf,
 ) -> Result<()> {
-    PythonGenerator::generate_from_source_directory(config, output, source_directory, crate_name)
+    ir::run_python_generation(config, output, manifest_path)
 }
 
 pub fn run_generate_csharp_with_output_from_source_dir(
@@ -173,10 +195,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use boltffi_bindgen::render::python::PythonRuntimeVersion;
-
     use super::generator::{GenerateRequest, LanguageGenerator, SourceCrate};
-    use super::languages::{KMPGenerator, KotlinGenerator, PythonGenerator};
+    use super::languages::{KMPGenerator, KotlinGenerator};
     use crate::config::Config;
 
     fn parse_config(input: &str) -> Config {
@@ -271,66 +291,6 @@ package = "com.boltffi.demo"
         assert!(header.contains("BoltFFICallbackHandle"));
         assert!(jni_glue.contains("#include <demo.h>"));
         assert!(kotlin.contains("package com.boltffi.demo"));
-
-        fs::remove_dir_all(output_directory).expect("cleanup generated output");
-    }
-
-    #[test]
-    fn python_generate_writes_python_package_sources() {
-        let output_directory = unique_temp_dir("boltffi-python-generate-test");
-        let config = parse_config(
-            r#"
-[package]
-name = "demo"
-version = "0.1.0"
-
-[targets.python]
-enabled = true
-"#,
-        );
-
-        PythonGenerator::generate_from_source_directory(
-            &config,
-            Some(output_directory.clone()),
-            &demo_source_directory(),
-            "demo",
-        )
-        .expect("python generate should succeed");
-
-        let generated_init_path = output_directory.join("demo/__init__.py");
-        let generated_stub_path = output_directory.join("demo/__init__.pyi");
-        let generated_native_path = output_directory.join("demo/_native.c");
-        let generated_pyproject_path = output_directory.join("pyproject.toml");
-        let generated_setup_path = output_directory.join("setup.py");
-        let generated_init = fs::read_to_string(&generated_init_path)
-            .expect("generated python init should be readable");
-        let generated_stub = fs::read_to_string(&generated_stub_path)
-            .expect("generated python typing stub should be readable");
-        let generated_native = fs::read_to_string(&generated_native_path)
-            .expect("generated native bridge should be readable");
-        let generated_pyproject = fs::read_to_string(&generated_pyproject_path)
-            .expect("generated pyproject should be readable");
-        let generated_setup = fs::read_to_string(&generated_setup_path)
-            .expect("generated setup.py should be readable");
-        let minimum_python_version_requirement =
-            PythonRuntimeVersion::minimum_supported().package_requirement();
-
-        assert!(generated_init.contains("from pathlib import Path"));
-        assert!(generated_init.contains("from . import _native"));
-        assert!(generated_init.contains("_native._initialize_loader"));
-        assert!(generated_init.contains("__all__ = ["));
-        assert!(generated_init.contains("PACKAGE_NAME = \"demo\""));
-        assert!(generated_stub.contains("MODULE_NAME: str"));
-        assert!(generated_stub.contains("def echo_i32"));
-        assert!(generated_pyproject.contains("setuptools.build_meta"));
-        assert!(generated_setup.contains("Extension("));
-        assert!(generated_setup.contains("\"demo._native\""));
-        assert!(generated_setup.contains(&format!(
-            "python_requires={minimum_python_version_requirement:?}"
-        )));
-        assert!(generated_native.contains("boltffi_python_symbol_echo_i32_fn"));
-        assert!(generated_native.contains("boltffi_python_initialize_loader"));
-        assert!(generated_native.contains("PyInit__native"));
 
         fs::remove_dir_all(output_directory).expect("cleanup generated output");
     }
