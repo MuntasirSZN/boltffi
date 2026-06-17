@@ -459,7 +459,8 @@ mod tests {
         assert!(extension.contains(
             "result = boltffi_python_decode_owned_vec_point(boltffi_python_boltffi_function_demo_echo_points((const ___Point *)values_ptr, values_len));"
         ));
-        assert!(stub.contains("def echo_points(values: list[Point]) -> list[Point]: ..."));
+        assert!(stub.contains("from collections.abc import Sequence"));
+        assert!(stub.contains("def echo_points(values: Sequence[Point]) -> list[Point]: ..."));
     }
 
     #[test]
@@ -486,7 +487,8 @@ mod tests {
         assert!(extension.contains(
             "result = boltffi_python_decode_owned_vec_i32(boltffi_python_boltffi_function_demo_echo_numbers((const int32_t *)values_ptr, values_len));"
         ));
-        assert!(stub.contains("def echo_numbers(values: list[int]) -> list[int]: ..."));
+        assert!(stub.contains("from collections.abc import Sequence"));
+        assert!(stub.contains("def echo_numbers(values: Sequence[int]) -> list[int]: ..."));
     }
 
     #[test]
@@ -657,7 +659,8 @@ mod tests {
         assert!(init.contains(
             "_boltffi_read_wire(_native.echo_statuses(_boltffi_wire_sequence(values, lambda value: _boltffi_wire_i32(int(value)))), lambda reader: reader.sequence(lambda: Status(reader.i32())))"
         ));
-        assert!(stub.contains("def echo_statuses(values: list[Status]) -> list[Status]: ..."));
+        assert!(stub.contains("from collections.abc import Sequence"));
+        assert!(stub.contains("def echo_statuses(values: Sequence[Status]) -> list[Status]: ..."));
     }
 
     #[test]

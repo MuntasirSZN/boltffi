@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 {% endif %}
+{% if uses_sequence_annotations %}
+from collections.abc import Sequence
+
+{% endif %}
 import sys
 from pathlib import Path
 

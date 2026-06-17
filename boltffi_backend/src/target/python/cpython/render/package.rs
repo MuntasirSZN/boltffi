@@ -27,6 +27,7 @@ struct InitTemplate {
     package_name_literal: String,
     package_version_literal: String,
     library_name: String,
+    uses_sequence_annotations: bool,
     uses_wire_helpers: bool,
     has_data_enums: bool,
     records: Vec<RecordClass>,
@@ -39,6 +40,7 @@ struct InitTemplate {
 #[derive(AskamaTemplate)]
 #[template(path = "target/python/package.pyi", escape = "none")]
 struct StubTemplate {
+    uses_sequence_annotations: bool,
     has_data_enums: bool,
     records: Vec<RecordClass>,
     enums: Vec<EnumClass>,
@@ -93,6 +95,10 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .iter()
             .map(|function| FunctionStub::from_declaration(function, &self))
             .collect::<Result<Vec<_>>>()?;
+        let uses_sequence_annotations = records.iter().any(RecordClass::uses_sequence_annotations)
+            || enums.iter().any(EnumClass::uses_sequence_annotations)
+            || classes.iter().any(Class::uses_sequence_annotations)
+            || stubs.iter().any(FunctionStub::uses_sequence_annotations);
         let uses_wire_helpers = records.iter().any(RecordClass::has_wire)
             || records.iter().any(RecordClass::uses_wire_helpers)
             || enums.iter().any(EnumClass::has_wire)
@@ -132,6 +138,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                             .map(Self::literal)
                             .unwrap_or_else(|| "None".to_owned()),
                         library_name: package.clone(),
+                        uses_sequence_annotations,
                         uses_wire_helpers,
                         has_data_enums: enums.iter().any(EnumClass::has_wire),
                         records: records.clone(),
@@ -145,6 +152,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                 self.file(
                     PathBuf::from(&module).join("__init__.pyi"),
                     StubTemplate {
+                        uses_sequence_annotations,
                         has_data_enums: enums.iter().any(EnumClass::has_wire),
                         records,
                         enums,
@@ -506,6 +514,12 @@ impl FunctionStub {
     fn uses_wire_helpers(&self) -> bool {
         self.uses_wire_helpers
     }
+
+    fn uses_sequence_annotations(&self) -> bool {
+        self.parameters
+            .iter()
+            .any(ParameterStub::uses_sequence_annotation)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -683,17 +697,19 @@ impl RecordClass {
     }
 
     fn uses_wire_helpers(&self) -> bool {
+        self.callables().any(AssociatedCallable::uses_wire_helpers)
+    }
+
+    fn uses_sequence_annotations(&self) -> bool {
+        self.callables()
+            .any(AssociatedCallable::uses_sequence_annotations)
+    }
+
+    fn callables(&self) -> impl Iterator<Item = &AssociatedCallable> {
         self.constructors
             .iter()
-            .any(AssociatedCallable::uses_wire_helpers)
-            || self
-                .static_methods
-                .iter()
-                .any(AssociatedCallable::uses_wire_helpers)
-            || self
-                .instance_methods
-                .iter()
-                .any(AssociatedCallable::uses_wire_helpers)
+            .chain(&self.static_methods)
+            .chain(&self.instance_methods)
     }
 
     fn constructors(
@@ -1084,17 +1100,19 @@ impl EnumClass {
     }
 
     fn uses_wire_helpers(&self) -> bool {
+        self.callables().any(AssociatedCallable::uses_wire_helpers)
+    }
+
+    fn uses_sequence_annotations(&self) -> bool {
+        self.callables()
+            .any(AssociatedCallable::uses_sequence_annotations)
+    }
+
+    fn callables(&self) -> impl Iterator<Item = &AssociatedCallable> {
         self.constructors
             .iter()
-            .any(AssociatedCallable::uses_wire_helpers)
-            || self
-                .static_methods
-                .iter()
-                .any(AssociatedCallable::uses_wire_helpers)
-            || self
-                .instance_methods
-                .iter()
-                .any(AssociatedCallable::uses_wire_helpers)
+            .chain(&self.static_methods)
+            .chain(&self.instance_methods)
     }
 
     fn constructors(
@@ -1287,20 +1305,21 @@ impl Class {
     }
 
     fn uses_wire_helpers(&self) -> bool {
-        self.init.iter().any(AssociatedCallable::uses_wire_helpers)
-            || self
-                .constructors
-                .iter()
-                .any(AssociatedCallable::uses_wire_helpers)
-            || self
-                .static_methods
-                .iter()
-                .any(AssociatedCallable::uses_wire_helpers)
-            || self
-                .instance_methods
-                .iter()
-                .any(AssociatedCallable::uses_wire_helpers)
+        self.callables().any(AssociatedCallable::uses_wire_helpers)
             || self.streams.iter().any(ClassStream::uses_wire_helpers)
+    }
+
+    fn uses_sequence_annotations(&self) -> bool {
+        self.callables()
+            .any(AssociatedCallable::uses_sequence_annotations)
+    }
+
+    fn callables(&self) -> impl Iterator<Item = &AssociatedCallable> {
+        self.init
+            .iter()
+            .chain(&self.constructors)
+            .chain(&self.static_methods)
+            .chain(&self.instance_methods)
     }
 }
 
@@ -1513,6 +1532,12 @@ impl AssociatedCallable {
         self.uses_wire_helpers
     }
 
+    fn uses_sequence_annotations(&self) -> bool {
+        self.parameters
+            .iter()
+            .any(ParameterStub::uses_sequence_annotation)
+    }
+
     fn arguments(receiver: Option<&str>, parameters: &[ParameterStub]) -> String {
         receiver
             .into_iter()
@@ -1542,6 +1567,7 @@ struct ParameterStub {
     name: String,
     annotation: String,
     argument: String,
+    uses_sequence_annotation: bool,
     uses_wire_helpers: bool,
 }
 
@@ -1558,9 +1584,11 @@ impl ParameterStub {
         };
         let argument = Self::argument(plan, parameter.name(), package)?;
         let uses_wire_helpers = Self::uses_wire(plan, package)?;
+        let annotation = PythonTypeHint::from_parameter(plan, package)?;
         Ok(Self {
             name: Name::new(parameter.name()).function(),
-            annotation: PythonTypeHint::from_parameter(plan, package)?.into_string(),
+            uses_sequence_annotation: annotation.uses_sequence(),
+            annotation: annotation.into_string(),
             argument,
             uses_wire_helpers,
         })
@@ -1568,6 +1596,10 @@ impl ParameterStub {
 
     fn uses_wire_helpers(&self) -> bool {
         self.uses_wire_helpers
+    }
+
+    fn uses_sequence_annotation(&self) -> bool {
+        self.uses_sequence_annotation
     }
 
     fn argument(
@@ -1770,6 +1802,7 @@ impl ReturnedValue {
 
 struct PythonTypeHint {
     annotation: String,
+    uses_sequence: bool,
 }
 
 impl PythonTypeHint {
@@ -1808,15 +1841,9 @@ impl PythonTypeHint {
                 Self::from_type_ref(key, package)?.into_string(),
                 Self::from_type_ref(value, package)?.into_string()
             ))),
-            TypeRef::Record(record) => Ok(Self {
-                annotation: package.record_name(*record)?,
-            }),
-            TypeRef::Enum(enumeration) => Ok(Self {
-                annotation: package.enum_name(*enumeration)?,
-            }),
-            TypeRef::Class(class) => Ok(Self {
-                annotation: package.class_name(class)?,
-            }),
+            TypeRef::Record(record) => Ok(Self::new(package.record_name(*record)?)),
+            TypeRef::Enum(enumeration) => Ok(Self::new(package.enum_name(*enumeration)?)),
+            TypeRef::Class(class) => Ok(Self::new(package.class_name(class)?)),
             TypeRef::Callback(_) => Ok(Self::new("object")),
             _ => Err(Error::UnsupportedTarget {
                 target: "python",
@@ -1837,22 +1864,16 @@ impl PythonTypeHint {
             ParamPlan::Direct {
                 ty: TypeRef::Record(record),
                 ..
-            } => Ok(Self {
-                annotation: package.record_name(*record)?,
-            }),
+            } => Ok(Self::new(package.record_name(*record)?)),
             ParamPlan::Direct {
                 ty: TypeRef::Enum(enumeration),
                 ..
-            } => Ok(Self {
-                annotation: package.enum_name(*enumeration)?,
-            }),
+            } => Ok(Self::new(package.enum_name(*enumeration)?)),
             ParamPlan::Handle {
                 target: HandleTarget::Class(class_id),
                 presence: HandlePresence::Required,
                 ..
-            } => Ok(Self {
-                annotation: package.class_name(class_id)?,
-            }),
+            } => Ok(Self::new(package.class_name(class_id)?)),
             ParamPlan::Handle {
                 target: HandleTarget::Callback(_),
                 ..
@@ -1871,30 +1892,27 @@ impl PythonTypeHint {
                 ty: TypeRef::Custom(custom_type),
                 shape: native::BufferShape::Slice,
                 ..
-            } => Self::from_type_ref(package.custom_representation(*custom_type)?, package),
+            } => {
+                Self::from_parameter_type_ref(package.custom_representation(*custom_type)?, package)
+            }
             ParamPlan::Encoded {
                 ty: TypeRef::Record(record),
                 shape: native::BufferShape::Slice,
                 ..
-            } => Ok(Self {
-                annotation: package.record_name(*record)?,
-            }),
+            } => Ok(Self::new(package.record_name(*record)?)),
             ParamPlan::Encoded {
                 ty: TypeRef::Enum(enumeration),
                 shape: native::BufferShape::Slice,
                 ..
-            } => Ok(Self {
-                annotation: package.enum_name(*enumeration)?,
-            }),
+            } => Ok(Self::new(package.enum_name(*enumeration)?)),
             ParamPlan::Encoded {
                 ty,
                 shape: native::BufferShape::Slice,
                 ..
-            } => Self::from_type_ref(ty, package),
-            ParamPlan::DirectVec { element } => Ok(Self::new(format!(
-                "list[{}]",
-                Self::from_type_ref(element, package)?.into_string()
-            ))),
+            } => Self::from_parameter_type_ref(ty, package),
+            ParamPlan::DirectVec { element } => {
+                Self::from_direct_vector_parameter(element, package)
+            }
             ParamPlan::Direct { .. }
             | ParamPlan::Encoded { .. }
             | ParamPlan::Handle { .. }
@@ -1926,17 +1944,13 @@ impl PythonTypeHint {
             }
             | ReturnPlan::DirectViaOutPointer {
                 ty: TypeRef::Record(record),
-            } => Ok(Self {
-                annotation: package.record_name(*record)?,
-            }),
+            } => Ok(Self::new(package.record_name(*record)?)),
             ReturnPlan::DirectViaReturnSlot {
                 ty: TypeRef::Enum(enumeration),
             }
             | ReturnPlan::DirectViaOutPointer {
                 ty: TypeRef::Enum(enumeration),
-            } => Ok(Self {
-                annotation: package.enum_name(*enumeration)?,
-            }),
+            } => Ok(Self::new(package.enum_name(*enumeration)?)),
             ReturnPlan::HandleViaReturnSlot {
                 target: HandleTarget::Class(class_id),
                 presence: HandlePresence::Required,
@@ -1946,9 +1960,7 @@ impl PythonTypeHint {
                 target: HandleTarget::Class(class_id),
                 presence: HandlePresence::Required,
                 ..
-            } => Ok(Self {
-                annotation: package.class_name(class_id)?,
-            }),
+            } => Ok(Self::new(package.class_name(class_id)?)),
             ReturnPlan::HandleViaReturnSlot {
                 target: HandleTarget::Callback(_),
                 ..
@@ -1992,9 +2004,7 @@ impl PythonTypeHint {
                 ty: TypeRef::Record(record),
                 shape: native::BufferShape::Buffer,
                 ..
-            } => Ok(Self {
-                annotation: package.record_name(*record)?,
-            }),
+            } => Ok(Self::new(package.record_name(*record)?)),
             ReturnPlan::EncodedViaReturnSlot {
                 ty: TypeRef::Enum(enumeration),
                 shape: native::BufferShape::Buffer,
@@ -2004,9 +2014,7 @@ impl PythonTypeHint {
                 ty: TypeRef::Enum(enumeration),
                 shape: native::BufferShape::Buffer,
                 ..
-            } => Ok(Self {
-                annotation: package.enum_name(*enumeration)?,
-            }),
+            } => Ok(Self::new(package.enum_name(*enumeration)?)),
             ReturnPlan::EncodedViaReturnSlot {
                 ty,
                 shape: native::BufferShape::Buffer,
@@ -2036,13 +2044,94 @@ impl PythonTypeHint {
         }
     }
 
+    fn from_parameter_type_ref(ty: &TypeRef, package: &Package<'_, '_>) -> Result<Self> {
+        match ty {
+            TypeRef::Custom(custom_type) => {
+                Self::from_parameter_type_ref(package.custom_representation(*custom_type)?, package)
+            }
+            TypeRef::Optional(inner) => {
+                let inner = Self::from_parameter_type_ref(inner, package)?;
+                Ok(Self::compose(
+                    format!("{} | None", inner.annotation),
+                    [inner],
+                ))
+            }
+            TypeRef::Result { ok, err } => {
+                let ok = Self::from_parameter_type_ref(ok, package)?;
+                let err = Self::from_parameter_type_ref(err, package)?;
+                Ok(Self::compose(
+                    format!("tuple[bool, {} | {}]", ok.annotation, err.annotation),
+                    [ok, err],
+                ))
+            }
+            TypeRef::Sequence(element) => {
+                let element = Self::from_parameter_type_ref(element, package)?;
+                Ok(Self::sequence(format!(
+                    "Sequence[{}]",
+                    element.into_string()
+                )))
+            }
+            TypeRef::Tuple(elements) => {
+                let elements = elements
+                    .iter()
+                    .map(|element| Self::from_parameter_type_ref(element, package))
+                    .collect::<Result<Vec<_>>>()?;
+                let annotation = format!(
+                    "tuple[{}]",
+                    elements
+                        .iter()
+                        .map(|element| element.annotation.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                Ok(Self::compose(annotation, elements))
+            }
+            TypeRef::Map { key, value } => {
+                let key = Self::from_parameter_type_ref(key, package)?;
+                let value = Self::from_parameter_type_ref(value, package)?;
+                Ok(Self::compose(
+                    format!("dict[{}, {}]", key.annotation, value.annotation),
+                    [key, value],
+                ))
+            }
+            _ => Self::from_type_ref(ty, package),
+        }
+    }
+
+    fn from_direct_vector_parameter(element: &TypeRef, package: &Package<'_, '_>) -> Result<Self> {
+        if matches!(element, TypeRef::Primitive(Primitive::U8)) {
+            return Ok(Self::sequence("bytes | Sequence[int]"));
+        }
+        let element = Self::from_type_ref(element, package)?;
+        Ok(Self::sequence(format!("Sequence[{}]", element.annotation)))
+    }
+
     fn into_string(self) -> String {
         self.annotation
+    }
+
+    fn uses_sequence(&self) -> bool {
+        self.uses_sequence
     }
 
     fn new(annotation: impl Into<String>) -> Self {
         Self {
             annotation: annotation.into(),
+            uses_sequence: false,
+        }
+    }
+
+    fn sequence(annotation: impl Into<String>) -> Self {
+        Self {
+            annotation: annotation.into(),
+            uses_sequence: true,
+        }
+    }
+
+    fn compose(annotation: impl Into<String>, parts: impl IntoIterator<Item = Self>) -> Self {
+        Self {
+            annotation: annotation.into(),
+            uses_sequence: parts.into_iter().any(|part| part.uses_sequence),
         }
     }
 
