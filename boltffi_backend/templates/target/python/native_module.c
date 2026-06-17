@@ -87,6 +87,67 @@ static int boltffi_python_wire_raw(PyObject *value, PyObject **out_wire, const u
     return ok;
 }
 {% endif %}
+{% if support.uses_borrowed_wire_decoders() %}
+static int boltffi_python_validate_borrowed_wire(const uint8_t *ptr, uintptr_t len) {
+    if (ptr == NULL && len != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "native callback argument contains an invalid buffer");
+        return 0;
+    }
+    if (len > PY_SSIZE_T_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "native callback argument is too large");
+        return 0;
+    }
+    return 1;
+}
+
+static uint32_t boltffi_python_read_borrowed_u32_le(const uint8_t *buffer) {
+    return ((uint32_t)buffer[0])
+        | ((uint32_t)buffer[1] << 8)
+        | ((uint32_t)buffer[2] << 16)
+        | ((uint32_t)buffer[3] << 24);
+}
+
+static PyObject *boltffi_python_decode_borrowed_utf8(const uint8_t *ptr, uintptr_t len) {
+    uint32_t payload_len = 0;
+    if (!boltffi_python_validate_borrowed_wire(ptr, len)) {
+        return NULL;
+    }
+    if (len < 4) {
+        PyErr_SetString(PyExc_RuntimeError, "native callback string argument is truncated");
+        return NULL;
+    }
+    payload_len = boltffi_python_read_borrowed_u32_le(ptr);
+    if ((uintptr_t)payload_len > len - 4) {
+        PyErr_SetString(PyExc_RuntimeError, "native callback string argument length is invalid");
+        return NULL;
+    }
+    return PyUnicode_FromStringAndSize((const char *)(ptr + 4), (Py_ssize_t)payload_len);
+}
+
+static PyObject *boltffi_python_decode_borrowed_bytes(const uint8_t *ptr, uintptr_t len) {
+    uint32_t payload_len = 0;
+    if (!boltffi_python_validate_borrowed_wire(ptr, len)) {
+        return NULL;
+    }
+    if (len < 4) {
+        PyErr_SetString(PyExc_RuntimeError, "native callback bytes argument is truncated");
+        return NULL;
+    }
+    payload_len = boltffi_python_read_borrowed_u32_le(ptr);
+    if ((uintptr_t)payload_len > len - 4) {
+        PyErr_SetString(PyExc_RuntimeError, "native callback bytes argument length is invalid");
+        return NULL;
+    }
+    return PyBytes_FromStringAndSize((const char *)(ptr + 4), (Py_ssize_t)payload_len);
+}
+
+static PyObject *boltffi_python_decode_borrowed_raw_wire(const uint8_t *ptr, uintptr_t len) {
+    if (!boltffi_python_validate_borrowed_wire(ptr, len)) {
+        return NULL;
+    }
+    return PyBytes_FromStringAndSize((const char *)ptr, (Py_ssize_t)len);
+}
+{% endif %}
 {% if support.uses_owned_buffers() %}
 static uint16_t boltffi_python_read_u16_le(const uint8_t *buffer) {
     return ((uint16_t)buffer[0])
@@ -960,12 +1021,52 @@ static int {{ element.vector_parser() }}(PyObject *value, PyObject **out_wire, c
     return 1;
 }
 
-static PyObject *{{ element.vector_decoder() }}(FfiBuf_u8 buffer) {
+static int {{ element.vector_encoder() }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    uintptr_t item_count = 0;
+    if (!{{ element.vector_parser() }}(value, out_wire, out_ptr, &item_count)) {
+        return 0;
+    }
+    if (item_count > UINTPTR_MAX / sizeof({{ element.c_type() }})) {
+        Py_CLEAR(*out_wire);
+        PyErr_SetString(PyExc_OverflowError, "sequence byte length is too large");
+        return 0;
+    }
+    *out_len = item_count * sizeof({{ element.c_type() }});
+    return 1;
+}
+
+static PyObject *{{ element.vector_boxer() }}(const {{ element.c_type() }} *values, uintptr_t len) {
     PyObject *result = NULL;
     PyObject *item = NULL;
     Py_ssize_t item_count = 0;
     Py_ssize_t index = 0;
-    const {{ element.c_type() }} *values = NULL;
+    if (values == NULL && len != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "native vector pointer is invalid");
+        return NULL;
+    }
+    if (len > (uintptr_t)PY_SSIZE_T_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "native vector is too large");
+        return NULL;
+    }
+    item_count = (Py_ssize_t)len;
+    result = PyList_New(item_count);
+    if (result == NULL) {
+        return NULL;
+    }
+    for (index = 0; index < item_count; index += 1) {
+        item = {{ element.boxer() }}(values[index]);
+        if (item == NULL) {
+            Py_CLEAR(result);
+            return NULL;
+        }
+        PyList_SET_ITEM(result, index, item);
+        item = NULL;
+    }
+    return result;
+}
+
+static PyObject *{{ element.vector_decoder() }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
     if (!boltffi_python_validate_owned_memory(buffer)) {
         goto done;
     }
@@ -973,25 +1074,10 @@ static PyObject *{{ element.vector_decoder() }}(FfiBuf_u8 buffer) {
         PyErr_SetString(PyExc_RuntimeError, "native vector buffer byte length is invalid");
         goto done;
     }
-    if (buffer.len / sizeof({{ element.c_type() }}) > (uintptr_t)PY_SSIZE_T_MAX) {
-        PyErr_SetString(PyExc_OverflowError, "native vector is too large");
-        goto done;
-    }
-    item_count = (Py_ssize_t)(buffer.len / sizeof({{ element.c_type() }}));
-    result = PyList_New(item_count);
-    if (result == NULL) {
-        goto done;
-    }
-    values = (const {{ element.c_type() }} *)buffer.ptr;
-    for (index = 0; index < item_count; index += 1) {
-        item = {{ element.boxer() }}(values[index]);
-        if (item == NULL) {
-            Py_CLEAR(result);
-            goto done;
-        }
-        PyList_SET_ITEM(result, index, item);
-        item = NULL;
-    }
+    result = {{ element.vector_boxer() }}(
+        (const {{ element.c_type() }} *)buffer.ptr,
+        buffer.len / sizeof({{ element.c_type() }})
+    );
 done:
     boltffi_python_release_owned_buffer(buffer);
     return result;
@@ -1025,6 +1111,9 @@ static void boltffi_python_release_host_state(void) {
 }
 {% for function in functions %}
 {{ function }}
+{% endfor %}
+{% for constant in constants %}
+{{ constant }}
 {% endfor %}
 {% for stream in streams %}
 {{ stream }}

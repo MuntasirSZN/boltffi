@@ -8,22 +8,29 @@ use boltffi_binding::{
 use crate::{
     bridge::python_cext::PythonCExtBridgeContract,
     core::{
-        BindingCapability, BridgeCapability, CapabilityRequirements, Diagnostic, Emitted, Error,
-        GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result,
-        contract::sealed, host,
+        BindingCapability, BridgeCapability, CapabilityRequirements, Emitted, GeneratedOutput,
+        HostCapabilities, RenderContext, RenderedDeclaration, Result, contract::sealed, host,
     },
-    target::python::name_style::Name,
+    target::python::name_style::PackageModule,
 };
 
 /// Python host renderer for a CPython extension bridge.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 #[non_exhaustive]
-pub struct PythonCExtHost;
+pub struct PythonCExtHost {
+    module: Option<PackageModule>,
+}
 
 impl PythonCExtHost {
     /// Creates a Python host renderer for a CPython extension module.
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Selects the generated Python package module name.
+    pub fn module_name(mut self, module: impl Into<String>) -> Result<Self> {
+        self.module = Some(PackageModule::parse(module)?);
+        Ok(self)
     }
 }
 
@@ -43,10 +50,7 @@ impl host::HostBackend for PythonCExtHost {
             .stable(BindingCapability::Classes)
             .stable(BindingCapability::Callbacks)
             .stable(BindingCapability::Streams)
-            .unsupported(
-                BindingCapability::Constants,
-                "Python constants are not migrated yet",
-            )
+            .stable(BindingCapability::Constants)
             .stable(BindingCapability::CustomTypes)
     }
 
@@ -60,7 +64,7 @@ impl host::HostBackend for PythonCExtHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::RecordWrapper::from_declaration(decl, bridge, context)?.render()
+        render::Record::from_declaration(decl, bridge, context)?.render()
     }
 
     fn enumeration(
@@ -69,7 +73,7 @@ impl host::HostBackend for PythonCExtHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::EnumWrapper::from_declaration(decl, bridge, context)?.render()
+        render::Enumeration::from_declaration(decl, bridge, context)?.render()
     }
 
     fn function(
@@ -78,13 +82,7 @@ impl host::HostBackend for PythonCExtHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        if !render::Wrapper::supports(decl.callable()) {
-            return Ok(Emitted::diagnostic(Diagnostic::new(format!(
-                "python target skipped unsupported function {}",
-                decl.symbol().name().as_str()
-            ))));
-        }
-        render::Wrapper::from_declaration(decl, bridge, context)?.render()
+        render::Function::from_declaration(decl, bridge, context)?.render()
     }
 
     fn class(
@@ -93,22 +91,16 @@ impl host::HostBackend for PythonCExtHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::ClassWrapper::from_declaration(decl, bridge, context)?.render()
+        render::Class::from_declaration(decl, bridge, context)?.render()
     }
 
     fn callback(
         &self,
         decl: &CallbackDecl<Self::Surface>,
         bridge: &Self::Bridge,
-        _: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        if !render::CallbackWrapper::supports(decl, bridge) {
-            return Ok(Emitted::diagnostic(Diagnostic::new(format!(
-                "python target skipped unsupported callback {}",
-                Name::new(decl.name()).function()
-            ))));
-        }
-        render::CallbackWrapper::from_declaration(decl, bridge)?.render()
+        render::Callback::from_declaration(decl, bridge, context)?.render()
     }
 
     fn stream(
@@ -117,25 +109,16 @@ impl host::HostBackend for PythonCExtHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        if !render::StreamWrapper::supports(decl) {
-            return Ok(Emitted::diagnostic(Diagnostic::new(format!(
-                "python target skipped unsupported stream {}",
-                Name::new(decl.name()).function()
-            ))));
-        }
-        render::StreamWrapper::from_declaration(decl, bridge, context)?.render()
+        render::Stream::from_declaration(decl, bridge, context)?.render()
     }
 
     fn constant(
         &self,
-        _decl: &ConstantDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        decl: &ConstantDecl<Self::Surface>,
+        bridge: &Self::Bridge,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Error::UnsupportedTarget {
-            target: self.name(),
-            shape: "constant",
-        })
+        render::Constant::from_declaration(decl, bridge, context)?.render()
     }
 
     fn custom_type(
@@ -160,10 +143,18 @@ impl host::HostBackend for PythonCExtHost {
             .collect();
         let mut output = GeneratedOutput::combine([
             render::NativeModule::new(bridge, context, declarations).render()?,
-            render::Package::new(bindings, bridge).render()?,
+            render::Package::new(bindings, bridge, self.package_module(bindings)).render()?,
         ]);
         output.append(GeneratedOutput::new(Vec::new(), diagnostics));
         Ok(output)
+    }
+}
+
+impl PythonCExtHost {
+    fn package_module(&self, bindings: &Bindings<Native>) -> PackageModule {
+        self.module
+            .clone()
+            .unwrap_or_else(|| PackageModule::from_canonical(bindings.package().name()))
     }
 }
 
@@ -178,7 +169,7 @@ mod tests {
 
     use crate::{
         bridge::{c::CBridge, python_cext::PythonCExtBridge},
-        core::{BridgeLayer, GeneratedOutput, Target},
+        core::{BridgeLayer, Error, GeneratedOutput, Target},
         target::python::PythonCExtHost,
     };
 
@@ -203,6 +194,20 @@ mod tests {
     fn target() -> Target<PythonCExtHost, BridgeLayer<CBridge, PythonCExtBridge>> {
         Target::new(
             PythonCExtHost::new(),
+            BridgeLayer::new(
+                CBridge::default_header().expect("C header bridge"),
+                PythonCExtBridge::native_module().expect("CPython extension bridge"),
+            ),
+        )
+    }
+
+    fn target_with_module(
+        module: &str,
+    ) -> Target<PythonCExtHost, BridgeLayer<CBridge, PythonCExtBridge>> {
+        Target::new(
+            PythonCExtHost::new()
+                .module_name(module)
+                .expect("Python package module"),
             BridgeLayer::new(
                 CBridge::default_header().expect("C header bridge"),
                 PythonCExtBridge::native_module().expect("CPython extension bridge"),
@@ -299,6 +304,34 @@ mod tests {
     }
 
     #[test]
+    fn python_target_keeps_native_extension_name_inside_custom_package_module() {
+        let output = target_with_module("demo_api")
+            .render(&bindings(
+                r#"
+                #[export]
+                pub fn add(left: i32, right: i32) -> i32 {
+                    left + right
+                }
+                "#,
+            ))
+            .expect("Python target should render custom module");
+        let init = file(&output, "demo_api/__init__.py");
+        let stub = file(&output, "demo_api/__init__.pyi");
+        let setup = file(&output, "setup.py");
+
+        assert!(file(&output, "_native.c").contains("PyMODINIT_FUNC PyInit__native(void)"));
+        assert!(init.contains("from . import _native"));
+        assert!(init.contains("return _native.add(left, right)"));
+        assert!(init.contains("MODULE_NAME = \"demo_api\""));
+        assert!(init.contains("PACKAGE_NAME = \"demo\""));
+        assert!(init.contains("return \"libdemo.dylib\""));
+        assert!(stub.contains("def add(left: int, right: int) -> int: ..."));
+        assert!(setup.contains("packages=[\"demo_api\"]"));
+        assert!(setup.contains("Extension(\n            \"demo_api._native\","));
+        assert!(setup.contains("sources=[\"_native.c\"]"));
+    }
+
+    #[test]
     fn python_target_renders_direct_record_package_and_native_conversions() {
         let output = target()
             .render(&bindings(
@@ -378,6 +411,33 @@ mod tests {
             "result = boltffi_python_decode_owned_vec_point(boltffi_python_boltffi_function_demo_echo_points(values_ptr, values_len));"
         ));
         assert!(stub.contains("def echo_points(values: list[Point]) -> list[Point]: ..."));
+    }
+
+    #[test]
+    fn python_target_renders_primitive_vector_function_wrapper() {
+        let output = target()
+            .render(&bindings(
+                r#"
+                #[export]
+                pub fn echo_numbers(values: Vec<i32>) -> Vec<i32> {
+                    values
+                }
+                "#,
+            ))
+            .expect("Python target should render primitive vector");
+        let extension = extension(&output);
+        let stub = file(&output, "demo/__init__.pyi");
+
+        assert!(extension.contains("static int boltffi_python_parse_vec_i32"));
+        assert!(extension.contains("static PyObject *boltffi_python_decode_owned_vec_i32"));
+        assert!(extension.contains("int32_t *values = NULL;"));
+        assert!(extension.contains(
+            "boltffi_python_parse_vec_i32(args[0], &values_wire, &values_ptr, &values_len)"
+        ));
+        assert!(extension.contains(
+            "result = boltffi_python_decode_owned_vec_i32(boltffi_python_boltffi_function_demo_echo_numbers(values_ptr, values_len));"
+        ));
+        assert!(stub.contains("def echo_numbers(values: list[int]) -> list[int]: ..."));
     }
 
     #[test]
@@ -759,17 +819,21 @@ mod tests {
         assert!(extension.contains(
             "boltffi_python_boltffi_create_callback_demo_value_callback((uint64_t)(uintptr_t)value)"
         ));
-        assert!(!extension.contains(
+        assert!(extension.contains(
             "static PyObject *boltffi_python_callable_wrapper_boltffi_function_demo_invoke_value_callback"
         ));
-        assert!(!extension.contains(
+        assert!(
+            extension.contains("boltffi_python_parse_callback_value_callback(args[0], &callback)")
+        );
+        assert!(extension.contains(
+            "result = boltffi_python_box_i32(boltffi_python_boltffi_function_demo_invoke_value_callback(callback, input));"
+        ));
+        assert!(extension.contains(
             "{\"invoke_value_callback\", (PyCFunction)boltffi_python_callable_wrapper_boltffi_function_demo_invoke_value_callback"
         ));
-        assert!(!stub.contains("def invoke_value_callback"));
-        assert!(output.diagnostics().iter().any(|diagnostic| {
-            diagnostic.message()
-                == "python target skipped unsupported function boltffi_function_demo_invoke_value_callback"
-        }));
+        assert!(
+            stub.contains("def invoke_value_callback(callback: object, input: int) -> int: ...")
+        );
     }
 
     #[test]
@@ -868,8 +932,78 @@ mod tests {
     }
 
     #[test]
-    fn python_target_skips_async_functions() {
+    fn python_target_renders_inline_constants_in_package() {
         let output = target()
+            .render(&bindings(
+                r#"
+                #[repr(i32)]
+                #[data]
+                pub enum Mode {
+                    Fast = 1,
+                    Slow = 2,
+                }
+
+                #[export]
+                pub const ANSWER: u32 = 42;
+
+                #[export]
+                pub const NAME: &'static str = "bolt";
+
+                #[export]
+                pub const DEFAULT_MODE: Mode = Mode::Fast;
+                "#,
+            ))
+            .expect("Python target should render constants");
+        let extension = extension(&output);
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
+
+        assert!(!extension.contains("boltffi_python_callable_wrapper_boltffi_const_demo_answer"));
+        assert!(init.contains("answer: int = 42"));
+        assert!(init.contains("name: str = \"bolt\""));
+        assert!(init.contains("default_mode: Mode = Mode.FAST"));
+        assert!(init.contains("\"answer\","));
+        assert!(init.contains("\"name\","));
+        assert!(init.contains("\"default_mode\","));
+        assert!(stub.contains("answer: int"));
+        assert!(stub.contains("name: str"));
+        assert!(stub.contains("default_mode: Mode"));
+    }
+
+    #[test]
+    fn python_target_renders_accessor_constants_through_native_module() {
+        let output = target()
+            .render(&bindings(
+                r#"
+                #[export]
+                pub const MAGIC: &'static [u8] = b"ffi";
+                "#,
+            ))
+            .expect("Python target should render accessor constant");
+        let extension = extension(&output);
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
+
+        assert!(extension.contains("static PyObject *boltffi_python_decode_owned_bytes"));
+        assert!(
+            extension.contains(
+                "static PyObject *boltffi_python_callable_wrapper_boltffi_const_demo_magic"
+            )
+        );
+        assert!(extension.contains(
+            "result = boltffi_python_decode_owned_bytes(boltffi_python_boltffi_const_demo_magic());"
+        ));
+        assert!(extension.contains(
+            "{\"magic\", (PyCFunction)boltffi_python_callable_wrapper_boltffi_const_demo_magic, METH_FASTCALL, NULL}"
+        ));
+        assert!(init.contains("magic: bytes = _native.magic()"));
+        assert!(init.contains("\"magic\","));
+        assert!(stub.contains("magic: bytes"));
+    }
+
+    #[test]
+    fn python_target_rejects_async_functions() {
+        let error = target()
             .render(&bindings(
                 r#"
                 #[export]
@@ -878,14 +1012,15 @@ mod tests {
                 }
                 "#,
             ))
-            .expect("Python target should render without async wrapper");
-        let init = file(&output, "demo/__init__.py");
+            .expect_err("Python target should reject async functions");
 
-        assert!(!init.contains("def fetch"));
-        assert!(output.diagnostics().iter().any(|diagnostic| {
-            diagnostic.message()
-                == "python target skipped unsupported function boltffi_function_demo_fetch"
-        }));
+        assert_eq!(
+            error,
+            Error::UnsupportedTarget {
+                target: "python",
+                shape: "async function",
+            }
+        );
     }
 
     #[test]

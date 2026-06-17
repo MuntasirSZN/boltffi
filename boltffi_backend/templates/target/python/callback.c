@@ -13,13 +13,18 @@ static uint64_t {{ clone }}(uint64_t handle) {
 }
 
 {%- for method in methods %}
-static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% for param in method.params %}, {{ param.declaration }}{% endfor %}) {
+static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% for param in method.params %}{% for declaration in param.declarations %}, {{ declaration }}{% endfor %}{% endfor %}) {
 {%- for param in method.params %}
     PyObject *{{ param.object }} = NULL;
 {%- endfor %}
     PyObject *callback = NULL;
     PyObject *arguments = NULL;
     PyObject *result = NULL;
+{%- if method.returns.wire %}
+    PyObject *return_wire = NULL;
+    const uint8_t *return_ptr = NULL;
+    uintptr_t return_len = 0;
+{%- endif %}
 {%- if method.returns.has_value() %}
     {{ method.returns.c_type }} {{ method.returns.value }} = {{ method.returns.default_value }};
 {%- endif %}
@@ -34,7 +39,7 @@ static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% for p
         goto done;
     }
 {%- for param in method.params %}
-    {{ param.object }} = {{ param.boxer }}({{ param.name }});
+    {{ param.object }} = {{ param.expression }};
     if ({{ param.object }} == NULL) {
         goto done;
     }
@@ -46,9 +51,16 @@ static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% for p
         goto done;
     }
 {%- if method.returns.has_value() %}
+{%- if method.returns.wire %}
+    if (!{{ method.returns.parser }}(result, &return_wire, &return_ptr, &return_len)) {
+        goto done;
+    }
+    {{ method.returns.value }} = {{ copy_buffer_storage }}(return_ptr, return_len);
+{%- else %}
     if (!{{ method.returns.parser }}(result, &{{ method.returns.value }})) {
         goto done;
     }
+{%- endif %}
 {%- endif %}
 done:
     if (PyErr_Occurred()) {
@@ -57,6 +69,9 @@ done:
 {%- for param in method.params %}
     Py_XDECREF({{ param.object }});
 {%- endfor %}
+{%- if method.returns.wire %}
+    Py_XDECREF(return_wire);
+{%- endif %}
     Py_XDECREF(result);
     Py_XDECREF(arguments);
     Py_XDECREF(callback);

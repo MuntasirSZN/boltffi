@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/python/function.c", escape = "none")]
-struct WrapperTemplate {
+struct FunctionTemplate {
     python_name: String,
     wrapper: String,
     storage: String,
@@ -23,7 +23,7 @@ struct WrapperTemplate {
     returns: result::Conversion,
 }
 
-pub struct Wrapper {
+pub struct Function {
     pub python_name: String,
     pub wrapper: String,
     pub storage: String,
@@ -33,7 +33,7 @@ pub struct Wrapper {
     method: ExtensionMethod,
 }
 
-impl Wrapper {
+impl Function {
     pub fn supports(callable: &ExportedCallable<Native>) -> bool {
         matches!(callable.execution(), ExecutionDecl::Synchronous(_))
             && matches!(callable.error(), ErrorDecl::None(_))
@@ -128,7 +128,7 @@ impl Wrapper {
     }
 
     pub fn render(self) -> Result<Emitted> {
-        let source = WrapperTemplate {
+        let source = FunctionTemplate {
             python_name: self.python_name,
             wrapper: self.wrapper,
             storage: self.storage,

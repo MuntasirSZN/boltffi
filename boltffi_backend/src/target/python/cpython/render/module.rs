@@ -9,8 +9,8 @@ use crate::{
         Emitted, Error, FileLayout, GeneratedOutput, RenderContext, RenderedDeclaration, Result,
     },
     target::python::cpython::render::{
-        callback, class, direct_vector, enumeration, function, method, primitive, record, result,
-        stream,
+        callback, class, constant, direct_vector, enumeration, function, method, primitive, record,
+        result, stream,
     },
 };
 
@@ -28,6 +28,7 @@ struct NativeModuleTemplate {
     classes: Vec<String>,
     callbacks: Vec<String>,
     streams: Vec<String>,
+    constants: Vec<String>,
     host_bindings: Vec<String>,
     functions: Vec<String>,
     methods: Vec<method::Entry>,
@@ -60,6 +61,7 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
         let classes = self.classes()?;
         let callbacks = self.callbacks()?;
         let streams = self.streams()?;
+        let constants = self.constants()?;
         let functions = self.functions()?;
         let methods = self
             .bridge
@@ -73,17 +75,28 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
             )
             .chain(classes.iter().flat_map(|class| class.wrapper.methods()))
             .chain(streams.iter().flat_map(|stream| stream.wrapper.methods()))
+            .chain(
+                constants
+                    .iter()
+                    .filter_map(|constant| constant.wrapper.method()),
+            )
             .chain(functions.iter().map(|function| function.wrapper.method()))
             .map(method::Entry::from_method)
             .collect();
         let support = ModuleSupport::new(
             bridge,
-            records.iter().map(|record| &record.wrapper),
-            enums.iter().map(|enumeration| &enumeration.wrapper),
-            classes.iter().map(|class| &class.wrapper),
-            callbacks.iter().map(|callback| &callback.wrapper),
-            streams.iter().map(|stream| &stream.wrapper),
-            functions.iter().map(|function| &function.wrapper),
+            SupportArtifacts {
+                records: records.iter().map(|record| &record.wrapper).collect(),
+                enums: enums
+                    .iter()
+                    .map(|enumeration| &enumeration.wrapper)
+                    .collect(),
+                classes: classes.iter().map(|class| &class.wrapper).collect(),
+                callbacks: callbacks.iter().map(|callback| &callback.wrapper).collect(),
+                streams: streams.iter().map(|stream| &stream.wrapper).collect(),
+                constants: constants.iter().map(|constant| &constant.wrapper).collect(),
+                functions: functions.iter().map(|function| &function.wrapper).collect(),
+            },
         )?;
         let source = NativeModuleTemplate {
             module_name: bridge.module().as_str().to_owned(),
@@ -103,6 +116,10 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 .map(|callback| callback.source.clone())
                 .collect(),
             streams: streams.iter().map(|stream| stream.source.clone()).collect(),
+            constants: constants
+                .iter()
+                .map(|constant| constant.source.clone())
+                .collect(),
             host_bindings: callbacks
                 .iter()
                 .map(|callback| callback.wrapper.binding().to_owned())
@@ -140,7 +157,7 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::CustomType(_) => None,
             })
             .map(|(record, emitted)| {
-                let wrapper = record::Wrapper::from_declaration(record, self.bridge, self.context)?;
+                let wrapper = record::Record::from_declaration(record, self.bridge, self.context)?;
                 Ok(RenderedRecord {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
@@ -162,10 +179,10 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .filter(|(function, _)| function::Wrapper::supports(function.callable()))
+            .filter(|(function, _)| function::Function::supports(function.callable()))
             .map(|(function, emitted)| {
                 let wrapper =
-                    function::Wrapper::from_declaration(function, self.bridge, self.context)?;
+                    function::Function::from_declaration(function, self.bridge, self.context)?;
                 Ok(RenderedFunction {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
@@ -188,8 +205,11 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::CustomType(_) => None,
             })
             .map(|(enumeration, emitted)| {
-                let wrapper =
-                    enumeration::Wrapper::from_declaration(enumeration, self.bridge, self.context)?;
+                let wrapper = enumeration::Enumeration::from_declaration(
+                    enumeration,
+                    self.bridge,
+                    self.context,
+                )?;
                 Ok(RenderedEnum {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
@@ -213,7 +233,7 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
             })
             .map(|(declaration, emitted)| {
                 let wrapper =
-                    class::Wrapper::from_declaration(declaration, self.bridge, self.context)?;
+                    class::Class::from_declaration(declaration, self.bridge, self.context)?;
                 Ok(RenderedClass {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
@@ -235,9 +255,10 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .filter(|(declaration, _)| callback::Wrapper::supports(declaration, self.bridge))
+            .filter(|(declaration, _)| callback::Callback::supports(declaration, self.bridge))
             .map(|(declaration, emitted)| {
-                let wrapper = callback::Wrapper::from_declaration(declaration, self.bridge)?;
+                let wrapper =
+                    callback::Callback::from_declaration(declaration, self.bridge, self.context)?;
                 Ok(RenderedCallback {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
@@ -259,11 +280,35 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .filter(|(declaration, _)| stream::Wrapper::supports(declaration))
+            .filter(|(declaration, _)| stream::Stream::supports(declaration))
             .map(|(declaration, emitted)| {
                 let wrapper =
-                    stream::Wrapper::from_declaration(declaration, self.bridge, self.context)?;
+                    stream::Stream::from_declaration(declaration, self.bridge, self.context)?;
                 Ok(RenderedStream {
+                    wrapper,
+                    source: emitted.primary_chunk().as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
+
+    fn constants(&self) -> Result<Vec<RenderedConstant>> {
+        self.declarations
+            .iter()
+            .filter_map(|declaration| match declaration.declaration() {
+                DeclarationRef::Constant(constant) => Some((constant, declaration.emitted())),
+                DeclarationRef::Record(_)
+                | DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|(declaration, emitted)| {
+                let wrapper =
+                    constant::Constant::from_declaration(declaration, self.bridge, self.context)?;
+                Ok(RenderedConstant {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
                 })
@@ -273,33 +318,48 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
 }
 
 struct RenderedFunction {
-    wrapper: function::Wrapper,
+    wrapper: function::Function,
     source: String,
 }
 
 struct RenderedRecord {
-    wrapper: record::Wrapper,
+    wrapper: record::Record,
     source: String,
 }
 
 struct RenderedEnum {
-    wrapper: enumeration::Wrapper,
+    wrapper: enumeration::Enumeration,
     source: String,
 }
 
 struct RenderedClass {
-    wrapper: class::Wrapper,
+    wrapper: class::Class,
     source: String,
 }
 
 struct RenderedCallback {
-    wrapper: callback::Wrapper,
+    wrapper: callback::Callback,
     source: String,
 }
 
 struct RenderedStream {
-    wrapper: stream::Wrapper,
+    wrapper: stream::Stream,
     source: String,
+}
+
+struct RenderedConstant {
+    wrapper: constant::Constant,
+    source: String,
+}
+
+struct SupportArtifacts<'module> {
+    records: Vec<&'module record::Record>,
+    enums: Vec<&'module enumeration::Enumeration>,
+    classes: Vec<&'module class::Class>,
+    callbacks: Vec<&'module callback::Callback>,
+    streams: Vec<&'module stream::Stream>,
+    constants: Vec<&'module constant::Constant>,
+    functions: Vec<&'module function::Function>,
 }
 
 struct ModuleSupport {
@@ -321,21 +381,16 @@ struct ModuleSupport {
 }
 
 impl ModuleSupport {
-    fn new<'record, 'enumeration, 'class, 'callback, 'stream_wrapper, 'function>(
-        bridge: &PythonCExtBridgeContract,
-        records: impl Iterator<Item = &'record record::Wrapper>,
-        enums: impl Iterator<Item = &'enumeration enumeration::Wrapper>,
-        classes: impl Iterator<Item = &'class class::Wrapper>,
-        callbacks: impl Iterator<Item = &'callback callback::Wrapper>,
-        streams: impl Iterator<Item = &'stream_wrapper stream::Wrapper>,
-        functions: impl Iterator<Item = &'function function::Wrapper>,
-    ) -> Result<Self> {
-        let records = records.collect::<Vec<_>>();
-        let enums = enums.collect::<Vec<_>>();
-        let classes = classes.collect::<Vec<_>>();
-        let callbacks = callbacks.collect::<Vec<_>>();
-        let streams = streams.collect::<Vec<_>>();
-        let functions = functions.collect::<Vec<_>>();
+    fn new(bridge: &PythonCExtBridgeContract, wrappers: SupportArtifacts<'_>) -> Result<Self> {
+        let SupportArtifacts {
+            records,
+            enums,
+            classes,
+            callbacks,
+            streams,
+            constants,
+            functions,
+        } = wrappers;
         let encoded_records = records.iter().any(|record| record.needs_owned_buffer());
         let data_enums = enums
             .iter()
@@ -343,6 +398,11 @@ impl ModuleSupport {
         let owned_buffers = functions
             .iter()
             .filter_map(|function| function.owned_buffer())
+            .chain(
+                constants
+                    .iter()
+                    .filter_map(|constant| constant.owned_buffer()),
+            )
             .chain(records.iter().flat_map(|record| record.owned_buffers()))
             .chain(
                 enums
@@ -367,6 +427,11 @@ impl ModuleSupport {
                     .flat_map(|function| function.direct_vector_elements()),
             )
             .chain(
+                constants
+                    .iter()
+                    .flat_map(|constant| constant.direct_vector_elements()),
+            )
+            .chain(
                 records
                     .iter()
                     .flat_map(|record| record.direct_vector_elements()),
@@ -381,10 +446,16 @@ impl ModuleSupport {
                     .iter()
                     .flat_map(|class| class.direct_vector_elements()),
             )
+            .chain(
+                callbacks
+                    .iter()
+                    .flat_map(|callback| callback.direct_vector_elements()),
+            )
             .collect::<BTreeSet<_>>();
         let primitives = functions
             .iter()
             .flat_map(|function| function.primitives())
+            .chain(constants.iter().flat_map(|constant| constant.primitives()))
             .chain(classes.iter().flat_map(|class| class.primitives()))
             .chain(callbacks.iter().flat_map(|callback| callback.primitives()))
             .chain(streams.iter().flat_map(|stream| stream.primitives()))
@@ -406,6 +477,11 @@ impl ModuleSupport {
         let wire_primitives = functions
             .iter()
             .flat_map(|function| function.wire_primitives())
+            .chain(
+                constants
+                    .iter()
+                    .flat_map(|constant| constant.wire_primitives()),
+            )
             .chain(records.iter().flat_map(|record| record.wire_primitives()))
             .chain(
                 enums
@@ -413,6 +489,11 @@ impl ModuleSupport {
                     .flat_map(|enumeration| enumeration.wire_primitives()),
             )
             .chain(classes.iter().flat_map(|class| class.wire_primitives()))
+            .chain(
+                callbacks
+                    .iter()
+                    .flat_map(|callback| callback.wire_primitives()),
+            )
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(primitive::Support::new)
@@ -433,27 +514,45 @@ impl ModuleSupport {
         let string_arguments = functions
             .iter()
             .any(|function| function.has_string_argument())
+            || constants
+                .iter()
+                .any(|constant| constant.has_string_argument())
             || records.iter().any(|record| record.has_string_argument())
             || enums
                 .iter()
                 .any(|enumeration| enumeration.has_string_argument())
-            || classes.iter().any(|class| class.has_string_argument());
+            || classes.iter().any(|class| class.has_string_argument())
+            || callbacks
+                .iter()
+                .any(|callback| callback.has_string_argument());
         let bytes_arguments = functions
             .iter()
             .any(|function| function.has_bytes_argument())
+            || constants
+                .iter()
+                .any(|constant| constant.has_bytes_argument())
             || records.iter().any(|record| record.has_bytes_argument())
             || enums
                 .iter()
                 .any(|enumeration| enumeration.has_bytes_argument())
-            || classes.iter().any(|class| class.has_bytes_argument());
+            || classes.iter().any(|class| class.has_bytes_argument())
+            || callbacks
+                .iter()
+                .any(|callback| callback.has_bytes_argument());
         let raw_wire_arguments = functions
             .iter()
             .any(|function| function.has_raw_wire_argument())
+            || constants
+                .iter()
+                .any(|constant| constant.has_raw_wire_argument())
             || records.iter().any(|record| record.has_raw_wire_argument())
             || enums
                 .iter()
                 .any(|enumeration| enumeration.has_raw_wire_argument())
-            || classes.iter().any(|class| class.has_raw_wire_argument());
+            || classes.iter().any(|class| class.has_raw_wire_argument())
+            || callbacks
+                .iter()
+                .any(|callback| callback.has_raw_wire_argument());
         Ok(Self {
             primitives,
             wire_primitives,
@@ -520,6 +619,10 @@ impl ModuleSupport {
 
     fn uses_raw_wire_arguments(&self) -> bool {
         self.raw_wire_arguments
+    }
+
+    fn uses_borrowed_wire_decoders(&self) -> bool {
+        self.string_arguments || self.bytes_arguments || self.raw_wire_arguments
     }
 
     fn uses_owned_utf8(&self) -> bool {

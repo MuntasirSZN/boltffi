@@ -24,7 +24,7 @@ use crate::target::Target;
 pub struct Generation {
     manifest_path: PathBuf,
     triple: Option<String>,
-    python_module_name: Option<String>,
+    python_package_module: Option<String>,
 }
 
 impl Generation {
@@ -33,7 +33,7 @@ impl Generation {
         Self {
             manifest_path: manifest_path.into(),
             triple: None,
-            python_module_name: None,
+            python_package_module: None,
         }
     }
 
@@ -43,9 +43,9 @@ impl Generation {
         self
     }
 
-    /// Sets the CPython extension module name used by Python generation.
+    /// Sets the generated Python package module name.
     pub fn python_module_name(mut self, module_name: impl Into<String>) -> Self {
-        self.python_module_name = Some(module_name.into());
+        self.python_package_module = Some(module_name.into());
         self
     }
 
@@ -53,14 +53,18 @@ impl Generation {
     pub fn render(&self, target: Target) -> Result<GeneratedOutput, GenerationError> {
         match target {
             Target::Python => {
-                let module_name = self.python_module_name.as_deref().unwrap_or("_native");
-                let source_path = format!("{module_name}.c");
+                let host = self
+                    .python_package_module
+                    .as_deref()
+                    .map(|module| PythonCExtHost::new().module_name(module))
+                    .transpose()
+                    .map_err(GenerationError::Render)?
+                    .unwrap_or_else(PythonCExtHost::new);
                 let target = BackendTarget::new(
-                    PythonCExtHost::new(),
+                    host,
                     BridgeLayer::new(
                         CBridge::default_header().map_err(GenerationError::Render)?,
-                        PythonCExtBridge::new(module_name, source_path)
-                            .map_err(GenerationError::Render)?,
+                        PythonCExtBridge::native_module().map_err(GenerationError::Render)?,
                     ),
                 );
                 self.render_backend(&target)

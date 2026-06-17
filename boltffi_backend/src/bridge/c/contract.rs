@@ -433,6 +433,14 @@ impl SupportFunctions {
                     Type::Void,
                 ),
                 Function::new(
+                    "boltffi_buf_from_bytes",
+                    vec![
+                        Parameter::new("ptr", Type::ConstPointer(Box::new(Type::Uint8))),
+                        Parameter::new("len", Type::PointerWidth),
+                    ],
+                    Type::Buffer,
+                ),
+                Function::new(
                     "boltffi_last_error_message",
                     vec![Parameter::new(
                         "out",

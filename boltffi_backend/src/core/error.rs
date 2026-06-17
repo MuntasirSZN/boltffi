@@ -76,6 +76,12 @@ pub enum BackendError {
         /// Invalid method name text.
         name: String,
     },
+    /// A generated Python package module name was invalid.
+    #[error("invalid Python package module name `{name}`")]
+    InvalidPythonPackageModule {
+        /// Invalid module name text.
+        name: String,
+    },
     /// A backend template failed to render.
     #[error("template rendering failed: {message}")]
     Template {

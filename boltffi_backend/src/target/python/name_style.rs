@@ -1,7 +1,14 @@
 use boltffi_binding::{CanonicalName, NamePart};
 
+use crate::core::{Error, Result};
+
 pub struct Name<'source> {
     source: &'source CanonicalName,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PackageModule {
+    name: String,
 }
 
 impl<'source> Name<'source> {
@@ -43,6 +50,36 @@ impl<'source> Name<'source> {
     }
 }
 
+impl PackageModule {
+    pub fn parse(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        if Self::identifier(&name) && !keyword(&name) {
+            Ok(Self { name })
+        } else {
+            Err(Error::InvalidPythonPackageModule { name })
+        }
+    }
+
+    pub fn from_canonical(name: &CanonicalName) -> Self {
+        Self {
+            name: Name::new(name).function(),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.name
+    }
+
+    fn identifier(name: &str) -> bool {
+        let mut characters = name.chars();
+        let Some(first_character) = characters.next() else {
+            return false;
+        };
+        (first_character == '_' || first_character.is_alphabetic())
+            && characters.all(|character| character == '_' || character.is_alphanumeric())
+    }
+}
+
 fn capitalized(part: &str) -> String {
     let mut characters = part.chars();
     characters.next().map_or_else(String::new, |first| {
@@ -62,6 +99,7 @@ fn keyword(name: &str) -> bool {
             | "async"
             | "await"
             | "break"
+            | "case"
             | "class"
             | "continue"
             | "def"
@@ -78,6 +116,7 @@ fn keyword(name: &str) -> bool {
             | "in"
             | "is"
             | "lambda"
+            | "match"
             | "nonlocal"
             | "not"
             | "or"
@@ -85,6 +124,7 @@ fn keyword(name: &str) -> bool {
             | "raise"
             | "return"
             | "try"
+            | "type"
             | "while"
             | "with"
             | "yield"

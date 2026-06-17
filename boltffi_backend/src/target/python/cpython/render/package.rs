@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    Bindings, BuiltinType, CStyleEnumDecl, ClassDecl, ClassId, CustomTypeId, DataEnumDecl,
-    DataVariantDecl, DataVariantPayload, DeclarationRef, DirectFieldDecl, DirectRecordDecl,
-    EncodedFieldDecl, EncodedRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedMethodDecl, FieldKey,
-    FunctionDecl, HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native,
-    NativeSymbol, OutOfRust, ParamDecl, ParamPlan, Primitive, Receive, RecordDecl, RecordId,
-    ReturnPlan, StreamDecl, StreamItemPlan, StreamMode, TypeRef, native,
+    Bindings, BuiltinType, CStyleEnumDecl, CanonicalName, ClassDecl, ClassId, ConstantDecl,
+    ConstantValueDecl, CustomTypeId, DataEnumDecl, DataVariantDecl, DataVariantPayload,
+    DeclarationRef, DefaultValue, DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl,
+    EncodedRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedMethodDecl, FieldKey, FunctionDecl,
+    HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native, NativeSymbol,
+    OutOfRust, ParamDecl, ParamPlan, Primitive, Receive, RecordDecl, RecordId, ReturnPlan,
+    StreamDecl, StreamItemPlan, StreamMode, TypeRef, native,
 };
 
 use crate::{
@@ -15,7 +16,7 @@ use crate::{
     core::{Error, FilePath, GeneratedFile, GeneratedOutput, Result},
     target::python::{
         cpython::render::{class, custom, enumeration, function, primitive, record, stream},
-        name_style::Name,
+        name_style::{Name, PackageModule},
     },
 };
 
@@ -31,6 +32,7 @@ struct InitTemplate {
     records: Vec<RecordClass>,
     enums: Vec<EnumClass>,
     classes: Vec<Class>,
+    constants: Vec<ConstantStub>,
     functions: Vec<FunctionStub>,
 }
 
@@ -41,6 +43,7 @@ struct StubTemplate {
     records: Vec<RecordClass>,
     enums: Vec<EnumClass>,
     classes: Vec<Class>,
+    constants: Vec<ConstantStub>,
     functions: Vec<FunctionStub>,
 }
 
@@ -61,14 +64,20 @@ struct SetupTemplate {
 pub struct Package<'binding, 'bridge> {
     bindings: &'binding Bindings<Native>,
     bridge: &'bridge PythonCExtBridgeContract,
+    module: PackageModule,
 }
 
 impl<'binding, 'bridge> Package<'binding, 'bridge> {
     pub fn new(
         bindings: &'binding Bindings<Native>,
         bridge: &'bridge PythonCExtBridgeContract,
+        module: PackageModule,
     ) -> Self {
-        Self { bindings, bridge }
+        Self {
+            bindings,
+            bridge,
+            module,
+        }
     }
 
     pub fn render(self) -> Result<GeneratedOutput> {
@@ -78,6 +87,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
         let records = self.records()?;
         let enums = self.enums()?;
         let classes = self.classes()?;
+        let constants = self.constants()?;
         let functions = self.functions();
         let stubs = functions
             .iter()
@@ -88,6 +98,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             || enums.iter().any(EnumClass::has_wire)
             || enums.iter().any(EnumClass::uses_wire_helpers)
             || classes.iter().any(Class::uses_wire_helpers)
+            || constants.iter().any(ConstantStub::uses_wire_helpers)
             || stubs.iter().any(FunctionStub::uses_wire_helpers);
         Ok(GeneratedOutput::new(
             vec![
@@ -120,12 +131,13 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                             .as_deref()
                             .map(Self::literal)
                             .unwrap_or_else(|| "None".to_owned()),
-                        library_name: module.clone(),
+                        library_name: package.clone(),
                         uses_wire_helpers,
                         has_data_enums: enums.iter().any(EnumClass::has_wire),
                         records: records.clone(),
                         enums: enums.clone(),
                         classes: classes.clone(),
+                        constants: constants.clone(),
                         functions: stubs.clone(),
                     }
                     .render()?,
@@ -137,6 +149,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                         records,
                         enums,
                         classes,
+                        constants,
                         functions: stubs,
                     }
                     .render()?,
@@ -148,11 +161,11 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
     }
 
     fn module_name(&self) -> String {
-        Name::new(self.bindings.package().name()).function()
+        self.module.as_str().to_owned()
     }
 
     fn package_name(&self) -> String {
-        self.module_name()
+        Name::new(self.bindings.package().name()).function()
     }
 
     fn package_version(&self) -> Option<String> {
@@ -165,7 +178,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .iter()
             .filter_map(|decl| match DeclarationRef::from(decl) {
                 DeclarationRef::Function(function)
-                    if function::Wrapper::supports(function.callable()) =>
+                    if function::Function::supports(function.callable()) =>
                 {
                     Some(function)
                 }
@@ -178,6 +191,24 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
+            .collect()
+    }
+
+    fn constants(&self) -> Result<Vec<ConstantStub>> {
+        self.bindings
+            .decls()
+            .iter()
+            .filter_map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Constant(constant) => Some(constant),
+                DeclarationRef::Function(_)
+                | DeclarationRef::Record(_)
+                | DeclarationRef::Enum(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|constant| ConstantStub::from_declaration(constant, self))
             .collect()
     }
 
@@ -255,7 +286,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .iter()
             .filter_map(|decl| match DeclarationRef::from(decl) {
                 DeclarationRef::Stream(stream)
-                    if stream.owner() == Some(class) && stream::Wrapper::supports(stream) =>
+                    if stream.owner() == Some(class) && stream::Stream::supports(stream) =>
                 {
                     Some(stream)
                 }
@@ -326,6 +357,41 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .ok_or(Error::UnsupportedTarget {
                 target: "python",
                 shape: "enum type hint without declaration",
+            })
+    }
+
+    fn enum_variant_expression(
+        &self,
+        enum_name: &CanonicalName,
+        variant_name: &CanonicalName,
+    ) -> Result<String> {
+        self.bindings
+            .decls()
+            .iter()
+            .find_map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Enum(EnumDecl::CStyle(enumeration))
+                    if enumeration.name() == enum_name =>
+                {
+                    Some(EnumVariantStyle::CStyle)
+                }
+                DeclarationRef::Enum(EnumDecl::Data(enumeration))
+                    if enumeration.name() == enum_name =>
+                {
+                    Some(EnumVariantStyle::Data)
+                }
+                DeclarationRef::Enum(_)
+                | DeclarationRef::Record(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|style| style.expression(enum_name, variant_name))
+            .ok_or(Error::UnsupportedTarget {
+                target: "python",
+                shape: "enum constant without declaration",
             })
     }
 
@@ -449,6 +515,114 @@ impl FunctionStub {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct ConstantStub {
+    python_name: String,
+    annotation: String,
+    expression: String,
+    uses_wire_helpers: bool,
+}
+
+impl ConstantStub {
+    fn from_declaration(
+        constant: &ConstantDecl<Native>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        match constant.value() {
+            ConstantValueDecl::Inline { ty, value, .. } => {
+                Self::from_inline(constant, ty, value, package)
+            }
+            ConstantValueDecl::Accessor { callable, .. } => {
+                let returned = ReturnStub::from_plan(callable.returns().plan(), package)?;
+                let native_call = format!("_native.{}()", Name::new(constant.name()).function());
+                Ok(Self {
+                    python_name: Name::new(constant.name()).function(),
+                    annotation: returned.annotation,
+                    expression: returned.value.expression(native_call),
+                    uses_wire_helpers: returned.value.uses_wire_helpers(),
+                })
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unknown constant value package",
+            }),
+        }
+    }
+
+    fn uses_wire_helpers(&self) -> bool {
+        self.uses_wire_helpers
+    }
+
+    fn from_inline(
+        constant: &ConstantDecl<Native>,
+        ty: &TypeRef,
+        value: &DefaultValue,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        Ok(Self {
+            python_name: Name::new(constant.name()).function(),
+            annotation: PythonTypeHint::from_type_ref(ty, package)?.into_string(),
+            expression: ConstantExpression::new(value, package)?.into_string(),
+            uses_wire_helpers: false,
+        })
+    }
+}
+
+struct ConstantExpression {
+    expression: String,
+}
+
+impl ConstantExpression {
+    fn new(value: &DefaultValue, package: &Package<'_, '_>) -> Result<Self> {
+        Ok(Self {
+            expression: match value {
+                DefaultValue::Bool(value) => Self::bool(*value),
+                DefaultValue::Integer(value) => value.get().to_string(),
+                DefaultValue::Float(value) => Self::float(value.to_f64()),
+                DefaultValue::String(value) => Package::literal(value),
+                DefaultValue::EnumVariant {
+                    enum_name,
+                    variant_name,
+                } => package.enum_variant_expression(enum_name, variant_name)?,
+                DefaultValue::Null => "None".to_owned(),
+                _ => {
+                    return Err(Error::UnsupportedTarget {
+                        target: "python",
+                        shape: "unknown constant literal",
+                    });
+                }
+            },
+        })
+    }
+
+    fn into_string(self) -> String {
+        self.expression
+    }
+
+    fn bool(value: bool) -> String {
+        match value {
+            true => "True".to_owned(),
+            false => "False".to_owned(),
+        }
+    }
+
+    fn float(value: f64) -> String {
+        if value.is_nan() {
+            return "float(\"nan\")".to_owned();
+        }
+        if value == f64::INFINITY {
+            return "float(\"inf\")".to_owned();
+        }
+        if value == f64::NEG_INFINITY {
+            return "float(\"-inf\")".to_owned();
+        }
+        if value == 0.0 && value.is_sign_negative() {
+            return "-0.0".to_owned();
+        }
+        value.to_string()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct RecordClass {
     class_name: String,
     register_method: String,
@@ -535,7 +709,7 @@ impl RecordClass {
     ) -> Result<Vec<AssociatedCallable>> {
         initializers
             .iter()
-            .filter(|initializer| function::Wrapper::supports(initializer.callable()))
+            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| {
                 AssociatedCallable::from_value_initializer(
                     initializer,
@@ -554,7 +728,7 @@ impl RecordClass {
         methods
             .iter()
             .filter(|method| {
-                function::Wrapper::supports(method.callable())
+                function::Function::supports(method.callable())
                     && method.callable().receiver().is_none()
             })
             .map(|method| {
@@ -576,7 +750,7 @@ impl RecordClass {
         methods
             .iter()
             .filter(|method| {
-                function::Wrapper::supports(method.callable())
+                function::Function::supports(method.callable())
                     && !matches!(method.callable().receiver(), None | Some(Receive::ByMutRef))
             })
             .map(|method| {
@@ -830,6 +1004,28 @@ enum EnumWire {
     Data { class_name: String },
 }
 
+enum EnumVariantStyle {
+    CStyle,
+    Data,
+}
+
+impl EnumVariantStyle {
+    fn expression(self, enum_name: &CanonicalName, variant_name: &CanonicalName) -> String {
+        match self {
+            Self::CStyle => format!(
+                "{}.{}",
+                Name::new(enum_name).class(),
+                Name::new(variant_name).enum_member()
+            ),
+            Self::Data => format!(
+                "{}{}()",
+                Name::new(enum_name).class(),
+                Name::new(variant_name).class()
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct EnumClass {
     class_name: String,
@@ -914,7 +1110,7 @@ impl EnumClass {
     ) -> Result<Vec<AssociatedCallable>> {
         initializers
             .iter()
-            .filter(|initializer| function::Wrapper::supports(initializer.callable()))
+            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| {
                 AssociatedCallable::from_value_initializer(
                     initializer,
@@ -933,7 +1129,7 @@ impl EnumClass {
         methods
             .iter()
             .filter(|method| {
-                function::Wrapper::supports(method.callable())
+                function::Function::supports(method.callable())
                     && method.callable().receiver().is_none()
             })
             .map(|method| {
@@ -955,7 +1151,7 @@ impl EnumClass {
         methods
             .iter()
             .filter(|method| {
-                function::Wrapper::supports(method.callable())
+                function::Function::supports(method.callable())
                     && !matches!(method.callable().receiver(), None | Some(Receive::ByMutRef))
             })
             .map(|method| {
@@ -1058,7 +1254,7 @@ impl Class {
         let constructors = declaration
             .initializers()
             .iter()
-            .filter(|initializer| function::Wrapper::supports(initializer.callable()))
+            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| {
                 AssociatedCallable::from_class_initializer(initializer, &symbols, package)
             })
@@ -1075,7 +1271,7 @@ impl Class {
         let methods = declaration
             .methods()
             .iter()
-            .filter(|method| function::Wrapper::supports(method.callable()))
+            .filter(|method| function::Function::supports(method.callable()))
             .map(|method| AssociatedCallable::from_class_method(method, &symbols, package))
             .collect::<Result<Vec<_>>>()?;
         let (instance_methods, static_methods): (Vec<_>, Vec<_>) =
@@ -1484,12 +1680,21 @@ impl ReturnedValue {
     fn statement(&self, native_call: String) -> String {
         match self {
             Self::Void => native_call,
-            Self::Native => format!("return {native_call}"),
+            Self::Native | Self::ClassHandle(_) | Self::Wire(_) => {
+                format!("return {}", self.expression(native_call))
+            }
+        }
+    }
+
+    fn expression(&self, native_call: String) -> String {
+        match self {
+            Self::Void => native_call,
+            Self::Native => native_call,
             Self::ClassHandle(class_name) => {
-                format!("return {class_name}._from_handle({native_call})")
+                format!("{class_name}._from_handle({native_call})")
             }
             Self::Wire(decode) => {
-                format!("return _boltffi_read_wire({native_call}, lambda reader: {decode})")
+                format!("_boltffi_read_wire({native_call}, lambda reader: {decode})")
             }
         }
     }

@@ -1,6 +1,7 @@
 mod argument;
 mod callback;
 mod class;
+mod constant;
 mod custom;
 mod direct_vector;
 mod enumeration;
@@ -13,11 +14,12 @@ mod record;
 mod result;
 mod stream;
 
-pub use callback::Wrapper as CallbackWrapper;
-pub use class::Wrapper as ClassWrapper;
-pub use enumeration::Wrapper as EnumWrapper;
-pub use function::Wrapper;
+pub use callback::Callback;
+pub use class::Class;
+pub use constant::Constant;
+pub use enumeration::Enumeration;
+pub use function::Function;
 pub use module::NativeModule;
 pub use package::Package;
-pub use record::Wrapper as RecordWrapper;
-pub use stream::Wrapper as StreamWrapper;
+pub use record::Record;
+pub use stream::Stream;

@@ -120,6 +120,9 @@ class {{ stream.subscription_class }}:
 
 {% endfor %}
 {% endfor %}
+{% for constant in constants %}
+{{ constant.python_name }}: {{ constant.annotation }}
+{% endfor %}
 {% for function in functions %}
 def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_annotation }}: ...
 {%- endfor %}

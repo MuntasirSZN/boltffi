@@ -38,16 +38,17 @@ struct EncodedTemplate {
     register_wrapper: String,
     wire_encoder: String,
     owned_decoder: String,
+    borrowed_decoder: String,
 }
 
-pub struct Wrapper {
+pub struct Record {
     symbols: Symbols,
     shape: Shape,
     method: ExtensionMethod,
-    callables: Vec<function::Wrapper>,
+    callables: Vec<function::Function>,
 }
 
-impl Wrapper {
+impl Record {
     pub fn from_declaration(
         declaration: &RecordDecl<Native>,
         bridge: &PythonCExtBridgeContract,
@@ -87,13 +88,14 @@ impl Wrapper {
                 register_wrapper: symbols.register_wrapper,
                 wire_encoder: symbols.parser,
                 owned_decoder: symbols.boxer,
+                borrowed_decoder: symbols.borrowed_decoder,
             }
             .render()?,
         };
         let callables = self
             .callables
             .into_iter()
-            .map(function::Wrapper::render)
+            .map(function::Function::render)
             .collect::<Result<Vec<_>>>()?;
         Ok(Emitted::primary(
             std::iter::once(source)
@@ -108,7 +110,7 @@ impl Wrapper {
     }
 
     pub fn methods(&self) -> impl Iterator<Item = &ExtensionMethod> {
-        std::iter::once(&self.method).chain(self.callables.iter().map(function::Wrapper::method))
+        std::iter::once(&self.method).chain(self.callables.iter().map(function::Function::method))
     }
 
     pub fn primitives(&self) -> Vec<primitive::Runtime> {
@@ -120,7 +122,7 @@ impl Wrapper {
             .chain(
                 self.callables
                     .iter()
-                    .flat_map(function::Wrapper::primitives),
+                    .flat_map(function::Function::primitives),
             )
             .collect()
     }
@@ -136,37 +138,37 @@ impl Wrapper {
     pub fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
         self.callables
             .iter()
-            .filter_map(function::Wrapper::owned_buffer)
+            .filter_map(function::Function::owned_buffer)
     }
 
     pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
         self.callables
             .iter()
-            .flat_map(function::Wrapper::wire_primitives)
+            .flat_map(function::Function::wire_primitives)
     }
 
     pub fn direct_vector_elements(&self) -> impl Iterator<Item = direct_vector::Element> + '_ {
         self.callables
             .iter()
-            .flat_map(function::Wrapper::direct_vector_elements)
+            .flat_map(function::Function::direct_vector_elements)
     }
 
     pub fn has_string_argument(&self) -> bool {
         self.callables
             .iter()
-            .any(function::Wrapper::has_string_argument)
+            .any(function::Function::has_string_argument)
     }
 
     pub fn has_bytes_argument(&self) -> bool {
         self.callables
             .iter()
-            .any(function::Wrapper::has_bytes_argument)
+            .any(function::Function::has_bytes_argument)
     }
 
     pub fn has_raw_wire_argument(&self) -> bool {
         self.callables
             .iter()
-            .any(function::Wrapper::has_raw_wire_argument)
+            .any(function::Function::has_raw_wire_argument)
     }
 
     fn from_direct(
@@ -234,17 +236,17 @@ impl Wrapper {
         symbols: &Symbols,
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
-    ) -> Result<Vec<function::Wrapper>> {
+    ) -> Result<Vec<function::Function>> {
         let initializers = record
             .initializers()
             .iter()
-            .filter(|initializer| function::Wrapper::supports(initializer.callable()))
+            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| Self::initializer(initializer, symbols, bridge, context));
         let methods = record
             .methods()
             .iter()
             .filter(|method| {
-                function::Wrapper::supports(method.callable())
+                function::Function::supports(method.callable())
                     && !matches!(method.callable().receiver(), Some(Receive::ByMutRef))
             })
             .map(|method| {
@@ -267,17 +269,17 @@ impl Wrapper {
         symbols: &Symbols,
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
-    ) -> Result<Vec<function::Wrapper>> {
+    ) -> Result<Vec<function::Function>> {
         let initializers = record
             .initializers()
             .iter()
-            .filter(|initializer| function::Wrapper::supports(initializer.callable()))
+            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| Self::initializer(initializer, symbols, bridge, context));
         let methods = record
             .methods()
             .iter()
             .filter(|method| {
-                function::Wrapper::supports(method.callable())
+                function::Function::supports(method.callable())
                     && !matches!(method.callable().receiver(), Some(Receive::ByMutRef))
             })
             .map(|method| {
@@ -305,8 +307,8 @@ impl Wrapper {
         symbols: &Symbols,
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
-    ) -> Result<function::Wrapper> {
-        function::Wrapper::from_export(
+    ) -> Result<function::Function> {
+        function::Function::from_export(
             symbols.initializer(initializer.name()),
             initializer.symbol(),
             initializer.callable(),
@@ -322,8 +324,8 @@ impl Wrapper {
         receiver: Vec<argument::Conversion>,
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
-    ) -> Result<function::Wrapper> {
-        function::Wrapper::from_export(
+    ) -> Result<function::Function> {
+        function::Function::from_export(
             symbols.method(method.name()),
             method.target(),
             method.callable(),
@@ -343,6 +345,7 @@ pub struct Symbols {
     register_wrapper: String,
     parser: String,
     boxer: String,
+    borrowed_decoder: String,
     direct_vec_parser: Option<String>,
     direct_vec_decoder: Option<String>,
 }
@@ -411,6 +414,14 @@ impl Symbols {
         &self.boxer
     }
 
+    pub fn borrowed_decoder(&self) -> &str {
+        &self.borrowed_decoder
+    }
+
+    pub fn stem(&self) -> &str {
+        &self.stem
+    }
+
     pub fn direct_vec_parser(&self) -> Result<&str> {
         self.direct_vec_parser
             .as_deref()
@@ -456,6 +467,7 @@ impl Symbols {
             register_wrapper: format!("boltffi_python_wrapper_register_{stem}"),
             parser: format!("boltffi_python_parse_{stem}"),
             boxer: format!("boltffi_python_box_{stem}"),
+            borrowed_decoder: String::new(),
             direct_vec_parser: Some(format!("boltffi_python_parse_vec_{stem}")),
             direct_vec_decoder: Some(format!("boltffi_python_decode_owned_vec_{stem}")),
         })
@@ -472,6 +484,7 @@ impl Symbols {
             register_wrapper: format!("boltffi_python_wrapper_register_{stem}"),
             parser: format!("boltffi_python_wire_{stem}"),
             boxer: format!("boltffi_python_decode_owned_{stem}"),
+            borrowed_decoder: format!("boltffi_python_decode_borrowed_{stem}"),
             direct_vec_parser: None,
             direct_vec_decoder: None,
         })

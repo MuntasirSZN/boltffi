@@ -29,7 +29,7 @@ struct Template {
     receiver: Option<Receiver>,
 }
 
-pub struct Wrapper {
+pub struct Stream {
     subscribe: Method,
     pop_batch: Method,
     wait: Method,
@@ -40,7 +40,7 @@ pub struct Wrapper {
     receiver: Option<Receiver>,
 }
 
-impl Wrapper {
+impl Stream {
     pub fn supports(declaration: &StreamDecl<Native>) -> bool {
         matches!(declaration.mode(), StreamMode::Async | StreamMode::Batch)
             && matches!(

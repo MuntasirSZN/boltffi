@@ -12,6 +12,8 @@ pub struct Element {
     c_type: String,
     parser: String,
     boxer: String,
+    vector_boxer: String,
+    vector_encoder: String,
     vector_parser: String,
     vector_decoder: String,
 }
@@ -39,6 +41,8 @@ impl Element {
             c_type: runtime.c_type()?,
             parser: runtime.parser()?.to_owned(),
             boxer: runtime.boxer()?.to_owned(),
+            vector_boxer: format!("boltffi_python_box_vec_{}", runtime.wire_stem()?),
+            vector_encoder: format!("boltffi_python_wire_vec_{}", runtime.wire_stem()?),
             vector_parser: runtime.direct_vec_parser()?,
             vector_decoder: runtime.direct_vec_decoder()?,
         })
@@ -54,6 +58,14 @@ impl Element {
 
     pub fn boxer(&self) -> &str {
         &self.boxer
+    }
+
+    pub fn vector_boxer(&self) -> &str {
+        &self.vector_boxer
+    }
+
+    pub fn vector_encoder(&self) -> &str {
+        &self.vector_encoder
     }
 
     pub fn vector_parser(&self) -> &str {
@@ -79,6 +91,8 @@ impl Element {
             c_type: symbols.c_type()?.to_owned(),
             parser: symbols.parser().to_owned(),
             boxer: symbols.boxer().to_owned(),
+            vector_boxer: format!("boltffi_python_box_vec_{}", symbols.stem()),
+            vector_encoder: format!("boltffi_python_wire_vec_{}", symbols.stem()),
             vector_parser: symbols.direct_vec_parser()?.to_owned(),
             vector_decoder: symbols.direct_vec_decoder()?.to_owned(),
         })
@@ -95,6 +109,8 @@ impl Element {
             c_type: symbols.c_type()?.to_owned(),
             parser: symbols.parser().to_owned(),
             boxer: symbols.boxer().to_owned(),
+            vector_boxer: format!("boltffi_python_box_vec_{}", symbols.stem()),
+            vector_encoder: format!("boltffi_python_wire_vec_{}", symbols.stem()),
             vector_parser: symbols.direct_vec_parser()?.to_owned(),
             vector_decoder: symbols.direct_vec_decoder()?.to_owned(),
         })

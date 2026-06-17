@@ -40,6 +40,12 @@ impl Conversion {
                 receive: Receive::ByValue,
                 ..
             })
+            | IncomingParam::Value(ParamPlan::Handle {
+                target: HandleTarget::Callback(_),
+                carrier: native::HandleCarrier::CallbackHandle,
+                receive: Receive::ByValue,
+                ..
+            })
             | IncomingParam::Value(ParamPlan::DirectVec {
                 element: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
             }) => true,
@@ -265,52 +271,42 @@ impl Conversion {
     }
 
     pub fn is_string(&self) -> bool {
-        matches!(
-            self.kind,
-            Kind::Encoded(EncodedParam {
-                value: Encoded::String,
-                ..
-            })
-        )
+        matches!(&self.kind, Kind::Encoded(encoded) if matches!(encoded.value, Encoded::String))
     }
 
     pub fn is_bytes(&self) -> bool {
-        matches!(
-            self.kind,
-            Kind::Encoded(EncodedParam {
-                value: Encoded::Bytes,
-                ..
-            })
-        )
+        matches!(&self.kind, Kind::Encoded(encoded) if matches!(encoded.value, Encoded::Bytes))
     }
 
     pub fn is_raw_wire(&self) -> bool {
-        matches!(
-            self.kind,
-            Kind::Encoded(EncodedParam {
-                value: Encoded::RawWire,
-                ..
-            })
-        )
+        matches!(&self.kind, Kind::Encoded(encoded) if matches!(encoded.value, Encoded::RawWire))
     }
 
     pub fn wire_primitive(&self) -> Option<primitive::Runtime> {
-        match self.kind {
-            Kind::Encoded(EncodedParam {
-                value: Encoded::Primitive(primitive),
-                ..
-            }) => Some(primitive),
-            Kind::Direct(_) | Kind::Encoded(_) => None,
+        match &self.kind {
+            Kind::Encoded(encoded) => match encoded.value {
+                Encoded::Primitive(primitive) => Some(primitive),
+                Encoded::String
+                | Encoded::Bytes
+                | Encoded::RegisteredType(_)
+                | Encoded::RawWire
+                | Encoded::DirectVector(_) => None,
+            },
+            Kind::Direct(_) => None,
         }
     }
 
     pub fn direct_vector_element(&self) -> Option<direct_vector::Element> {
-        match self.kind {
-            Kind::Encoded(EncodedParam {
-                value: Encoded::DirectVector(ref element),
-                ..
-            }) => Some(element.clone()),
-            Kind::Direct(_) | Kind::Encoded(_) => None,
+        match &self.kind {
+            Kind::Encoded(encoded) => match &encoded.value {
+                Encoded::DirectVector(element) => Some(element.clone()),
+                Encoded::String
+                | Encoded::Bytes
+                | Encoded::Primitive(_)
+                | Encoded::RegisteredType(_)
+                | Encoded::RawWire => None,
+            },
+            Kind::Direct(_) => None,
         }
     }
 
@@ -541,13 +537,13 @@ impl Conversion {
         Ok(Self {
             index,
             name,
-            kind: Kind::Encoded(EncodedParam {
+            kind: Kind::Encoded(Box::new(EncodedParam {
                 value: encoded,
                 parser,
                 wire,
                 pointer,
                 length,
-            }),
+            })),
             primitive,
         })
     }
@@ -555,7 +551,7 @@ impl Conversion {
 
 enum Kind {
     Direct(Direct),
-    Encoded(EncodedParam),
+    Encoded(Box<EncodedParam>),
 }
 
 struct Direct {

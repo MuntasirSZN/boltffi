@@ -20,12 +20,12 @@ struct ReleaseTemplate {
     parser: String,
 }
 
-pub struct Wrapper {
+pub struct Class {
     release: Release,
-    callables: Vec<function::Wrapper>,
+    callables: Vec<function::Function>,
 }
 
-impl Wrapper {
+impl Class {
     pub fn from_declaration(
         declaration: &ClassDecl<Native>,
         bridge: &PythonCExtBridgeContract,
@@ -33,10 +33,10 @@ impl Wrapper {
     ) -> Result<Self> {
         let symbols = Symbols::new(declaration);
         let initializers = declaration.initializers().iter().map(|initializer| {
-            if !function::Wrapper::supports(initializer.callable()) {
+            if !function::Function::supports(initializer.callable()) {
                 return Ok(None);
             }
-            function::Wrapper::from_export(
+            function::Function::from_export(
                 symbols.initializer(initializer.name()),
                 initializer.symbol(),
                 initializer.callable(),
@@ -47,7 +47,7 @@ impl Wrapper {
             .map(Some)
         });
         let methods = declaration.methods().iter().map(|method| {
-            if !function::Wrapper::supports(method.callable()) {
+            if !function::Function::supports(method.callable()) {
                 return Ok(None);
             }
             let receiver = method
@@ -57,7 +57,7 @@ impl Wrapper {
                 .transpose()?
                 .into_iter()
                 .collect();
-            function::Wrapper::from_export(
+            function::Function::from_export(
                 symbols.method(method.name()),
                 method.target(),
                 method.callable(),
@@ -83,7 +83,7 @@ impl Wrapper {
         let callables = self
             .callables
             .into_iter()
-            .map(function::Wrapper::render)
+            .map(function::Function::render)
             .collect::<Result<Vec<_>>>()?;
         let source = std::iter::once(release)
             .chain(
@@ -98,13 +98,13 @@ impl Wrapper {
 
     pub fn methods(&self) -> impl Iterator<Item = &ExtensionMethod> {
         std::iter::once(self.release.method())
-            .chain(self.callables.iter().map(function::Wrapper::method))
+            .chain(self.callables.iter().map(function::Function::method))
     }
 
     pub fn primitives(&self) -> Vec<primitive::Runtime> {
         self.callables
             .iter()
-            .flat_map(function::Wrapper::primitives)
+            .flat_map(function::Function::primitives)
             .chain(std::iter::once(self.release.primitive()))
             .collect()
     }
@@ -112,37 +112,37 @@ impl Wrapper {
     pub fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
         self.callables
             .iter()
-            .filter_map(function::Wrapper::owned_buffer)
+            .filter_map(function::Function::owned_buffer)
     }
 
     pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
         self.callables
             .iter()
-            .flat_map(function::Wrapper::wire_primitives)
+            .flat_map(function::Function::wire_primitives)
     }
 
     pub fn direct_vector_elements(&self) -> impl Iterator<Item = direct_vector::Element> + '_ {
         self.callables
             .iter()
-            .flat_map(function::Wrapper::direct_vector_elements)
+            .flat_map(function::Function::direct_vector_elements)
     }
 
     pub fn has_string_argument(&self) -> bool {
         self.callables
             .iter()
-            .any(function::Wrapper::has_string_argument)
+            .any(function::Function::has_string_argument)
     }
 
     pub fn has_bytes_argument(&self) -> bool {
         self.callables
             .iter()
-            .any(function::Wrapper::has_bytes_argument)
+            .any(function::Function::has_bytes_argument)
     }
 
     pub fn has_raw_wire_argument(&self) -> bool {
         self.callables
             .iter()
-            .any(function::Wrapper::has_raw_wire_argument)
+            .any(function::Function::has_raw_wire_argument)
     }
 }
 

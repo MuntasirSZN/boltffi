@@ -514,6 +514,9 @@ class {{ stream.subscription_class }}:
 
 {% endfor %}
 {% endfor %}
+{% for constant in constants %}
+{{ constant.python_name }}: {{ constant.annotation }} = {{ constant.expression }}
+{% endfor %}
 {% for function in functions %}
 def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_annotation }}:
     {{ function.body }}
@@ -544,6 +547,9 @@ __all__ = [
 {%- for stream in class.streams %}
     "{{ stream.subscription_class }}",
 {%- endfor %}
+{%- endfor %}
+{%- for constant in constants %}
+    "{{ constant.python_name }}",
 {%- endfor %}
 {%- for function in functions %}
     "{{ function.python_name }}",
