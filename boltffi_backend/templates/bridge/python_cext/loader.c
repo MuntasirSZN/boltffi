@@ -23,6 +23,8 @@ static HMODULE boltffi_python_library_handle = NULL;
 static void *boltffi_python_library_handle = NULL;
 #endif
 
+static void boltffi_python_release_host_state(void);
+
 static void boltffi_python_clear_symbols(void) {
 {%- for function in functions %}
     {{ function.storage_name }} = NULL;
@@ -116,5 +118,6 @@ static PyObject *{{ loader_function }}(PyObject *self, PyObject *library_path) {
 
 static void {{ free_function }}(void *module) {
     (void)module;
+    boltffi_python_release_host_state();
     boltffi_python_unload_library();
 }

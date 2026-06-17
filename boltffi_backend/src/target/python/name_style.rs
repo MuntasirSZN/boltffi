@@ -22,6 +22,22 @@ impl<'source> Name<'source> {
             false => name,
         }
     }
+
+    pub fn class(&self) -> String {
+        self.source
+            .parts()
+            .iter()
+            .map(NamePart::as_str)
+            .map(capitalized)
+            .collect()
+    }
+}
+
+fn capitalized(part: &str) -> String {
+    let mut characters = part.chars();
+    characters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(characters).collect()
+    })
 }
 
 fn keyword(name: &str) -> bool {

@@ -119,6 +119,72 @@ done:
     return result;
 }
 {% endif %}
+{% if support.uses_direct_records() %}
+static int boltffi_python_validate_registered_type_object(PyObject *type_object, const char *type_name) {
+    if (!PyType_Check(type_object)) {
+        PyErr_Format(PyExc_TypeError, "expected type for %s", type_name);
+        return 0;
+    }
+    return 1;
+}
+
+static int boltffi_python_store_registered_type(PyObject **type_slot, PyObject *type_object, const char *type_name) {
+    if (!boltffi_python_validate_registered_type_object(type_object, type_name)) {
+        return 0;
+    }
+    Py_INCREF(type_object);
+    Py_XDECREF(*type_slot);
+    *type_slot = type_object;
+    return 1;
+}
+
+static int boltffi_python_expect_registered_type(PyObject *type_object, const char *type_name) {
+    if (type_object != NULL) {
+        return 1;
+    }
+    PyErr_Format(PyExc_ImportError, "native type %s is not registered", type_name);
+    return 0;
+}
+
+static int boltffi_python_expect_type_instance(PyObject *value, PyObject *type_object, const char *type_name) {
+    int is_instance = 0;
+    if (!boltffi_python_expect_registered_type(type_object, type_name)) {
+        return 0;
+    }
+    is_instance = PyObject_IsInstance(value, type_object);
+    if (is_instance < 0) {
+        return 0;
+    }
+    if (is_instance == 0) {
+        PyErr_Format(PyExc_TypeError, "expected %s", type_name);
+        return 0;
+    }
+    return 1;
+}
+
+static PyObject *boltffi_python_get_record_field(PyObject *value, const char *record_name, const char *field_name) {
+    PyObject *field_value = PyObject_GetAttrString(value, field_name);
+    if (field_value == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+        PyErr_Clear();
+        PyErr_Format(PyExc_TypeError, "%s is missing field %s", record_name, field_name);
+    }
+    return field_value;
+}
+
+static PyObject *boltffi_python_box_registered_record(PyObject *type_object, PyObject *constructor_args, const char *record_name) {
+    PyObject *record_value = NULL;
+    if (constructor_args == NULL) {
+        return NULL;
+    }
+    if (!boltffi_python_expect_registered_type(type_object, record_name)) {
+        Py_DECREF(constructor_args);
+        return NULL;
+    }
+    record_value = PyObject_CallObject(type_object, constructor_args);
+    Py_DECREF(constructor_args);
+    return record_value;
+}
+{% endif %}
 {% for primitive in support.primitives() %}
 {% if primitive.is_bool() %}
 static int {{ primitive.parser }}(PyObject *value, bool *out) {
@@ -331,6 +397,14 @@ static PyObject *{{ primitive.boxer }}(double value) {
 }
 {% endif %}
 {% endfor %}
+{% for record in records %}
+{{ record }}
+{% endfor %}
+static void boltffi_python_release_host_state(void) {
+{%- for cleanup in cleanup %}
+    {{ cleanup }};
+{%- endfor %}
+}
 {% for function in functions %}
 {{ function }}
 {% endfor %}

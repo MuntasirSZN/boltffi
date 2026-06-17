@@ -1,23 +1,28 @@
 use boltffi_binding::{Native, OutOfRust, ReturnPlan, TypeRef, native};
 
 use crate::{
-    core::{Error, Result},
-    target::python::cpython::render::primitive,
+    bridge::python_cext::PythonCExtBridgeContract,
+    core::{Error, RenderContext, Result},
+    target::python::cpython::render::{primitive, record},
 };
 
 pub struct Conversion {
     pub void: bool,
-    pub converter: &'static str,
+    pub converter: String,
     primitive: Option<primitive::Runtime>,
     owned_buffer: Option<OwnedBuffer>,
 }
 
 impl Conversion {
-    pub fn from_plan(plan: &ReturnPlan<Native, OutOfRust>) -> Result<Self> {
+    pub fn from_plan(
+        plan: &ReturnPlan<Native, OutOfRust>,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         match plan {
             ReturnPlan::Void => Ok(Self {
                 void: true,
-                converter: "",
+                converter: String::new(),
                 primitive: None,
                 owned_buffer: None,
             }),
@@ -27,11 +32,21 @@ impl Conversion {
                 let primitive = primitive::Runtime::new(*primitive);
                 Ok(Self {
                     void: false,
-                    converter: primitive.boxer()?,
+                    converter: primitive.boxer()?.to_owned(),
                     primitive: Some(primitive),
                     owned_buffer: None,
                 })
             }
+            ReturnPlan::DirectViaReturnSlot {
+                ty: TypeRef::Record(record),
+            } => Ok(Self {
+                void: false,
+                converter: record::Symbols::from_record_id(*record, bridge, context)?
+                    .boxer()
+                    .to_owned(),
+                primitive: None,
+                owned_buffer: None,
+            }),
             ReturnPlan::EncodedViaReturnSlot {
                 ty: TypeRef::String,
                 shape: native::BufferShape::Buffer,
@@ -76,7 +91,7 @@ impl Conversion {
     fn from_owned_buffer(buffer: OwnedBuffer) -> Self {
         Self {
             void: false,
-            converter: buffer.converter(),
+            converter: buffer.converter().to_owned(),
             primitive: None,
             owned_buffer: Some(buffer),
         }

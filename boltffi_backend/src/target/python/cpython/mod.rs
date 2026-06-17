@@ -36,10 +36,7 @@ impl host::HostBackend for PythonCExtHost {
 
     fn binding_capabilities(&self) -> HostCapabilities {
         HostCapabilities::new()
-            .unsupported(
-                BindingCapability::Records,
-                "Python records are not migrated yet",
-            )
+            .stable(BindingCapability::Records)
             .unsupported(
                 BindingCapability::Enums,
                 "Python enums are not migrated yet",
@@ -73,14 +70,11 @@ impl host::HostBackend for PythonCExtHost {
 
     fn record(
         &self,
-        _decl: &RecordDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
+        decl: &RecordDecl<Self::Surface>,
+        bridge: &Self::Bridge,
         _context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Error::UnsupportedTarget {
-            target: self.name(),
-            shape: "record",
-        })
+        render::RecordWrapper::from_declaration(decl, bridge)?.render()
     }
 
     fn enumeration(
@@ -99,9 +93,9 @@ impl host::HostBackend for PythonCExtHost {
         &self,
         decl: &FunctionDecl<Self::Surface>,
         bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Wrapper::from_declaration(decl, bridge)?.render()
+        render::Wrapper::from_declaration(decl, bridge, context)?.render()
     }
 
     fn class(
@@ -168,11 +162,11 @@ impl host::HostBackend for PythonCExtHost {
         &self,
         bindings: &Bindings<Self::Surface>,
         bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'_, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
         Ok(GeneratedOutput::combine([
-            render::NativeModule::new(bridge, declarations).render()?,
+            render::NativeModule::new(bridge, context, declarations).render()?,
             render::Package::new(bindings, bridge).render()?,
         ]))
     }
@@ -306,6 +300,50 @@ mod tests {
         assert!(stub.contains("def add(left: int, right: int) -> int: ..."));
         assert!(setup.contains("Extension(\n            \"demo._native\","));
         assert!(setup.contains("sources=[\"_native.c\"]"));
+    }
+
+    #[test]
+    fn python_target_renders_direct_record_package_and_native_conversions() {
+        let output = target()
+            .render(&bindings(
+                r#"
+                #[repr(C)]
+                #[data]
+                pub struct Point {
+                    pub x: f64,
+                    pub y: f64,
+                }
+
+                #[export]
+                pub fn echo_point(value: Point) -> Point {
+                    value
+                }
+                "#,
+            ))
+            .expect("Python target should render");
+        let extension = extension(&output);
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
+
+        assert!(extension.contains("static PyObject *boltffi_python_point_type = NULL;"));
+        assert!(extension.contains("static PyObject *boltffi_python_wrapper_register_point"));
+        assert!(extension.contains("static int boltffi_python_parse_point"));
+        assert!(extension.contains("static PyObject *boltffi_python_box_point"));
+        assert!(extension.contains("___Point value;"));
+        assert!(extension.contains("boltffi_python_parse_point(args[0], &value)"));
+        assert!(extension.contains(
+            "result = boltffi_python_box_point(boltffi_python_boltffi_function_demo_echo_point(value));"
+        ));
+        assert!(extension.contains(
+            "{\"_register_point\", (PyCFunction)boltffi_python_wrapper_register_point, METH_FASTCALL, NULL}"
+        ));
+        assert!(extension.contains("Py_CLEAR(boltffi_python_point_type);"));
+        assert!(init.contains("@dataclass(frozen=True, slots=True)\nclass Point:"));
+        assert!(init.contains("    x: float"));
+        assert!(init.contains("    y: float"));
+        assert!(init.contains("_native._register_point(Point)"));
+        assert!(stub.contains("class Point:"));
+        assert!(stub.contains("def echo_point(value: Point) -> Point: ..."));
     }
 
     #[test]

@@ -2,14 +2,15 @@ use std::path::PathBuf;
 
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    Bindings, DeclarationRef, ErrorDecl, FunctionDecl, IncomingParam, IntoRust, Native, OutOfRust,
-    ParamDecl, ParamPlan, Primitive, ReturnPlan, TypeRef, native,
+    Bindings, DeclarationRef, DirectFieldDecl, DirectRecordDecl, ErrorDecl, FieldKey, FunctionDecl,
+    IncomingParam, IntoRust, Native, OutOfRust, ParamDecl, ParamPlan, Primitive, RecordDecl,
+    RecordId, ReturnPlan, TypeRef, native,
 };
 
 use crate::{
     bridge::python_cext::PythonCExtBridgeContract,
     core::{Error, FilePath, GeneratedFile, GeneratedOutput, Result},
-    target::python::name_style::Name,
+    target::python::{cpython::render::record, name_style::Name},
 };
 
 #[derive(AskamaTemplate)]
@@ -19,12 +20,14 @@ struct InitTemplate {
     package_name_literal: String,
     package_version_literal: String,
     library_name: String,
+    records: Vec<RecordClass>,
     functions: Vec<String>,
 }
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/python/package.pyi", escape = "none")]
 struct StubTemplate {
+    records: Vec<RecordClass>,
     functions: Vec<FunctionStub>,
 }
 
@@ -59,10 +62,11 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
         let module = self.module_name();
         let package = self.package_name();
         let version = self.package_version();
+        let records = self.records()?;
         let functions = self.functions();
         let stubs = functions
             .iter()
-            .map(|function| FunctionStub::from_declaration(function))
+            .map(|function| FunctionStub::from_declaration(function, &self))
             .collect::<Result<Vec<_>>>()?;
         let names = stubs
             .iter()
@@ -100,13 +104,18 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                             .map(Self::literal)
                             .unwrap_or_else(|| "None".to_owned()),
                         library_name: module.clone(),
+                        records: records.clone(),
                         functions: names,
                     }
                     .render()?,
                 )?,
                 self.file(
                     PathBuf::from(&module).join("__init__.pyi"),
-                    StubTemplate { functions: stubs }.render()?,
+                    StubTemplate {
+                        records,
+                        functions: stubs,
+                    }
+                    .render()?,
                 )?,
                 self.file(PathBuf::from(&module).join("py.typed"), String::new())?,
             ],
@@ -143,6 +152,58 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .collect()
     }
 
+    fn records(&self) -> Result<Vec<RecordClass>> {
+        self.bindings
+            .decls()
+            .iter()
+            .filter_map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Record(record) => Some(record),
+                DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|record| match record {
+                RecordDecl::Direct(record) => RecordClass::from_direct(record, self.bridge),
+                RecordDecl::Encoded(_) => Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "encoded record package",
+                }),
+                _ => Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unknown record package",
+                }),
+            })
+            .collect()
+    }
+
+    fn record_name(&self, record_id: RecordId) -> Result<String> {
+        self.bindings
+            .decls()
+            .iter()
+            .find_map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Record(RecordDecl::Direct(record)) if record.id() == record_id => {
+                    Some(record)
+                }
+                DeclarationRef::Record(_)
+                | DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|record| Name::new(record.name()).class())
+            .ok_or(Error::UnsupportedTarget {
+                target: "python",
+                shape: "record type hint without direct declaration",
+            })
+    }
+
     fn file(&self, path: impl Into<PathBuf>, contents: impl Into<String>) -> Result<GeneratedFile> {
         Ok(GeneratedFile::new(FilePath::new(path.into())?, contents))
     }
@@ -160,7 +221,10 @@ struct FunctionStub {
 }
 
 impl FunctionStub {
-    fn from_declaration(function: &FunctionDecl<Native>) -> Result<Self> {
+    fn from_declaration(
+        function: &FunctionDecl<Native>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
         if !matches!(function.callable().error(), ErrorDecl::None(_)) {
             return Err(Error::UnsupportedTarget {
                 target: "python",
@@ -173,10 +237,79 @@ impl FunctionStub {
                 .callable()
                 .params()
                 .iter()
-                .map(ParameterStub::from_declaration)
+                .map(|parameter| ParameterStub::from_declaration(parameter, package))
                 .collect::<Result<Vec<_>>>()?,
-            return_annotation: PythonTypeHint::from_return(function.callable().returns().plan())?
-                .into_string(),
+            return_annotation: PythonTypeHint::from_return(
+                function.callable().returns().plan(),
+                package,
+            )?
+            .into_string(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecordClass {
+    class_name: String,
+    register_method: String,
+    fields: Vec<RecordField>,
+}
+
+impl RecordClass {
+    fn from_direct(
+        record: &DirectRecordDecl<Native>,
+        bridge: &PythonCExtBridgeContract,
+    ) -> Result<Self> {
+        let c_record =
+            bridge
+                .source_direct_record(record.id())
+                .ok_or(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "direct record package without C typedef",
+                })?;
+        let symbols = record::Symbols::from_direct(record, c_record)?;
+        Ok(Self {
+            class_name: symbols.class_name().to_owned(),
+            register_method: symbols.register_method().to_owned(),
+            fields: record
+                .fields()
+                .iter()
+                .map(RecordField::from_direct)
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecordField {
+    name: String,
+    annotation: String,
+}
+
+impl RecordField {
+    fn from_direct(field: &DirectFieldDecl) -> Result<Self> {
+        let TypeRef::Primitive(primitive) = field.ty() else {
+            return Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "non-primitive record field annotation",
+            });
+        };
+        Ok(Self {
+            name: Self::name(field.key())?,
+            annotation: PythonTypeHint::from_primitive(*primitive)?.into_string(),
+        })
+    }
+
+    fn name(key: &FieldKey) -> Result<String> {
+        Ok(match key {
+            FieldKey::Named(name) => Name::new(name).function(),
+            FieldKey::Position(position) => format!("field_{position}"),
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unknown record field annotation",
+                });
+            }
         })
     }
 }
@@ -188,7 +321,10 @@ struct ParameterStub {
 }
 
 impl ParameterStub {
-    fn from_declaration(parameter: &ParamDecl<Native, IntoRust>) -> Result<Self> {
+    fn from_declaration(
+        parameter: &ParamDecl<Native, IntoRust>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
         let IncomingParam::Value(plan) = parameter.payload() else {
             return Err(Error::UnsupportedTarget {
                 target: "python",
@@ -197,34 +333,41 @@ impl ParameterStub {
         };
         Ok(Self {
             name: Name::new(parameter.name()).function(),
-            annotation: PythonTypeHint::from_parameter(plan)?.into_string(),
+            annotation: PythonTypeHint::from_parameter(plan, package)?.into_string(),
         })
     }
 }
 
 struct PythonTypeHint {
-    annotation: &'static str,
+    annotation: String,
 }
 
 impl PythonTypeHint {
-    fn from_parameter(plan: &ParamPlan<Native, IntoRust>) -> Result<Self> {
+    fn from_parameter(
+        plan: &ParamPlan<Native, IntoRust>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
         match plan {
             ParamPlan::Direct {
                 ty: TypeRef::Primitive(primitive),
                 ..
             } => Self::from_primitive(*primitive),
+            ParamPlan::Direct {
+                ty: TypeRef::Record(record),
+                ..
+            } => Ok(Self {
+                annotation: package.record_name(*record)?,
+            }),
             ParamPlan::Encoded {
                 ty: TypeRef::String,
                 shape: native::BufferShape::Slice,
                 ..
-            } => Ok(Self { annotation: "str" }),
+            } => Ok(Self::new("str")),
             ParamPlan::Encoded {
                 ty: TypeRef::Bytes,
                 shape: native::BufferShape::Slice,
                 ..
-            } => Ok(Self {
-                annotation: "bytes",
-            }),
+            } => Ok(Self::new("bytes")),
             ParamPlan::Direct { .. }
             | ParamPlan::Encoded { .. }
             | ParamPlan::Handle { .. }
@@ -240,24 +383,30 @@ impl PythonTypeHint {
         }
     }
 
-    fn from_return(plan: &ReturnPlan<Native, OutOfRust>) -> Result<Self> {
+    fn from_return(
+        plan: &ReturnPlan<Native, OutOfRust>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
         match plan {
-            ReturnPlan::Void => Ok(Self { annotation: "None" }),
+            ReturnPlan::Void => Ok(Self::new("None")),
             ReturnPlan::DirectViaReturnSlot {
                 ty: TypeRef::Primitive(primitive),
             } => Self::from_primitive(*primitive),
+            ReturnPlan::DirectViaReturnSlot {
+                ty: TypeRef::Record(record),
+            } => Ok(Self {
+                annotation: package.record_name(*record)?,
+            }),
             ReturnPlan::EncodedViaReturnSlot {
                 ty: TypeRef::String,
                 shape: native::BufferShape::Buffer,
                 ..
-            } => Ok(Self { annotation: "str" }),
+            } => Ok(Self::new("str")),
             ReturnPlan::EncodedViaReturnSlot {
                 ty: TypeRef::Bytes,
                 shape: native::BufferShape::Buffer,
                 ..
-            } => Ok(Self {
-                annotation: "bytes",
-            }),
+            } => Ok(Self::new("bytes")),
             ReturnPlan::DirectViaReturnSlot { .. }
             | ReturnPlan::EncodedViaReturnSlot { .. }
             | ReturnPlan::HandleViaReturnSlot { .. }
@@ -278,15 +427,19 @@ impl PythonTypeHint {
     }
 
     fn into_string(self) -> String {
-        self.annotation.to_owned()
+        self.annotation
+    }
+
+    fn new(annotation: impl Into<String>) -> Self {
+        Self {
+            annotation: annotation.into(),
+        }
     }
 
     fn from_primitive(primitive: Primitive) -> Result<Self> {
         Ok(match primitive {
-            Primitive::Bool => Self { annotation: "bool" },
-            Primitive::F32 | Primitive::F64 => Self {
-                annotation: "float",
-            },
+            Primitive::Bool => Self::new("bool"),
+            Primitive::F32 | Primitive::F64 => Self::new("float"),
             Primitive::I8
             | Primitive::U8
             | Primitive::I16
@@ -296,7 +449,7 @@ impl PythonTypeHint {
             | Primitive::I64
             | Primitive::U64
             | Primitive::ISize
-            | Primitive::USize => Self { annotation: "int" },
+            | Primitive::USize => Self::new("int"),
             _ => {
                 return Err(Error::UnsupportedTarget {
                     target: "python",

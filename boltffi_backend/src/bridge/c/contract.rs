@@ -160,7 +160,7 @@ pub enum Type {
 
 #[derive(Clone, Debug, Default)]
 struct Names {
-    records: BTreeMap<RecordId, String>,
+    direct_records: BTreeMap<RecordId, String>,
     enums: BTreeMap<boltffi_binding::EnumId, String>,
     classes: BTreeMap<boltffi_binding::ClassId, String>,
     class_handles: BTreeMap<ClassId, native::HandleCarrier>,
@@ -888,10 +888,12 @@ impl Names {
 
     fn insert(&mut self, decl: &Decl<Native>) {
         match DeclarationRef::from(decl) {
-            DeclarationRef::Record(record) => {
-                self.records
+            DeclarationRef::Record(RecordDecl::Direct(record)) => {
+                self.direct_records
                     .insert(record.id(), name::Spelling::new(record.name()).typedef());
             }
+            DeclarationRef::Record(RecordDecl::Encoded(_)) => {}
+            DeclarationRef::Record(_) => {}
             DeclarationRef::Enum(enumeration) => {
                 self.enums.insert(
                     enumeration.id(),
@@ -922,11 +924,11 @@ impl Names {
     }
 
     fn record(&self, id: RecordId) -> Result<String> {
-        self.records
+        self.direct_records
             .get(&id)
             .cloned()
             .ok_or(Error::UnsupportedCAbi {
-                shape: "missing record type name",
+                shape: "missing direct record type name",
             })
     }
 

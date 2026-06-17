@@ -10,7 +10,7 @@ use super::syntax::{FunctionSyntax, TypeSyntax};
 #[template(path = "bridge/c/header.h", escape = "none")]
 struct HeaderTemplate {
     support_functions: Vec<FunctionView>,
-    records: Vec<RecordView>,
+    direct_records: Vec<RecordView>,
     enums: Vec<EnumView>,
     callback_vtables: Vec<RecordView>,
     callback_functions: Vec<FunctionView>,
@@ -60,7 +60,7 @@ impl<'abi> Header<'abi> {
                 .iter()
                 .map(FunctionView::from_function)
                 .collect::<Result<_>>()?,
-            records: self
+            direct_records: self
                 .abi
                 .direct_records()
                 .iter()

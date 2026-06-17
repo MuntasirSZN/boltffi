@@ -3,7 +3,7 @@ use boltffi_binding::{ErrorDecl, ExecutionDecl, FunctionDecl, Native};
 
 use crate::{
     bridge::python_cext::{ExtensionMethod, MethodFlags, PythonCExtBridgeContract},
-    core::{Emitted, Error, Result},
+    core::{Emitted, Error, RenderContext, Result},
     target::python::{
         cpython::render::{argument, primitive, result},
         name_style::Name,
@@ -35,6 +35,7 @@ impl Wrapper {
     pub fn from_declaration(
         declaration: &FunctionDecl<Native>,
         bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
     ) -> Result<Self> {
         if matches!(
             declaration.callable().execution(),
@@ -70,13 +71,19 @@ impl Wrapper {
             .params()
             .iter()
             .enumerate()
-            .map(|(index, parameter)| argument::Conversion::from_parameter(index, parameter))
+            .map(|(index, parameter)| {
+                argument::Conversion::from_parameter(index, parameter, bridge, context)
+            })
             .collect::<Result<Vec<_>>>()?;
         let call_args = params
             .iter()
             .flat_map(argument::Conversion::call_args)
             .collect();
-        let returns = result::Conversion::from_plan(declaration.callable().returns().plan())?;
+        let returns = result::Conversion::from_plan(
+            declaration.callable().returns().plan(),
+            bridge,
+            context,
+        )?;
         Ok(Self {
             python_name,
             wrapper,

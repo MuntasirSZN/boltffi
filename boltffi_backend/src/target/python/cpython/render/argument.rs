@@ -1,11 +1,14 @@
 use boltffi_binding::{
-    IncomingParam, IntoRust, Native, ParamDecl, ParamPlan, Receive, TypeRef, native,
+    IncomingParam, IntoRust, Native, ParamDecl, ParamPlan, Receive, RecordId, TypeRef, native,
 };
 
 use crate::{
-    bridge::c::identifier::Identifier,
-    core::{Error, Result},
-    target::python::{cpython::render::primitive, name_style::Name},
+    bridge::{c::identifier::Identifier, python_cext::PythonCExtBridgeContract},
+    core::{Error, RenderContext, Result},
+    target::python::{
+        cpython::render::{primitive, record},
+        name_style::Name,
+    },
 };
 
 pub struct Conversion {
@@ -16,12 +19,21 @@ pub struct Conversion {
 }
 
 impl Conversion {
-    pub fn from_parameter(index: usize, parameter: &ParamDecl<Native, IntoRust>) -> Result<Self> {
+    pub fn from_parameter(
+        index: usize,
+        parameter: &ParamDecl<Native, IntoRust>,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         match parameter.payload() {
             IncomingParam::Value(ParamPlan::Direct {
                 ty: TypeRef::Primitive(primitive),
                 receive: Receive::ByValue,
             }) => Self::from_primitive(index, parameter, primitive::Runtime::new(*primitive)),
+            IncomingParam::Value(ParamPlan::Direct {
+                ty: TypeRef::Record(record),
+                receive: Receive::ByValue,
+            }) => Self::from_record(index, parameter, *record, bridge, context),
             IncomingParam::Value(ParamPlan::Encoded {
                 ty: TypeRef::String,
                 shape: native::BufferShape::Slice,
@@ -67,7 +79,7 @@ impl Conversion {
 
     pub fn call_args(&self) -> Vec<String> {
         match &self.kind {
-            Kind::Primitive(_) => vec![self.name.clone()],
+            Kind::Direct(_) => vec![self.name.clone()],
             Kind::Encoded(encoded) => vec![encoded.pointer.clone(), encoded.length.clone()],
         }
     }
@@ -80,8 +92,8 @@ impl Conversion {
         &self.name
     }
 
-    pub fn is_primitive(&self) -> bool {
-        matches!(self.kind, Kind::Primitive(_))
+    pub fn is_direct(&self) -> bool {
+        matches!(self.kind, Kind::Direct(_))
     }
 
     pub fn is_encoded(&self) -> bool {
@@ -110,35 +122,35 @@ impl Conversion {
 
     pub fn c_type(&self) -> &str {
         match &self.kind {
-            Kind::Primitive(primitive) => primitive.c_type.as_str(),
+            Kind::Direct(direct) => direct.c_type.as_str(),
             Kind::Encoded(_) => "",
         }
     }
 
     pub fn parser(&self) -> &str {
         match &self.kind {
-            Kind::Primitive(primitive) => primitive.parser,
+            Kind::Direct(direct) => direct.parser.as_str(),
             Kind::Encoded(encoded) => encoded.parser,
         }
     }
 
     pub fn wire(&self) -> &str {
         match &self.kind {
-            Kind::Primitive(_) => "",
+            Kind::Direct(_) => "",
             Kind::Encoded(encoded) => encoded.wire.as_str(),
         }
     }
 
     pub fn pointer(&self) -> &str {
         match &self.kind {
-            Kind::Primitive(_) => "",
+            Kind::Direct(_) => "",
             Kind::Encoded(encoded) => encoded.pointer.as_str(),
         }
     }
 
     pub fn length(&self) -> &str {
         match &self.kind {
-            Kind::Primitive(_) => "",
+            Kind::Direct(_) => "",
             Kind::Encoded(encoded) => encoded.length.as_str(),
         }
     }
@@ -152,11 +164,31 @@ impl Conversion {
         Ok(Self {
             index,
             name,
-            kind: Kind::Primitive(Primitive {
+            kind: Kind::Direct(Direct {
                 c_type: primitive.c_type()?,
-                parser: primitive.parser()?,
+                parser: primitive.parser()?.to_owned(),
             }),
             primitive: Some(primitive),
+        })
+    }
+
+    fn from_record(
+        index: usize,
+        parameter: &ParamDecl<Native, IntoRust>,
+        record: RecordId,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let symbols = record::Symbols::from_record_id(record, bridge, context)?;
+        let name = Identifier::escape(Name::new(parameter.name()).function())?.to_string();
+        Ok(Self {
+            index,
+            name,
+            kind: Kind::Direct(Direct {
+                c_type: symbols.c_type().to_owned(),
+                parser: symbols.parser().to_owned(),
+            }),
+            primitive: None,
         })
     }
 
@@ -193,13 +225,13 @@ impl Conversion {
 }
 
 enum Kind {
-    Primitive(Primitive),
+    Direct(Direct),
     Encoded(EncodedParam),
 }
 
-struct Primitive {
+struct Direct {
     c_type: String,
-    parser: &'static str,
+    parser: String,
 }
 
 struct EncodedParam {

@@ -1,6 +1,6 @@
 static PyObject *{{ wrapper }}(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
 {%- for param in params %}
-{%- if param.is_primitive() %}
+{%- if param.is_direct() %}
     {{ param.c_type() }} {{ param.name() }};
 {%- endif %}
 {%- if param.is_encoded() %}
@@ -20,7 +20,7 @@ static PyObject *{{ wrapper }}(PyObject *self, PyObject *const *args, Py_ssize_t
         goto done;
     }
 {%- for param in params %}
-{%- if param.is_primitive() %}
+{%- if param.is_direct() %}
     if (!{{ param.parser() }}(args[{{ param.index() }}], &{{ param.name() }})) {
         goto done;
     }

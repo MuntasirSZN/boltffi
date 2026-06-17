@@ -5,8 +5,10 @@ use boltffi_binding::{DeclarationRef, Native};
 
 use crate::{
     bridge::python_cext::PythonCExtBridgeContract,
-    core::{Emitted, Error, FileLayout, GeneratedOutput, RenderedDeclaration, Result},
-    target::python::cpython::render::{function, method, primitive, result},
+    core::{
+        Emitted, Error, FileLayout, GeneratedOutput, RenderContext, RenderedDeclaration, Result,
+    },
+    target::python::cpython::render::{function, method, primitive, record, result},
 };
 
 #[derive(AskamaTemplate)]
@@ -18,38 +20,46 @@ struct NativeModuleTemplate {
     free_function: String,
     init_function: String,
     support: ModuleSupport,
+    records: Vec<String>,
     functions: Vec<String>,
     methods: Vec<method::Entry>,
+    cleanup: Vec<String>,
 }
 
-pub struct NativeModule<'bridge, 'decl> {
+pub struct NativeModule<'bridge, 'context, 'decl> {
     bridge: &'bridge PythonCExtBridgeContract,
+    context: &'context RenderContext<'context, Native>,
     declarations: Vec<RenderedDeclaration<'decl, Native>>,
 }
 
-impl<'bridge, 'decl> NativeModule<'bridge, 'decl> {
+impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
     pub fn new(
         bridge: &'bridge PythonCExtBridgeContract,
+        context: &'context RenderContext<'context, Native>,
         declarations: Vec<RenderedDeclaration<'decl, Native>>,
     ) -> Self {
         Self {
             bridge,
+            context,
             declarations,
         }
     }
 
     pub fn render(self) -> Result<GeneratedOutput> {
         let bridge = self.bridge;
+        let records = self.records()?;
         let functions = self.functions()?;
         let methods = self
             .bridge
             .methods()
             .iter()
+            .chain(records.iter().map(|record| record.wrapper.method()))
             .chain(functions.iter().map(|function| function.wrapper.method()))
             .map(method::Entry::from_method)
             .collect();
-        let support = ModuleSupport::from_functions(
+        let support = ModuleSupport::new(
             bridge,
+            records.iter().map(|record| &record.wrapper),
             functions.iter().map(|function| &function.wrapper),
         )?;
         let source = NativeModuleTemplate {
@@ -59,14 +69,42 @@ impl<'bridge, 'decl> NativeModule<'bridge, 'decl> {
             free_function: bridge.symbols().free_function().to_owned(),
             init_function: bridge.symbols().init_function().to_owned(),
             support,
+            records: records.iter().map(|record| record.source.clone()).collect(),
             functions: functions
                 .into_iter()
                 .map(|function| function.source)
                 .collect(),
             methods,
+            cleanup: records
+                .iter()
+                .map(|record| record.wrapper.cleanup())
+                .collect(),
         }
         .render()?;
         FileLayout::single(bridge.source_path().clone()).assemble([Emitted::primary(source)])
+    }
+
+    fn records(&self) -> Result<Vec<RenderedRecord>> {
+        self.declarations
+            .iter()
+            .filter_map(|declaration| match declaration.declaration() {
+                DeclarationRef::Record(record) => Some((record, declaration.emitted())),
+                DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Stream(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|(record, emitted)| {
+                let wrapper = record::Wrapper::from_declaration(record, self.bridge)?;
+                Ok(RenderedRecord {
+                    wrapper,
+                    source: emitted.primary_chunk().as_str().to_owned(),
+                })
+            })
+            .collect()
     }
 
     fn functions(&self) -> Result<Vec<RenderedFunction>> {
@@ -83,7 +121,8 @@ impl<'bridge, 'decl> NativeModule<'bridge, 'decl> {
                 | DeclarationRef::CustomType(_) => None,
             })
             .map(|(function, emitted)| {
-                let wrapper = function::Wrapper::from_declaration(function, self.bridge)?;
+                let wrapper =
+                    function::Wrapper::from_declaration(function, self.bridge, self.context)?;
                 Ok(RenderedFunction {
                     wrapper,
                     source: emitted.primary_chunk().as_str().to_owned(),
@@ -98,6 +137,11 @@ struct RenderedFunction {
     source: String,
 }
 
+struct RenderedRecord {
+    wrapper: record::Wrapper,
+    source: String,
+}
+
 struct ModuleSupport {
     primitives: Vec<primitive::Support>,
     free_buffer: String,
@@ -105,17 +149,21 @@ struct ModuleSupport {
     bytes_arguments: bool,
     string_returns: bool,
     bytes_returns: bool,
+    direct_records: bool,
 }
 
 impl ModuleSupport {
-    fn from_functions<'function>(
+    fn new<'record, 'function>(
         bridge: &PythonCExtBridgeContract,
+        records: impl Iterator<Item = &'record record::Wrapper>,
         functions: impl Iterator<Item = &'function function::Wrapper>,
     ) -> Result<Self> {
+        let records = records.collect::<Vec<_>>();
         let functions = functions.collect::<Vec<_>>();
         let primitives = functions
             .iter()
             .flat_map(|function| function.primitives())
+            .chain(records.iter().flat_map(|record| record.primitives()))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(primitive::Support::new)
@@ -135,6 +183,7 @@ impl ModuleSupport {
                 .any(|function| function.has_bytes_argument()),
             string_returns: owned_buffers.contains(&result::OwnedBuffer::String),
             bytes_returns: owned_buffers.contains(&result::OwnedBuffer::Bytes),
+            direct_records: !records.is_empty(),
         })
     }
 
@@ -168,6 +217,10 @@ impl ModuleSupport {
 
     fn uses_owned_bytes(&self) -> bool {
         self.bytes_returns
+    }
+
+    fn uses_direct_records(&self) -> bool {
+        self.direct_records
     }
 
     fn free_buffer_storage(bridge: &PythonCExtBridgeContract) -> Result<String> {

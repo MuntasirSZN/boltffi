@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+{% if !records.is_empty() %}
+from dataclasses import dataclass
+
+{% endif %}
 import sys
 from pathlib import Path
 
@@ -16,6 +20,17 @@ def _shared_library_filename() -> str:
 
 _native._initialize_loader(str(Path(__file__).resolve().with_name(_shared_library_filename())))
 
+{% for record in records %}
+@dataclass(frozen=True, slots=True)
+class {{ record.class_name }}:
+{%- for field in record.fields %}
+    {{ field.name }}: {{ field.annotation }}
+{%- endfor %}
+
+
+_native.{{ record.register_method }}({{ record.class_name }})
+
+{% endfor %}
 {% for function in functions %}
 {{ function }} = _native.{{ function }}
 {%- endfor %}
@@ -28,6 +43,9 @@ __all__ = [
     "MODULE_NAME",
     "PACKAGE_NAME",
     "PACKAGE_VERSION",
+{%- for record in records %}
+    "{{ record.class_name }}",
+{%- endfor %}
 {%- for function in functions %}
     "{{ function }}",
 {%- endfor %}
