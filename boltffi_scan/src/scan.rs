@@ -180,6 +180,15 @@ mod tests {
         TypeExpr::custom(CustomTypeId::new(id), source_path(path))
     }
 
+    fn custom_converter(role: &str) -> CustomTypeConverter {
+        CustomTypeConverter::path(Path::new(
+            PathRoot::Crate,
+            vec![PathSegment::new(format!(
+                "__boltffi_custom_type_utc_date_time_{role}"
+            ))],
+        ))
+    }
+
     fn class(id: &str, path: &str) -> TypeExpr {
         TypeExpr::class(ClassId::new(id), source_path(path))
     }
@@ -490,16 +499,14 @@ mod tests {
             contract.customs[0].error,
             Some(CustomRemoteType::single_path("ConvertError"))
         );
-        assert!(matches!(
-            &contract.customs[0].converters.into_ffi,
-            CustomTypeConverter::Expr(expr)
-                if expr.source.replace(' ', "") == "|dt:&DateTime<Utc>|dt.timestamp_millis()"
-        ));
-        assert!(matches!(
-            &contract.customs[0].converters.try_from_ffi,
-            CustomTypeConverter::Expr(expr)
-                if expr.source.replace(' ', "") == "|millis:i64|from_millis(millis)"
-        ));
+        assert_eq!(
+            contract.customs[0].converters.into_ffi,
+            custom_converter("into_ffi")
+        );
+        assert_eq!(
+            contract.customs[0].converters.try_from_ffi,
+            custom_converter("try_from_ffi")
+        );
         assert_eq!(
             contract.functions[0].parameters[0].type_expr,
             custom("demo::UtcDateTime", "DateTime")
