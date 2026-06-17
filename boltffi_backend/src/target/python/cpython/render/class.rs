@@ -5,7 +5,7 @@ use crate::{
     bridge::python_cext::{ExtensionMethod, MethodFlags, PythonCExtBridgeContract},
     core::{Emitted, Error, RenderContext, Result},
     target::python::{
-        cpython::render::{argument, function, primitive, result, scalar_handle},
+        cpython::render::{argument, function, primitive, result},
         name_style::Name,
     },
 };
@@ -102,6 +102,12 @@ impl Wrapper {
             .filter_map(function::Wrapper::owned_buffer)
     }
 
+    pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
+        self.callables
+            .iter()
+            .flat_map(function::Wrapper::wire_primitives)
+    }
+
     pub fn has_string_argument(&self) -> bool {
         self.callables
             .iter()
@@ -153,7 +159,7 @@ struct Release {
     python_name: String,
     wrapper: String,
     storage: String,
-    handle: scalar_handle::Carrier,
+    handle: primitive::Runtime,
     method: ExtensionMethod,
 }
 
@@ -178,7 +184,7 @@ impl Release {
             python_name,
             wrapper,
             storage: loaded.storage_name().to_owned(),
-            handle: scalar_handle::Carrier::new(declaration.handle())?,
+            handle: primitive::Runtime::native_handle(declaration.handle())?,
             method,
         })
     }
@@ -199,6 +205,6 @@ impl Release {
     }
 
     fn primitive(&self) -> primitive::Runtime {
-        self.handle.primitive()
+        self.handle
     }
 }

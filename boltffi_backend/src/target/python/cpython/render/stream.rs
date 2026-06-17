@@ -8,7 +8,7 @@ use crate::{
     bridge::python_cext::{ExtensionMethod, MethodFlags, PythonCExtBridgeContract},
     core::{Emitted, Error, RenderContext, Result},
     target::python::{
-        cpython::render::{enumeration, primitive, record, scalar_handle},
+        cpython::render::{enumeration, primitive, record},
         name_style::Name,
     },
 };
@@ -36,7 +36,7 @@ pub struct Wrapper {
     unsubscribe: Method,
     free: Method,
     item: Item,
-    handle: scalar_handle::Carrier,
+    handle: primitive::Runtime,
     receiver: Option<Receiver>,
 }
 
@@ -91,7 +91,7 @@ impl Wrapper {
                 bridge,
             )?,
             item: Item::new(ty, bridge, context)?,
-            handle: scalar_handle::Carrier::new(declaration.handle())?,
+            handle: primitive::Runtime::native_handle(declaration.handle())?,
             receiver: declaration
                 .owner()
                 .map(|owner| Receiver::new(owner, context))
@@ -133,7 +133,7 @@ impl Wrapper {
 
     pub fn primitives(&self) -> Vec<primitive::Runtime> {
         [
-            Some(self.handle.primitive()),
+            Some(self.handle),
             Some(primitive::Runtime::new(Primitive::U32)),
             Some(primitive::Runtime::new(Primitive::USize)),
             self.receiver.as_ref().map(|receiver| receiver.primitive),
@@ -174,9 +174,9 @@ impl Receiver {
                 target: "python",
                 shape: "stream owner without class declaration",
             })?;
-        let handle = scalar_handle::Carrier::new(handle)?;
+        let handle = primitive::Runtime::native_handle(handle)?;
         Ok(Self {
-            primitive: handle.primitive(),
+            primitive: handle,
             handle_type: handle.c_type()?,
             parser: handle.parser()?,
         })

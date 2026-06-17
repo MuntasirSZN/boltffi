@@ -10,7 +10,7 @@ use crate::{
     },
     core::{Error, RenderContext, Result},
     target::python::{
-        cpython::render::{callback, enumeration, primitive, record, scalar_handle},
+        cpython::render::{callback, custom, enumeration, primitive, record},
         name_style::Name,
     },
 };
@@ -54,6 +54,20 @@ impl Conversion {
                 receive,
                 ..
             }) => Self::encoded(index, parameter, *receive, Encoded::Bytes),
+            IncomingParam::Value(ParamPlan::Encoded {
+                ty: TypeRef::Custom(custom_type),
+                shape: native::BufferShape::Slice,
+                receive,
+                ..
+            }) => {
+                let custom_types = custom::CustomTypes::from_context(context);
+                Self::from_encoded_type(
+                    index,
+                    parameter,
+                    *receive,
+                    custom_types.representation(*custom_type)?,
+                )
+            }
             IncomingParam::Value(ParamPlan::Handle {
                 target: HandleTarget::Class(_),
                 carrier,
@@ -144,6 +158,16 @@ impl Conversion {
         )
     }
 
+    pub fn wire_primitive(&self) -> Option<primitive::Runtime> {
+        match self.kind {
+            Kind::Encoded(EncodedParam {
+                value: Encoded::Primitive(primitive),
+                ..
+            }) => Some(primitive),
+            Kind::Direct(_) | Kind::Encoded(_) => None,
+        }
+    }
+
     pub fn c_type(&self) -> &str {
         match &self.kind {
             Kind::Direct(direct) => direct.c_type.as_str(),
@@ -154,7 +178,7 @@ impl Conversion {
     pub fn parser(&self) -> &str {
         match &self.kind {
             Kind::Direct(direct) => direct.parser.as_str(),
-            Kind::Encoded(encoded) => encoded.parser,
+            Kind::Encoded(encoded) => encoded.parser.as_str(),
         }
     }
 
@@ -231,7 +255,7 @@ impl Conversion {
         carrier: native::HandleCarrier,
     ) -> Result<Self> {
         let name = name.into();
-        let carrier = scalar_handle::Carrier::new(carrier)?;
+        let carrier = primitive::Runtime::native_handle(carrier)?;
         Ok(Self {
             index,
             name,
@@ -239,7 +263,7 @@ impl Conversion {
                 c_type: carrier.c_type()?.to_owned(),
                 parser: carrier.parser()?.to_owned(),
             }),
-            primitive: Some(carrier.primitive()),
+            primitive: Some(carrier),
         })
     }
 
@@ -305,13 +329,35 @@ impl Conversion {
                 name,
                 kind: Kind::Encoded(EncodedParam {
                     value: encoded,
-                    parser: encoded.parser(),
+                    parser: encoded.parser()?,
                     wire,
                     pointer,
                     length,
                 }),
-                primitive: None,
+                primitive: encoded.primitive(),
             })
+        }
+    }
+
+    fn from_encoded_type(
+        index: usize,
+        parameter: &ParamDecl<Native, IntoRust>,
+        receive: Receive,
+        ty: &TypeRef,
+    ) -> Result<Self> {
+        match ty {
+            TypeRef::Primitive(primitive) => Self::encoded(
+                index,
+                parameter,
+                receive,
+                Encoded::Primitive(primitive::Runtime::new(*primitive)),
+            ),
+            TypeRef::String => Self::encoded(index, parameter, receive, Encoded::String),
+            TypeRef::Bytes => Self::encoded(index, parameter, receive, Encoded::Bytes),
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unsupported custom representation parameter",
+            }),
         }
     }
 }
@@ -328,7 +374,7 @@ struct Direct {
 
 struct EncodedParam {
     value: Encoded,
-    parser: &'static str,
+    parser: String,
     wire: String,
     pointer: String,
     length: String,
@@ -338,13 +384,22 @@ struct EncodedParam {
 enum Encoded {
     String,
     Bytes,
+    Primitive(primitive::Runtime),
 }
 
 impl Encoded {
-    fn parser(self) -> &'static str {
+    fn parser(self) -> Result<String> {
         match self {
-            Self::String => "boltffi_python_wire_string",
-            Self::Bytes => "boltffi_python_wire_bytes",
+            Self::String => Ok("boltffi_python_wire_string".to_owned()),
+            Self::Bytes => Ok("boltffi_python_wire_bytes".to_owned()),
+            Self::Primitive(primitive) => primitive.wire_encoder(),
+        }
+    }
+
+    fn primitive(self) -> Option<primitive::Runtime> {
+        match self {
+            Self::Primitive(primitive) => Some(primitive),
+            Self::String | Self::Bytes => None,
         }
     }
 }

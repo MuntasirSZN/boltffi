@@ -1,10 +1,37 @@
 
 {% if support.uses_wire_arguments() %}
+static void boltffi_python_write_u16_le(uint8_t *buffer, uint16_t value) {
+    buffer[0] = (uint8_t)(value & 0xffu);
+    buffer[1] = (uint8_t)((value >> 8) & 0xffu);
+}
+
 static void boltffi_python_write_u32_le(uint8_t *buffer, uint32_t value) {
     buffer[0] = (uint8_t)(value & 0xffu);
     buffer[1] = (uint8_t)((value >> 8) & 0xffu);
     buffer[2] = (uint8_t)((value >> 16) & 0xffu);
     buffer[3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
+static void boltffi_python_write_u64_le(uint8_t *buffer, uint64_t value) {
+    buffer[0] = (uint8_t)(value & 0xffu);
+    buffer[1] = (uint8_t)((value >> 8) & 0xffu);
+    buffer[2] = (uint8_t)((value >> 16) & 0xffu);
+    buffer[3] = (uint8_t)((value >> 24) & 0xffu);
+    buffer[4] = (uint8_t)((value >> 32) & 0xffu);
+    buffer[5] = (uint8_t)((value >> 40) & 0xffu);
+    buffer[6] = (uint8_t)((value >> 48) & 0xffu);
+    buffer[7] = (uint8_t)((value >> 56) & 0xffu);
+}
+
+static int boltffi_python_wire_fixed(const uint8_t *payload, Py_ssize_t payload_len, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    PyObject *wire = PyBytes_FromStringAndSize((const char *)payload, payload_len);
+    if (wire == NULL) {
+        return 0;
+    }
+    *out_wire = wire;
+    *out_ptr = (const uint8_t *)PyBytes_AS_STRING(wire);
+    *out_len = (uintptr_t)payload_len;
+    return 1;
 }
 
 static int boltffi_python_wire_payload(const uint8_t *payload, Py_ssize_t payload_len, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
@@ -50,6 +77,11 @@ static int boltffi_python_wire_bytes(PyObject *value, PyObject **out_wire, const
 }
 {% endif %}
 {% if support.uses_owned_buffers() %}
+static uint16_t boltffi_python_read_u16_le(const uint8_t *buffer) {
+    return ((uint16_t)buffer[0])
+        | ((uint16_t)buffer[1] << 8);
+}
+
 static uint32_t boltffi_python_read_u32_le(const uint8_t *buffer) {
     return ((uint32_t)buffer[0])
         | ((uint32_t)buffer[1] << 8)
@@ -57,17 +89,46 @@ static uint32_t boltffi_python_read_u32_le(const uint8_t *buffer) {
         | ((uint32_t)buffer[3] << 24);
 }
 
-static int boltffi_python_validate_owned_buffer(FfiBuf_u8 buffer) {
+static uint64_t boltffi_python_read_u64_le(const uint8_t *buffer) {
+    return ((uint64_t)buffer[0])
+        | ((uint64_t)buffer[1] << 8)
+        | ((uint64_t)buffer[2] << 16)
+        | ((uint64_t)buffer[3] << 24)
+        | ((uint64_t)buffer[4] << 32)
+        | ((uint64_t)buffer[5] << 40)
+        | ((uint64_t)buffer[6] << 48)
+        | ((uint64_t)buffer[7] << 56);
+}
+
+static int boltffi_python_validate_owned_memory(FfiBuf_u8 buffer) {
     if (buffer.ptr == NULL && buffer.len != 0) {
         PyErr_SetString(PyExc_RuntimeError, "native function returned invalid buffer");
+        return 0;
+    }
+    if (buffer.len > PY_SSIZE_T_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "native buffer is too large");
+        return 0;
+    }
+    return 1;
+}
+
+static int boltffi_python_validate_owned_buffer(FfiBuf_u8 buffer) {
+    if (!boltffi_python_validate_owned_memory(buffer)) {
         return 0;
     }
     if (buffer.len < 4) {
         PyErr_SetString(PyExc_RuntimeError, "native function returned truncated wire buffer");
         return 0;
     }
-    if (buffer.len > PY_SSIZE_T_MAX) {
-        PyErr_SetString(PyExc_OverflowError, "native buffer is too large");
+    return 1;
+}
+
+static int boltffi_python_validate_owned_fixed_buffer(FfiBuf_u8 buffer, uintptr_t expected_len) {
+    if (!boltffi_python_validate_owned_memory(buffer)) {
+        return 0;
+    }
+    if (buffer.len != expected_len) {
+        PyErr_SetString(PyExc_RuntimeError, "native function returned wrong fixed wire size");
         return 0;
     }
     return 1;
@@ -519,6 +580,325 @@ static int {{ primitive.parser }}(PyObject *value, double *out) {
 
 static PyObject *{{ primitive.boxer }}(double value) {
     return PyFloat_FromDouble(value);
+}
+{% endif %}
+{% endfor %}
+{% for primitive in support.wire_primitives() %}
+{% if primitive.is_bool() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    bool parsed = false;
+    uint8_t bytes[1];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    bytes[0] = parsed ? 1 : 0;
+    return boltffi_python_wire_fixed(bytes, 1, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_i8() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    int8_t parsed = 0;
+    uint8_t bytes[1];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    bytes[0] = (uint8_t)parsed;
+    return boltffi_python_wire_fixed(bytes, 1, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_u8() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    uint8_t parsed = 0;
+    uint8_t bytes[1];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    bytes[0] = parsed;
+    return boltffi_python_wire_fixed(bytes, 1, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_i16() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    int16_t parsed = 0;
+    uint8_t bytes[2];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u16_le(bytes, (uint16_t)parsed);
+    return boltffi_python_wire_fixed(bytes, 2, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_u16() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    uint16_t parsed = 0;
+    uint8_t bytes[2];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u16_le(bytes, parsed);
+    return boltffi_python_wire_fixed(bytes, 2, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_i32() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    int32_t parsed = 0;
+    uint8_t bytes[4];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u32_le(bytes, (uint32_t)parsed);
+    return boltffi_python_wire_fixed(bytes, 4, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_u32() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    uint32_t parsed = 0;
+    uint8_t bytes[4];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u32_le(bytes, parsed);
+    return boltffi_python_wire_fixed(bytes, 4, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_i64() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    int64_t parsed = 0;
+    uint8_t bytes[8];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u64_le(bytes, (uint64_t)parsed);
+    return boltffi_python_wire_fixed(bytes, 8, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_u64() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    uint64_t parsed = 0;
+    uint8_t bytes[8];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u64_le(bytes, parsed);
+    return boltffi_python_wire_fixed(bytes, 8, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_isize() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    intptr_t parsed = 0;
+    uint8_t bytes[8];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u64_le(bytes, (uint64_t)((int64_t)parsed));
+    return boltffi_python_wire_fixed(bytes, 8, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_usize() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    uintptr_t parsed = 0;
+    uint8_t bytes[8];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    boltffi_python_write_u64_le(bytes, (uint64_t)parsed);
+    return boltffi_python_wire_fixed(bytes, 8, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_f32() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    float parsed = 0.0f;
+    uint32_t bits = 0;
+    uint8_t bytes[4];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    memcpy(&bits, &parsed, sizeof(bits));
+    boltffi_python_write_u32_le(bytes, bits);
+    return boltffi_python_wire_fixed(bytes, 4, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% if primitive.is_f64() %}
+static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    double parsed = 0.0;
+    uint64_t bits = 0;
+    uint8_t bytes[8];
+    if (!{{ primitive.parser }}(value, &parsed)) {
+        return 0;
+    }
+    memcpy(&bits, &parsed, sizeof(bits));
+    boltffi_python_write_u64_le(bytes, bits);
+    return boltffi_python_wire_fixed(bytes, 8, out_wire, out_ptr, out_len);
+}
+{% endif %}
+{% endfor %}
+{% for primitive in support.owned_primitives() %}
+{% if primitive.is_bool() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 1)) {
+        goto done;
+    }
+    if (buffer.ptr[0] > 1) {
+        PyErr_SetString(PyExc_RuntimeError, "native function returned invalid bool wire value");
+        goto done;
+    }
+    result = {{ primitive.boxer }}(buffer.ptr[0] == 1);
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_i8() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 1)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}((int8_t)buffer.ptr[0]);
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_u8() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 1)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}(buffer.ptr[0]);
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_i16() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 2)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}((int16_t)boltffi_python_read_u16_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_u16() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 2)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}(boltffi_python_read_u16_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_i32() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 4)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}((int32_t)boltffi_python_read_u32_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_u32() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 4)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}(boltffi_python_read_u32_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_i64() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 8)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}((int64_t)boltffi_python_read_u64_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_u64() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 8)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}(boltffi_python_read_u64_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_isize() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 8)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}((intptr_t)((int64_t)boltffi_python_read_u64_le(buffer.ptr)));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_usize() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 8)) {
+        goto done;
+    }
+    result = {{ primitive.boxer }}((uintptr_t)boltffi_python_read_u64_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_f32() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    uint32_t bits = 0;
+    float value = 0.0f;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 4)) {
+        goto done;
+    }
+    bits = boltffi_python_read_u32_le(buffer.ptr);
+    memcpy(&value, &bits, sizeof(value));
+    result = {{ primitive.boxer }}(value);
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
+{% endif %}
+{% if primitive.is_f64() %}
+static PyObject *{{ primitive.owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    uint64_t bits = 0;
+    double value = 0.0;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 8)) {
+        goto done;
+    }
+    bits = boltffi_python_read_u64_le(buffer.ptr);
+    memcpy(&value, &bits, sizeof(value));
+    result = {{ primitive.boxer }}(value);
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
 }
 {% endif %}
 {% endfor %}

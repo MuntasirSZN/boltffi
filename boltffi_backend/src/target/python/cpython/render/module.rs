@@ -298,6 +298,8 @@ struct RenderedStream {
 
 struct ModuleSupport {
     primitives: Vec<primitive::Support>,
+    wire_primitives: Vec<primitive::Support>,
+    owned_primitives: Vec<primitive::Support>,
     free_buffer: String,
     string_arguments: bool,
     bytes_arguments: bool,
@@ -340,6 +342,24 @@ impl ModuleSupport {
             .filter_map(|function| function.owned_buffer())
             .chain(classes.iter().flat_map(|class| class.owned_buffers()))
             .collect::<BTreeSet<_>>();
+        let wire_primitives = functions
+            .iter()
+            .flat_map(|function| function.wire_primitives())
+            .chain(classes.iter().flat_map(|class| class.wire_primitives()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(primitive::Support::new)
+            .collect::<Result<Vec<_>>>()?;
+        let owned_primitives = owned_buffers
+            .iter()
+            .filter_map(|buffer| match buffer {
+                result::OwnedBuffer::Primitive(primitive) => Some(*primitive),
+                result::OwnedBuffer::String | result::OwnedBuffer::Bytes => None,
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(primitive::Support::new)
+            .collect::<Result<Vec<_>>>()?;
         let string_arguments = functions
             .iter()
             .any(|function| function.has_string_argument())
@@ -350,6 +370,8 @@ impl ModuleSupport {
             || classes.iter().any(|class| class.has_bytes_argument());
         Ok(Self {
             primitives,
+            wire_primitives,
+            owned_primitives,
             free_buffer: Self::free_buffer_storage(bridge)?,
             string_arguments,
             bytes_arguments,
@@ -364,16 +386,24 @@ impl ModuleSupport {
         &self.primitives
     }
 
+    fn wire_primitives(&self) -> &[primitive::Support] {
+        &self.wire_primitives
+    }
+
+    fn owned_primitives(&self) -> &[primitive::Support] {
+        &self.owned_primitives
+    }
+
     fn free_buffer(&self) -> &str {
         &self.free_buffer
     }
 
     fn uses_wire_arguments(&self) -> bool {
-        self.string_arguments || self.bytes_arguments
+        self.string_arguments || self.bytes_arguments || !self.wire_primitives.is_empty()
     }
 
     fn uses_owned_buffers(&self) -> bool {
-        self.string_returns || self.bytes_returns
+        self.string_returns || self.bytes_returns || !self.owned_primitives.is_empty()
     }
 
     fn uses_wire_strings(&self) -> bool {

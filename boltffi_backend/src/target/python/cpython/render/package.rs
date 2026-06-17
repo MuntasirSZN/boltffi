@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    Bindings, CStyleEnumDecl, ClassDecl, ClassId, DeclarationRef, DirectFieldDecl,
+    Bindings, CStyleEnumDecl, ClassDecl, ClassId, CustomTypeId, DeclarationRef, DirectFieldDecl,
     DirectRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedMethodDecl, FieldKey, FunctionDecl,
     HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native, NativeSymbol,
     OutOfRust, ParamDecl, ParamPlan, Primitive, RecordDecl, RecordId, ReturnPlan, StreamDecl,
@@ -13,7 +13,7 @@ use crate::{
     bridge::python_cext::PythonCExtBridgeContract,
     core::{Error, FilePath, GeneratedFile, GeneratedOutput, Result},
     target::python::{
-        cpython::render::{class, enumeration, record, stream},
+        cpython::render::{class, custom, enumeration, record, stream},
         name_style::Name,
     },
 };
@@ -329,6 +329,10 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                 target: "python",
                 shape: "class type hint without declaration",
             })
+    }
+
+    fn custom_representation(&self, custom_type: CustomTypeId) -> Result<&'binding TypeRef> {
+        custom::CustomTypes::new(self.bindings, "python").representation(custom_type)
     }
 
     fn file(&self, path: impl Into<PathBuf>, contents: impl Into<String>) -> Result<GeneratedFile> {
@@ -728,6 +732,11 @@ impl PythonTypeHint {
     fn from_type_ref(ty: &TypeRef, package: &Package<'_, '_>) -> Result<Self> {
         match ty {
             TypeRef::Primitive(primitive) => Self::from_primitive(*primitive),
+            TypeRef::String => Ok(Self::new("str")),
+            TypeRef::Bytes => Ok(Self::new("bytes")),
+            TypeRef::Custom(custom_type) => {
+                Self::from_type_ref(package.custom_representation(*custom_type)?, package)
+            }
             TypeRef::Record(record) => Ok(Self {
                 annotation: package.record_name(*record)?,
             }),
@@ -783,6 +792,11 @@ impl PythonTypeHint {
                 shape: native::BufferShape::Slice,
                 ..
             } => Ok(Self::new("bytes")),
+            ParamPlan::Encoded {
+                ty: TypeRef::Custom(custom_type),
+                shape: native::BufferShape::Slice,
+                ..
+            } => Self::from_type_ref(package.custom_representation(*custom_type)?, package),
             ParamPlan::Direct { .. }
             | ParamPlan::Encoded { .. }
             | ParamPlan::Handle { .. }
@@ -838,6 +852,11 @@ impl PythonTypeHint {
                 shape: native::BufferShape::Buffer,
                 ..
             } => Ok(Self::new("bytes")),
+            ReturnPlan::EncodedViaReturnSlot {
+                ty: TypeRef::Custom(custom_type),
+                shape: native::BufferShape::Buffer,
+                ..
+            } => Self::from_type_ref(package.custom_representation(*custom_type)?, package),
             ReturnPlan::DirectViaReturnSlot { .. }
             | ReturnPlan::EncodedViaReturnSlot { .. }
             | ReturnPlan::HandleViaReturnSlot { .. }

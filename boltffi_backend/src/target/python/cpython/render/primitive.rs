@@ -1,4 +1,4 @@
-use boltffi_binding::Primitive;
+use boltffi_binding::{Primitive, native};
 
 use crate::{
     bridge::c::{Type, syntax::TypeSyntax},
@@ -14,6 +14,8 @@ pub struct Support {
     runtime: Runtime,
     pub parser: &'static str,
     pub boxer: &'static str,
+    pub wire_encoder: String,
+    pub owned_wire_decoder: String,
 }
 
 impl Support {
@@ -22,6 +24,8 @@ impl Support {
             runtime,
             parser: runtime.parser()?,
             boxer: runtime.boxer()?,
+            wire_encoder: runtime.wire_encoder()?,
+            owned_wire_decoder: runtime.owned_wire_decoder()?,
         })
     }
 
@@ -83,6 +87,26 @@ impl Runtime {
         Self { primitive }
     }
 
+    pub fn native_handle(carrier: native::HandleCarrier) -> Result<Self> {
+        let primitive = match carrier {
+            native::HandleCarrier::U64 => Primitive::U64,
+            native::HandleCarrier::USize => Primitive::USize,
+            native::HandleCarrier::CallbackHandle => {
+                return Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "callback handle carrier",
+                });
+            }
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unknown native handle carrier",
+                });
+            }
+        };
+        Ok(Self::new(primitive))
+    }
+
     pub fn c_type(self) -> Result<String> {
         TypeSyntax::new(&Type::primitive(self.primitive)?).anonymous()
     }
@@ -135,6 +159,14 @@ impl Runtime {
         })
     }
 
+    pub fn wire_encoder(self) -> Result<String> {
+        Ok(format!("boltffi_python_wire_{}", self.wire_stem()?))
+    }
+
+    pub fn owned_wire_decoder(self) -> Result<String> {
+        Ok(format!("boltffi_python_decode_owned_{}", self.wire_stem()?))
+    }
+
     pub fn is_bool(&self) -> bool {
         matches!(self.primitive, Primitive::Bool)
     }
@@ -185,5 +217,29 @@ impl Runtime {
 
     pub fn is_f64(&self) -> bool {
         matches!(self.primitive, Primitive::F64)
+    }
+
+    fn wire_stem(self) -> Result<&'static str> {
+        Ok(match self.primitive {
+            Primitive::Bool => "bool",
+            Primitive::I8 => "i8",
+            Primitive::U8 => "u8",
+            Primitive::I16 => "i16",
+            Primitive::U16 => "u16",
+            Primitive::I32 => "i32",
+            Primitive::U32 => "u32",
+            Primitive::I64 => "i64",
+            Primitive::U64 => "u64",
+            Primitive::ISize => "isize",
+            Primitive::USize => "usize",
+            Primitive::F32 => "f32",
+            Primitive::F64 => "f64",
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unknown primitive wire support",
+                });
+            }
+        })
     }
 }

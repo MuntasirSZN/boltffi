@@ -133,6 +133,12 @@ impl Wrapper {
         params.into_iter().chain(self.returns.primitive()).collect()
     }
 
+    pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
+        self.params
+            .iter()
+            .filter_map(argument::Conversion::wire_primitive)
+    }
+
     pub fn owned_buffer(&self) -> Option<result::OwnedBuffer> {
         self.returns.owned_buffer()
     }

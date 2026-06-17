@@ -46,10 +46,7 @@ impl host::HostBackend for PythonCExtHost {
                 BindingCapability::Constants,
                 "Python constants are not migrated yet",
             )
-            .unsupported(
-                BindingCapability::CustomTypes,
-                "Python custom types are not migrated yet",
-            )
+            .stable(BindingCapability::CustomTypes)
     }
 
     fn bridge_capabilities(&self) -> CapabilityRequirements<BridgeCapability> {
@@ -128,10 +125,7 @@ impl host::HostBackend for PythonCExtHost {
         _bridge: &Self::Bridge,
         _context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Error::UnsupportedTarget {
-            target: self.name(),
-            shape: "custom type",
-        })
+        Ok(Emitted::primary(""))
     }
 
     fn assemble(

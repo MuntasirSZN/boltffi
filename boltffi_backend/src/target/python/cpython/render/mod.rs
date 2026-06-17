@@ -1,6 +1,7 @@
 mod argument;
 mod callback;
 mod class;
+mod custom;
 mod enumeration;
 mod function;
 mod method;
@@ -9,7 +10,6 @@ mod package;
 mod primitive;
 mod record;
 mod result;
-mod scalar_handle;
 mod stream;
 
 pub use callback::Wrapper as CallbackWrapper;
