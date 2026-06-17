@@ -3,11 +3,12 @@ use std::path::{Component, Path, PathBuf};
 use boltffi_bindgen::render::java::{JavaEmitter, JavaOptions, JavaVersion};
 use boltffi_bindgen::render::jni::{JniEmitter, JniLowerer, JvmBindingStyle};
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{
     GenerateRequest, LanguageGenerator, ScanPointerWidth, SourceCrate,
 };
-use crate::config::Target;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum JavaGenerationMode {

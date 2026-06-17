@@ -219,7 +219,7 @@ where
             .written_type()?
             .unwrap_or_else(|| parse_quote! { () });
         let complete = Complete::new(
-            symbol,
+            rust_call.owner().clone(),
             callable,
             source.returns(),
             &rust_return_type,
@@ -251,7 +251,7 @@ where
         let visibility = &self.visibility;
         let start_ident = format_ident!("{}", self.symbol.name().as_str());
         let rust_return_type = &self.rust_return_type;
-        AsyncParameters::new(self.callable.params()).validate()?;
+        CapturedParameters::new(self.callable.params()).validate()?;
         if !self.receiver.writebacks().is_empty() {
             return Err(Error::UnsupportedExpansion("async receiver writeback"));
         }
@@ -303,11 +303,11 @@ where
     }
 }
 
-struct AsyncParameters<'lowered, S: RenderSurface> {
+struct CapturedParameters<'lowered, S: RenderSurface> {
     params: &'lowered [ParamDecl<S, IntoRust>],
 }
 
-impl<'lowered, S: RenderSurface> AsyncParameters<'lowered, S> {
+impl<'lowered, S: RenderSurface> CapturedParameters<'lowered, S> {
     fn new(params: &'lowered [ParamDecl<S, IntoRust>]) -> Self {
         Self { params }
     }
@@ -328,13 +328,7 @@ impl<'lowered, S: RenderSurface> AsyncParameters<'lowered, S> {
                 target, receive, ..
             }) => {
                 self.validate_receive(*receive)?;
-                match target {
-                    HandleTarget::Class(_) => Ok(()),
-                    HandleTarget::Callback(_) => Err(Error::UnsupportedExpansion(
-                        "async callback handle parameter",
-                    )),
-                    _ => Err(Error::UnsupportedExpansion("async handle parameter")),
-                }
+                self.validate_handle_target(target)
             }
             IncomingParam::Value(ParamPlan::ScalarOption { .. })
             | IncomingParam::Value(ParamPlan::DirectVec { .. }) => Ok(()),
@@ -352,6 +346,13 @@ impl<'lowered, S: RenderSurface> AsyncParameters<'lowered, S> {
                 Err(Error::UnsupportedExpansion("async reference parameter"))
             }
             _ => Err(Error::UnsupportedExpansion("async receive mode")),
+        }
+    }
+
+    fn validate_handle_target(&self, target: &HandleTarget) -> Result<(), Error> {
+        match target {
+            HandleTarget::Class(_) | HandleTarget::Callback(_) => Ok(()),
+            _ => Err(Error::UnsupportedExpansion("async handle parameter")),
         }
     }
 }
@@ -531,6 +532,8 @@ enum Complete {
 }
 
 struct PlainComplete {
+    items: Vec<TokenStream>,
+    ffi_parameters: Vec<TokenStream>,
     return_type: TokenStream,
     ok_pattern: TokenStream,
     ok_body: TokenStream,
@@ -539,7 +542,7 @@ struct PlainComplete {
 
 impl Complete {
     fn new<'expansion, 'plan, S: RenderSurface>(
-        symbol: &'plan NativeSymbol,
+        owner: syn::Ident,
         callable: &'plan ExportedCallable<S>,
         source: rust_api::Return<'plan>,
         rust_return_type: &Type,
@@ -573,7 +576,7 @@ impl Complete {
     {
         if !matches!(callable.error(), ErrorDecl::None(_)) {
             return FallibleComplete::new(
-                symbol,
+                owner,
                 callable,
                 source.fallible()?,
                 rust_return_type,
@@ -581,7 +584,7 @@ impl Complete {
             )
             .map(Self::Fallible);
         }
-        PlainComplete::new(callable, source, rust_return_type, expansion).map(Self::Plain)
+        PlainComplete::new(owner, callable, source, rust_return_type, expansion).map(Self::Plain)
     }
 
     fn tokens<S: RenderSurface>(
@@ -599,6 +602,7 @@ impl Complete {
 
 impl PlainComplete {
     fn new<'expansion, 'plan, S: RenderSurface>(
+        owner: syn::Ident,
         callable: &'plan ExportedCallable<S>,
         source: rust_api::Return<'plan>,
         rust_return_type: &Type,
@@ -608,6 +612,8 @@ impl PlainComplete {
         encoded::Renderer:
             Render<S, encoded::Input<'expansion, 'plan, 'plan, S>, Output = encoded::Tokens>,
         encoded::Renderer: Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
+        closure::Write:
+            Render<S, closure::WriteInput<'expansion, 'plan, S>, Output = closure::WriteTokens>,
         direct_vec::Renderer: Render<S, direct_vec::Input, Output = wrapper::returns::Tokens>
             + Render<S, direct_vec::Empty, Output = wrapper::returns::Tokens>,
         for<'handle> handle::Value: Render<
@@ -626,6 +632,8 @@ impl PlainComplete {
         let result = names::Wrapper::new(proc_macro2::Span::call_site()).result();
         match callable.returns().plan() {
             ReturnPlan::Void => Ok(Self {
+                items: Vec::new(),
+                ffi_parameters: Vec::new(),
                 return_type: TokenStream::new(),
                 ok_pattern: quote! { _ },
                 ok_body: TokenStream::new(),
@@ -643,6 +651,8 @@ impl PlainComplete {
                     crate::experimental::wrapper::type_ref::Renderer, &ty
                 )?;
                 Ok(Self {
+                    items: Vec::new(),
+                    ffi_parameters: Vec::new(),
                     return_type: quote! { -> #ty },
                     ok_pattern: quote! { #result },
                     ok_body: quote! { #result },
@@ -650,6 +660,8 @@ impl PlainComplete {
                 })
             }
             ReturnPlan::DirectViaReturnSlot { .. } => Ok(Self {
+                items: Vec::new(),
+                ffi_parameters: Vec::new(),
                 return_type: quote! { -> <#rust_return_type as ::boltffi::__private::Passable>::Out },
                 ok_pattern: quote! { #result },
                 ok_body: quote! { ::boltffi::__private::Passable::pack(#result) },
@@ -669,6 +681,8 @@ impl PlainComplete {
                     encoded::Empty::new(*shape),
                 )?;
                 Ok(Self {
+                    items: Vec::new(),
+                    ffi_parameters: Vec::new(),
                     return_type: encoded.return_type().clone(),
                     ok_pattern: quote! { #result },
                     ok_body: encoded.value().clone(),
@@ -698,6 +712,8 @@ impl PlainComplete {
                 )?;
                 let ty = handle.ty();
                 Ok(Self {
+                    items: Vec::new(),
+                    ffi_parameters: Vec::new(),
                     return_type: quote! { -> #ty },
                     ok_pattern: quote! { #result },
                     ok_body: handle.value().clone(),
@@ -715,6 +731,8 @@ impl PlainComplete {
                     scalar_option::Empty,
                 )?;
                 Ok(Self {
+                    items: Vec::new(),
+                    ffi_parameters: Vec::new(),
                     return_type: optional.return_type().clone(),
                     ok_pattern: quote! { #result },
                     ok_body: optional.body().clone(),
@@ -732,10 +750,34 @@ impl PlainComplete {
                     direct_vec::Empty,
                 )?;
                 Ok(Self {
+                    items: Vec::new(),
+                    ffi_parameters: Vec::new(),
                     return_type: sequence.return_type().clone(),
                     ok_pattern: quote! { #result },
                     ok_body: sequence.body().clone(),
                     err_body: empty.body().clone(),
+                })
+            }
+            ReturnPlan::ClosureViaOutPointer(closure) => {
+                let source_closure = source.closure(closure.presence())?;
+                let writer = <closure::Write as Render<S, _>>::render(
+                    closure::Write,
+                    closure::WriteInput::returned(
+                        closure,
+                        source_closure,
+                        result.clone(),
+                        owner,
+                        expansion,
+                    ),
+                )?;
+                let (items, ffi_parameters, body) = writer.into_parts();
+                Ok(Self {
+                    items,
+                    ffi_parameters,
+                    return_type: quote! { -> ::boltffi::__private::FfiStatus },
+                    ok_pattern: quote! { #result },
+                    ok_body: body,
+                    err_body: quote! { ::boltffi::__private::FfiStatus::OK },
                 })
             }
             _ => Err(Error::UnsupportedExpansion("async return shape")),
@@ -750,17 +792,22 @@ impl PlainComplete {
     ) -> TokenStream {
         let cfg = S::cfg_attr();
         let Self {
+            items,
+            ffi_parameters,
             return_type,
             ok_pattern,
             ok_body,
             err_body,
         } = self;
         quote! {
+            #(#items)*
+
             #cfg
             #[unsafe(no_mangle)]
             #visibility unsafe extern "C" fn #ident(
                 handle: ::boltffi::__private::RustFutureHandle,
-                out_status: *mut ::boltffi::__private::FfiStatus,
+                out_status: *mut ::boltffi::__private::FfiStatus
+                #(, #ffi_parameters)*,
             ) #return_type {
                 match unsafe { ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) } {
                     Ok(#ok_pattern) => {
@@ -793,7 +840,7 @@ struct FallibleComplete {
 
 impl FallibleComplete {
     fn new<'expansion, 'plan, S: RenderSurface>(
-        symbol: &'plan NativeSymbol,
+        owner: syn::Ident,
         callable: &'plan ExportedCallable<S>,
         source: rust_api::Fallible<'plan>,
         rust_return_type: &Type,
@@ -830,12 +877,7 @@ impl FallibleComplete {
         )?;
         let success = <fallible::Success as Render<S, _>>::render(
             fallible::Success,
-            fallible::SuccessInput::new(
-                callable.returns(),
-                source,
-                format_ident!("{}", symbol.name().as_str()),
-                expansion,
-            ),
+            fallible::SuccessInput::new(callable.returns(), source, owner, expansion),
         )?;
         let (_, ffi_parameters, success_pattern, success_body) = success.into_parts();
         let return_type = encoded_error.return_type().clone();

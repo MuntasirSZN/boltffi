@@ -5,7 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use boltffi_binding::BindingMetadataEnvelope;
+use boltffi_binding::{
+    BINDING_METADATA_BUILD_ENV, BINDING_METADATA_ROOT_ENV, BINDING_METADATA_SOURCE_ENV,
+    BINDING_METADATA_SURFACE_ENV, BindingMetadataEnvelope, BindingMetadataSurface,
+};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -40,8 +43,9 @@ impl BindingMetadataBuild {
 
     /// Runs Cargo and returns the validated metadata envelopes.
     pub fn read(&self) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataBuildError> {
-        let output = CargoBuild::new(self).output()?;
         let manifest = CargoManifest::new(&self.manifest_path)?;
+        let source_root = SourceRoot::resolve(&manifest)?;
+        let output = CargoBuild::new(self, &manifest, &source_root).output()?;
         let artifacts = output.artifacts(&manifest)?;
         BindingMetadataReader::new(artifacts.into_paths())
             .read_required()
@@ -85,6 +89,12 @@ pub enum BindingMetadataBuildError {
     /// Cargo did not report a readable compiled artifact.
     #[error("cargo build for `{manifest_path}` did not report compiled library artifacts")]
     NoArtifacts {
+        /// Manifest path passed to Cargo.
+        manifest_path: PathBuf,
+    },
+    /// Cargo metadata did not expose a library target source path.
+    #[error("cargo metadata for `{manifest_path}` did not report a library target source")]
+    NoLibrarySource {
         /// Manifest path passed to Cargo.
         manifest_path: PathBuf,
     },
@@ -144,17 +154,124 @@ impl CargoManifest {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SourceRoot {
+    path: PathBuf,
+}
+
+impl SourceRoot {
+    fn resolve(manifest: &CargoManifest) -> Result<Self, BindingMetadataBuildError> {
+        CargoMetadata::load(manifest)?
+            .library_source(manifest)
+            .map(|path| Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct CargoMetadata {
+    packages: Vec<MetadataPackage>,
+}
+
+impl CargoMetadata {
+    fn load(manifest: &CargoManifest) -> Result<Self, BindingMetadataBuildError> {
+        let output = Command::new(CargoProgram::from_env().into_os_string())
+            .arg("metadata")
+            .arg("--format-version=1")
+            .arg("--no-deps")
+            .arg("--manifest-path")
+            .arg(manifest.path())
+            .output()
+            .map_err(|source| BindingMetadataBuildError::CargoSpawn { source })?;
+        if !output.status.success() {
+            return Err(BindingMetadataBuildError::CargoFailed {
+                status: CargoStatus::from_status(output.status),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        serde_json::from_slice(&output.stdout).map_err(|source| {
+            BindingMetadataBuildError::CargoJson {
+                line: String::from_utf8_lossy(&output.stdout).into_owned(),
+                source,
+            }
+        })
+    }
+
+    fn library_source(
+        self,
+        manifest: &CargoManifest,
+    ) -> Result<PathBuf, BindingMetadataBuildError> {
+        self.packages
+            .into_iter()
+            .find(|package| manifest.matches(&package.manifest_path))
+            .and_then(MetadataPackage::library_source)
+            .ok_or_else(|| BindingMetadataBuildError::NoLibrarySource {
+                manifest_path: manifest.path().to_path_buf(),
+            })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MetadataPackage {
+    manifest_path: PathBuf,
+    targets: Vec<MetadataTarget>,
+}
+
+impl MetadataPackage {
+    fn library_source(self) -> Option<PathBuf> {
+        self.targets
+            .into_iter()
+            .find(MetadataTarget::is_library)
+            .map(MetadataTarget::into_source)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MetadataTarget {
+    kind: Vec<String>,
+    src_path: PathBuf,
+}
+
+impl MetadataTarget {
+    fn is_library(&self) -> bool {
+        self.kind.iter().any(|kind| {
+            matches!(
+                kind.as_str(),
+                "lib" | "rlib" | "dylib" | "cdylib" | "staticlib"
+            )
+        })
+    }
+
+    fn into_source(self) -> PathBuf {
+        self.src_path
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CargoBuild<'build> {
     build: &'build BindingMetadataBuild,
+    manifest: &'build CargoManifest,
+    source_root: &'build SourceRoot,
 }
 
 impl<'build> CargoBuild<'build> {
-    const fn new(build: &'build BindingMetadataBuild) -> Self {
-        Self { build }
+    const fn new(
+        build: &'build BindingMetadataBuild,
+        manifest: &'build CargoManifest,
+        source_root: &'build SourceRoot,
+    ) -> Self {
+        Self {
+            build,
+            manifest,
+            source_root,
+        }
     }
 
     fn output(self) -> Result<CargoOutput, BindingMetadataBuildError> {
+        let surface = BindingMetadataSurface::from_target_triple(self.build.target.as_deref());
         let mut command = Command::new(CargoProgram::from_env().into_os_string());
         command
             .arg("build")
@@ -164,6 +281,12 @@ impl<'build> CargoBuild<'build> {
             .arg(&self.build.manifest_path);
         if let Some(target) = &self.build.target {
             command.arg("--target").arg(target);
+        }
+        command.env(BINDING_METADATA_BUILD_ENV, "1");
+        command.env(BINDING_METADATA_SOURCE_ENV, self.source_root.path());
+        command.env(BINDING_METADATA_SURFACE_ENV, surface.as_str());
+        if let Some(root) = self.manifest.path().parent() {
+            command.env(BINDING_METADATA_ROOT_ENV, root);
         }
         MetadataRustflags::from_env().apply(&mut command);
         command
@@ -369,7 +492,7 @@ mod tests {
 
     use boltffi_ast::{PackageInfo, SourceContract};
     use boltffi_binding::{
-        BindingMetadataEnvelope, BindingMetadataSection, Native, SerializedBindings,
+        BindingMetadataEnvelope, BindingMetadataSection, Decl, Native, SerializedBindings,
         lower_with_declarations,
     };
 
@@ -410,6 +533,44 @@ mod tests {
     }
 
     #[test]
+    fn cargo_build_reads_macro_emitted_metadata_without_expanding_wrappers() {
+        if cfg!(miri) {
+            return;
+        }
+
+        let fixture = FixtureCrate::with_boltffi_macros();
+
+        let envelopes = BindingMetadataBuild::new(fixture.manifest())
+            .read()
+            .expect("cargo metadata build reads");
+
+        assert_eq!(envelopes.len(), 1);
+        let SerializedBindings::Native(bindings) = envelopes[0].bindings() else {
+            panic!("expected native metadata");
+        };
+        assert_eq!(
+            bindings.package().name().as_path_string(),
+            "metadata_fixture"
+        );
+        assert_eq!(
+            bindings
+                .decls()
+                .iter()
+                .filter(|decl| matches!(decl, Decl::Record(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            bindings
+                .decls()
+                .iter()
+                .filter(|decl| matches!(decl, Decl::Function(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn cargo_build_rejects_crate_without_metadata() {
         if cfg!(miri) {
             return;
@@ -435,6 +596,10 @@ mod tests {
     impl FixtureCrate {
         fn with_metadata(envelope: &BindingMetadataEnvelope) -> Self {
             Self::write(Source::with_metadata(envelope), Dependency::None)
+        }
+
+        fn with_boltffi_macros() -> Self {
+            Self::write(Source::with_boltffi_macros(), Dependency::Boltffi)
         }
 
         fn with_metadata_dependency(
@@ -476,6 +641,7 @@ mod tests {
     }
 
     enum Dependency<'envelope> {
+        Boltffi,
         Metadata(&'envelope BindingMetadataEnvelope),
         None,
     }
@@ -483,10 +649,15 @@ mod tests {
     impl Dependency<'_> {
         fn root_manifest(&self) -> String {
             let dependency = match self {
+                Self::Boltffi => format!(
+                    "\n[dependencies]\nboltffi = {{ path = \"{}\" }}\n",
+                    workspace_crate("boltffi").display()
+                ),
                 Self::Metadata(_) => {
                     "\n[dependencies]\nmetadata_dependency = { path = \"metadata_dependency\" }\n"
+                        .to_owned()
                 }
-                Self::None => "",
+                Self::None => String::new(),
             };
             format!(
                 "[package]\nname = \"metadata_fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n{dependency}"
@@ -520,6 +691,33 @@ mod tests {
     impl Source {
         fn with_metadata(envelope: &BindingMetadataEnvelope) -> Self {
             Self::with_metadata_and_body(envelope, "pub fn exported() -> u32 { 1 }\n")
+        }
+
+        fn with_boltffi_macros() -> Self {
+            Self {
+                code: r#"
+pub mod domain {
+    use boltffi::data;
+
+    #[data]
+    pub struct Point {
+        pub x: f64,
+    }
+}
+
+pub mod api {
+    use boltffi::export;
+
+    use crate::domain::Point;
+
+    #[export]
+    pub fn origin() -> Point {
+        Point { x: 0.0 }
+    }
+}
+"#
+                .to_owned(),
+            }
         }
 
         fn with_dependency_metadata(envelope: &BindingMetadataEnvelope) -> Self {
@@ -562,6 +760,13 @@ mod tests {
         let lowered = lower_with_declarations::<Native>(&source).expect("empty source lowers");
         BindingMetadataEnvelope::new(SerializedBindings::native(lowered.into_bindings()))
             .expect("metadata envelope")
+    }
+
+    fn workspace_crate(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join(name)
     }
 
     fn temp_root(prefix: &str) -> PathBuf {

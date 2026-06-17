@@ -180,6 +180,7 @@ fn is_boltffi_owned_attr(attr: &syn::Attribute) -> bool {
                 | "default"
                 | "ffi_stream"
                 | "name"
+                | "custom_ffi"
                 | "custom_type",
         )
     )

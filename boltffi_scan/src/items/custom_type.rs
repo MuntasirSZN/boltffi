@@ -6,11 +6,10 @@ use boltffi_ast::{
     Literal, NamePart, Path, PathRoot, PathSegment,
 };
 use syn::parse::Parse;
-use syn::spanned::Spanned;
 
 use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
-use crate::marked::MarkedCustom;
+use crate::marked::{MarkedCustom, MarkedCustomItem};
 use crate::path::{ImportLookup, ModuleScope};
 use crate::type_expr::Scanner;
 use crate::{ScanError, attributes, name};
@@ -19,11 +18,11 @@ pub fn scan(
     marked: &MarkedCustom<'_>,
     declared_types: &DeclaredTypes,
 ) -> Result<CustomTypeDef, ScanError> {
-    let spec = Spec::parse(marked.item())?;
+    let spec = Spec::parse(marked)?;
     let custom_name = name::source(spec.name());
     let custom_id = CustomTypeId::new(marked.module().qualified(&spec.name().to_string()));
     let scanner = Scanner::new(declared_types, marked.scope());
-    let attrs = Attributes::new(&marked.item().attrs, &scanner);
+    let attrs = Attributes::new(marked.attrs(), &scanner);
     let mut custom = CustomTypeDef::new(
         custom_id,
         custom_name,
@@ -32,7 +31,7 @@ pub fn scan(
         spec.error().cloned(),
         spec.converters().clone(),
     );
-    custom.source = attributes::source(spec.visibility(), marked.scope(), marked.item().span());
+    custom.source = spec.source(marked);
     custom.source_span = custom.source.span.clone();
     custom.doc = attrs.doc();
     custom.deprecated = attrs.deprecated()?;
@@ -41,7 +40,7 @@ pub fn scan(
 }
 
 pub struct Spec {
-    visibility: syn::Visibility,
+    visibility: Option<syn::Visibility>,
     name: syn::Ident,
     remote_type: CustomRemoteType,
     repr: syn::Type,
@@ -50,16 +49,51 @@ pub struct Spec {
 }
 
 impl Spec {
-    pub fn parse(item: &syn::ItemMacro) -> Result<Self, ScanError> {
+    pub fn parse(marked: &MarkedCustom<'_>) -> Result<Self, ScanError> {
+        match marked.item() {
+            MarkedCustomItem::Macro(item) => Self::parse_macro(item),
+            MarkedCustomItem::TraitImpl(item) => Self::parse_trait_impl(item),
+        }
+    }
+
+    fn parse_macro(item: &syn::ItemMacro) -> Result<Self, ScanError> {
         syn::parse2::<ParsedSpec>(item.mac.tokens.clone())
             .map_err(invalid_custom_type)
             .and_then(Self::from_parsed)
     }
 
+    fn parse_trait_impl(item: &syn::ItemImpl) -> Result<Self, ScanError> {
+        let (_, trait_path, _) = item.trait_.as_ref().ok_or_else(|| {
+            invalid_custom_type_message("custom_ffi marker requires a trait impl".to_owned())
+        })?;
+        if !is_custom_ffi_trait(trait_path) {
+            return Err(invalid_custom_type_message(format!(
+                "custom_ffi marker requires CustomFfiConvertible, found `{}`",
+                quote::quote!(#trait_path).to_string().replace(' ', "")
+            )));
+        }
+        let self_type = item.self_ty.as_ref();
+        let name = impl_target_name(self_type)?;
+        let remote_type = RemoteType::scan(self_type)?;
+        let repr = associated_type(item, "FfiRepr")?;
+        let error = Some(RemoteType::scan(&associated_type(item, "Error")?)?);
+        Ok(Self {
+            visibility: None,
+            name,
+            remote_type,
+            repr,
+            error,
+            converters: CustomTypeConverters::new(
+                trait_converter(self_type, "into_ffi"),
+                trait_converter(self_type, "try_from_ffi"),
+            ),
+        })
+    }
+
     fn from_parsed(parsed: ParsedSpec) -> Result<Self, ScanError> {
         let remote_type = RemoteType::scan(&parsed.remote)?;
         Ok(Self {
-            visibility: parsed.visibility,
+            visibility: Some(parsed.visibility),
             name: parsed.name,
             remote_type,
             repr: parsed.repr,
@@ -91,9 +125,62 @@ impl Spec {
         self.error.as_ref()
     }
 
-    fn visibility(&self) -> &syn::Visibility {
-        &self.visibility
+    fn source(&self, marked: &MarkedCustom<'_>) -> boltffi_ast::Source {
+        match &self.visibility {
+            Some(visibility) => attributes::source(visibility, marked.scope(), marked.span()),
+            None => attributes::public_source(marked.scope(), marked.span()),
+        }
     }
+}
+
+fn is_custom_ffi_trait(path: &syn::Path) -> bool {
+    path.segments
+        .last()
+        .is_some_and(|segment| segment.ident == "CustomFfiConvertible")
+}
+
+fn impl_target_name(ty: &syn::Type) -> Result<syn::Ident, ScanError> {
+    let syn::Type::Path(path) = ty else {
+        return Err(invalid_custom_type_message(format!(
+            "custom_ffi target is not a path `{}`",
+            crate::spelling::ty(ty)
+        )));
+    };
+    if path.qself.is_some() {
+        return Err(invalid_custom_type_message(format!(
+            "custom_ffi target cannot use qualified self type `{}`",
+            crate::spelling::ty(ty)
+        )));
+    }
+    path.path
+        .segments
+        .last()
+        .map(|segment| segment.ident.clone())
+        .ok_or_else(|| invalid_custom_type_message("custom_ffi target path is empty".to_owned()))
+}
+
+fn associated_type(item: &syn::ItemImpl, name: &str) -> Result<syn::Type, ScanError> {
+    item.items
+        .iter()
+        .find_map(|item| match item {
+            syn::ImplItem::Type(ty) if ty.ident == name => Some(ty.ty.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            invalid_custom_type_message(format!(
+                "custom_ffi impl is missing associated type `{name}`"
+            ))
+        })
+}
+
+fn trait_converter(self_type: &syn::Type, method: &str) -> CustomTypeConverter {
+    let method = syn::Ident::new(method, proc_macro2::Span::call_site());
+    CustomTypeConverter::expr(
+        quote::quote! {
+            <#self_type as ::boltffi::CustomFfiConvertible>::#method
+        }
+        .to_string(),
+    )
 }
 
 impl Parse for ParsedSpec {

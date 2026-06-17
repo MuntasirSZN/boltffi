@@ -1,5 +1,7 @@
+use boltffi_bindgen::target::Target;
+
 use crate::cli::Result;
-use crate::config::{Config, Target};
+use crate::config::Config;
 use crate::reporter::Reporter;
 
 use super::{

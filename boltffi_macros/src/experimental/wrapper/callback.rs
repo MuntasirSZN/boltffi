@@ -4,7 +4,7 @@ use boltffi_ast::{
 };
 use boltffi_binding::{
     CallbackDecl, CallbackLocalFunction, CallbackLocalMethodDecl, CallbackLocalProtocol,
-    CanonicalName, ClosureForm, ClosureParameter, ClosureReturn, Direction, ErrorDecl,
+    CanonicalName, ClosureForm, ClosureParameter, ClosureReturn, CodecNode, Direction, ErrorDecl,
     ExecutionDecl, ExportedCallable, HandlePresence, HandleTarget, ImportedCallable,
     ImportedMethodDecl, IntoRust, Native, OutOfRust, OutgoingParam, ParamDecl, ParamDirection,
     ParamPlan, ReturnPlan, TypeRef, VTableSlot, Wasm32, native, wasm32,
@@ -821,6 +821,14 @@ struct MethodAbi<'expansion, 'lowered, S: RenderSurface> {
 impl<'expansion, 'lowered, S> MethodAbi<'expansion, 'lowered, S>
 where
     S: CallbackMethodSurface,
+    wrapper::returns::direct_vec::Incoming:
+        Render<S, wrapper::returns::direct_vec::IncomingInput, Output = TokenStream>,
+    wrapper::returns::direct_vec::Renderer:
+        Render<S, wrapper::returns::direct_vec::Input, Output = wrapper::returns::Tokens>,
+    wrapper::returns::scalar_option::Incoming:
+        Render<S, wrapper::returns::scalar_option::IncomingInput, Output = TokenStream>,
+    wrapper::returns::scalar_option::Renderer:
+        Render<S, wrapper::returns::scalar_option::Input, Output = wrapper::returns::Tokens>,
     wrapper::returns::closure::Write: Render<
             S,
             wrapper::returns::closure::WriteInput<'expansion, 'lowered, S>,
@@ -1762,9 +1770,144 @@ struct LocalReturn<'lowered, S: CallbackMethodSurface> {
     error: &'lowered ErrorDecl<S, OutOfRust>,
 }
 
+enum InfallibleMethodReturn<'lowered, S: CallbackMethodSurface, D: Direction>
+where
+    D::Opposite: ParamDirection<S>,
+{
+    Void,
+    Direct {
+        ty: &'lowered TypeRef,
+    },
+    Encoded {
+        codec: &'lowered D::Codec,
+        shape: S::BufferShape,
+        ty: &'lowered TypeRef,
+    },
+    Handle {
+        target: &'lowered HandleTarget,
+        carrier: S::HandleCarrier,
+        presence: HandlePresence,
+    },
+    ScalarOption {
+        primitive: boltffi_binding::Primitive,
+    },
+    DirectVec,
+    Closure {
+        closure: &'lowered ClosureReturn<S, D>,
+    },
+}
+
+enum FallibleMethodSuccess<'lowered, S: CallbackMethodSurface, D: Direction>
+where
+    D::Opposite: ParamDirection<S>,
+{
+    Void,
+    Direct {
+        ty: &'lowered TypeRef,
+    },
+    Encoded {
+        codec: &'lowered D::Codec,
+        shape: S::BufferShape,
+    },
+    Handle {
+        target: &'lowered HandleTarget,
+        carrier: S::HandleCarrier,
+        presence: HandlePresence,
+    },
+    Closure {
+        closure: &'lowered ClosureReturn<S, D>,
+    },
+}
+
+impl<'lowered, S, D> InfallibleMethodReturn<'lowered, S, D>
+where
+    S: CallbackMethodSurface,
+    D: Direction,
+    D::Opposite: ParamDirection<S>,
+{
+    fn new(
+        plan: &'lowered ReturnPlan<S, D>,
+        error: &'lowered ErrorDecl<S, D>,
+    ) -> Result<Self, Error> {
+        match error {
+            ErrorDecl::None(_) => Self::from_plan(plan),
+            ErrorDecl::EncodedViaReturnSlot { .. } => Err(Error::UnsupportedExpansion(
+                "fallible callback method return",
+            )),
+            _ => Err(Error::UnsupportedExpansion("callback method error shape")),
+        }
+    }
+
+    fn from_plan(plan: &'lowered ReturnPlan<S, D>) -> Result<Self, Error> {
+        match plan {
+            ReturnPlan::Void => Ok(Self::Void),
+            ReturnPlan::DirectViaReturnSlot { ty } => Ok(Self::Direct { ty }),
+            ReturnPlan::EncodedViaReturnSlot { codec, shape, ty } => Ok(Self::Encoded {
+                codec,
+                shape: *shape,
+                ty,
+            }),
+            ReturnPlan::HandleViaReturnSlot {
+                target,
+                carrier,
+                presence,
+            } => Ok(Self::Handle {
+                target,
+                carrier: *carrier,
+                presence: *presence,
+            }),
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => Ok(Self::ScalarOption {
+                primitive: *primitive,
+            }),
+            ReturnPlan::DirectVecViaReturnSlot { .. } => Ok(Self::DirectVec),
+            ReturnPlan::ClosureViaOutPointer(closure) => Ok(Self::Closure { closure }),
+            _ => Err(Error::UnsupportedExpansion("callback method return shape")),
+        }
+    }
+}
+
+impl<'lowered, S, D> FallibleMethodSuccess<'lowered, S, D>
+where
+    S: CallbackMethodSurface,
+    D: Direction,
+    D::Opposite: ParamDirection<S>,
+{
+    fn new(plan: &'lowered ReturnPlan<S, D>) -> Result<Self, Error> {
+        match plan {
+            ReturnPlan::Void => Ok(Self::Void),
+            ReturnPlan::DirectViaOutPointer { ty } => Ok(Self::Direct { ty }),
+            ReturnPlan::EncodedViaOutPointer { codec, shape, .. } => Ok(Self::Encoded {
+                codec,
+                shape: *shape,
+            }),
+            ReturnPlan::HandleViaOutPointer {
+                target,
+                carrier,
+                presence,
+            } => Ok(Self::Handle {
+                target,
+                carrier: *carrier,
+                presence: *presence,
+            }),
+            ReturnPlan::ClosureViaOutPointer(closure) => Ok(Self::Closure { closure }),
+            _ => Err(Error::UnsupportedExpansion(
+                "fallible callback success shape",
+            )),
+        }
+    }
+}
+
 impl<'expansion, 'lowered, S> MethodReturn<'expansion, 'lowered, S>
 where
     S: CallbackMethodSurface,
+    wrapper::returns::direct_vec::Incoming:
+        Render<S, wrapper::returns::direct_vec::IncomingInput, Output = TokenStream>,
+    wrapper::returns::direct_vec::Renderer:
+        Render<S, wrapper::returns::direct_vec::Input, Output = wrapper::returns::Tokens>,
+    wrapper::returns::scalar_option::Incoming:
+        Render<S, wrapper::returns::scalar_option::IncomingInput, Output = TokenStream>,
+    wrapper::returns::scalar_option::Renderer:
+        Render<S, wrapper::returns::scalar_option::Input, Output = wrapper::returns::Tokens>,
     wrapper::returns::closure::Write: Render<
             S,
             wrapper::returns::closure::WriteInput<'expansion, 'lowered, S>,
@@ -1816,21 +1959,40 @@ where
         D::Opposite: ParamDirection<S>,
     {
         match error {
-            ErrorDecl::None(_) => match plan {
-                ReturnPlan::Void => Ok(CallbackReturnAbi::empty()),
-                ReturnPlan::DirectViaReturnSlot { ty } => Ok(CallbackReturnAbi::direct(
+            ErrorDecl::None(_) => match InfallibleMethodReturn::from_plan(plan)? {
+                InfallibleMethodReturn::Void => Ok(CallbackReturnAbi::empty()),
+                InfallibleMethodReturn::Direct { ty } => Ok(CallbackReturnAbi::direct(
                     Self::direct_return_type(ty, source)?,
                 )),
-                ReturnPlan::EncodedViaReturnSlot { shape, ty, .. } => {
-                    Ok(S::callback_encoded_return(*shape, ty)?.abi())
+                InfallibleMethodReturn::Encoded { shape, ty, .. } => {
+                    Ok(S::callback_encoded_return(shape, ty)?.abi())
                 }
-                ReturnPlan::HandleViaReturnSlot {
+                InfallibleMethodReturn::Handle {
                     carrier,
                     target,
                     presence,
-                } => Self::handle_abi(target, *carrier, *presence),
-                ReturnPlan::ClosureViaOutPointer(_) => Ok(S::callback_closure_return_abi()),
-                _ => Err(Error::UnsupportedExpansion("callback method return shape")),
+                } => Self::handle_abi(target, carrier, presence),
+                InfallibleMethodReturn::ScalarOption { primitive } => {
+                    source.scalar_option(primitive)?;
+                    let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                    let optional =
+                        <wrapper::returns::scalar_option::Renderer as Render<S, _>>::render(
+                            wrapper::returns::scalar_option::Renderer,
+                            wrapper::returns::scalar_option::Input::new(primitive, result),
+                        )?;
+                    Ok(CallbackReturnAbi::direct(optional.return_type().clone()))
+                }
+                InfallibleMethodReturn::DirectVec => {
+                    source.direct_vec()?;
+                    let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                    let sequence =
+                        <wrapper::returns::direct_vec::Renderer as Render<S, _>>::render(
+                            wrapper::returns::direct_vec::Renderer,
+                            wrapper::returns::direct_vec::Input::new(result),
+                        )?;
+                    Ok(CallbackReturnAbi::direct(sequence.return_type().clone()))
+                }
+                InfallibleMethodReturn::Closure { .. } => Ok(S::callback_closure_return_abi()),
             },
             ErrorDecl::EncodedViaReturnSlot { shape, .. } => {
                 let error_slot = S::callback_encoded_error(*shape)?;
@@ -1865,19 +2027,23 @@ where
     }
 
     fn native_async_completion_type(&self) -> Result<TokenStream, Error> {
-        match (self.plan, self.error) {
-            (ReturnPlan::Void, ErrorDecl::None(_)) => {
-                Ok(quote! { ::boltffi::__private::AsyncCallbackVoid })
-            }
-            (ReturnPlan::EncodedViaReturnSlot { .. }, ErrorDecl::None(_)) => {
+        if let ErrorDecl::EncodedViaReturnSlot { .. } = self.error {
+            FallibleMethodSuccess::new(self.plan)?;
+            return Ok(
+                quote! { ::boltffi::__private::AsyncCallback<::boltffi::__private::FfiBuf> },
+            );
+        }
+
+        match InfallibleMethodReturn::new(self.plan, self.error)? {
+            InfallibleMethodReturn::Void => Ok(quote! { ::boltffi::__private::AsyncCallbackVoid }),
+            InfallibleMethodReturn::Encoded { .. }
+            | InfallibleMethodReturn::ScalarOption { .. }
+            | InfallibleMethodReturn::DirectVec => {
                 Ok(quote! { ::boltffi::__private::AsyncCallback<::boltffi::__private::FfiBuf> })
             }
-            (
-                ReturnPlan::DirectViaReturnSlot {
-                    ty: TypeRef::Primitive(primitive),
-                },
-                ErrorDecl::None(_),
-            ) => {
+            InfallibleMethodReturn::Direct {
+                ty: TypeRef::Primitive(primitive),
+            } => {
                 let ty = TypeRef::Primitive(*primitive);
                 let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
                     wrapper::type_ref::Renderer,
@@ -1885,34 +2051,31 @@ where
                 )?;
                 Ok(quote! { ::boltffi::__private::AsyncCallback<#ffi_type> })
             }
-            (ReturnPlan::DirectViaReturnSlot { .. }, ErrorDecl::None(_)) => {
+            InfallibleMethodReturn::Direct { .. } => {
                 let rust_type = self.direct_source_type()?;
                 Ok(quote! {
                     ::boltffi::__private::AsyncCallback<<#rust_type as ::boltffi::__private::Passable>::In>
                 })
             }
-            (
-                ReturnPlan::HandleViaReturnSlot {
-                    carrier,
-                    target: _,
-                    presence: _,
-                },
-                ErrorDecl::None(_),
-            ) => {
-                let carrier = S::handle_carrier(*carrier)?;
+            InfallibleMethodReturn::Handle { carrier, .. } => {
+                let carrier = S::handle_carrier(carrier)?;
                 let ty = carrier.ty();
                 Ok(quote! { ::boltffi::__private::AsyncCallback<#ty> })
             }
-            _ => Err(Error::UnsupportedExpansion(
-                "async callback method return shape",
-            )),
+            InfallibleMethodReturn::Closure { .. } => {
+                Err(Error::UnsupportedExpansion("async callback closure return"))
+            }
         }
     }
 
     fn native_async_foreign_body(&self, call: TokenStream) -> Result<TokenStream, Error> {
-        match (self.plan, self.error) {
-            (ReturnPlan::Void, ErrorDecl::None(_)) => Ok(self.native_async_void_body(call)),
-            (ReturnPlan::EncodedViaReturnSlot { codec, .. }, ErrorDecl::None(_)) => {
+        if let ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } = self.error {
+            return self.native_async_fallible_body(call, codec.root(), *shape);
+        }
+
+        match InfallibleMethodReturn::new(self.plan, self.error)? {
+            InfallibleMethodReturn::Void => Ok(self.native_async_void_body(call)),
+            InfallibleMethodReturn::Encoded { codec, .. } => {
                 let value = self.native_async_encoded_value(codec.root())?;
                 Ok(self.native_async_value_body(
                     quote! { ::boltffi::__private::FfiBuf },
@@ -1920,12 +2083,9 @@ where
                     value,
                 ))
             }
-            (
-                ReturnPlan::DirectViaReturnSlot {
-                    ty: TypeRef::Primitive(primitive),
-                },
-                ErrorDecl::None(_),
-            ) => {
+            InfallibleMethodReturn::Direct {
+                ty: TypeRef::Primitive(primitive),
+            } => {
                 let ty = TypeRef::Primitive(*primitive);
                 let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
                     wrapper::type_ref::Renderer,
@@ -1933,7 +2093,7 @@ where
                 )?;
                 Ok(self.native_async_value_body(ffi_type, call, quote! { __boltffi_result }))
             }
-            (ReturnPlan::DirectViaReturnSlot { .. }, ErrorDecl::None(_)) => {
+            InfallibleMethodReturn::Direct { .. } => {
                 let rust_type = self.direct_source_type()?;
                 Ok(self.native_async_value_body(
                     quote! { <#rust_type as ::boltffi::__private::Passable>::In },
@@ -1945,40 +2105,137 @@ where
                     },
                 ))
             }
-            (
-                ReturnPlan::HandleViaReturnSlot {
-                    target,
-                    carrier,
-                    presence,
-                },
-                ErrorDecl::None(_),
-            ) => {
-                let carrier_tokens = S::handle_carrier(*carrier)?;
+            InfallibleMethodReturn::Handle {
+                target,
+                carrier,
+                presence,
+            } => {
+                let carrier_tokens = S::handle_carrier(carrier)?;
                 let carrier_type = carrier_tokens.ty();
                 let value = self.foreign_handle_value(
                     target,
-                    *carrier,
-                    *presence,
+                    carrier,
+                    presence,
                     quote! { __boltffi_result },
                 )?;
                 Ok(self.native_async_value_body(carrier_type.clone(), call, value))
             }
-            _ => Err(Error::UnsupportedExpansion(
-                "async callback method return shape",
-            )),
+            InfallibleMethodReturn::ScalarOption { primitive } => {
+                self.source.scalar_option(primitive)?;
+                let rust_type = self.direct_source_type()?;
+                let value = <wrapper::returns::scalar_option::Incoming as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Incoming,
+                    wrapper::returns::scalar_option::IncomingInput::new(
+                        primitive,
+                        rust_type,
+                        quote! { __boltffi_result },
+                    ),
+                )?;
+                Ok(self.native_async_value_body(
+                    quote! { ::boltffi::__private::FfiBuf },
+                    call,
+                    value,
+                ))
+            }
+            InfallibleMethodReturn::DirectVec => {
+                let element = self.source.direct_vec_element_type()?;
+                let value = <wrapper::returns::direct_vec::Incoming as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Incoming,
+                    wrapper::returns::direct_vec::IncomingInput::new(
+                        element,
+                        quote! { __boltffi_result },
+                    ),
+                )?;
+                Ok(self.native_async_value_body(
+                    quote! { ::boltffi::__private::FfiBuf },
+                    call,
+                    value,
+                ))
+            }
+            InfallibleMethodReturn::Closure { .. } => {
+                Err(Error::UnsupportedExpansion("async callback closure return"))
+            }
         }
     }
 
     fn wasm_async_foreign_body(&self, call: TokenStream) -> Result<TokenStream, Error> {
-        match (self.plan, self.error) {
-            (ReturnPlan::Void, ErrorDecl::None(_)) => Ok(self.wasm_async_void_body(call)),
-            (ReturnPlan::EncodedViaReturnSlot { codec, .. }, ErrorDecl::None(_)) => {
+        if let ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } = self.error {
+            return self.wasm_async_fallible_body(call, codec.root(), *shape);
+        }
+
+        match InfallibleMethodReturn::new(self.plan, self.error)? {
+            InfallibleMethodReturn::Void => Ok(self.wasm_async_void_body(call)),
+            InfallibleMethodReturn::Encoded { codec, .. } => {
                 let value = self.wasm_async_encoded_value(codec.root())?;
                 Ok(self.wasm_async_value_body(call, value))
             }
-            _ => Err(Error::UnsupportedExpansion(
-                "async callback method return shape",
-            )),
+            InfallibleMethodReturn::Direct {
+                ty: TypeRef::Primitive(primitive),
+            } => {
+                let ty = TypeRef::Primitive(*primitive);
+                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
+                    wrapper::type_ref::Renderer,
+                    &ty,
+                )?;
+                let value = Self::wasm_completion_value(ffi_type);
+                Ok(self.wasm_async_value_body(call, value))
+            }
+            InfallibleMethodReturn::Direct { .. } => {
+                let rust_type = self.direct_source_type()?;
+                let value = Self::wasm_completion_value(quote! {
+                    <#rust_type as ::boltffi::__private::Passable>::In
+                });
+                Ok(self.wasm_async_value_body(
+                    call,
+                    quote! {
+                        unsafe {
+                            <#rust_type as ::boltffi::__private::Passable>::unpack(#value)
+                        }
+                    },
+                ))
+            }
+            InfallibleMethodReturn::Handle {
+                target,
+                carrier,
+                presence,
+            } => {
+                let carrier_tokens = S::handle_carrier(carrier)?;
+                let carrier_type = carrier_tokens.ty();
+                let value = self.foreign_handle_value(
+                    target,
+                    carrier,
+                    presence,
+                    Self::wasm_completion_value(carrier_type.clone()),
+                )?;
+                Ok(self.wasm_async_value_body(call, value))
+            }
+            InfallibleMethodReturn::ScalarOption { primitive } => {
+                let value = self.wasm_async_scalar_option_value(primitive)?;
+                Ok(self.wasm_async_value_body(call, value))
+            }
+            InfallibleMethodReturn::DirectVec => {
+                let value = self.wasm_async_direct_vec_value()?;
+                Ok(self.wasm_async_value_body(call, value))
+            }
+            InfallibleMethodReturn::Closure { .. } => {
+                Err(Error::UnsupportedExpansion("async callback closure return"))
+            }
+        }
+    }
+
+    fn wasm_completion_value(ty: TokenStream) -> TokenStream {
+        quote! {
+            match ::boltffi::__private::wire::decode::<#ty>(
+                __boltffi_completion.data.as_slice()
+            ) {
+                Ok(__boltffi_value) => __boltffi_value,
+                Err(error) => {
+                    panic!(
+                        "async callback return conversion failed: {:?}",
+                        error
+                    )
+                }
+            }
         }
     }
 
@@ -2016,6 +2273,182 @@ where
                 },
             ),
         )
+    }
+
+    fn wasm_async_scalar_option_value(
+        &self,
+        primitive: boltffi_binding::Primitive,
+    ) -> Result<TokenStream, Error> {
+        self.source.scalar_option(primitive)?;
+        let rust_type = self.direct_source_type()?;
+        Ok(quote! {
+            match ::boltffi::__private::wire::decode::<#rust_type>(
+                __boltffi_completion.data.as_slice()
+            ) {
+                Ok(__boltffi_value) => __boltffi_value,
+                Err(error) => {
+                    panic!(
+                        "async callback optional scalar return conversion failed: {:?}",
+                        error
+                    )
+                }
+            }
+        })
+    }
+
+    fn wasm_async_direct_vec_value(&self) -> Result<TokenStream, Error> {
+        let element = self.source.direct_vec_element_type()?;
+        Ok(quote! {
+            if __boltffi_completion.data.is_empty() {
+                Vec::new()
+            } else {
+                let __boltffi_byte_len = __boltffi_completion.data.len();
+                let __boltffi_element_size =
+                    ::core::mem::size_of::<<#element as ::boltffi::__private::Passable>::In>();
+                if __boltffi_byte_len % __boltffi_element_size == 0 {
+                    unsafe {
+                        <#element as ::boltffi::__private::VecTransport>::unpack_vec(
+                            __boltffi_completion.data.as_ptr(),
+                            __boltffi_byte_len,
+                        )
+                    }
+                } else {
+                    panic!(
+                        "invalid async callback Vec<{}> return byte length {} for element size {}",
+                        ::core::any::type_name::<#element>(),
+                        __boltffi_byte_len,
+                        __boltffi_element_size,
+                    )
+                }
+            }
+        })
+    }
+
+    fn async_fallible_success_value(&self, bytes: TokenStream) -> Result<TokenStream, Error> {
+        match FallibleMethodSuccess::new(self.plan)? {
+            FallibleMethodSuccess::Void => Ok(quote! { () }),
+            FallibleMethodSuccess::Direct {
+                ty: TypeRef::Primitive(primitive),
+            } => {
+                let ty = TypeRef::Primitive(*primitive);
+                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
+                    wrapper::type_ref::Renderer,
+                    &ty,
+                )?;
+                Ok(Self::async_wire_value(
+                    ffi_type,
+                    bytes,
+                    "async callback success conversion failed",
+                ))
+            }
+            FallibleMethodSuccess::Direct { .. } => {
+                let ok_type = self.source.fallible()?.ok_written_type()?;
+                let passable = Self::async_wire_value(
+                    quote! { <#ok_type as ::boltffi::__private::Passable>::In },
+                    bytes,
+                    "async callback success conversion failed",
+                );
+                Ok(quote! {
+                    unsafe {
+                        <#ok_type as ::boltffi::__private::Passable>::unpack(#passable)
+                    }
+                })
+            }
+            FallibleMethodSuccess::Encoded { codec, .. } => {
+                let fallible = self.source.fallible()?;
+                let ok_type = fallible.ok_written_type()?;
+                wrapper::encoded::incoming::Value::new(codec.root(), self.expansion).expression(
+                    wrapper::encoded::incoming::Bytes::new(
+                        &ok_type,
+                        fallible.ok(),
+                        bytes,
+                        quote! {
+                            panic!("async callback success conversion failed: {:?}", error)
+                        },
+                    ),
+                )
+            }
+            FallibleMethodSuccess::Handle {
+                target,
+                carrier,
+                presence,
+            } => {
+                let carrier_tokens = S::handle_carrier(carrier)?;
+                let value = Self::async_wire_value(
+                    carrier_tokens.ty().clone(),
+                    bytes,
+                    "async callback success conversion failed",
+                );
+                self.foreign_handle_value(target, carrier, presence, value)
+            }
+            FallibleMethodSuccess::Closure { .. } => Err(Error::UnsupportedExpansion(
+                "async callback closure success",
+            )),
+        }
+    }
+
+    fn async_fallible_error_value(
+        &self,
+        codec: &CodecNode,
+        bytes: TokenStream,
+    ) -> Result<TokenStream, Error> {
+        let fallible = self.source.fallible()?;
+        let error_type = fallible.error_written_type()?;
+        wrapper::encoded::incoming::Value::new(codec, self.expansion).expression(
+            wrapper::encoded::incoming::Bytes::new(
+                &error_type,
+                fallible.error(),
+                bytes,
+                quote! {
+                    panic!("async callback error conversion failed: {:?}", error)
+                },
+            ),
+        )
+    }
+
+    fn async_wire_value(ty: TokenStream, bytes: TokenStream, failure: &'static str) -> TokenStream {
+        let failure = LitStr::new(failure, Span::call_site());
+        quote! {
+            match ::boltffi::__private::wire::decode::<#ty>(#bytes) {
+                Ok(__boltffi_value) => __boltffi_value,
+                Err(error) => {
+                    panic!("{}: {:?}", #failure, error)
+                }
+            }
+        }
+    }
+
+    fn native_async_fallible_body(
+        &self,
+        call: TokenStream,
+        error_codec: &CodecNode,
+        error_shape: S::BufferShape,
+    ) -> Result<TokenStream, Error> {
+        S::callback_encoded_error(error_shape)?;
+        let success = self.async_fallible_success_value(quote! {
+            unsafe { __boltffi_result.as_byte_slice() }
+        })?;
+        let error = self.async_fallible_error_value(
+            error_codec,
+            quote! { unsafe { __boltffi_result.as_byte_slice() } },
+        )?;
+        Ok(self.native_async_result_body(call, success, error))
+    }
+
+    fn wasm_async_fallible_body(
+        &self,
+        call: TokenStream,
+        error_codec: &CodecNode,
+        error_shape: S::BufferShape,
+    ) -> Result<TokenStream, Error> {
+        S::callback_encoded_error(error_shape)?;
+        let success =
+            self.async_fallible_success_value(quote! { __boltffi_completion.data.as_slice() })?;
+        let error = self.async_fallible_error_value(
+            error_codec,
+            quote! { __boltffi_completion.data.as_slice() },
+        )?;
+        Ok(self.wasm_async_result_body(call, success, error))
     }
 
     fn native_async_void_body(&self, call: TokenStream) -> TokenStream {
@@ -2156,6 +2589,80 @@ where
         }
     }
 
+    fn native_async_result_body(
+        &self,
+        call: TokenStream,
+        success: TokenStream,
+        error: TokenStream,
+    ) -> TokenStream {
+        quote! {
+            use std::sync::{Arc, Mutex};
+            use std::task::Waker;
+
+            struct __BoltffiAsyncState {
+                result: Option<::boltffi::__private::FfiBuf>,
+                status: ::boltffi::__private::FfiStatus,
+                waker: Option<Waker>,
+            }
+
+            struct __BoltffiAsyncContext {
+                state: Mutex<__BoltffiAsyncState>,
+            }
+
+            extern "C" fn __boltffi_completion(
+                completion_data: *mut ::core::ffi::c_void,
+                status: ::boltffi::__private::FfiStatus,
+                result: ::boltffi::__private::FfiBuf,
+            ) {
+                let context =
+                    unsafe { Arc::from_raw(completion_data as *const __BoltffiAsyncContext) };
+                let waker = context
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|mut state| {
+                        state.result = Some(result);
+                        state.status = status;
+                        state.waker.take()
+                    });
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }
+
+            let __boltffi_context = Arc::new(__BoltffiAsyncContext {
+                state: Mutex::new(__BoltffiAsyncState {
+                    result: None,
+                    status: ::boltffi::__private::FfiStatus::OK,
+                    waker: None,
+                }),
+            });
+            let __boltffi_completion_data =
+                Arc::into_raw(Arc::clone(&__boltffi_context)) as *mut ::core::ffi::c_void;
+            unsafe {
+                #call;
+            }
+
+            std::future::poll_fn(move |task| {
+                let mut state = __boltffi_context
+                    .state
+                    .lock()
+                    .expect("async callback mutex poisoned");
+                if let Some(__boltffi_result) = state.result.take() {
+                    let __boltffi_return = if state.status.is_err() {
+                        Err(#error)
+                    } else {
+                        Ok(#success)
+                    };
+                    std::task::Poll::Ready(__boltffi_return)
+                } else {
+                    state.waker = Some(task.waker().clone());
+                    std::task::Poll::Pending
+                }
+            }).await
+        }
+    }
+
     fn wasm_async_void_body(&self, call: TokenStream) -> TokenStream {
         quote! {
             let __boltffi_registry = ::boltffi::__private::AsyncCallbackRegistry::current();
@@ -2174,6 +2681,38 @@ where
                         }
                         drop(__boltffi_guard);
                         std::task::Poll::Ready(())
+                    }
+                    None => std::task::Poll::Pending,
+                }
+            }).await
+        }
+    }
+
+    fn wasm_async_result_body(
+        &self,
+        call: TokenStream,
+        success: TokenStream,
+        error: TokenStream,
+    ) -> TokenStream {
+        quote! {
+            let __boltffi_registry = ::boltffi::__private::AsyncCallbackRegistry::current();
+            let __boltffi_request = __boltffi_registry.allocate();
+            let __boltffi_guard =
+                ::boltffi::__private::AsyncCallbackRequestGuard::new(__boltffi_request);
+            unsafe {
+                #call;
+            }
+            std::future::poll_fn(move |task| {
+                __boltffi_registry.set_waker(__boltffi_request, task.waker().clone());
+                match __boltffi_registry.take_completion(__boltffi_request) {
+                    Some(__boltffi_completion) => {
+                        let __boltffi_return = if __boltffi_completion.code.is_success() {
+                            Ok(#success)
+                        } else {
+                            Err(#error)
+                        };
+                        drop(__boltffi_guard);
+                        std::task::Poll::Ready(__boltffi_return)
                     }
                     None => std::task::Poll::Pending,
                 }
@@ -2216,9 +2755,9 @@ where
         D::Opposite: ParamDirection<S>,
     {
         let success_out = quote! { __boltffi_success_out };
-        let success_pointer = match plan {
-            ReturnPlan::Void => None,
-            ReturnPlan::DirectViaOutPointer {
+        let success_pointer = match FallibleMethodSuccess::new(plan)? {
+            FallibleMethodSuccess::Void => None,
+            FallibleMethodSuccess::Direct {
                 ty: TypeRef::Primitive(primitive),
             } => {
                 let ty = TypeRef::Primitive(*primitive);
@@ -2228,24 +2767,19 @@ where
                 )?;
                 Some(quote! { *mut #ty })
             }
-            ReturnPlan::DirectViaOutPointer { .. } => {
+            FallibleMethodSuccess::Direct { .. } => {
                 let ok = source.ok_written_type()?;
                 Some(quote! { *mut <#ok as ::boltffi::__private::Passable>::Out })
             }
-            ReturnPlan::EncodedViaOutPointer { shape, .. } => {
-                Some(S::callback_encoded_out_pointer(*shape)?)
+            FallibleMethodSuccess::Encoded { shape, .. } => {
+                Some(S::callback_encoded_out_pointer(shape)?)
             }
-            ReturnPlan::HandleViaOutPointer { carrier, .. } => {
-                let carrier = S::handle_carrier(*carrier)?;
+            FallibleMethodSuccess::Handle { carrier, .. } => {
+                let carrier = S::handle_carrier(carrier)?;
                 let ty = carrier.ty();
                 Some(quote! { *mut #ty })
             }
-            ReturnPlan::ClosureViaOutPointer(_) => Some(S::callback_closure_out_pointer()),
-            _ => {
-                return Err(Error::UnsupportedExpansion(
-                    "fallible callback success shape",
-                ));
-            }
+            FallibleMethodSuccess::Closure { .. } => Some(S::callback_closure_out_pointer()),
         };
         let foreign_ffi_parameters = success_pointer
             .as_ref()
@@ -2280,16 +2814,16 @@ where
         if let ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } = self.error {
             return self.foreign_fallible_body(call, codec.root(), *shape);
         }
-        match self.plan {
-            ReturnPlan::Void => Ok(quote! {
+        match InfallibleMethodReturn::new(self.plan, self.error)? {
+            InfallibleMethodReturn::Void => Ok(quote! {
                 unsafe {
                     #call;
                 }
             }),
-            ReturnPlan::DirectViaReturnSlot {
+            InfallibleMethodReturn::Direct {
                 ty: TypeRef::Primitive(_),
             } => Ok(quote! { unsafe { #call } }),
-            ReturnPlan::DirectViaReturnSlot { .. } => {
+            InfallibleMethodReturn::Direct { .. } => {
                 let rust_type = self.direct_source_type()?;
                 Ok(quote! {
                     unsafe {
@@ -2297,10 +2831,10 @@ where
                     }
                 })
             }
-            ReturnPlan::EncodedViaReturnSlot { codec, shape, ty } => {
+            InfallibleMethodReturn::Encoded { codec, shape, ty } => {
                 let source = self.source.value_type()?;
                 let rust_type = rust_api::TypeTokens::new(source.as_ref())?.into_type();
-                S::callback_encoded_return(*shape, ty)?.foreign_body(
+                S::callback_encoded_return(shape, ty)?.foreign_body(
                     call,
                     codec.root(),
                     rust_type,
@@ -2308,20 +2842,39 @@ where
                     self.expansion,
                 )
             }
-            ReturnPlan::HandleViaReturnSlot {
+            InfallibleMethodReturn::Handle {
                 target,
                 carrier,
                 presence,
-            } => {
-                self.foreign_handle_value(target, *carrier, *presence, quote! { unsafe { #call } })
+            } => self.foreign_handle_value(target, carrier, presence, quote! { unsafe { #call } }),
+            InfallibleMethodReturn::ScalarOption { primitive } => {
+                self.source.scalar_option(primitive)?;
+                let rust_type = self.direct_source_type()?;
+                <wrapper::returns::scalar_option::Incoming as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Incoming,
+                    wrapper::returns::scalar_option::IncomingInput::new(
+                        primitive,
+                        rust_type,
+                        quote! { unsafe { #call } },
+                    ),
+                )
             }
-            ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_return_body(
+            InfallibleMethodReturn::DirectVec => {
+                let element = self.source.direct_vec_element_type()?;
+                <wrapper::returns::direct_vec::Incoming as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Incoming,
+                    wrapper::returns::direct_vec::IncomingInput::new(
+                        element,
+                        quote! { unsafe { #call } },
+                    ),
+                )
+            }
+            InfallibleMethodReturn::Closure { closure } => S::foreign_closure_return_body(
                 closure,
                 self.source.closure(closure.presence())?,
                 call,
                 self.expansion,
             ),
-            _ => Err(Error::UnsupportedExpansion("callback method return shape")),
         }
     }
 
@@ -2330,14 +2883,14 @@ where
         if let ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } = local_return.error {
             return self.local_proxy_fallible_body(call, codec.root(), *shape);
         }
-        match local_return.plan {
-            ReturnPlan::Void => Ok(quote! {
+        match InfallibleMethodReturn::new(local_return.plan, local_return.error)? {
+            InfallibleMethodReturn::Void => Ok(quote! {
                 #call;
             }),
-            ReturnPlan::DirectViaReturnSlot {
+            InfallibleMethodReturn::Direct {
                 ty: TypeRef::Primitive(_),
             } => Ok(quote! { #call }),
-            ReturnPlan::DirectViaReturnSlot { .. } => {
+            InfallibleMethodReturn::Direct { .. } => {
                 let rust_type = self.direct_source_type()?;
                 Ok(quote! {
                     unsafe {
@@ -2345,10 +2898,10 @@ where
                     }
                 })
             }
-            ReturnPlan::EncodedViaReturnSlot { codec, shape, ty } => {
+            InfallibleMethodReturn::Encoded { codec, shape, ty } => {
                 let source = self.source.value_type()?;
                 let rust_type = rust_api::TypeTokens::new(source.as_ref())?.into_type();
-                S::callback_encoded_return(*shape, ty)?.local_proxy_body(
+                S::callback_encoded_return(shape, ty)?.local_proxy_body(
                     call,
                     codec.root(),
                     rust_type,
@@ -2356,23 +2909,39 @@ where
                     self.expansion,
                 )
             }
-            ReturnPlan::HandleViaReturnSlot {
+            InfallibleMethodReturn::Handle {
                 target,
                 carrier,
                 presence,
-            } => self.foreign_handle_value(target, *carrier, *presence, quote! { #call }),
-            ReturnPlan::ClosureViaOutPointer(_) => match self.plan {
-                ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_return_body(
+            } => self.foreign_handle_value(target, carrier, presence, quote! { #call }),
+            InfallibleMethodReturn::ScalarOption { primitive } => {
+                self.source.scalar_option(primitive)?;
+                let rust_type = self.direct_source_type()?;
+                <wrapper::returns::scalar_option::Incoming as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Incoming,
+                    wrapper::returns::scalar_option::IncomingInput::new(
+                        primitive,
+                        rust_type,
+                        quote! { #call },
+                    ),
+                )
+            }
+            InfallibleMethodReturn::DirectVec => {
+                let element = self.source.direct_vec_element_type()?;
+                <wrapper::returns::direct_vec::Incoming as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Incoming,
+                    wrapper::returns::direct_vec::IncomingInput::new(element, quote! { #call }),
+                )
+            }
+            InfallibleMethodReturn::Closure { .. } => {
+                let closure = self.foreign_closure_return()?;
+                S::foreign_closure_return_body(
                     closure,
                     self.source.closure(closure.presence())?,
                     call,
                     self.expansion,
-                ),
-                _ => Err(Error::SourceSyntaxMismatch(
-                    "callback local proxy closure return does not match foreign return",
-                )),
-            },
-            _ => Err(Error::UnsupportedExpansion("callback method return shape")),
+                )
+            }
         }
     }
 
@@ -2445,26 +3014,26 @@ where
         if let ErrorDecl::EncodedViaReturnSlot { codec, shape, ty } = local_return.error {
             return self.local_fallible_body(owner, call, codec.root(), *shape, ty);
         }
-        match local_return.plan {
-            ReturnPlan::Void => Ok(LocalMethodBody::new(quote! { #call })),
-            ReturnPlan::DirectViaReturnSlot {
+        match InfallibleMethodReturn::new(local_return.plan, local_return.error)? {
+            InfallibleMethodReturn::Void => Ok(LocalMethodBody::new(quote! { #call })),
+            InfallibleMethodReturn::Direct {
                 ty: TypeRef::Primitive(_),
             } => Ok(LocalMethodBody::new(quote! { #call })),
-            ReturnPlan::DirectViaReturnSlot { .. } => Ok(LocalMethodBody::new(quote! {
+            InfallibleMethodReturn::Direct { .. } => Ok(LocalMethodBody::new(quote! {
                 ::boltffi::__private::Passable::pack(#call)
             })),
-            ReturnPlan::EncodedViaReturnSlot { codec, shape, ty } => {
-                S::callback_encoded_return(*shape, ty)?
+            InfallibleMethodReturn::Encoded { codec, shape, ty } => {
+                S::callback_encoded_return(shape, ty)?
                     .local_body(call, codec.root(), self.expansion)
                     .map(LocalMethodBody::new)
             }
-            ReturnPlan::HandleViaReturnSlot {
+            InfallibleMethodReturn::Handle {
                 target,
                 carrier,
                 presence,
             } => {
                 let result = wrapper::names::Wrapper::new(Span::call_site()).result();
-                let value = self.local_handle_value(target, *carrier, *presence, result.clone())?;
+                let value = self.local_handle_value(target, carrier, presence, result.clone())?;
                 Ok(LocalMethodBody::new(quote! {
                     {
                         let #result = #call;
@@ -2472,7 +3041,37 @@ where
                     }
                 }))
             }
-            ReturnPlan::ClosureViaOutPointer(closure) => {
+            InfallibleMethodReturn::ScalarOption { primitive } => {
+                self.source.scalar_option(primitive)?;
+                let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                let optional = <wrapper::returns::scalar_option::Renderer as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Renderer,
+                    wrapper::returns::scalar_option::Input::new(primitive, result.clone()),
+                )?;
+                let body = optional.body();
+                Ok(LocalMethodBody::new(quote! {
+                    {
+                        let #result = #call;
+                        #body
+                    }
+                }))
+            }
+            InfallibleMethodReturn::DirectVec => {
+                self.source.direct_vec()?;
+                let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                let sequence = <wrapper::returns::direct_vec::Renderer as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Renderer,
+                    wrapper::returns::direct_vec::Input::new(result.clone()),
+                )?;
+                let body = sequence.body();
+                Ok(LocalMethodBody::new(quote! {
+                    {
+                        let #result = #call;
+                        #body
+                    }
+                }))
+            }
+            InfallibleMethodReturn::Closure { closure } => {
                 let result = wrapper::names::Wrapper::new(owner.span()).closure();
                 let writer = <wrapper::returns::closure::Write as Render<S, _>>::render(
                     wrapper::returns::closure::Write,
@@ -2494,7 +3093,6 @@ where
                     },
                 })
             }
-            _ => Err(Error::UnsupportedExpansion("callback method return shape")),
         }
     }
 
@@ -2530,9 +3128,9 @@ where
     }
 
     fn foreign_success_storage(&self) -> Result<TokenStream, Error> {
-        match self.plan {
-            ReturnPlan::Void => Ok(TokenStream::new()),
-            ReturnPlan::DirectViaOutPointer {
+        match FallibleMethodSuccess::new(self.plan)? {
+            FallibleMethodSuccess::Void => Ok(TokenStream::new()),
+            FallibleMethodSuccess::Direct {
                 ty: TypeRef::Primitive(primitive),
             } => {
                 let ty = TypeRef::Primitive(*primitive);
@@ -2544,44 +3142,41 @@ where
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
             }
-            ReturnPlan::DirectViaOutPointer { .. } => {
+            FallibleMethodSuccess::Direct { .. } => {
                 let ok = self.source.fallible()?.ok_written_type()?;
                 Ok(quote! {
                     let mut __boltffi_success_out =
                         ::core::mem::MaybeUninit::<<#ok as ::boltffi::__private::Passable>::Out>::uninit();
                 })
             }
-            ReturnPlan::EncodedViaOutPointer { shape, .. } => {
-                let ty = S::callback_encoded_out_value(*shape)?;
+            FallibleMethodSuccess::Encoded { shape, .. } => {
+                let ty = S::callback_encoded_out_value(shape)?;
                 Ok(quote! {
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
             }
-            ReturnPlan::HandleViaOutPointer { carrier, .. } => {
-                let carrier = S::handle_carrier(*carrier)?;
+            FallibleMethodSuccess::Handle { carrier, .. } => {
+                let carrier = S::handle_carrier(carrier)?;
                 let ty = carrier.ty();
                 Ok(quote! {
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
             }
-            ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_success_storage(
+            FallibleMethodSuccess::Closure { closure } => S::foreign_closure_success_storage(
                 closure,
                 self.source.fallible()?.ok_closure(closure.presence())?,
                 self.expansion,
             ),
-            _ => Err(Error::UnsupportedExpansion(
-                "fallible callback success shape",
-            )),
         }
     }
 
     fn foreign_success_value(&self) -> Result<TokenStream, Error> {
-        match self.plan {
-            ReturnPlan::Void => Ok(quote! { () }),
-            ReturnPlan::DirectViaOutPointer {
+        match FallibleMethodSuccess::new(self.plan)? {
+            FallibleMethodSuccess::Void => Ok(quote! { () }),
+            FallibleMethodSuccess::Direct {
                 ty: TypeRef::Primitive(_),
             } => Ok(quote! { unsafe { __boltffi_success_out.assume_init() } }),
-            ReturnPlan::DirectViaOutPointer { .. } => {
+            FallibleMethodSuccess::Direct { .. } => {
                 let ok = self.source.fallible()?.ok_written_type()?;
                 Ok(quote! {
                     unsafe {
@@ -2591,11 +3186,11 @@ where
                     }
                 })
             }
-            ReturnPlan::EncodedViaOutPointer { codec, shape, .. } => {
+            FallibleMethodSuccess::Encoded { codec, shape } => {
                 let fallible = self.source.fallible()?;
                 let ok = fallible.ok_written_type()?;
                 S::decode_callback_encoded_out_pointer(
-                    *shape,
+                    shape,
                     quote! { unsafe { __boltffi_success_out.assume_init() } },
                     codec.root(),
                     ok,
@@ -2603,32 +3198,29 @@ where
                     self.expansion,
                 )
             }
-            ReturnPlan::HandleViaOutPointer {
+            FallibleMethodSuccess::Handle {
                 target,
                 carrier,
                 presence,
             } => self.foreign_handle_value(
                 target,
-                *carrier,
-                *presence,
+                carrier,
+                presence,
                 quote! { unsafe { __boltffi_success_out.assume_init() } },
             ),
-            ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_success_value(
+            FallibleMethodSuccess::Closure { closure } => S::foreign_closure_success_value(
                 closure,
                 self.source.fallible()?.ok_closure(closure.presence())?,
                 self.expansion,
             ),
-            _ => Err(Error::UnsupportedExpansion(
-                "fallible callback success shape",
-            )),
         }
     }
 
     fn local_proxy_success_storage(&self) -> Result<TokenStream, Error> {
         let local_return = self.local_return()?;
-        match local_return.plan {
-            ReturnPlan::Void => Ok(TokenStream::new()),
-            ReturnPlan::DirectViaOutPointer {
+        match FallibleMethodSuccess::new(local_return.plan)? {
+            FallibleMethodSuccess::Void => Ok(TokenStream::new()),
+            FallibleMethodSuccess::Direct {
                 ty: TypeRef::Primitive(primitive),
             } => {
                 let ty = TypeRef::Primitive(*primitive);
@@ -2640,50 +3232,45 @@ where
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
             }
-            ReturnPlan::DirectViaOutPointer { .. } => {
+            FallibleMethodSuccess::Direct { .. } => {
                 let ok = self.source.fallible()?.ok_written_type()?;
                 Ok(quote! {
                     let mut __boltffi_success_out =
                         ::core::mem::MaybeUninit::<<#ok as ::boltffi::__private::Passable>::Out>::uninit();
                 })
             }
-            ReturnPlan::EncodedViaOutPointer { shape, .. } => {
-                let ty = S::callback_encoded_out_value(*shape)?;
+            FallibleMethodSuccess::Encoded { shape, .. } => {
+                let ty = S::callback_encoded_out_value(shape)?;
                 Ok(quote! {
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
             }
-            ReturnPlan::HandleViaOutPointer { carrier, .. } => {
-                let carrier = S::handle_carrier(*carrier)?;
+            FallibleMethodSuccess::Handle { carrier, .. } => {
+                let carrier = S::handle_carrier(carrier)?;
                 let ty = carrier.ty();
                 Ok(quote! {
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
             }
-            ReturnPlan::ClosureViaOutPointer(_) => match self.plan {
-                ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_success_storage(
+            FallibleMethodSuccess::Closure { .. } => {
+                let closure = self.foreign_closure_success()?;
+                S::foreign_closure_success_storage(
                     closure,
                     self.source.fallible()?.ok_closure(closure.presence())?,
                     self.expansion,
-                ),
-                _ => Err(Error::SourceSyntaxMismatch(
-                    "callback local proxy closure success does not match foreign return",
-                )),
-            },
-            _ => Err(Error::UnsupportedExpansion(
-                "fallible callback success shape",
-            )),
+                )
+            }
         }
     }
 
     fn local_proxy_success_value(&self) -> Result<TokenStream, Error> {
         let local_return = self.local_return()?;
-        match local_return.plan {
-            ReturnPlan::Void => Ok(quote! { () }),
-            ReturnPlan::DirectViaOutPointer {
+        match FallibleMethodSuccess::new(local_return.plan)? {
+            FallibleMethodSuccess::Void => Ok(quote! { () }),
+            FallibleMethodSuccess::Direct {
                 ty: TypeRef::Primitive(_),
             } => Ok(quote! { unsafe { __boltffi_success_out.assume_init() } }),
-            ReturnPlan::DirectViaOutPointer { .. } => {
+            FallibleMethodSuccess::Direct { .. } => {
                 let ok = self.source.fallible()?.ok_written_type()?;
                 Ok(quote! {
                     unsafe {
@@ -2693,11 +3280,11 @@ where
                     }
                 })
             }
-            ReturnPlan::EncodedViaOutPointer { codec, shape, .. } => {
+            FallibleMethodSuccess::Encoded { codec, shape } => {
                 let fallible = self.source.fallible()?;
                 let ok = fallible.ok_written_type()?;
                 S::decode_callback_encoded_out_pointer(
-                    *shape,
+                    shape,
                     quote! { unsafe { __boltffi_success_out.assume_init() } },
                     codec.root(),
                     ok,
@@ -2705,37 +3292,32 @@ where
                     self.expansion,
                 )
             }
-            ReturnPlan::HandleViaOutPointer {
+            FallibleMethodSuccess::Handle {
                 target,
                 carrier,
                 presence,
             } => self.foreign_handle_value(
                 target,
-                *carrier,
-                *presence,
+                carrier,
+                presence,
                 quote! { unsafe { __boltffi_success_out.assume_init() } },
             ),
-            ReturnPlan::ClosureViaOutPointer(_) => match self.plan {
-                ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_success_value(
+            FallibleMethodSuccess::Closure { .. } => {
+                let closure = self.foreign_closure_success()?;
+                S::foreign_closure_success_value(
                     closure,
                     self.source.fallible()?.ok_closure(closure.presence())?,
                     self.expansion,
-                ),
-                _ => Err(Error::SourceSyntaxMismatch(
-                    "callback local proxy closure success does not match foreign return",
-                )),
-            },
-            _ => Err(Error::UnsupportedExpansion(
-                "fallible callback success shape",
-            )),
+                )
+            }
         }
     }
 
     fn local_success_write(&self, owner: Ident) -> Result<LocalMethodBody, Error> {
         let local_return = self.local_return()?;
-        match local_return.plan {
-            ReturnPlan::Void => Ok(LocalMethodBody::empty()),
-            ReturnPlan::DirectViaOutPointer {
+        match FallibleMethodSuccess::new(local_return.plan)? {
+            FallibleMethodSuccess::Void => Ok(LocalMethodBody::empty()),
+            FallibleMethodSuccess::Direct {
                 ty: TypeRef::Primitive(_),
             } => Ok(LocalMethodBody::new(quote! {
                 if !__boltffi_success_out.is_null() {
@@ -2744,7 +3326,7 @@ where
                     }
                 }
             })),
-            ReturnPlan::DirectViaOutPointer { .. } => Ok(LocalMethodBody::new(quote! {
+            FallibleMethodSuccess::Direct { .. } => Ok(LocalMethodBody::new(quote! {
                 if !__boltffi_success_out.is_null() {
                     unsafe {
                         *__boltffi_success_out =
@@ -2752,10 +3334,10 @@ where
                     }
                 }
             })),
-            ReturnPlan::EncodedViaOutPointer { codec, shape, .. } => {
+            FallibleMethodSuccess::Encoded { codec, shape } => {
                 let buffer = wrapper::encoded::outgoing::Value::new(codec.root(), self.expansion)
                     .buffer(quote! { __boltffi_success })?;
-                let value = S::encode_callback_encoded_out_pointer(*shape, buffer)?;
+                let value = S::encode_callback_encoded_out_pointer(shape, buffer)?;
                 Ok(LocalMethodBody::new(quote! {
                     if !__boltffi_success_out.is_null() {
                         unsafe {
@@ -2764,13 +3346,13 @@ where
                     }
                 }))
             }
-            ReturnPlan::HandleViaOutPointer {
+            FallibleMethodSuccess::Handle {
                 target,
                 carrier,
                 presence,
             } => {
                 let success = wrapper::names::Wrapper::new(Span::call_site()).success();
-                let value = self.local_handle_value(target, *carrier, *presence, success)?;
+                let value = self.local_handle_value(target, carrier, presence, success)?;
                 Ok(LocalMethodBody::new(quote! {
                     if !__boltffi_success_out.is_null() {
                         unsafe {
@@ -2779,7 +3361,7 @@ where
                     }
                 }))
             }
-            ReturnPlan::ClosureViaOutPointer(closure) => {
+            FallibleMethodSuccess::Closure { closure } => {
                 let writer = <wrapper::returns::closure::Write as Render<S, _>>::render(
                     wrapper::returns::closure::Write,
                     wrapper::returns::closure::WriteInput::success(
@@ -2799,9 +3381,6 @@ where
                     },
                 })
             }
-            _ => Err(Error::UnsupportedExpansion(
-                "fallible callback success shape",
-            )),
         }
     }
 
@@ -2824,17 +3403,22 @@ where
     ) -> Result<TokenStream, Error> {
         match self.handle_return(target, presence)? {
             rust_api::HandleReturn::Callback(callback) => {
-                let object = callback.object();
+                let proxy = callback.proxy();
                 let handle = S::callback_handle(value);
                 Ok(match (callback.form(), callback.presence()) {
                     (rust_api::CallbackCarrier::BoxedDyn, HandlePresence::Required) => quote! {
                         unsafe {
-                            <#object as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
+                            <#proxy as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
                         }
                     },
                     (rust_api::CallbackCarrier::ArcDyn, HandlePresence::Required) => quote! {
                         unsafe {
-                            <#object as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#handle)
+                            <#proxy as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#handle)
+                        }
+                    },
+                    (rust_api::CallbackCarrier::ImplTrait, HandlePresence::Required) => quote! {
+                        unsafe {
+                            *<#proxy as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
                         }
                     },
                     (rust_api::CallbackCarrier::BoxedDyn, HandlePresence::Nullable) => quote! {
@@ -2842,7 +3426,7 @@ where
                             None
                         } else {
                             Some(unsafe {
-                                <#object as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
+                                <#proxy as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
                             })
                         }
                     },
@@ -2851,7 +3435,16 @@ where
                             None
                         } else {
                             Some(unsafe {
-                                <#object as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#handle)
+                                <#proxy as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#handle)
+                            })
+                        }
+                    },
+                    (rust_api::CallbackCarrier::ImplTrait, HandlePresence::Nullable) => quote! {
+                        if #handle.is_null() {
+                            None
+                        } else {
+                            Some(unsafe {
+                                *<#proxy as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#handle)
                             })
                         }
                     },
@@ -2934,6 +3527,24 @@ where
             )),
             _ => Err(Error::SourceSyntaxMismatch(
                 "callback local return is incomplete",
+            )),
+        }
+    }
+
+    fn foreign_closure_return(&self) -> Result<&'lowered ClosureReturn<S, IntoRust>, Error> {
+        match InfallibleMethodReturn::new(self.plan, self.error)? {
+            InfallibleMethodReturn::Closure { closure } => Ok(closure),
+            _ => Err(Error::SourceSyntaxMismatch(
+                "callback local proxy closure return does not match foreign return",
+            )),
+        }
+    }
+
+    fn foreign_closure_success(&self) -> Result<&'lowered ClosureReturn<S, IntoRust>, Error> {
+        match FallibleMethodSuccess::new(self.plan)? {
+            FallibleMethodSuccess::Closure { closure } => Ok(closure),
+            _ => Err(Error::SourceSyntaxMismatch(
+                "callback local proxy closure success does not match foreign return",
             )),
         }
     }
@@ -4008,22 +4619,8 @@ fn packed_encoded_value<S: RenderSurface>(
     expansion: &Expansion<'_, S>,
     failure: TokenStream,
 ) -> Result<TokenStream, Error> {
-    let decoded = wrapper::encoded::incoming::Value::new(codec, expansion).expression(
-        wrapper::encoded::incoming::Bytes::new(
-            &rust_type,
-            source,
-            quote! { __boltffi_packed_bytes.as_slice() },
-            failure,
-        ),
-    )?;
-    Ok(quote! {
-        {
-            let __boltffi_packed_bytes = unsafe {
-                ::boltffi::__private::take_packed_bytes(#packed)
-            };
-            #decoded
-        }
-    })
+    wrapper::encoded::incoming::Value::new(codec, expansion)
+        .packed_expression(&rust_type, source, packed, failure)
 }
 
 struct RustIdent(Ident);

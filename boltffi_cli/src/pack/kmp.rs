@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::{
     run_generate_header_with_output_from_source_dir,
     run_generate_kmp_with_output_from_source_dir_and_desktop_fallback_library_name,
 };
 use crate::commands::pack::PackKmpOptions;
-use crate::config::{Config, Target};
+use crate::config::Config;
 use crate::pack::PackError;
 use crate::pack::android::{AndroidBindingMode, AndroidPackager, build_android_targets};
 use crate::pack::java::link::{

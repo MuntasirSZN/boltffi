@@ -1,11 +1,12 @@
 use boltffi_bindgen::ffi_prefix;
 use boltffi_bindgen::render::swift::{SwiftEmitter, SwiftLowerer};
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{
     GenerateRequest, LanguageGenerator, ScanPointerWidth, bindgen_type_mappings,
 };
-use crate::config::Target;
 
 pub struct SwiftGenerator;
 

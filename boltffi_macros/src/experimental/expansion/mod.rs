@@ -159,13 +159,13 @@ mod tests {
     use std::process::Command;
 
     use boltffi_ast::{
-        CanonicalName, ClassDef, ClassId, ClassThreadSafety, ConstExpr, ConstantDef, ConstantId,
-        CustomRemoteType, CustomTypeConverter, CustomTypeConverters, CustomTypeDef, CustomTypeId,
-        EnumDef, EnumId, ExecutionKind, FieldDef, FnSig, FnTrait, FnTraitKind, FunctionDef,
-        FunctionId, IntegerLiteral, Literal, MethodDef, MethodId, PackageInfo, ParameterDef,
-        ParameterPassing, Path, Primitive, Receiver, RecordDef, RecordId, ReprAttr, ReprItem,
-        ReturnDef, Source, SourceContract, SourceName, StreamDef, StreamId, TraitDef, TraitId,
-        TypeExpr, VariantDef, VariantPayload, Visibility,
+        AdditionalBound, BaseTrait, CanonicalName, ClassDef, ClassId, ClassThreadSafety, ConstExpr,
+        ConstantDef, ConstantId, CustomRemoteType, CustomTypeConverter, CustomTypeConverters,
+        CustomTypeDef, CustomTypeId, EnumDef, EnumId, ExecutionKind, FieldDef, FnSig, FnTrait,
+        FnTraitKind, FunctionDef, FunctionId, IntegerLiteral, Literal, MethodDef, MethodId,
+        PackageInfo, ParameterDef, ParameterPassing, Path, Primitive, Receiver, RecordDef,
+        RecordId, ReprAttr, ReprItem, ReturnDef, Source, SourceContract, SourceName, StreamDef,
+        StreamId, TraitBounds, TraitDef, TraitId, TypeExpr, VariantDef, VariantPayload, Visibility,
     };
     use boltffi_binding::{Native, Wasm32, lower_with_declarations};
     use proc_macro2::TokenStream;
@@ -686,6 +686,20 @@ mod tests {
         ))
     }
 
+    fn boxed_send_listener() -> TypeExpr {
+        TypeExpr::boxed(TypeExpr::Dyn(TraitBounds::new(
+            BaseTrait::Named {
+                id: TraitId::new("demo::Listener"),
+                path: path("Listener"),
+            },
+            vec![AdditionalBound::AutoTrait(Path::single("Send"))],
+        )))
+    }
+
+    fn impl_listener() -> TypeExpr {
+        TypeExpr::impl_trait(TraitId::new("demo::Listener"), path("Listener"))
+    }
+
     fn arc_listener() -> TypeExpr {
         TypeExpr::arc(TypeExpr::dyn_trait(
             TraitId::new("demo::Listener"),
@@ -1009,6 +1023,28 @@ mod tests {
         source
     }
 
+    fn direct_returning_listener_contract() -> SourceContract {
+        let mut listener = listener_trait();
+        let mut optional = MethodDef::new(
+            MethodId::new("maybe_count"),
+            CanonicalName::single("maybe_count"),
+            Receiver::Shared,
+        );
+        optional.returns = ReturnDef::value(TypeExpr::option(TypeExpr::Primitive(Primitive::I32)));
+        let mut vector = MethodDef::new(
+            MethodId::new("numbers"),
+            CanonicalName::single("numbers"),
+            Receiver::Shared,
+        );
+        vector.returns = ReturnDef::value(TypeExpr::vec(TypeExpr::Primitive(Primitive::I32)));
+        listener.methods.push(optional);
+        listener.methods.push(vector);
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener);
+        source
+    }
+
     fn borrowed_string_listener_contract() -> SourceContract {
         let mut listener = listener_trait();
         let mut method = MethodDef::new(
@@ -1054,6 +1090,78 @@ mod tests {
         method.execution = ExecutionKind::Async;
         method.parameters = vec![parameter("value", TypeExpr::Primitive(Primitive::I32))];
         method.returns = ReturnDef::value(TypeExpr::String);
+        listener.methods.push(method);
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener);
+        source
+    }
+
+    fn async_direct_returning_listener_contract() -> SourceContract {
+        let mut listener = listener_trait();
+        let mut count = MethodDef::new(
+            MethodId::new("count"),
+            CanonicalName::single("count"),
+            Receiver::Shared,
+        );
+        count.execution = ExecutionKind::Async;
+        count.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::U32));
+        let mut optional = MethodDef::new(
+            MethodId::new("maybe_count"),
+            CanonicalName::single("maybe_count"),
+            Receiver::Shared,
+        );
+        optional.execution = ExecutionKind::Async;
+        optional.returns = ReturnDef::value(TypeExpr::option(TypeExpr::Primitive(Primitive::I32)));
+        let mut vector = MethodDef::new(
+            MethodId::new("numbers"),
+            CanonicalName::single("numbers"),
+            Receiver::Shared,
+        );
+        vector.execution = ExecutionKind::Async;
+        vector.returns = ReturnDef::value(TypeExpr::vec(TypeExpr::Primitive(Primitive::I32)));
+        listener.methods.push(count);
+        listener.methods.push(optional);
+        listener.methods.push(vector);
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener);
+        source
+    }
+
+    fn async_fallible_listener_contract() -> SourceContract {
+        let mut listener = listener_trait();
+        let mut count = MethodDef::new(
+            MethodId::new("try_count"),
+            CanonicalName::single("try_count"),
+            Receiver::Shared,
+        );
+        count.execution = ExecutionKind::Async;
+        count.returns = result_return(TypeExpr::Primitive(Primitive::U32), TypeExpr::String);
+        let mut numbers = MethodDef::new(
+            MethodId::new("try_numbers"),
+            CanonicalName::single("try_numbers"),
+            Receiver::Shared,
+        );
+        numbers.execution = ExecutionKind::Async;
+        numbers.returns = result_return(byte_vec(), TypeExpr::String);
+        listener.methods.push(count);
+        listener.methods.push(numbers);
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener);
+        source
+    }
+
+    fn async_callback_returning_listener_contract() -> SourceContract {
+        let mut listener = listener_trait();
+        let mut method = MethodDef::new(
+            MethodId::new("listener"),
+            CanonicalName::single("listener"),
+            Receiver::Shared,
+        );
+        method.execution = ExecutionKind::Async;
+        method.returns = ReturnDef::value(impl_listener());
         listener.methods.push(method);
 
         let mut source = SourceContract::new(PackageInfo::new("demo", None));
@@ -1283,6 +1391,22 @@ mod tests {
             CanonicalName::single("make_callback"),
         );
         function.returns = ReturnDef::value(impl_closure(
+            vec![TypeExpr::Primitive(Primitive::U32)],
+            ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
+        ));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.functions.push(function);
+        source
+    }
+
+    fn async_boxed_closure_return_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::make_callback"),
+            CanonicalName::single("make_callback"),
+        );
+        function.execution = ExecutionKind::Async;
+        function.returns = ReturnDef::value(boxed_closure(
             vec![TypeExpr::Primitive(Primitive::U32)],
             ReturnDef::value(TypeExpr::Primitive(Primitive::U32)),
         ));
@@ -1701,6 +1825,47 @@ mod tests {
 
         let mut source = SourceContract::new(PackageInfo::new("demo", None));
         source.traits.push(listener_trait());
+        source.functions.push(function);
+        source
+    }
+
+    fn boxed_send_callback_param_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::listen"),
+            CanonicalName::single("listen"),
+        );
+        function.parameters = vec![parameter("listener", boxed_send_listener())];
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener_trait());
+        source.functions.push(function);
+        source
+    }
+
+    fn impl_callback_param_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::listen"),
+            CanonicalName::single("listen"),
+        );
+        function.parameters = vec![parameter("listener", impl_listener())];
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener_trait_with_method());
+        source.functions.push(function);
+        source
+    }
+
+    fn async_impl_callback_param_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::listen"),
+            CanonicalName::single("listen"),
+        );
+        function.execution = ExecutionKind::Async;
+        function.parameters = vec![parameter("listener", impl_listener())];
+        function.returns = ReturnDef::value(TypeExpr::Primitive(Primitive::U32));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener_trait_with_method());
         source.functions.push(function);
         source
     }
@@ -6210,7 +6375,7 @@ mod tests {
                         return ::boltffi::__private::FfiStatus::INVALID_ARG;
                     }
                     let listener: Box<dyn Listener> = unsafe {
-                        <dyn Listener as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(
+                        <ForeignListener as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(
                             __boltffi_listener_handle
                         )
                     };
@@ -6219,6 +6384,179 @@ mod tests {
                 }
             }
             .to_string()
+        );
+    }
+
+    #[test]
+    fn native_bounded_callback_param_expansion_recovers_foreign_proxy() {
+        let source = boxed_send_callback_param_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn listen(listener: Box<dyn Listener + Send>) {
+                drop(listener);
+            }
+        };
+
+        let function_tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let callback_tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = function_tokens.to_string();
+
+        assert!(rendered.contains("let listener : Box < dyn Listener + Send > = unsafe"));
+        assert!(rendered.contains("< ForeignListener as :: boltffi :: __private :: BoxFromCallbackHandle > :: box_from_callback_handle"));
+        assert_generated_crate_checks(
+            "native_bounded_callback_param",
+            quote! {
+                pub trait Listener {}
+
+                #callback_tokens
+                #function_tokens
+            },
+        );
+    }
+
+    #[test]
+    fn native_impl_trait_callback_param_expansion_recovers_foreign_proxy() {
+        let source = impl_callback_param_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn listen(listener: impl Listener) {
+                let _ = listener.on_value(1);
+            }
+        };
+
+        let function_tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let callback_tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = function_tokens.to_string();
+
+        assert!(rendered.contains("listener : :: boltffi :: __private :: CallbackHandle"));
+        assert!(rendered.contains("let listener : ForeignListener = unsafe"));
+        assert!(rendered.contains("< ForeignListener as :: boltffi :: __private :: BoxFromCallbackHandle > :: box_from_callback_handle"));
+        assert!(rendered.contains("listen (listener)"));
+        assert_generated_crate_checks(
+            "native_impl_trait_callback_param",
+            quote! {
+                pub trait Listener {
+                    fn on_value(&self, value: u32) -> u32;
+                }
+
+                #callback_tokens
+                #function_tokens
+            },
+        );
+    }
+
+    #[test]
+    fn wasm_impl_trait_callback_param_expansion_recovers_foreign_proxy() {
+        let source = impl_callback_param_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn listen(listener: impl Listener) {
+                let _ = listener.on_value(1);
+            }
+        };
+
+        let function_tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let callback_tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = function_tokens.to_string();
+
+        assert!(rendered.contains("listener : u32"));
+        assert!(rendered.contains(":: boltffi :: __private :: CallbackHandle :: from_wasm_handle"));
+        assert!(rendered.contains("let listener : ForeignListener = unsafe"));
+        assert!(rendered.contains("< ForeignListener as :: boltffi :: __private :: BoxFromCallbackHandle > :: box_from_callback_handle"));
+        assert_generated_crate_checks(
+            "wasm_impl_trait_callback_param",
+            quote! {
+                pub trait Listener {
+                    fn on_value(&self, value: u32) -> u32;
+                }
+
+                #callback_tokens
+                #function_tokens
+            },
+        );
+    }
+
+    #[test]
+    fn native_async_impl_trait_callback_param_expansion_captures_foreign_proxy() {
+        let source = async_impl_callback_param_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub async fn listen(listener: impl Listener) -> u32 {
+                listener.on_value(1)
+            }
+        };
+
+        let function_tokens = expand_function(&expansion, &source.functions[0], syntax)
+            .expect("expanded async function");
+        let callback_tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = function_tokens.to_string();
+
+        assert!(rendered.contains("listener : :: boltffi :: __private :: CallbackHandle"));
+        assert!(rendered.contains("let listener : ForeignListener = unsafe"));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: rustfuture :: rust_future_new (async move")
+        );
+        assert!(rendered.contains("listen (listener) . await"));
+        assert_generated_crate_checks(
+            "native_async_impl_trait_callback_param",
+            quote! {
+                pub trait Listener {
+                    fn on_value(&self, value: u32) -> u32;
+                }
+
+                #callback_tokens
+                #function_tokens
+            },
+        );
+    }
+
+    #[test]
+    fn wasm_async_impl_trait_callback_param_expansion_captures_foreign_proxy() {
+        let source = async_impl_callback_param_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub async fn listen(listener: impl Listener) -> u32 {
+                listener.on_value(1)
+            }
+        };
+
+        let function_tokens = expand_function(&expansion, &source.functions[0], syntax)
+            .expect("expanded async function");
+        let callback_tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = function_tokens.to_string();
+
+        assert!(rendered.contains("listener : u32"));
+        assert!(rendered.contains(":: boltffi :: __private :: CallbackHandle :: from_wasm_handle"));
+        assert!(rendered.contains("let listener : ForeignListener = unsafe"));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: rustfuture :: rust_future_new (async move")
+        );
+        assert!(rendered.contains("listen (listener) . await"));
+        assert_generated_crate_checks(
+            "wasm_async_impl_trait_callback_param",
+            quote! {
+                pub trait Listener {
+                    fn on_value(&self, value: u32) -> u32;
+                }
+
+                #callback_tokens
+                #function_tokens
+            },
         );
     }
 
@@ -6318,6 +6656,53 @@ mod tests {
     }
 
     #[test]
+    fn native_callback_method_direct_returns_use_return_renderers() {
+        let source = direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "pub maybe_count : extern \"C\" fn (handle : u64) -> :: boltffi :: __private :: FfiBuf"
+        ));
+        assert!(rendered.contains(
+            "pub numbers : extern \"C\" fn (handle : u64) -> :: boltffi :: __private :: FfiBuf"
+        ));
+        assert!(rendered.contains("wire :: decode :: < Option < i32 > >"));
+        assert!(rendered.contains(":: boltffi :: __private :: FfiBuf :: wire_encode"));
+        assert!(rendered.contains("< _ as :: boltffi :: __private :: VecTransport > :: pack_vec"));
+        assert!(
+            rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: unpack_vec")
+        );
+    }
+
+    #[test]
+    fn wasm_callback_method_direct_returns_use_return_renderers() {
+        let source = direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "fn __boltffi_callback_method_demo_listener_maybe_count (handle : u32) -> f64"
+        ));
+        assert!(
+            rendered.contains("fn __boltffi_callback_method_demo_listener_numbers (handle : u32)")
+        );
+        assert!(rendered.contains("f64 :: NAN"));
+        assert!(rendered.contains(":: boltffi :: __private :: write_return_slot"));
+        assert!(rendered.contains(":: boltffi :: __private :: take_return_slot_vec :: < i32 >"));
+    }
+
+    #[test]
     fn native_callback_method_borrowed_string_param_encodes_reference() {
         let source = borrowed_string_listener_contract();
         let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
@@ -6413,6 +6798,135 @@ mod tests {
             !rendered
                 .contains("impl :: boltffi :: __private :: CallbackForeignType for dyn Listener")
         );
+    }
+
+    #[test]
+    fn native_async_callback_method_direct_returns_use_buffer_completion() {
+        let source = async_direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "completion : :: boltffi :: __private :: AsyncCallback < :: boltffi :: __private :: FfiBuf >"
+        ));
+        assert!(rendered.contains("completion : :: boltffi :: __private :: AsyncCallback < u32 >"));
+        assert!(rendered.contains("wire :: decode :: < Option < i32 > >"));
+        assert!(
+            rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: unpack_vec")
+        );
+    }
+
+    #[test]
+    fn wasm_async_callback_method_direct_returns_use_completion_bytes() {
+        let source = async_direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "fn __boltffi_callback_async_start_demo_listener_maybe_count (handle : u32 , request_id : u32)"
+        ));
+        assert!(rendered.contains(
+            "fn __boltffi_callback_async_start_demo_listener_count (handle : u32 , request_id : u32)"
+        ));
+        assert!(rendered.contains("wire :: decode :: < u32 >"));
+        assert!(rendered.contains("wire :: decode :: < Option < i32 > >"));
+        assert!(rendered.contains("__boltffi_completion . data . as_slice ()"));
+        assert!(
+            rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: unpack_vec")
+        );
+        assert!(rendered.contains("__boltffi_completion . data . as_ptr ()"));
+    }
+
+    #[test]
+    fn wasm_async_callback_method_callback_return_uses_completion_bytes() {
+        let source = async_callback_returning_listener_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "fn __boltffi_callback_async_start_demo_listener_listener (handle : u32 , request_id : u32)"
+        ));
+        assert!(rendered.contains("wire :: decode :: < u32 >"));
+        assert!(rendered.contains("CallbackHandle :: from_wasm_handle"));
+        assert!(rendered.contains("< ForeignListener as :: boltffi :: __private :: BoxFromCallbackHandle > :: box_from_callback_handle"));
+    }
+
+    #[test]
+    fn native_async_callback_method_result_return_decodes_success_and_error() {
+        let source = async_fallible_listener_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "completion : :: boltffi :: __private :: AsyncCallback < :: boltffi :: __private :: FfiBuf >"
+        ));
+        assert!(rendered.contains("async fn try_count (& self) -> Result < u32 , String >"));
+        assert!(
+            rendered.contains("async fn try_numbers (& self) -> Result < Vec < u8 > , String >")
+        );
+        assert!(rendered.contains("if state . status . is_err ()"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < u32 > (unsafe { __boltffi_result . as_byte_slice () })"
+        ));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < Vec < u8 > > (unsafe { __boltffi_result . as_byte_slice () })"
+        ));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < String > (unsafe { __boltffi_result . as_byte_slice () })"
+        ));
+    }
+
+    #[test]
+    fn wasm_async_callback_method_result_return_decodes_completion_branch() {
+        let source = async_fallible_listener_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "fn __boltffi_callback_async_start_demo_listener_try_count (handle : u32 , request_id : u32)"
+        ));
+        assert!(rendered.contains(
+            "fn __boltffi_callback_async_start_demo_listener_try_numbers (handle : u32 , request_id : u32)"
+        ));
+        assert!(rendered.contains("async fn try_count (& self) -> Result < u32 , String >"));
+        assert!(
+            rendered.contains("async fn try_numbers (& self) -> Result < Vec < u8 > , String >")
+        );
+        assert!(rendered.contains("if __boltffi_completion . code . is_success ()"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < u32 > (__boltffi_completion . data . as_slice ())"
+        ));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < Vec < u8 > > (__boltffi_completion . data . as_slice ())"
+        ));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < String > (__boltffi_completion . data . as_slice ())"
+        ));
     }
 
     #[test]
@@ -6608,7 +7122,7 @@ mod tests {
                             None
                         } else {
                             Some(unsafe {
-                                <dyn Listener as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(
+                                <ForeignListener as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(
                                     __boltffi_listener_handle
                                 )
                             })
@@ -7005,6 +7519,34 @@ mod tests {
     }
 
     #[test]
+    fn wasm_closure_param_expansion_decodes_fallible_custom_sequence_return_through_repr() {
+        let source = fallible_custom_sequence_closure_param_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn apply(callback: impl Fn() -> Result<Vec<Timestamp>, String>) -> u32 {
+                callback()
+                    .map(|values| values.into_iter().map(|value| value.year()).sum())
+                    .unwrap_or_default()
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded function parses");
+
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: take_packed_bytes (__boltffi_success . assume_init ())"
+        ));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < Vec < i64 > > (__boltffi_packed_bytes . as_slice ())"
+        ));
+        assert!(rendered.contains("(timestamp_try_from_ffi) (value)"));
+        assert!(!rendered.contains("wire :: decode :: < Vec < Timestamp > >"));
+    }
+
+    #[test]
     fn wasm_closure_param_expansion_decodes_packed_string_invoke_return() {
         let source = string_closure_param_contract();
         let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
@@ -7017,61 +7559,20 @@ mod tests {
 
         let tokens =
             expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded wasm closure param parses");
 
-        assert_eq!(
-            tokens.to_string(),
-            quote! {
-                pub fn render(callback: impl Fn(String) -> String) -> u32 {
-                    callback("x".to_string()).len() as u32
-                }
-                #[cfg(target_arch = "wasm32")]
-                #[unsafe(no_mangle)]
-                pub unsafe extern "C" fn boltffi_function_demo_apply(callback: u32) -> u32 {
-                    unsafe extern "C" {
-                        fn __boltffi_callback_closure____closure__string_to_string_call(
-                            handle: u32,
-                            __boltffi_ffi_arg0: *const u8,
-                            __boltffi_ffi_arg1: usize
-                        ) -> u64;
-                        fn __boltffi_callback_closure____closure__string_to_string_free(handle: u32);
-                    }
-                    if callback == 0 {
-                        ::boltffi::__private::set_last_error(format!(
-                            "{}: null closure handle",
-                            stringify!(callback)
-                        ));
-                        return ::core::default::Default::default();
-                    }
-                    let __boltffi_callback_owner =
-                        ::boltffi::__private::WasmCallbackOwner::new(
-                            callback,
-                            __boltffi_callback_closure____closure__string_to_string_free
-                        );
-                    let callback = move |__boltffi_arg0: String| {
-                        {
-                            let __boltffi_result_packed = unsafe {
-                                let __boltffi_arg0_wire =
-                                    ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_arg0);
-                                let __boltffi_arg0_ptr = __boltffi_arg0_wire.as_ptr();
-                                let __boltffi_arg0_len = __boltffi_arg0_wire.len();
-                                __boltffi_callback_closure____closure__string_to_string_call(
-                                    __boltffi_callback_owner.handle(),
-                                    __boltffi_arg0_ptr,
-                                    __boltffi_arg0_len
-                                )
-                            };
-                            unsafe {
-                                ::boltffi::__private::take_packed_utf8_string(
-                                    __boltffi_result_packed
-                                )
-                            }
-                        }
-                    };
-                    apply(callback)
-                }
-            }
-            .to_string()
+        assert!(rendered.contains(
+            "__boltffi_callback_closure____closure__string_to_string_call (__boltffi_callback_owner . handle ()"
+        ));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: take_packed_bytes (__boltffi_result_packed)")
         );
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < String > (__boltffi_packed_bytes . as_slice ())"
+        ));
+        assert!(!rendered.contains("take_packed_utf8_string"));
     }
 
     #[test]
@@ -7119,8 +7620,12 @@ mod tests {
             "__boltffi_callback_closure____closure__to_result_void_err_string_call (__boltffi_callback_owner . handle ())"
         ));
         assert!(rendered.contains("if __boltffi_error_packed == 0 { Ok (()) }"));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: take_packed_bytes (__boltffi_error_packed)")
+        );
         assert!(rendered.contains(
-            ":: boltffi :: __private :: take_packed_utf8_string (__boltffi_error_packed)"
+            ":: boltffi :: __private :: wire :: decode :: < String > (__boltffi_packed_bytes . as_slice ())"
         ));
     }
 
@@ -7164,8 +7669,16 @@ mod tests {
 
         assert!(rendered.contains("fn __boltffi_callback_closure____closure__to_result_string_err_string_call (handle : u32 , __boltffi_ffi_arg0 : * mut u64) -> u64"));
         assert!(rendered.contains("MaybeUninit :: < u64 > :: uninit ()"));
-        assert!(rendered.contains("take_packed_utf8_string (__boltffi_success . assume_init ())"));
-        assert!(rendered.contains("take_packed_utf8_string (__boltffi_error_packed)"));
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: take_packed_bytes (__boltffi_success . assume_init ())"
+        ));
+        assert!(
+            rendered
+                .contains(":: boltffi :: __private :: take_packed_bytes (__boltffi_error_packed)")
+        );
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: wire :: decode :: < String > (__boltffi_packed_bytes . as_slice ())"
+        ));
     }
 
     #[test]
@@ -7223,6 +7736,58 @@ mod tests {
         assert!(rendered.contains(
             "* __boltffi_return_out = Box :: into_raw (Box :: new (Box :: new (__boltffi_closure) as Box < dyn Fn (u32) -> u32 + 'static >)) as usize as u32"
         ));
+    }
+
+    #[test]
+    fn native_async_boxed_closure_return_expansion_writes_owned_context_out_pointer() {
+        let source = async_boxed_closure_return_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub async fn make_callback() -> Box<dyn Fn(u32) -> u32> {
+                Box::new(|value| value + 1)
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded async closure return parses");
+        let rendered = tokens.to_string();
+
+        assert!(rendered.contains(
+            "pub unsafe extern \"C\" fn boltffi_async_function_demo_make_callback_complete"
+        ));
+        assert!(rendered.contains("__boltffi_return_out : * mut :: core :: ffi :: c_void"));
+        assert!(rendered.contains("-> :: boltffi :: __private :: FfiStatus"));
+        assert!(rendered.contains("closure return out pointer is null"));
+        assert!(rendered.contains("__boltffi_make_callback_closure_call"));
+        assert!(rendered.contains("* __boltffi_return_out = __BoltffiClosureReturn"));
+    }
+
+    #[test]
+    fn wasm_async_boxed_closure_return_expansion_writes_wasm_handle_out_pointer() {
+        let source = async_boxed_closure_return_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub async fn make_callback() -> Box<dyn Fn(u32) -> u32> {
+                Box::new(|value| value + 1)
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded async closure return parses");
+        let rendered = tokens.to_string();
+
+        assert!(rendered.contains(
+            "pub unsafe extern \"C\" fn boltffi_async_function_demo_make_callback_complete"
+        ));
+        assert!(rendered.contains("__boltffi_return_out : * mut u32"));
+        assert!(rendered.contains("-> :: boltffi :: __private :: FfiStatus"));
+        assert!(rendered.contains("closure return out pointer is null"));
+        assert!(rendered.contains("boltffi_closure_"));
+        assert!(rendered.contains("* __boltffi_return_out = Box :: into_raw"));
     }
 
     #[test]

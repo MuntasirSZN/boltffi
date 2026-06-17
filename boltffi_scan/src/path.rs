@@ -131,6 +131,24 @@ impl ModuleScope {
             .collect()
     }
 
+    pub fn reexported(&self, name: &str) -> ImportLookup<'_> {
+        self.imports.reexported(name)
+    }
+
+    pub fn reexport_glob_candidates_for_segments(&self, segments: &[String]) -> Vec<String> {
+        self.imports
+            .reexport_globs()
+            .iter()
+            .map(|glob| {
+                glob.iter()
+                    .cloned()
+                    .chain(segments.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join("::")
+            })
+            .collect()
+    }
+
     fn expand_segments(&self, segments: &[String]) -> PathExpansion {
         let Some((first, rest)) = segments.split_first() else {
             return PathExpansion::Unsupported;
@@ -226,6 +244,8 @@ impl SpanMap {
 struct Imports {
     by_name: HashMap<String, ImportBinding>,
     globs: Vec<Vec<String>>,
+    reexports_by_name: HashMap<String, ImportBinding>,
+    reexport_globs: Vec<Vec<String>>,
 }
 
 impl Imports {
@@ -239,7 +259,8 @@ impl Imports {
             })
             .for_each(|item| {
                 let prefix = UsePrefix::new(item.leading_colon.is_some());
-                imports.insert_tree(module, prefix, &item.tree);
+                let public = matches!(item.vis, syn::Visibility::Public(_));
+                imports.insert_tree(module, prefix, &item.tree, public);
             });
         imports
     }
@@ -256,18 +277,36 @@ impl Imports {
         &self.globs
     }
 
-    fn insert_tree(&mut self, module: &ModulePath, prefix: UsePrefix, tree: &syn::UseTree) {
+    fn reexported(&self, name: &str) -> ImportLookup<'_> {
+        match self.reexports_by_name.get(name) {
+            Some(ImportBinding::Unique(path)) => ImportLookup::Unique(path),
+            Some(ImportBinding::Ambiguous) => ImportLookup::Ambiguous,
+            None => ImportLookup::None,
+        }
+    }
+
+    fn reexport_globs(&self) -> &[Vec<String>] {
+        &self.reexport_globs
+    }
+
+    fn insert_tree(
+        &mut self,
+        module: &ModulePath,
+        prefix: UsePrefix,
+        tree: &syn::UseTree,
+        public: bool,
+    ) {
         match tree {
             syn::UseTree::Path(path) => {
                 let next = prefix.join(path.ident.to_string());
-                self.insert_tree(module, next, &path.tree);
+                self.insert_tree(module, next, &path.tree, public);
             }
             syn::UseTree::Name(name) => {
                 if name.ident == "self" {
-                    self.insert_self(module, prefix);
+                    self.insert_self(module, prefix, public);
                 } else {
                     let imported = prefix.join(name.ident.to_string());
-                    self.insert(module, name.ident.to_string(), imported);
+                    self.insert(module, name.ident.to_string(), imported, public);
                 }
             }
             syn::UseTree::Rename(rename) => {
@@ -276,39 +315,53 @@ impl Imports {
                 } else {
                     prefix.join(rename.ident.to_string())
                 };
-                self.insert(module, rename.rename.to_string(), imported);
+                self.insert(module, rename.rename.to_string(), imported, public);
             }
             syn::UseTree::Group(group) => group
                 .items
                 .iter()
-                .for_each(|tree| self.insert_tree(module, prefix.clone(), tree)),
-            syn::UseTree::Glob(_) => self.insert_glob(module, prefix),
+                .for_each(|tree| self.insert_tree(module, prefix.clone(), tree, public)),
+            syn::UseTree::Glob(_) => self.insert_glob(module, prefix, public),
         }
     }
 
-    fn insert_self(&mut self, module: &ModulePath, prefix: UsePrefix) {
+    fn insert_self(&mut self, module: &ModulePath, prefix: UsePrefix, public: bool) {
         if let Some(local) = prefix.segments.last().cloned() {
-            self.insert(module, local, prefix);
+            self.insert(module, local, prefix, public);
         }
     }
 
-    fn insert(&mut self, module: &ModulePath, local: String, prefix: UsePrefix) {
+    fn insert(&mut self, module: &ModulePath, local: String, prefix: UsePrefix, public: bool) {
         let path = prefix.into_qualified_segments(module).collect::<Vec<_>>();
-        match self.by_name.get(&local) {
+        Self::insert_binding(&mut self.by_name, local.clone(), path.clone());
+        if public {
+            Self::insert_binding(&mut self.reexports_by_name, local, path);
+        }
+    }
+
+    fn insert_binding(
+        bindings: &mut HashMap<String, ImportBinding>,
+        local: String,
+        path: Vec<String>,
+    ) {
+        match bindings.get(&local) {
             Some(ImportBinding::Unique(existing)) if existing == &path => {}
             Some(ImportBinding::Unique(_)) | Some(ImportBinding::Ambiguous) => {
-                self.by_name.insert(local, ImportBinding::Ambiguous);
+                bindings.insert(local, ImportBinding::Ambiguous);
             }
             None => {
-                self.by_name.insert(local, ImportBinding::Unique(path));
+                bindings.insert(local, ImportBinding::Unique(path));
             }
         }
     }
 
-    fn insert_glob(&mut self, module: &ModulePath, prefix: UsePrefix) {
+    fn insert_glob(&mut self, module: &ModulePath, prefix: UsePrefix, public: bool) {
         let path = prefix.into_qualified_segments(module).collect::<Vec<_>>();
         if !self.globs.contains(&path) {
-            self.globs.push(path);
+            self.globs.push(path.clone());
+        }
+        if public && !self.reexport_globs.contains(&path) {
+            self.reexport_globs.push(path);
         }
     }
 }

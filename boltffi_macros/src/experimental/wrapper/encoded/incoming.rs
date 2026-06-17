@@ -91,6 +91,29 @@ impl<'expansion, 'lowered, S: RenderSurface> Value<'expansion, 'lowered, S> {
             }
         })
     }
+
+    pub fn packed_expression(
+        &self,
+        rust_type: &Type,
+        source: &TypeExpr,
+        packed: TokenStream,
+        failure: TokenStream,
+    ) -> Result<TokenStream, Error> {
+        let value = self.expression(Bytes::new(
+            rust_type,
+            source,
+            quote! { __boltffi_packed_bytes.as_slice() },
+            failure,
+        ))?;
+        Ok(quote! {
+            {
+                let __boltffi_packed_bytes = unsafe {
+                    ::boltffi::__private::take_packed_bytes(#packed)
+                };
+                #value
+            }
+        })
+    }
 }
 
 impl<'rust> Bytes<'rust> {

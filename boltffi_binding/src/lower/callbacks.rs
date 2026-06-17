@@ -111,8 +111,7 @@ fn local_protocol<S: SurfaceLower>(
         .iter()
         .enumerate()
         .map(|(index, method)| {
-            let raw_method_name = method.name.parts().last().map_or("", |part| part.as_str());
-            let slot = CallbackSlot::from_method_name(raw_method_name);
+            let slot = CallbackSlot::from_source_name(&method.name);
             Ok(CallbackLocalMethodDecl::new(
                 crate::MethodId::from_raw(index as u32),
                 CanonicalName::from(&method.name),
@@ -408,8 +407,7 @@ fn local_function(module_segments: &[NamePart], name: String) -> CallbackLocalFu
 fn reject_slot_collisions(callback: &SourceTrait) -> Result<(), LowerError> {
     let mut seen: Vec<CallbackSlot> = Vec::with_capacity(callback.methods.len());
     callback.methods.iter().try_for_each(|method| {
-        let raw = method.name.parts().last().map_or("", |part| part.as_str());
-        let slot = CallbackSlot::from_method_name(raw);
+        let slot = CallbackSlot::from_source_name(&method.name);
         let collides_with_lifecycle = [
             VTABLE_FREE_SLOT_NAME,
             VTABLE_CLONE_SLOT_NAME,

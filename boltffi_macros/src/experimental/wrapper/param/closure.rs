@@ -603,6 +603,21 @@ impl<'expansion, 'lowered, 'rust, S: RenderSurface>
             ),
         )
     }
+
+    fn packed_expression(
+        &self,
+        codec: &'lowered WritePlan,
+        rust_type: &Type,
+        source_type: &TypeExpr,
+        packed: TokenStream,
+    ) -> Result<TokenStream, Error> {
+        encoded::incoming::Value::new(codec.root(), self.expansion).packed_expression(
+            rust_type,
+            source_type,
+            packed,
+            quote! { panic!("closure encoded return conversion failed: {:?}", error) },
+        )
+    }
 }
 
 struct ForeignClosureReturnRenderer;
@@ -766,7 +781,7 @@ impl<'expansion, 'lowered, 'rust>
                     ty: TypeRef::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty: TypeRef::String,
+                    codec,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
@@ -776,57 +791,103 @@ impl<'expansion, 'lowered, 'rust>
                     wrapper::type_ref::Renderer,
                     &ty,
                 )?;
-                Ok(ForeignClosureReturnTokens::WasmFallibleDirectPrimitive { ffi_type })
+                let result = input.rust_fallible_return()?;
+                let error = input.packed_expression(
+                    codec,
+                    &result.error_type,
+                    &result.error_source,
+                    quote! { __boltffi_error_packed },
+                )?;
+                Ok(ForeignClosureReturnTokens::WasmFallibleDirectPrimitive { ffi_type, error })
             }
             (
                 ReturnPlan::DirectViaOutPointer { .. },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty: TypeRef::String,
+                    codec,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
-            ) => Ok(ForeignClosureReturnTokens::WasmFallibleDirectPassable {
-                ok_type: input.rust_fallible_return()?.ok_type,
-            }),
+            ) => {
+                let result = input.rust_fallible_return()?;
+                let error = input.packed_expression(
+                    codec,
+                    &result.error_type,
+                    &result.error_source,
+                    quote! { __boltffi_error_packed },
+                )?;
+                Ok(ForeignClosureReturnTokens::WasmFallibleDirectPassable {
+                    ok_type: result.ok_type,
+                    error,
+                })
+            }
             (
                 ReturnPlan::EncodedViaOutPointer {
-                    ty: TypeRef::String,
+                    codec: ok_codec,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty: TypeRef::String,
+                    codec: error_codec,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
-            ) => Ok(ForeignClosureReturnTokens::WasmFalliblePackedString {
-                ok_type: input.rust_fallible_return()?.ok_type,
-            }),
+            ) => {
+                let result = input.rust_fallible_return()?;
+                let ok = input.packed_expression(
+                    ok_codec,
+                    &result.ok_type,
+                    &result.ok_source,
+                    quote! { __boltffi_success.assume_init() },
+                )?;
+                let error = input.packed_expression(
+                    error_codec,
+                    &result.error_type,
+                    &result.error_source,
+                    quote! { __boltffi_error_packed },
+                )?;
+                Ok(ForeignClosureReturnTokens::WasmFallibleEncoded { ok, error })
+            }
             (
                 ReturnPlan::Void,
                 ErrorDecl::EncodedViaReturnSlot {
-                    ty: TypeRef::String,
+                    codec,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
-            ) => Ok(ForeignClosureReturnTokens::WasmFallibleVoidString),
+            ) => {
+                let result = input.rust_fallible_return()?;
+                let error = input.packed_expression(
+                    codec,
+                    &result.error_type,
+                    &result.error_source,
+                    quote! { __boltffi_error_packed },
+                )?;
+                Ok(ForeignClosureReturnTokens::WasmFallibleVoid { error })
+            }
             (
                 ReturnPlan::EncodedViaReturnSlot {
-                    ty: TypeRef::String,
+                    codec,
                     shape: wasm32::BufferShape::Packed,
                     ..
                 },
                 ErrorDecl::None(_),
-            ) => Ok(ForeignClosureReturnTokens::WasmPackedString),
-            (
-                ReturnPlan::EncodedViaReturnSlot {
-                    shape: wasm32::BufferShape::Packed,
-                    ..
-                },
-                ErrorDecl::None(_),
-            ) => Err(Error::UnsupportedExpansion(
-                "wasm closure invoke encoded return",
-            )),
+            ) => {
+                let rust_type = input.rust_type.ok_or(Error::SourceSyntaxMismatch(
+                    "closure invoke encoded return requires source return type",
+                ))?;
+                let ReturnDef::Value(source_type) = input.source else {
+                    return Err(Error::SourceSyntaxMismatch(
+                        "closure encoded return requires source return type",
+                    ));
+                };
+                let value = input.packed_expression(
+                    codec,
+                    rust_type,
+                    source_type,
+                    quote! { __boltffi_result_packed },
+                )?;
+                Ok(ForeignClosureReturnTokens::WasmEncoded { value })
+            }
             (ReturnPlan::EncodedViaReturnSlot { .. }, _) => Err(Error::UnsupportedExpansion(
                 "wasm closure invoke encoded return shape",
             )),
@@ -846,7 +907,9 @@ enum ForeignClosureReturnTokens<'rust> {
     NativeEncoded {
         value: TokenStream,
     },
-    WasmPackedString,
+    WasmEncoded {
+        value: TokenStream,
+    },
     NativeFallibleVoid {
         error: TokenStream,
     },
@@ -863,15 +926,20 @@ enum ForeignClosureReturnTokens<'rust> {
         ok: TokenStream,
         error: TokenStream,
     },
-    WasmFallibleVoidString,
+    WasmFallibleVoid {
+        error: TokenStream,
+    },
     WasmFallibleDirectPrimitive {
         ffi_type: TokenStream,
+        error: TokenStream,
     },
     WasmFallibleDirectPassable {
         ok_type: Type,
+        error: TokenStream,
     },
-    WasmFalliblePackedString {
-        ok_type: Type,
+    WasmFallibleEncoded {
+        ok: TokenStream,
+        error: TokenStream,
     },
 }
 
@@ -884,32 +952,32 @@ impl ForeignClosureReturnTokens<'_> {
                 quote! { -> <#rust_type as ::boltffi::__private::Passable>::In }
             }
             Self::NativeEncoded { .. } => quote! { -> ::boltffi::__private::FfiBuf },
-            Self::WasmPackedString => quote! { -> u64 },
+            Self::WasmEncoded { .. } => quote! { -> u64 },
             Self::NativeFallibleVoid { .. }
             | Self::NativeFallibleDirectPrimitive { .. }
             | Self::NativeFallibleDirectPassable { .. }
             | Self::NativeFallibleEncoded { .. } => quote! { -> ::boltffi::__private::FfiBuf },
-            Self::WasmFallibleVoidString
+            Self::WasmFallibleVoid { .. }
             | Self::WasmFallibleDirectPrimitive { .. }
             | Self::WasmFallibleDirectPassable { .. }
-            | Self::WasmFalliblePackedString { .. } => quote! { -> u64 },
+            | Self::WasmFallibleEncoded { .. } => quote! { -> u64 },
         }
     }
 
     fn ffi_parameter_types(&self) -> Vec<TokenStream> {
         match self {
             Self::NativeFallibleDirectPrimitive { ffi_type, .. }
-            | Self::WasmFallibleDirectPrimitive { ffi_type } => {
+            | Self::WasmFallibleDirectPrimitive { ffi_type, .. } => {
                 vec![quote! { *mut #ffi_type }]
             }
             Self::NativeFallibleDirectPassable { ok_type, .. }
-            | Self::WasmFallibleDirectPassable { ok_type } => {
+            | Self::WasmFallibleDirectPassable { ok_type, .. } => {
                 vec![quote! { *mut <#ok_type as ::boltffi::__private::Passable>::In }]
             }
             Self::NativeFallibleEncoded { .. } => {
                 vec![quote! { *mut ::boltffi::__private::FfiBuf }]
             }
-            Self::WasmFalliblePackedString { .. } => vec![quote! { *mut u64 }],
+            Self::WasmFallibleEncoded { .. } => vec![quote! { *mut u64 }],
             _ => Vec::new(),
         }
     }
@@ -917,11 +985,11 @@ impl ForeignClosureReturnTokens<'_> {
     fn setup(&self) -> Vec<TokenStream> {
         match self {
             Self::NativeFallibleDirectPrimitive { ffi_type, .. }
-            | Self::WasmFallibleDirectPrimitive { ffi_type } => vec![quote! {
+            | Self::WasmFallibleDirectPrimitive { ffi_type, .. } => vec![quote! {
                 let mut __boltffi_success = ::core::mem::MaybeUninit::<#ffi_type>::uninit();
             }],
             Self::NativeFallibleDirectPassable { ok_type, .. }
-            | Self::WasmFallibleDirectPassable { ok_type } => vec![quote! {
+            | Self::WasmFallibleDirectPassable { ok_type, .. } => vec![quote! {
                 let mut __boltffi_success =
                     ::core::mem::MaybeUninit::<<#ok_type as ::boltffi::__private::Passable>::In>::uninit();
             }],
@@ -929,7 +997,7 @@ impl ForeignClosureReturnTokens<'_> {
                 let mut __boltffi_success =
                     ::core::mem::MaybeUninit::<::boltffi::__private::FfiBuf>::uninit();
             }],
-            Self::WasmFalliblePackedString { .. } => vec![quote! {
+            Self::WasmFallibleEncoded { .. } => vec![quote! {
                 let mut __boltffi_success = ::core::mem::MaybeUninit::<u64>::uninit();
             }],
             _ => Vec::new(),
@@ -943,7 +1011,7 @@ impl ForeignClosureReturnTokens<'_> {
             | Self::NativeFallibleEncoded { .. }
             | Self::WasmFallibleDirectPrimitive { .. }
             | Self::WasmFallibleDirectPassable { .. }
-            | Self::WasmFalliblePackedString { .. } => {
+            | Self::WasmFallibleEncoded { .. } => {
                 vec![quote! { __boltffi_success.as_mut_ptr() }]
             }
             _ => Vec::new(),
@@ -972,12 +1040,10 @@ impl ForeignClosureReturnTokens<'_> {
                     #value
                 }
             },
-            Self::WasmPackedString => quote! {
+            Self::WasmEncoded { value } => quote! {
                 {
                     let __boltffi_result_packed = unsafe { #call };
-                    unsafe {
-                        ::boltffi::__private::take_packed_utf8_string(__boltffi_result_packed)
-                    }
+                    #value
                 }
             },
             Self::NativeFallibleVoid { error } => quote! {
@@ -1052,19 +1118,17 @@ impl ForeignClosureReturnTokens<'_> {
                     }
                 }
             }
-            Self::WasmFallibleVoidString => quote! {
+            Self::WasmFallibleVoid { error } => quote! {
                 {
                     let __boltffi_error_packed = unsafe { #call };
                     if __boltffi_error_packed == 0 {
                         Ok(())
                     } else {
-                        Err(unsafe {
-                            ::boltffi::__private::take_packed_utf8_string(__boltffi_error_packed)
-                        })
+                        Err(#error)
                     }
                 }
             },
-            Self::WasmFallibleDirectPrimitive { .. } => {
+            Self::WasmFallibleDirectPrimitive { error, .. } => {
                 let setup = self.setup();
                 quote! {
                     #(#setup)*
@@ -1072,13 +1136,11 @@ impl ForeignClosureReturnTokens<'_> {
                     if __boltffi_error_packed == 0 {
                         Ok(unsafe { __boltffi_success.assume_init() })
                     } else {
-                        Err(unsafe {
-                            ::boltffi::__private::take_packed_utf8_string(__boltffi_error_packed)
-                        })
+                        Err(#error)
                     }
                 }
             }
-            Self::WasmFallibleDirectPassable { ok_type } => {
+            Self::WasmFallibleDirectPassable { ok_type, error } => {
                 let setup = self.setup();
                 quote! {
                     #(#setup)*
@@ -1090,27 +1152,19 @@ impl ForeignClosureReturnTokens<'_> {
                             )
                         })
                     } else {
-                        Err(unsafe {
-                            ::boltffi::__private::take_packed_utf8_string(__boltffi_error_packed)
-                        })
+                        Err(#error)
                     }
                 }
             }
-            Self::WasmFalliblePackedString { .. } => {
+            Self::WasmFallibleEncoded { ok, error } => {
                 let setup = self.setup();
                 quote! {
                     #(#setup)*
                     let __boltffi_error_packed = unsafe { #call };
                     if __boltffi_error_packed == 0 {
-                        Ok(unsafe {
-                            ::boltffi::__private::take_packed_utf8_string(
-                                __boltffi_success.assume_init()
-                            )
-                        })
+                        Ok(#ok)
                     } else {
-                        Err(unsafe {
-                            ::boltffi::__private::take_packed_utf8_string(__boltffi_error_packed)
-                        })
+                        Err(#error)
                     }
                 }
             }

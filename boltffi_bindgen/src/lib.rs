@@ -4,11 +4,13 @@
 #![allow(dead_code)]
 
 pub mod artifact;
+pub mod generate;
 pub mod ir;
 pub mod metadata;
 pub mod model;
 pub mod render;
 pub mod scan;
+pub mod target;
 
 pub use model::{
     Class, Constructor, ConstructorParam, Deprecation, Enumeration, Function, Method, Module,

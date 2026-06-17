@@ -908,15 +908,21 @@ mod tests {
     #[test]
     fn csharp_runtime_identifier_maps_native_assets() {
         assert_eq!(
-            CSharpRuntimeIdentifier::OsxArm64.native_library_filename("demo"),
+            CSharpRuntimeIdentifier::OsxArm64
+                .native_host_platform()
+                .shared_library_filename("demo"),
             "libdemo.dylib"
         );
         assert_eq!(
-            CSharpRuntimeIdentifier::LinuxX64.native_library_filename("demo"),
+            CSharpRuntimeIdentifier::LinuxX64
+                .native_host_platform()
+                .shared_library_filename("demo"),
             "libdemo.so"
         );
         assert_eq!(
-            CSharpRuntimeIdentifier::WinX64.native_library_filename("demo"),
+            CSharpRuntimeIdentifier::WinX64
+                .native_host_platform()
+                .shared_library_filename("demo"),
             "demo.dll"
         );
     }

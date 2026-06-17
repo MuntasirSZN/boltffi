@@ -5,13 +5,15 @@ use boltffi_bindgen::render::kotlin::{
 };
 use boltffi_bindgen::{CHeaderLowerer, FactoryStyle as BindgenFactoryStyle, KotlinOptions};
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{
     GenerateRequest, LanguageGenerator, ScanPointerWidth, bindgen_type_mappings,
 };
 use crate::config::{
-    FactoryStyle as ConfigFactoryStyle, KotlinApiStyle as ConfigKotlinApiStyle,
-    KotlinDesktopLoader as ConfigKotlinDesktopLoader, Target,
+    KotlinApiStyle as ConfigKotlinApiStyle, KotlinDesktopLoader as ConfigKotlinDesktopLoader,
+    KotlinFactoryStyle as ConfigKotlinFactoryStyle,
 };
 
 pub struct KotlinGenerator;
@@ -19,8 +21,8 @@ pub struct KotlinGenerator;
 impl KotlinGenerator {
     fn kotlin_options(request: &GenerateRequest<'_>, module_name: &str) -> KotlinOptions {
         let factory_style = match request.config().android_kotlin_factory_style() {
-            ConfigFactoryStyle::Constructors => BindgenFactoryStyle::Constructors,
-            ConfigFactoryStyle::CompanionMethods => BindgenFactoryStyle::CompanionMethods,
+            ConfigKotlinFactoryStyle::Constructors => BindgenFactoryStyle::Constructors,
+            ConfigKotlinFactoryStyle::CompanionMethods => BindgenFactoryStyle::CompanionMethods,
         };
 
         KotlinOptions {

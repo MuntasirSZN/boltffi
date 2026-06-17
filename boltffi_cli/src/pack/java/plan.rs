@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use boltffi_bindgen::target::Target;
+
 use crate::build::CargoBuildProfile;
 use crate::cargo::Cargo;
 use crate::cli::{CliError, Result};
 use crate::commands::generate::run_generate_java_with_output_from_source_dir;
-use crate::config::{Config, DebugSymbolsBundle, DebugSymbolsFormat, Target};
+use crate::config::{Config, DebugSymbolsBundle, DebugSymbolsFormat};
 use crate::pack::resolve_build_cargo_args;
 use crate::pack::symbols::{
     DebugSymbolArtifact, DebugSymbolArtifactKind, ensure_debug_symbols_profile_has_debuginfo,

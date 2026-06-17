@@ -1,66 +1,29 @@
-use crate::target::{
-    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, CSharpRuntimeIdentifier,
-    DartNativeArchitecture, JavaHostTarget, RustTarget, resolve_android_targets,
-    resolve_apple_ios_targets, resolve_apple_macos_targets, resolve_apple_simulator_targets,
-    resolve_dart_native_targets, resolve_java_host_targets,
-};
-use boltffi_bindgen::render::python::NamingConvention;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    Swift,
-    Kotlin,
-    KotlinMultiplatform,
-    Java,
-    TypeScript,
-    Header,
-    Dart,
-    Python,
-    CSharp,
-}
+use boltffi_bindgen::render::python::NamingConvention;
+use boltffi_bindgen::target::Target;
+use serde::{Deserialize, Serialize};
 
-impl Target {
-    pub const fn name(self) -> &'static str {
-        match self {
-            Target::Swift => "swift",
-            Target::Kotlin => "kotlin",
-            Target::KotlinMultiplatform => "kotlin_multiplatform",
-            Target::Java => "java",
-            Target::TypeScript => "typescript",
-            Target::Header => "header",
-            Target::Dart => "dart",
-            Target::Python => "python",
-            Target::CSharp => "csharp",
-        }
-    }
-}
+use crate::target::{Architecture, CSharpRuntimeIdentifier, JavaHostTarget, Platform, RustTarget};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Experimental {
-    WholeTarget(Target),
-    Feature { target: Target, name: &'static str },
-}
+pub mod cargo;
+pub mod experimental;
+pub mod symbols;
+pub mod targets;
 
-impl Experimental {
-    pub const ALL: &'static [Experimental] = &[
-        Experimental::Feature {
-            target: Target::TypeScript,
-            name: "async_streams",
-        },
-        Experimental::WholeTarget(Target::Dart),
-        Experimental::WholeTarget(Target::Python),
-        Experimental::WholeTarget(Target::KotlinMultiplatform),
-    ];
-
-    pub fn is_target_experimental(target: Target) -> bool {
-        Self::ALL.iter().any(
-            |experimental| matches!(experimental, Experimental::WholeTarget(t) if *t == target),
-        )
-    }
-}
+pub use cargo::{CargoConfig, PackageConfig};
+pub use experimental::Experimental;
+pub use symbols::{DebugSymbolsBundle, DebugSymbolsConfig, DebugSymbolsFormat};
+pub use targets::{
+    AndroidConfig, AndroidPackConfig, AppleConfig, CSharpConfig, DartConfig, HeaderConfig,
+    JavaConfig, KotlinApiStyle, KotlinConfig, KotlinDesktopLoader, KotlinFactoryStyle,
+    KotlinMultiplatformConfig, PythonConfig, SpmConfig, SpmDistribution, SpmLayout, SwiftConfig,
+    TargetsConfig, WasmConfig, WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMissing,
+    WasmProfile, XcframeworkConfig,
+};
+#[cfg(test)]
+pub use targets::{CSharpNugetConfig, JavaJvmConfig, PythonWheelConfig};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -74,175 +37,12 @@ pub struct Config {
     pub targets: TargetsConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct CargoConfig {
-    #[serde(default)]
-    pub global_args: Vec<String>,
-    #[serde(default)]
-    pub command_args: HashMap<String, Vec<String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PackageConfig {
-    pub name: String,
-    #[serde(rename = "crate")]
-    pub crate_name: Option<String>,
-    pub version: Option<String>,
-    pub description: Option<String>,
-    pub license: Option<String>,
-    pub repository: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct TargetsConfig {
-    #[serde(default)]
-    pub apple: AppleConfig,
-    #[serde(default)]
-    pub android: AndroidConfig,
-    #[serde(default)]
-    pub kotlin_multiplatform: KotlinMultiplatformConfig,
-    #[serde(default)]
-    pub wasm: WasmConfig,
-    #[serde(default)]
-    pub java: JavaConfig,
-    #[serde(default)]
-    pub dart: DartConfig,
-    #[serde(default)]
-    pub python: PythonConfig,
-    #[serde(default)]
-    pub csharp: CSharpConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DartConfig {
-    #[serde(default = "default_dart_output")]
-    pub output: PathBuf,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub native_architectures: Option<Vec<DartNativeArchitecture>>,
-}
-
-impl Default for DartConfig {
-    fn default() -> Self {
-        Self {
-            output: default_dart_output(),
-            enabled: false,
-            native_architectures: None,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PythonConfig {
-    #[serde(default = "default_python_output")]
-    pub output: PathBuf,
-    pub module_name: Option<String>,
-    #[serde(default, alias = "pack")]
-    pub wheel: PythonWheelConfig,
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-impl Default for PythonConfig {
-    fn default() -> Self {
-        Self {
-            output: default_python_output(),
-            module_name: None,
-            wheel: PythonWheelConfig::default(),
-            enabled: false,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct PythonWheelConfig {
-    #[serde(alias = "wheel_output")]
-    pub output: Option<PathBuf>,
-    pub interpreters: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CSharpConfig {
-    #[serde(default = "default_csharp_output")]
-    pub output: PathBuf,
-    pub namespace: Option<String>,
-    pub package_id: Option<String>,
-    pub target_framework: Option<String>,
-    pub package_output: Option<PathBuf>,
-    pub runtime_identifiers: Option<Vec<CSharpRuntimeIdentifier>>,
-    #[serde(default)]
-    pub nuget: CSharpNugetConfig,
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct CSharpNugetConfig {
-    pub title: Option<String>,
-    pub authors: Option<Vec<String>>,
-    pub owners: Option<Vec<String>>,
-    pub project_url: Option<String>,
-    pub repository_url: Option<String>,
-    pub repository_type: Option<String>,
-    pub license_expression: Option<String>,
-    pub icon: Option<PathBuf>,
-    pub readme: Option<PathBuf>,
-    pub tags: Option<Vec<String>>,
-    pub release_notes: Option<String>,
-    pub require_license_acceptance: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct KotlinMultiplatformConfig {
-    #[serde(default = "default_kotlin_multiplatform_output")]
-    pub output: PathBuf,
-    #[serde(default)]
-    pub enabled: bool,
-    pub package: Option<String>,
-    pub module_name: Option<String>,
-}
-
-impl Default for KotlinMultiplatformConfig {
-    fn default() -> Self {
-        Self {
-            output: default_kotlin_multiplatform_output(),
-            enabled: false,
-            package: None,
-            module_name: None,
-        }
-    }
-}
-
-impl Default for CSharpConfig {
-    fn default() -> Self {
-        Self {
-            output: default_csharp_output(),
-            namespace: None,
-            package_id: None,
-            target_framework: None,
-            package_output: None,
-            runtime_identifiers: None,
-            nuget: CSharpNugetConfig::default(),
-            enabled: false,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ErrorStyle {
     #[default]
     Throwing,
     Result,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum FactoryStyle {
-    #[default]
-    Constructors,
-    CompanionMethods,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -259,441 +59,7 @@ pub struct TypeMapping {
     pub conversion: TypeConversion,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct AppleSwiftConfig {
-    pub module_name: Option<String>,
-    pub output: Option<PathBuf>,
-    pub ffi_module_name: Option<String>,
-    pub tools_version: Option<String>,
-    #[serde(default)]
-    pub error_style: ErrorStyle,
-    #[serde(default)]
-    pub type_mappings: HashMap<String, TypeMapping>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct AndroidKotlinConfig {
-    pub package: Option<String>,
-    pub output: Option<PathBuf>,
-    pub module_name: Option<String>,
-    pub library_name: Option<String>,
-    #[serde(default)]
-    pub desktop_loader: KotlinDesktopLoader,
-    #[serde(default)]
-    pub api_style: KotlinApiStyle,
-    #[serde(default)]
-    pub error_style: ErrorStyle,
-    #[serde(default)]
-    pub factory_style: FactoryStyle,
-    #[serde(default)]
-    pub type_mappings: HashMap<String, TypeMapping>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum KotlinApiStyle {
-    #[default]
-    TopLevel,
-    ModuleObject,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum KotlinDesktopLoader {
-    #[default]
-    Bundled,
-    System,
-    None,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct AppleConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_apple_output")]
-    pub output: PathBuf,
-    #[serde(default = "default_apple_deployment_target")]
-    pub deployment_target: String,
-    #[serde(default)]
-    pub include_macos: bool,
-    pub ios_architectures: Option<Vec<AppleIosArchitecture>>,
-    pub simulator_architectures: Option<Vec<AppleArchitecture>>,
-    pub macos_architectures: Option<Vec<AppleArchitecture>>,
-    #[serde(default)]
-    pub swift: AppleSwiftConfig,
-    #[serde(default)]
-    pub xcframework: XcframeworkConfig,
-    #[serde(default)]
-    pub spm: SpmConfig,
-    #[serde(default)]
-    pub debug_symbols: DebugSymbolsConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct AndroidConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_android_output")]
-    pub output: PathBuf,
-    #[serde(default = "default_android_min_sdk")]
-    pub min_sdk: u32,
-    pub ndk_version: Option<String>,
-    pub architectures: Option<Vec<AndroidArchitecture>>,
-    #[serde(default)]
-    pub kotlin: AndroidKotlinConfig,
-    #[serde(default)]
-    pub header: HeaderConfig,
-    #[serde(default)]
-    pub pack: AndroidPackConfig,
-    #[serde(default)]
-    pub debug_symbols: DebugSymbolsConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct HeaderConfig {
-    pub output: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum DebugSymbolsFormat {
-    #[default]
-    Zip,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum DebugSymbolsBundle {
-    #[default]
-    Unstripped,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct DebugSymbolsConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    pub output: Option<PathBuf>,
-    #[serde(default)]
-    pub format: DebugSymbolsFormat,
-    #[serde(default)]
-    pub bundle: DebugSymbolsBundle,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct XcframeworkConfig {
-    pub output: Option<PathBuf>,
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum SpmDistribution {
-    #[default]
-    Local,
-    Remote,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct SpmConfig {
-    pub output: Option<PathBuf>,
-    #[serde(default)]
-    pub distribution: SpmDistribution,
-    pub repo_url: Option<String>,
-    #[serde(default)]
-    pub layout: SpmLayout,
-    pub package_name: Option<String>,
-    pub wrapper_sources: Option<PathBuf>,
-    #[serde(default)]
-    pub skip_package_swift: bool,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct AndroidPackConfig {
-    pub output: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct JavaConfig {
-    pub package: Option<String>,
-    pub module_name: Option<String>,
-    pub min_version: Option<u8>,
-    #[serde(default)]
-    pub jvm: JavaJvmConfig,
-    #[serde(default)]
-    pub android: JavaAndroidConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct JavaJvmConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_java_jvm_output")]
-    pub output: PathBuf,
-    pub host_targets: Option<Vec<JavaHostTarget>>,
-    #[serde(default)]
-    pub strip_symbols: bool,
-    #[serde(default)]
-    pub debug_symbols: DebugSymbolsConfig,
-}
-
-impl Default for JavaJvmConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            output: default_java_jvm_output(),
-            host_targets: None,
-            strip_symbols: false,
-            debug_symbols: DebugSymbolsConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct JavaAndroidConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_java_android_output")]
-    pub output: PathBuf,
-    #[serde(default = "default_android_min_sdk")]
-    pub min_sdk: u32,
-}
-
-impl Default for JavaAndroidConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            output: default_java_android_output(),
-            min_sdk: default_android_min_sdk(),
-        }
-    }
-}
-
-fn default_java_jvm_output() -> PathBuf {
-    PathBuf::from("dist/java")
-}
-
-fn default_java_android_output() -> PathBuf {
-    PathBuf::from("dist/java/android")
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum SpmLayout {
-    Bundled,
-    Split,
-    #[default]
-    FfiOnly,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct WasmConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_wasm_triple")]
-    pub triple: String,
-    #[serde(default)]
-    pub profile: WasmProfile,
-    #[serde(default = "default_wasm_output")]
-    pub output: PathBuf,
-    pub artifact_path: Option<PathBuf>,
-    #[serde(default)]
-    pub optimize: WasmOptimizeConfig,
-    #[serde(default)]
-    pub typescript: WasmTypeScriptConfig,
-    #[serde(default)]
-    pub npm: WasmNpmConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum WasmProfile {
-    Debug,
-    #[default]
-    Release,
-}
-
-impl WasmProfile {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Debug => "debug",
-            Self::Release => "release",
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct WasmOptimizeConfig {
-    pub enabled: Option<bool>,
-    pub level: Option<WasmOptimizeLevel>,
-    pub strip_debug: Option<bool>,
-    pub on_missing: Option<WasmOptimizeOnMissing>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
-pub enum WasmOptimizeLevel {
-    #[serde(rename = "0")]
-    O0,
-    #[serde(rename = "1")]
-    O1,
-    #[serde(rename = "2")]
-    O2,
-    #[serde(rename = "3")]
-    O3,
-    #[serde(rename = "4")]
-    O4,
-    #[serde(rename = "s")]
-    Size,
-    #[serde(rename = "z")]
-    MinSize,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum WasmOptimizeOnMissing {
-    Error,
-    Warn,
-    Skip,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct WasmTypeScriptConfig {
-    pub output: Option<PathBuf>,
-    pub runtime_package: Option<String>,
-    pub runtime_version: Option<String>,
-    pub module_name: Option<String>,
-    pub source_map: Option<bool>,
-    #[serde(default)]
-    pub type_mappings: HashMap<String, TypeMapping>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct WasmNpmConfig {
-    pub package_name: Option<String>,
-    pub output: Option<PathBuf>,
-    pub targets: Option<Vec<WasmNpmTarget>>,
-    pub generate_package_json: Option<bool>,
-    pub generate_readme: Option<bool>,
-    pub version: Option<String>,
-    pub license: Option<String>,
-    pub repository: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum WasmNpmTarget {
-    Bundler,
-    Web,
-    Nodejs,
-}
-
-impl Default for AppleConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            output: default_apple_output(),
-            deployment_target: default_apple_deployment_target(),
-            include_macos: false,
-            ios_architectures: None,
-            simulator_architectures: None,
-            macos_architectures: None,
-            swift: AppleSwiftConfig::default(),
-            xcframework: XcframeworkConfig::default(),
-            spm: SpmConfig::default(),
-            debug_symbols: DebugSymbolsConfig::default(),
-        }
-    }
-}
-
-impl Default for AndroidConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            output: default_android_output(),
-            min_sdk: default_android_min_sdk(),
-            ndk_version: None,
-            architectures: None,
-            kotlin: AndroidKotlinConfig::default(),
-            header: HeaderConfig::default(),
-            pack: AndroidPackConfig::default(),
-            debug_symbols: DebugSymbolsConfig::default(),
-        }
-    }
-}
-
-impl Default for SpmConfig {
-    fn default() -> Self {
-        Self {
-            output: None,
-            distribution: SpmDistribution::Local,
-            repo_url: None,
-            layout: SpmLayout::default(),
-            package_name: None,
-            wrapper_sources: None,
-            skip_package_swift: false,
-        }
-    }
-}
-
-impl Default for WasmConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            triple: default_wasm_triple(),
-            profile: WasmProfile::Release,
-            output: default_wasm_output(),
-            artifact_path: None,
-            optimize: WasmOptimizeConfig::default(),
-            typescript: WasmTypeScriptConfig::default(),
-            npm: WasmNpmConfig::default(),
-        }
-    }
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_apple_output() -> PathBuf {
-    PathBuf::from("dist/apple")
-}
-
-fn default_apple_deployment_target() -> String {
-    "16.0".to_string()
-}
-
-fn default_android_output() -> PathBuf {
-    PathBuf::from("dist/android")
-}
-
-fn default_android_min_sdk() -> u32 {
-    24
-}
-
-fn default_wasm_triple() -> String {
-    "wasm32-unknown-unknown".to_string()
-}
-
-fn default_wasm_output() -> PathBuf {
-    PathBuf::from("dist/wasm")
-}
-
-fn default_dart_output() -> PathBuf {
-    PathBuf::from("dist/dart")
-}
-
-fn default_python_output() -> PathBuf {
-    PathBuf::from("dist/python")
-}
-
-fn default_csharp_output() -> PathBuf {
-    PathBuf::from("dist/csharp")
-}
-
-fn default_kotlin_multiplatform_output() -> PathBuf {
-    PathBuf::from("dist/kotlin-multiplatform")
-}
-
-fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
+pub fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
     let content = std::fs::read_to_string(path).map_err(|err| ConfigError::Read {
         path: path.to_path_buf(),
         source: err,
@@ -705,7 +71,7 @@ fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
     })
 }
 
-fn merge_toml_value(base: &mut toml::Value, overlay: toml::Value) {
+pub fn merge_toml_value(base: &mut toml::Value, overlay: toml::Value) {
     match (base, overlay) {
         (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
             for (key, overlay_value) in overlay_table {
@@ -791,33 +157,29 @@ impl Config {
                 ));
             }
 
-            let mut seen = HashSet::new();
-            for architecture in architectures {
-                if !seen.insert(*architecture) {
-                    return Err(ConfigError::Validation(format!(
-                        "targets.android.architectures contains duplicate architecture '{}'",
-                        architecture.canonical_name()
-                    )));
-                }
-            }
+            validate_unique(
+                Some(architectures.as_slice()),
+                "targets.android.architectures",
+                Architecture::canonical_name,
+            )?;
         }
 
         if self.is_apple_enabled() {
             validate_unique(
                 self.targets.apple.ios_architectures.as_deref(),
                 "targets.apple.ios_architectures",
-                AppleIosArchitecture::canonical_name,
+                Architecture::canonical_name,
             )?;
             validate_unique(
                 self.targets.apple.simulator_architectures.as_deref(),
                 "targets.apple.simulator_architectures",
-                AppleArchitecture::canonical_name,
+                Architecture::canonical_name,
             )?;
             if self.apple_include_macos() {
                 validate_unique(
                     self.targets.apple.macos_architectures.as_deref(),
                     "targets.apple.macos_architectures",
-                    AppleArchitecture::canonical_name,
+                    Architecture::canonical_name,
                 )?;
             }
 
@@ -1030,36 +392,36 @@ impl Config {
         self.targets.apple.include_macos
     }
 
-    pub fn apple_ios_architectures(&self) -> &[AppleIosArchitecture] {
+    pub fn apple_ios_architectures(&self) -> &[Architecture] {
         self.targets
             .apple
             .ios_architectures
             .as_deref()
-            .unwrap_or(AppleIosArchitecture::ALL)
+            .unwrap_or(Platform::Ios.architectures())
     }
 
-    pub fn apple_simulator_architectures(&self) -> &[AppleArchitecture] {
+    pub fn apple_simulator_architectures(&self) -> &[Architecture] {
         self.targets
             .apple
             .simulator_architectures
             .as_deref()
-            .unwrap_or(AppleArchitecture::ALL)
+            .unwrap_or(Platform::IosSimulator.architectures())
     }
 
-    pub fn apple_macos_architectures(&self) -> &[AppleArchitecture] {
+    pub fn apple_macos_architectures(&self) -> &[Architecture] {
         self.targets
             .apple
             .macos_architectures
             .as_deref()
-            .unwrap_or(AppleArchitecture::ALL)
+            .unwrap_or(Platform::MacOs.architectures())
     }
 
     pub fn apple_ios_targets(&self) -> Vec<RustTarget> {
-        resolve_apple_ios_targets(self.apple_ios_architectures())
+        RustTarget::for_architectures(Platform::Ios, self.apple_ios_architectures())
     }
 
     pub fn apple_simulator_targets(&self) -> Vec<RustTarget> {
-        resolve_apple_simulator_targets(self.apple_simulator_architectures())
+        RustTarget::for_architectures(Platform::IosSimulator, self.apple_simulator_architectures())
     }
 
     pub fn apple_macos_targets(&self) -> Vec<RustTarget> {
@@ -1067,7 +429,7 @@ impl Config {
             .apple
             .macos_architectures
             .as_deref()
-            .map(resolve_apple_macos_targets)
+            .map(|architectures| RustTarget::for_architectures(Platform::MacOs, architectures))
             .unwrap_or_else(|| RustTarget::ALL_MACOS.to_vec())
     }
 
@@ -1160,16 +522,16 @@ impl Config {
         self.targets.android.ndk_version.as_deref()
     }
 
-    pub fn android_architectures(&self) -> &[AndroidArchitecture] {
+    pub fn android_architectures(&self) -> &[Architecture] {
         self.targets
             .android
             .architectures
             .as_deref()
-            .unwrap_or(AndroidArchitecture::ALL)
+            .unwrap_or(Platform::Android.architectures())
     }
 
     pub fn android_targets(&self) -> Vec<RustTarget> {
-        resolve_android_targets(self.android_architectures())
+        RustTarget::for_architectures(Platform::Android, self.android_architectures())
     }
 
     pub fn android_output(&self) -> PathBuf {
@@ -1219,7 +581,7 @@ impl Config {
         self.targets.android.kotlin.api_style
     }
 
-    pub fn android_kotlin_factory_style(&self) -> FactoryStyle {
+    pub fn android_kotlin_factory_style(&self) -> KotlinFactoryStyle {
         self.targets.android.kotlin.factory_style
     }
 
@@ -1446,7 +808,7 @@ impl Config {
     }
 
     pub fn java_jvm_host_targets(&self) -> std::result::Result<Vec<JavaHostTarget>, String> {
-        resolve_java_host_targets(self.java_jvm_requested_host_targets())
+        JavaHostTarget::resolve_requested(self.java_jvm_requested_host_targets())
     }
 
     pub fn java_android_output(&self) -> PathBuf {
@@ -1705,16 +1067,16 @@ impl Config {
         self.targets.dart.output.clone()
     }
 
-    pub fn dart_native_architectures(&self) -> &[DartNativeArchitecture] {
+    pub fn dart_native_architectures(&self) -> &[RustTarget] {
         self.targets
             .dart
             .native_architectures
             .as_deref()
-            .unwrap_or(DartNativeArchitecture::ALL)
+            .unwrap_or(RustTarget::ALL_DART_NATIVE)
     }
 
     pub fn dart_targets(&self) -> Vec<RustTarget> {
-        resolve_dart_native_targets(self.dart_native_architectures())
+        self.dart_native_architectures().to_vec()
     }
 }
 

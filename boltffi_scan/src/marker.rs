@@ -7,6 +7,7 @@ use crate::ScanError;
 pub enum Marker {
     Data,
     DataImpl,
+    CustomFfi,
     Error,
     Export(ExportMarker),
     Skip,
@@ -51,6 +52,7 @@ impl Marker {
         match self {
             Self::Data => "data",
             Self::DataImpl => "data(impl)",
+            Self::CustomFfi => "custom_ffi",
             Self::Error => "error",
             Self::Export(_) => "export",
             Self::Skip => "skip",
@@ -80,6 +82,7 @@ impl Marker {
     fn from_attribute(attr: &syn::Attribute) -> Result<Option<Self>, ScanError> {
         match marker_name(attr).as_deref() {
             Some("data") => Self::from_data(attr).map(Some),
+            Some("custom_ffi") => Self::empty(attr, Self::CustomFfi).map(Some),
             Some("error") => Self::empty(attr, Self::Error).map(Some),
             Some("export") => Self::from_export(attr).map(Some),
             Some("skip") => Self::empty(attr, Self::Skip).map(Some),
@@ -154,10 +157,19 @@ fn parse_export_args(input: syn::parse::ParseStream<'_>) -> syn::Result<ExportMa
 fn marker_name(attr: &syn::Attribute) -> Option<String> {
     let segments = attr.path().segments.iter().collect::<Vec<_>>();
     match segments.as_slice() {
-        [segment] => Some(segment.ident.to_string())
-            .filter(|name| matches!(name.as_str(), "data" | "error" | "export" | "skip")),
+        [segment] => Some(segment.ident.to_string()).filter(|name| {
+            matches!(
+                name.as_str(),
+                "custom_ffi" | "data" | "error" | "export" | "skip"
+            )
+        }),
         [namespace, marker] if namespace.ident == "boltffi" => Some(marker.ident.to_string())
-            .filter(|name| matches!(name.as_str(), "data" | "error" | "export" | "skip")),
+            .filter(|name| {
+                matches!(
+                    name.as_str(),
+                    "custom_ffi" | "data" | "error" | "export" | "skip"
+                )
+            }),
         _ => None,
     }
 }
@@ -219,6 +231,22 @@ mod tests {
         assert_eq!(
             Marker::detect(&struct_attrs("#[derive(Clone)] struct S { x: i32 }")),
             Ok(None)
+        );
+    }
+
+    #[test]
+    fn detects_custom_ffi_on_trait_impls() {
+        assert_eq!(
+            Marker::detect(&impl_attrs(
+                "#[custom_ffi] impl CustomFfiConvertible for Email {}"
+            )),
+            Ok(Some(Marker::CustomFfi))
+        );
+        assert_eq!(
+            Marker::detect(&impl_attrs(
+                "#[boltffi::custom_ffi] impl boltffi::CustomFfiConvertible for Email {}"
+            )),
+            Ok(Some(Marker::CustomFfi))
         );
     }
 

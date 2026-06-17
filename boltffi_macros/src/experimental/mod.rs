@@ -2,6 +2,7 @@
 
 mod error;
 mod metadata;
+pub mod metadata_build;
 
 pub mod expander;
 pub mod expansion;

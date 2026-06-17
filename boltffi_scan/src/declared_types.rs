@@ -5,7 +5,7 @@ use boltffi_ast::{ClassId, CustomRemoteType, CustomTypeId, EnumId, RecordId, Tra
 use crate::impl_target;
 use crate::items;
 use crate::marked::MarkedItems;
-use crate::path::{ModuleScope, PathExpansion};
+use crate::path::{ImportLookup, ModuleScope, PathExpansion};
 use crate::source_tree::{SourceModule, SourceTree};
 use crate::{ScanError, spelling};
 
@@ -74,7 +74,7 @@ impl DeclaredTypes {
             declared_types.register(DeclaredType::Class(id))
         })?;
         marked.customs().iter().try_for_each(|marked| {
-            let spec = items::custom_type::Spec::parse(marked.item())?;
+            let spec = items::custom_type::Spec::parse(marked)?;
             declared_types.register_custom_type(
                 marked.scope(),
                 CustomTypeId::new(marked.module().qualified(&spec.name().to_string())),
@@ -456,9 +456,14 @@ impl TypeNamespace {
         let Some(scope) = self.scopes.get(&module_path) else {
             return TypeResolution::Unknown;
         };
+        match self.resolve_explicit_reexport(scope, name, visited) {
+            TypeResolution::Known(path) => return TypeResolution::Known(path),
+            TypeResolution::Ambiguous => return TypeResolution::Ambiguous,
+            TypeResolution::Unknown => {}
+        }
         let segments = [name.clone()];
         let matches = self
-            .glob_candidate_paths(scope, &segments)
+            .reexport_glob_candidate_paths(scope, &segments)
             .into_iter()
             .try_fold(Vec::new(), |mut matches, candidate| {
                 match self.by_path.get(&candidate) {
@@ -485,9 +490,47 @@ impl TypeNamespace {
         }
     }
 
+    fn resolve_explicit_reexport(
+        &self,
+        scope: &ModuleScope,
+        name: &str,
+        visited: &mut HashSet<String>,
+    ) -> TypeResolution {
+        match scope.reexported(name) {
+            ImportLookup::Unique(imported) => {
+                let candidate = imported.join("::");
+                match self.by_path.get(&candidate) {
+                    Some(TypeBinding::Unique(path)) => TypeResolution::Known(path.clone()),
+                    Some(TypeBinding::Ambiguous) => TypeResolution::Ambiguous,
+                    None => self.resolve_reexported_with_visited(&candidate, visited),
+                }
+            }
+            ImportLookup::Ambiguous => TypeResolution::Ambiguous,
+            ImportLookup::None => TypeResolution::Unknown,
+        }
+    }
+
     fn glob_candidate_paths(&self, scope: &ModuleScope, segments: &[String]) -> Vec<String> {
         scope
             .glob_candidates_for_segments(segments)
+            .into_iter()
+            .flat_map(|candidate| {
+                let qualified = self.module_qualified_candidate(scope, &candidate);
+                match qualified == candidate {
+                    true => vec![candidate],
+                    false => vec![candidate, qualified],
+                }
+            })
+            .collect()
+    }
+
+    fn reexport_glob_candidate_paths(
+        &self,
+        scope: &ModuleScope,
+        segments: &[String],
+    ) -> Vec<String> {
+        scope
+            .reexport_glob_candidates_for_segments(segments)
             .into_iter()
             .flat_map(|candidate| {
                 let qualified = self.module_qualified_candidate(scope, &candidate);

@@ -259,6 +259,10 @@ impl RustCall {
         }
     }
 
+    pub fn owner(&self) -> &syn::Ident {
+        &self.owner
+    }
+
     fn class_method_expression(
         receive: Receive,
         class: &syn::Ident,

@@ -2,11 +2,13 @@ use std::path::{Path, PathBuf};
 
 use boltffi_bindgen::render::csharp::{CSharpEmitter, CSharpOptions};
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{
     GenerateRequest, LanguageGenerator, ScanPointerWidth, SourceCrate,
 };
-use crate::config::{Config, Target};
+use crate::config::Config;
 
 pub struct CSharpGenerator;
 

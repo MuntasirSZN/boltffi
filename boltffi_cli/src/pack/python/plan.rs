@@ -246,13 +246,14 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{PythonCargoContext, PythonInterpreterSelection, PythonPackagingPlan};
+    use super::{
+        PythonCargoContext, PythonInterpreterSelection, PythonPackageLayout, PythonPackagingPlan,
+    };
     use crate::build::CargoBuildProfile;
     use crate::cli::CliError;
     use crate::config::{
         CargoConfig, Config, PackageConfig, PythonConfig, PythonWheelConfig, TargetsConfig,
     };
-    use crate::pack::python::PythonPackageLayout;
     use crate::target::NativeHostPlatform;
 
     fn config() -> Config {
