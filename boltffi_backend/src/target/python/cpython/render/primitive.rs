@@ -15,6 +15,7 @@ pub struct Support {
     pub parser: &'static str,
     pub boxer: &'static str,
     pub wire_encoder: String,
+    pub optional_wire_encoder: String,
     pub owned_wire_decoder: String,
 }
 
@@ -25,6 +26,7 @@ impl Support {
             parser: runtime.parser()?,
             boxer: runtime.boxer()?,
             wire_encoder: runtime.wire_encoder()?,
+            optional_wire_encoder: runtime.optional_wire_encoder()?,
             owned_wire_decoder: runtime.owned_wire_decoder()?,
         })
     }
@@ -161,6 +163,13 @@ impl Runtime {
 
     pub fn wire_encoder(self) -> Result<String> {
         Ok(format!("boltffi_python_wire_{}", self.wire_stem()?))
+    }
+
+    pub fn optional_wire_encoder(self) -> Result<String> {
+        Ok(format!(
+            "boltffi_python_wire_optional_{}",
+            self.wire_stem()?
+        ))
     }
 
     pub fn owned_wire_decoder(self) -> Result<String> {

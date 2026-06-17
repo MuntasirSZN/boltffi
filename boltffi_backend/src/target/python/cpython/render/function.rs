@@ -1,10 +1,14 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    ErrorDecl, ExecutionDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol,
+    ErrorDecl, ExecutionDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol, OutOfRust,
+    ReturnPlan, TypeRef, native,
 };
 
 use crate::{
-    bridge::python_cext::{ExtensionMethod, MethodFlags, PythonCExtBridgeContract},
+    bridge::{
+        c::{self, syntax::TypeSyntax},
+        python_cext::{ExtensionMethod, LoadedFunction, MethodFlags, PythonCExtBridgeContract},
+    },
     core::{Emitted, Error, RenderContext, Result},
     target::python::{
         cpython::render::{argument, direct_vector, primitive, result},
@@ -21,6 +25,7 @@ struct FunctionTemplate {
     params: Vec<argument::Conversion>,
     call_args: Vec<String>,
     returns: result::Conversion,
+    fallible: Option<FallibleResult>,
 }
 
 pub struct Function {
@@ -30,15 +35,26 @@ pub struct Function {
     pub params: Vec<argument::Conversion>,
     pub call_args: Vec<String>,
     pub returns: result::Conversion,
+    fallible: Option<FallibleResult>,
     method: ExtensionMethod,
 }
 
 impl Function {
     pub fn supports(callable: &ExportedCallable<Native>) -> bool {
         matches!(callable.execution(), ExecutionDecl::Synchronous(_))
-            && matches!(callable.error(), ErrorDecl::None(_))
             && callable.params().iter().all(argument::Conversion::supports)
-            && result::Conversion::supports(callable.returns().plan())
+            && match callable.error() {
+                ErrorDecl::None(_) => result::Conversion::supports(callable.returns().plan()),
+                ErrorDecl::EncodedViaReturnSlot {
+                    ty,
+                    shape: native::BufferShape::Buffer,
+                    ..
+                } => {
+                    result::Conversion::supports_out(callable.returns().plan())
+                        && result::Conversion::supports_encoded(ty)
+                }
+                _ => false,
+            }
     }
 
     pub fn from_declaration(
@@ -79,12 +95,6 @@ impl Function {
                 });
             }
         }
-        if !matches!(callable.error(), ErrorDecl::None(_)) {
-            return Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "fallible function",
-            });
-        }
         let loaded = bridge
             .loaded_function(symbol)
             .ok_or(Error::UnsupportedTarget {
@@ -107,11 +117,22 @@ impl Function {
             .into_iter()
             .chain(value_args)
             .collect::<Vec<_>>();
-        let call_args = params
+        let base_call_args = params
             .iter()
             .flat_map(argument::Conversion::call_args)
+            .collect::<Vec<_>>();
+        let fallible =
+            FallibleResult::new(callable, loaded, base_call_args.len(), bridge, context)?;
+        let call_args = base_call_args
+            .into_iter()
+            .chain(fallible.iter().filter_map(FallibleResult::success_argument))
             .collect();
-        let returns = result::Conversion::from_plan(callable.returns().plan(), bridge, context)?;
+        let returns = match &fallible {
+            Some(_) => {
+                result::Conversion::from_out_plan(callable.returns().plan(), bridge, context)
+            }
+            None => result::Conversion::from_plan(callable.returns().plan(), bridge, context),
+        }?;
         Ok(Self {
             python_name,
             wrapper,
@@ -119,6 +140,7 @@ impl Function {
             params,
             call_args,
             returns,
+            fallible,
             method,
         })
     }
@@ -135,6 +157,7 @@ impl Function {
             params: self.params,
             call_args: self.call_args,
             returns: self.returns,
+            fallible: self.fallible,
         }
         .render()?;
         Ok(Emitted::primary(source))
@@ -146,7 +169,11 @@ impl Function {
             .iter()
             .filter_map(argument::Conversion::primitive)
             .collect::<Vec<_>>();
-        params.into_iter().chain(self.returns.primitive()).collect()
+        params
+            .into_iter()
+            .chain(self.returns.primitive())
+            .chain(self.fallible.iter().filter_map(FallibleResult::primitive))
+            .collect()
     }
 
     pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
@@ -160,10 +187,23 @@ impl Function {
             .iter()
             .filter_map(argument::Conversion::direct_vector_element)
             .chain(self.returns.direct_vector_element())
+            .chain(
+                self.fallible
+                    .iter()
+                    .filter_map(FallibleResult::direct_vector_element),
+            )
     }
 
     pub fn owned_buffer(&self) -> Option<result::OwnedBuffer> {
-        self.returns.owned_buffer()
+        self.owned_buffers().next()
+    }
+
+    pub fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
+        self.returns.owned_buffer().into_iter().chain(
+            self.fallible
+                .iter()
+                .filter_map(FallibleResult::owned_buffer),
+        )
     }
 
     pub fn has_string_argument(&self) -> bool {
@@ -176,5 +216,131 @@ impl Function {
 
     pub fn has_raw_wire_argument(&self) -> bool {
         self.params.iter().any(argument::Conversion::is_raw_wire)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FallibleResult {
+    success_declaration: Option<String>,
+    success_argument: Option<String>,
+    success_value: String,
+    error_type: String,
+    error_value: String,
+    error: result::Conversion,
+}
+
+impl FallibleResult {
+    fn new(
+        callable: &ExportedCallable<Native>,
+        loaded: &LoadedFunction,
+        argument_count: usize,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Option<Self>> {
+        match callable.error() {
+            ErrorDecl::None(_) => Ok(None),
+            ErrorDecl::EncodedViaReturnSlot {
+                ty,
+                shape: native::BufferShape::Buffer,
+                ..
+            } => Self::encoded(
+                ty,
+                callable.returns().plan(),
+                loaded,
+                argument_count,
+                bridge,
+                context,
+            )
+            .map(Some),
+            ErrorDecl::EncodedViaReturnSlot { .. } => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible error buffer shape",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible function",
+            }),
+        }
+    }
+
+    fn success_argument(&self) -> Option<String> {
+        self.success_argument.clone()
+    }
+
+    fn primitive(&self) -> Option<primitive::Runtime> {
+        self.error.primitive()
+    }
+
+    fn direct_vector_element(&self) -> Option<direct_vector::Element> {
+        self.error.direct_vector_element()
+    }
+
+    fn owned_buffer(&self) -> Option<result::OwnedBuffer> {
+        self.error.owned_buffer()
+    }
+
+    fn encoded(
+        error: &TypeRef,
+        success: &ReturnPlan<Native, OutOfRust>,
+        loaded: &LoadedFunction,
+        argument_count: usize,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        if !matches!(loaded.function().returns(), c::Type::Buffer) {
+            return Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible error return",
+            });
+        }
+        let error = result::Conversion::from_encoded_type(error, bridge, context)?;
+        let (success_declaration, success_argument, success_value) =
+            Self::success_binding(success, loaded.function(), argument_count)?;
+        Ok(Self {
+            success_declaration,
+            success_argument,
+            success_value,
+            error_type: TypeSyntax::new(loaded.function().returns()).anonymous()?,
+            error_value: "return_error".to_owned(),
+            error,
+        })
+    }
+
+    fn success_binding(
+        success: &ReturnPlan<Native, OutOfRust>,
+        function: &c::Function,
+        argument_count: usize,
+    ) -> Result<(Option<String>, Option<String>, String)> {
+        match success {
+            ReturnPlan::Void => Ok((None, None, String::new())),
+            ReturnPlan::DirectViaOutPointer { .. }
+            | ReturnPlan::EncodedViaOutPointer { .. }
+            | ReturnPlan::HandleViaOutPointer { .. } => {
+                let parameter =
+                    function
+                        .params()
+                        .get(argument_count)
+                        .ok_or(Error::UnsupportedTarget {
+                            target: "python",
+                            shape: "missing fallible success out parameter",
+                        })?;
+                let c::Type::MutPointer(success_type) = parameter.ty() else {
+                    return Err(Error::UnsupportedTarget {
+                        target: "python",
+                        shape: "fallible success parameter",
+                    });
+                };
+                let value = "return_success".to_owned();
+                Ok((
+                    Some(TypeSyntax::new(success_type.as_ref()).declaration(&value)?),
+                    Some(format!("&{value}")),
+                    value,
+                ))
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible success return",
+            }),
+        }
     }
 }

@@ -397,7 +397,7 @@ impl ModuleSupport {
             .any(|enumeration| enumeration.needs_owned_buffer());
         let owned_buffers = functions
             .iter()
-            .filter_map(|function| function.owned_buffer())
+            .flat_map(|function| function.owned_buffers())
             .chain(
                 constants
                     .iter()

@@ -66,6 +66,20 @@ static int {{ native_to_wire_tag }}({{ c_type }} value, int32_t *out) {
     }
 }
 
+static int {{ wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    {{ c_type }} native_value = 0;
+    int32_t wire_tag = 0;
+    uint8_t bytes[4] = {0};
+    if (!{{ parser }}(value, &native_value)) {
+        return 0;
+    }
+    if (!{{ native_to_wire_tag }}(native_value, &wire_tag)) {
+        return 0;
+    }
+    boltffi_python_write_u32_le(bytes, (uint32_t)wire_tag);
+    return boltffi_python_wire_fixed(bytes, 4, out_wire, out_ptr, out_len);
+}
+
 static PyObject *{{ box_from_wire_tag }}(int32_t wire_tag) {
     switch (wire_tag) {
 {%- for variant in variants %}

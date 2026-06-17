@@ -138,7 +138,7 @@ impl Record {
     pub fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
         self.callables
             .iter()
-            .filter_map(function::Function::owned_buffer)
+            .flat_map(function::Function::owned_buffers)
     }
 
     pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {

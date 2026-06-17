@@ -13,17 +13,40 @@ static uint64_t {{ clone }}(uint64_t handle) {
 }
 
 {%- for method in methods %}
-static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% for param in method.params %}{% for declaration in param.declarations %}, {{ declaration }}{% endfor %}{% endfor %}) {
+static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% if let Some(fallible) = method.fallible_return %}{% for declaration in fallible.declarations %}, {{ declaration }}{% endfor %}{% endif %}{% for param in method.params %}{% for declaration in param.declarations %}, {{ declaration }}{% endfor %}{% endfor %}{% if let Some(completion) = method.completion %}, {{ completion.declaration }}, {{ completion.data_declaration }}{% endif %}) {
 {%- for param in method.params %}
     PyObject *{{ param.object }} = NULL;
 {%- endfor %}
     PyObject *callback = NULL;
     PyObject *arguments = NULL;
     PyObject *result = NULL;
-{%- if method.returns.wire %}
+{%- if method.wire_payload %}
     PyObject *return_wire = NULL;
     const uint8_t *return_ptr = NULL;
     uintptr_t return_len = 0;
+{%- endif %}
+{%- if let Some(fallible) = method.fallible_return %}
+    int fallible_ok = 0;
+    PyObject *fallible_payload = NULL;
+{%- if fallible.success.direct %}
+    {{ fallible.success.c_type }} {{ fallible.success.value }} = {{ fallible.success.default_value }};
+{%- endif %}
+{%- endif %}
+{%- if let Some(completion) = method.completion %}
+{%- if completion.payload.fallible %}
+    int completion_ok = 0;
+    PyObject *completion_result_payload = NULL;
+{%- endif %}
+{%- if completion.payload.direct_bytes %}
+    {{ completion.payload.direct_type }} {{ completion.payload.direct_value }} = ({{ completion.payload.direct_type }}){0};
+{%- endif %}
+{%- if completion.payload.error_direct_bytes %}
+    {{ completion.payload.error_direct_type }} {{ completion.payload.error_direct_value }} = ({{ completion.payload.error_direct_type }}){0};
+{%- endif %}
+{%- if completion.payload.has_value() %}
+    {{ completion.payload.value }} = {{ completion.payload.default_value }};
+{%- endif %}
+    FfiStatus completion_status = FFI_STATUS_OK;
 {%- endif %}
 {%- if method.returns.has_value() %}
     {{ method.returns.c_type }} {{ method.returns.value }} = {{ method.returns.default_value }};
@@ -50,6 +73,94 @@ static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% for p
     if (result == NULL) {
         goto done;
     }
+{%- if let Some(completion) = method.completion %}
+{%- if completion.payload.fallible %}
+    if (!PyTuple_Check(result) || PyTuple_GET_SIZE(result) != 2) {
+        PyErr_SetString(PyExc_TypeError, "{{ method.python_name }}() must return a (success, payload) tuple");
+        goto done;
+    }
+    completion_ok = PyObject_IsTrue(PyTuple_GET_ITEM(result, 0));
+    if (completion_ok < 0) {
+        goto done;
+    }
+    completion_result_payload = PyTuple_GET_ITEM(result, 1);
+    if (completion_ok) {
+{%- if completion.payload.wire %}
+        if (!{{ completion.payload.parser }}(completion_result_payload, &return_wire, &return_ptr, &return_len)) {
+            goto done;
+        }
+        {{ completion.payload.value }} = {{ copy_buffer_storage }}(return_ptr, return_len);
+{%- elif completion.payload.direct_bytes %}
+        if (!{{ completion.payload.parser }}(completion_result_payload, &{{ completion.payload.direct_value }})) {
+            goto done;
+        }
+        {{ completion.payload.value }} = {{ copy_buffer_storage }}((const uint8_t *)&{{ completion.payload.direct_value }}, (uintptr_t)sizeof({{ completion.payload.direct_value }}));
+{%- else %}
+        {{ completion.payload.value }} = {{ completion.payload.default_value }};
+{%- endif %}
+    } else {
+        completion_status = FFI_STATUS_INTERNAL_ERROR;
+{%- if completion.payload.error_wire %}
+        if (!{{ completion.payload.error_parser }}(completion_result_payload, &return_wire, &return_ptr, &return_len)) {
+            goto done;
+        }
+        {{ completion.payload.value }} = {{ copy_buffer_storage }}(return_ptr, return_len);
+{%- elif completion.payload.error_direct_bytes %}
+        if (!{{ completion.payload.error_parser }}(completion_result_payload, &{{ completion.payload.error_direct_value }})) {
+            goto done;
+        }
+        {{ completion.payload.value }} = {{ copy_buffer_storage }}((const uint8_t *)&{{ completion.payload.error_direct_value }}, (uintptr_t)sizeof({{ completion.payload.error_direct_value }}));
+{%- else %}
+        {{ completion.payload.value }} = {{ completion.payload.default_value }};
+{%- endif %}
+    }
+{%- elif completion.payload.has_value() %}
+{%- if completion.payload.wire %}
+    if (!{{ completion.payload.parser }}(result, &return_wire, &return_ptr, &return_len)) {
+        goto done;
+    }
+    {{ completion.payload.value }} = {{ copy_buffer_storage }}(return_ptr, return_len);
+{%- elif completion.payload.direct_bytes %}
+    if (!{{ completion.payload.parser }}(result, &{{ completion.payload.direct_value }})) {
+        goto done;
+    }
+    {{ completion.payload.value }} = {{ copy_buffer_storage }}((const uint8_t *)&{{ completion.payload.direct_value }}, (uintptr_t)sizeof({{ completion.payload.direct_value }}));
+{%- else %}
+    if (!{{ completion.payload.parser }}(result, &{{ completion.payload.value }})) {
+        goto done;
+    }
+{%- endif %}
+{%- endif %}
+{%- else %}
+{%- if let Some(fallible) = method.fallible_return %}
+    if (!PyTuple_Check(result) || PyTuple_GET_SIZE(result) != 2) {
+        PyErr_SetString(PyExc_TypeError, "{{ method.python_name }}() must return a (success, payload) tuple");
+        goto done;
+    }
+    fallible_ok = PyObject_IsTrue(PyTuple_GET_ITEM(result, 0));
+    if (fallible_ok < 0) {
+        goto done;
+    }
+    fallible_payload = PyTuple_GET_ITEM(result, 1);
+    if (fallible_ok) {
+{%- if fallible.success.wire %}
+        if (!{{ fallible.success.parser }}(fallible_payload, &return_wire, &return_ptr, &return_len)) {
+            goto done;
+        }
+        *{{ fallible.success.out }} = {{ copy_buffer_storage }}(return_ptr, return_len);
+{%- elif fallible.success.direct %}
+        if (!{{ fallible.success.parser }}(fallible_payload, &{{ fallible.success.value }})) {
+            goto done;
+        }
+        *{{ fallible.success.out }} = {{ fallible.success.value }};
+{%- endif %}
+    } else {
+        if (!{{ fallible.error.parser }}(fallible_payload, &return_wire, &return_ptr, &return_len)) {
+            goto done;
+        }
+        {{ fallible.error.value }} = {{ copy_buffer_storage }}(return_ptr, return_len);
+    }
+{%- else %}
 {%- if method.returns.has_value() %}
 {%- if method.returns.wire %}
     if (!{{ method.returns.parser }}(result, &return_wire, &return_ptr, &return_len)) {
@@ -62,9 +173,14 @@ static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% for p
     }
 {%- endif %}
 {%- endif %}
+{%- endif %}
+{%- endif %}
 done:
     if (PyErr_Occurred()) {
         PyErr_Print();
+{%- if let Some(completion) = method.completion %}
+        completion_status = FFI_STATUS_INTERNAL_ERROR;
+{%- endif %}
     }
 {%- for param in method.params %}
     Py_XDECREF({{ param.object }});
@@ -76,6 +192,14 @@ done:
     Py_XDECREF(arguments);
     Py_XDECREF(callback);
     PyGILState_Release(gil);
+{%- if let Some(completion) = method.completion %}
+{%- if completion.payload.has_value() %}
+    {{ completion.callback }}({{ completion.data }}, completion_status, {{ completion.payload.value }});
+{%- else %}
+    {{ completion.callback }}({{ completion.data }}, completion_status);
+{%- endif %}
+    return;
+{%- endif %}
 {%- if method.returns.has_value() %}
     return {{ method.returns.value }};
 {%- endif %}

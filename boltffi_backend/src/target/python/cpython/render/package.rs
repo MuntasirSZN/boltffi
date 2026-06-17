@@ -5,10 +5,10 @@ use boltffi_binding::{
     Bindings, BuiltinType, CStyleEnumDecl, CanonicalName, ClassDecl, ClassId, ConstantDecl,
     ConstantValueDecl, CustomTypeId, DataEnumDecl, DataVariantDecl, DataVariantPayload,
     DeclarationRef, DefaultValue, DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl,
-    EncodedRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedMethodDecl, FieldKey, FunctionDecl,
-    HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native, NativeSymbol,
-    OutOfRust, ParamDecl, ParamPlan, Primitive, Receive, RecordDecl, RecordId, ReturnPlan,
-    StreamDecl, StreamItemPlan, StreamMode, TypeRef, native,
+    EncodedRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedCallable, ExportedMethodDecl, FieldKey,
+    FunctionDecl, HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native,
+    NativeSymbol, OutOfRust, ParamDecl, ParamPlan, Primitive, Receive, RecordDecl, RecordId,
+    ReturnPlan, StreamDecl, StreamItemPlan, StreamMode, TypeRef, native,
 };
 
 use crate::{
@@ -476,12 +476,6 @@ impl FunctionStub {
         function: &FunctionDecl<Native>,
         package: &Package<'_, '_>,
     ) -> Result<Self> {
-        if !matches!(function.callable().error(), ErrorDecl::None(_)) {
-            return Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "fallible function stub",
-            });
-        }
         let parameters = function
             .callable()
             .params()
@@ -493,7 +487,7 @@ impl FunctionStub {
             .map(|parameter| parameter.argument.clone())
             .collect::<Vec<_>>()
             .join(", ");
-        let returned = ReturnStub::from_plan(function.callable().returns().plan(), package)?;
+        let returned = ReturnStub::from_callable(function.callable(), package)?;
         let native_call = format!(
             "_native.{}({arguments})",
             Name::new(function.name()).function()
@@ -1456,7 +1450,7 @@ impl AssociatedCallable {
             .iter()
             .map(|parameter| ParameterStub::from_declaration(parameter, package))
             .collect::<Result<Vec<_>>>()?;
-        let returned = ReturnStub::from_plan(method.callable().returns().plan(), package)?;
+        let returned = ReturnStub::from_callable(method.callable(), package)?;
         let arguments = Self::arguments(receiver.then_some("self._handle"), &parameters);
         let native_name = symbols.method(method.name());
         let native_call = format!("_native.{native_name}({arguments})");
@@ -1480,7 +1474,7 @@ impl AssociatedCallable {
         package: &Package<'_, '_>,
     ) -> Result<Self> {
         let parameters = Self::parameters(initializer.callable().params(), package)?;
-        let returned = ReturnStub::from_plan(initializer.callable().returns().plan(), package)?;
+        let returned = ReturnStub::from_callable(initializer.callable(), package)?;
         let arguments = Self::arguments(None, &parameters);
         let native_call = format!("_native.{native_name}({arguments})");
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers)
@@ -1504,7 +1498,7 @@ impl AssociatedCallable {
         package: &Package<'_, '_>,
     ) -> Result<Self> {
         let parameters = Self::parameters(method.callable().params(), package)?;
-        let returned = ReturnStub::from_plan(method.callable().returns().plan(), package)?;
+        let returned = ReturnStub::from_callable(method.callable(), package)?;
         let arguments = Self::arguments(receiver, &parameters);
         let native_call = format!("_native.{native_name}({arguments})");
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers)
@@ -1644,10 +1638,41 @@ struct ReturnStub {
 }
 
 impl ReturnStub {
+    fn from_callable(
+        callable: &ExportedCallable<Native>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        match callable.error() {
+            ErrorDecl::None(_) => Self::from_plan(callable.returns().plan(), package),
+            ErrorDecl::EncodedViaReturnSlot {
+                shape: native::BufferShape::Buffer,
+                ..
+            } => Self::from_success_plan(callable.returns().plan(), package),
+            ErrorDecl::EncodedViaReturnSlot { .. } => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible error buffer shape",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible callable stub",
+            }),
+        }
+    }
+
     fn from_plan(plan: &ReturnPlan<Native, OutOfRust>, package: &Package<'_, '_>) -> Result<Self> {
         Ok(Self {
             annotation: PythonTypeHint::from_return(plan, package)?.into_string(),
             value: ReturnedValue::from_plan(plan, package)?,
+        })
+    }
+
+    fn from_success_plan(
+        plan: &ReturnPlan<Native, OutOfRust>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        Ok(Self {
+            annotation: PythonTypeHint::from_return(plan, package)?.into_string(),
+            value: ReturnedValue::from_success_plan(plan, package)?,
         })
     }
 }
@@ -1674,6 +1699,30 @@ impl ReturnedValue {
                 ..
             } => Self::from_encoded_type(ty, package),
             _ => Ok(Self::Native),
+        }
+    }
+
+    fn from_success_plan(
+        plan: &ReturnPlan<Native, OutOfRust>,
+        package: &Package<'_, '_>,
+    ) -> Result<Self> {
+        match plan {
+            ReturnPlan::Void => Ok(Self::Void),
+            ReturnPlan::HandleViaOutPointer {
+                target: HandleTarget::Class(class_id),
+                presence: HandlePresence::Required,
+                ..
+            } => Ok(Self::ClassHandle(package.class_name(class_id)?)),
+            ReturnPlan::EncodedViaOutPointer {
+                ty,
+                shape: native::BufferShape::Buffer,
+                ..
+            } => Self::from_encoded_type(ty, package),
+            ReturnPlan::DirectViaOutPointer { .. } => Ok(Self::Native),
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible success stub",
+            }),
         }
     }
 
@@ -1874,18 +1923,32 @@ impl PythonTypeHint {
             ReturnPlan::Void => Ok(Self::new("None")),
             ReturnPlan::DirectViaReturnSlot {
                 ty: TypeRef::Primitive(primitive),
+            }
+            | ReturnPlan::DirectViaOutPointer {
+                ty: TypeRef::Primitive(primitive),
             } => Self::from_primitive(*primitive),
             ReturnPlan::DirectViaReturnSlot {
+                ty: TypeRef::Record(record),
+            }
+            | ReturnPlan::DirectViaOutPointer {
                 ty: TypeRef::Record(record),
             } => Ok(Self {
                 annotation: package.record_name(*record)?,
             }),
             ReturnPlan::DirectViaReturnSlot {
                 ty: TypeRef::Enum(enumeration),
+            }
+            | ReturnPlan::DirectViaOutPointer {
+                ty: TypeRef::Enum(enumeration),
             } => Ok(Self {
                 annotation: package.enum_name(*enumeration)?,
             }),
             ReturnPlan::HandleViaReturnSlot {
+                target: HandleTarget::Class(class_id),
+                presence: HandlePresence::Required,
+                ..
+            }
+            | ReturnPlan::HandleViaOutPointer {
                 target: HandleTarget::Class(class_id),
                 presence: HandlePresence::Required,
                 ..
@@ -1900,8 +1963,18 @@ impl PythonTypeHint {
                 ty: TypeRef::String,
                 shape: native::BufferShape::Buffer,
                 ..
+            }
+            | ReturnPlan::EncodedViaOutPointer {
+                ty: TypeRef::String,
+                shape: native::BufferShape::Buffer,
+                ..
             } => Ok(Self::new("str")),
             ReturnPlan::EncodedViaReturnSlot {
+                ty: TypeRef::Bytes,
+                shape: native::BufferShape::Buffer,
+                ..
+            }
+            | ReturnPlan::EncodedViaOutPointer {
                 ty: TypeRef::Bytes,
                 shape: native::BufferShape::Buffer,
                 ..
@@ -1910,8 +1983,18 @@ impl PythonTypeHint {
                 ty: TypeRef::Custom(custom_type),
                 shape: native::BufferShape::Buffer,
                 ..
+            }
+            | ReturnPlan::EncodedViaOutPointer {
+                ty: TypeRef::Custom(custom_type),
+                shape: native::BufferShape::Buffer,
+                ..
             } => Self::from_type_ref(package.custom_representation(*custom_type)?, package),
             ReturnPlan::EncodedViaReturnSlot {
+                ty: TypeRef::Record(record),
+                shape: native::BufferShape::Buffer,
+                ..
+            }
+            | ReturnPlan::EncodedViaOutPointer {
                 ty: TypeRef::Record(record),
                 shape: native::BufferShape::Buffer,
                 ..
@@ -1922,10 +2005,20 @@ impl PythonTypeHint {
                 ty: TypeRef::Enum(enumeration),
                 shape: native::BufferShape::Buffer,
                 ..
+            }
+            | ReturnPlan::EncodedViaOutPointer {
+                ty: TypeRef::Enum(enumeration),
+                shape: native::BufferShape::Buffer,
+                ..
             } => Ok(Self {
                 annotation: package.enum_name(*enumeration)?,
             }),
             ReturnPlan::EncodedViaReturnSlot {
+                ty,
+                shape: native::BufferShape::Buffer,
+                ..
+            }
+            | ReturnPlan::EncodedViaOutPointer {
                 ty,
                 shape: native::BufferShape::Buffer,
                 ..
@@ -1938,9 +2031,6 @@ impl PythonTypeHint {
             | ReturnPlan::EncodedViaReturnSlot { .. }
             | ReturnPlan::HandleViaReturnSlot { .. }
             | ReturnPlan::ScalarOptionViaReturnSlot { .. }
-            | ReturnPlan::DirectViaOutPointer { .. }
-            | ReturnPlan::EncodedViaOutPointer { .. }
-            | ReturnPlan::HandleViaOutPointer { .. }
             | ReturnPlan::ClosureViaOutPointer(_) => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "unsupported return stub",

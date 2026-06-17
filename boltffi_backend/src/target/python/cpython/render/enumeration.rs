@@ -29,6 +29,7 @@ struct CStyleTemplate {
     register_wrapper: String,
     load_member: String,
     parser: String,
+    wire_encoder: String,
     boxer: String,
     box_from_wire_tag: String,
     native_to_wire_tag: String,
@@ -98,6 +99,7 @@ impl Enumeration {
                     register_wrapper: symbols.register_wrapper,
                     load_member,
                     parser: symbols.parser,
+                    wire_encoder: symbols.wire_encoder,
                     boxer: symbols.boxer,
                     box_from_wire_tag,
                     native_to_wire_tag,
@@ -169,7 +171,7 @@ impl Enumeration {
     pub fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
         self.callables
             .iter()
-            .filter_map(function::Function::owned_buffer)
+            .flat_map(function::Function::owned_buffers)
     }
 
     pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
@@ -393,6 +395,7 @@ pub struct Symbols {
     register_wrapper: String,
     load_member: Option<String>,
     parser: String,
+    wire_encoder: String,
     boxer: String,
     borrowed_decoder: String,
     direct_vec_parser: Option<String>,
@@ -465,6 +468,10 @@ impl Symbols {
         &self.parser
     }
 
+    pub fn wire_encoder(&self) -> &str {
+        &self.wire_encoder
+    }
+
     pub fn boxer(&self) -> &str {
         &self.boxer
     }
@@ -526,6 +533,7 @@ impl Symbols {
             register_wrapper: format!("boltffi_python_wrapper_register_{stem}"),
             load_member: Some(format!("boltffi_python_load_{stem}_member")),
             parser: format!("boltffi_python_parse_{stem}"),
+            wire_encoder: format!("boltffi_python_wire_{stem}"),
             boxer: format!("boltffi_python_box_{stem}"),
             borrowed_decoder: String::new(),
             direct_vec_parser: Some(format!("boltffi_python_parse_vec_{stem}")),
@@ -550,6 +558,7 @@ impl Symbols {
             register_wrapper: format!("boltffi_python_wrapper_register_{stem}"),
             load_member: None,
             parser: format!("boltffi_python_wire_{stem}"),
+            wire_encoder: format!("boltffi_python_wire_{stem}"),
             boxer: format!("boltffi_python_decode_owned_{stem}"),
             borrowed_decoder: format!("boltffi_python_decode_borrowed_{stem}"),
             direct_vec_parser: None,

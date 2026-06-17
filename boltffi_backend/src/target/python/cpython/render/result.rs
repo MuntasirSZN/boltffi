@@ -8,6 +8,7 @@ use crate::{
     target::python::cpython::render::{custom, direct_vector, enumeration, primitive, record},
 };
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Conversion {
     pub void: bool,
     pub converter: String,
@@ -35,6 +36,37 @@ impl Conversion {
                 | ReturnPlan::DirectVecViaReturnSlot {
                     element: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
                 }
+        )
+    }
+
+    pub fn supports_out(plan: &ReturnPlan<Native, OutOfRust>) -> bool {
+        matches!(
+            plan,
+            ReturnPlan::Void
+                | ReturnPlan::DirectViaOutPointer {
+                    ty: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
+                }
+                | ReturnPlan::EncodedViaOutPointer {
+                    shape: native::BufferShape::Buffer,
+                    ..
+                }
+                | ReturnPlan::HandleViaOutPointer {
+                    target: HandleTarget::Class(_),
+                    presence: HandlePresence::Required,
+                    ..
+                }
+        )
+    }
+
+    pub fn supports_encoded(ty: &TypeRef) -> bool {
+        matches!(
+            ty,
+            TypeRef::Primitive(_)
+                | TypeRef::String
+                | TypeRef::Bytes
+                | TypeRef::Record(_)
+                | TypeRef::Enum(_)
+                | TypeRef::Custom(_)
         )
     }
 
@@ -164,6 +196,124 @@ impl Conversion {
         }
     }
 
+    pub fn from_out_plan(
+        plan: &ReturnPlan<Native, OutOfRust>,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        match plan {
+            ReturnPlan::Void => Ok(Self {
+                void: true,
+                converter: String::new(),
+                primitive: None,
+                owned_buffer: None,
+            }),
+            ReturnPlan::DirectViaOutPointer {
+                ty: TypeRef::Primitive(primitive),
+            } => {
+                let primitive = primitive::Runtime::new(*primitive);
+                Ok(Self {
+                    void: false,
+                    converter: primitive.boxer()?.to_owned(),
+                    primitive: Some(primitive),
+                    owned_buffer: None,
+                })
+            }
+            ReturnPlan::DirectViaOutPointer {
+                ty: TypeRef::Record(record),
+            } => Ok(Self {
+                void: false,
+                converter: record::Symbols::from_record_id(*record, bridge, context)?
+                    .boxer()
+                    .to_owned(),
+                primitive: None,
+                owned_buffer: None,
+            }),
+            ReturnPlan::DirectViaOutPointer {
+                ty: TypeRef::Enum(enumeration),
+            } => Ok(Self {
+                void: false,
+                converter: enumeration::Symbols::from_enum_id(*enumeration, bridge, context)?
+                    .boxer()
+                    .to_owned(),
+                primitive: None,
+                owned_buffer: None,
+            }),
+            ReturnPlan::EncodedViaOutPointer {
+                ty,
+                shape: native::BufferShape::Buffer,
+                ..
+            } => Self::from_encoded_type(ty, bridge, context),
+            ReturnPlan::HandleViaOutPointer {
+                target: HandleTarget::Class(_),
+                carrier,
+                presence: HandlePresence::Required,
+            } => {
+                let carrier = primitive::Runtime::native_handle(*carrier)?;
+                Ok(Self {
+                    void: false,
+                    converter: carrier.boxer()?.to_owned(),
+                    primitive: Some(carrier),
+                    owned_buffer: None,
+                })
+            }
+            ReturnPlan::DirectViaOutPointer { .. }
+            | ReturnPlan::EncodedViaOutPointer { .. }
+            | ReturnPlan::HandleViaOutPointer { .. }
+            | ReturnPlan::ClosureViaOutPointer(_)
+            | ReturnPlan::DirectViaReturnSlot { .. }
+            | ReturnPlan::EncodedViaReturnSlot { .. }
+            | ReturnPlan::HandleViaReturnSlot { .. }
+            | ReturnPlan::ScalarOptionViaReturnSlot { .. }
+            | ReturnPlan::DirectVecViaReturnSlot { .. } => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible success return",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unknown fallible success return",
+            }),
+        }
+    }
+
+    pub fn from_encoded_type(
+        ty: &TypeRef,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        match ty {
+            TypeRef::Primitive(primitive) => {
+                Self::from_owned_buffer(OwnedBuffer::Primitive(primitive::Runtime::new(*primitive)))
+            }
+            TypeRef::String => Self::from_owned_buffer(OwnedBuffer::String),
+            TypeRef::Bytes => Self::from_owned_buffer(OwnedBuffer::Bytes),
+            TypeRef::Record(record) => Ok(Self {
+                void: false,
+                converter: record::Symbols::from_record_id(*record, bridge, context)?
+                    .boxer()
+                    .to_owned(),
+                primitive: None,
+                owned_buffer: None,
+            }),
+            TypeRef::Enum(enumeration) => Ok(Self {
+                void: false,
+                converter: enumeration::Symbols::from_enum_id(*enumeration, bridge, context)?
+                    .boxer()
+                    .to_owned(),
+                primitive: None,
+                owned_buffer: None,
+            }),
+            TypeRef::Custom(custom_type) => {
+                let custom_types = custom::CustomTypes::from_context(context);
+                Self::from_encoded_type(custom_types.representation(*custom_type)?, bridge, context)
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unsupported encoded return",
+            }),
+        }
+    }
+
     pub fn primitive(&self) -> Option<primitive::Runtime> {
         self.primitive
     }
@@ -196,40 +346,6 @@ impl Conversion {
             primitive: buffer.primitive(),
             owned_buffer: Some(buffer),
         })
-    }
-
-    fn from_encoded_type(
-        ty: &TypeRef,
-        bridge: &PythonCExtBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        match ty {
-            TypeRef::Primitive(primitive) => {
-                Self::from_owned_buffer(OwnedBuffer::Primitive(primitive::Runtime::new(*primitive)))
-            }
-            TypeRef::String => Self::from_owned_buffer(OwnedBuffer::String),
-            TypeRef::Bytes => Self::from_owned_buffer(OwnedBuffer::Bytes),
-            TypeRef::Record(record) => Ok(Self {
-                void: false,
-                converter: record::Symbols::from_record_id(*record, bridge, context)?
-                    .boxer()
-                    .to_owned(),
-                primitive: None,
-                owned_buffer: None,
-            }),
-            TypeRef::Enum(enumeration) => Ok(Self {
-                void: false,
-                converter: enumeration::Symbols::from_enum_id(*enumeration, bridge, context)?
-                    .boxer()
-                    .to_owned(),
-                primitive: None,
-                owned_buffer: None,
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "unsupported custom representation return",
-            }),
-        }
     }
 }
 

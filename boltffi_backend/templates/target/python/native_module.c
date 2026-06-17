@@ -815,6 +815,39 @@ static int {{ primitive.wire_encoder }}(PyObject *value, PyObject **out_wire, co
     return boltffi_python_wire_fixed(bytes, 8, out_wire, out_ptr, out_len);
 }
 {% endif %}
+static int {{ primitive.optional_wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
+    PyObject *payload = NULL;
+    const uint8_t *payload_ptr = NULL;
+    uintptr_t payload_len = 0;
+    PyObject *wire = NULL;
+    if (value == Py_None) {
+        uint8_t tag[1] = {0};
+        return boltffi_python_wire_fixed(tag, 1, out_wire, out_ptr, out_len);
+    }
+    if (!{{ primitive.wire_encoder }}(value, &payload, &payload_ptr, &payload_len)) {
+        return 0;
+    }
+    if (payload_len > (uintptr_t)PY_SSIZE_T_MAX - 1) {
+        Py_DECREF(payload);
+        PyErr_SetString(PyExc_OverflowError, "optional scalar payload is too large");
+        return 0;
+    }
+    wire = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)(payload_len + 1));
+    if (wire == NULL) {
+        Py_DECREF(payload);
+        return 0;
+    }
+    uint8_t *bytes = (uint8_t *)PyBytes_AS_STRING(wire);
+    bytes[0] = 1;
+    if (payload_len > 0) {
+        memcpy(bytes + 1, payload_ptr, (size_t)payload_len);
+    }
+    Py_DECREF(payload);
+    *out_wire = wire;
+    *out_ptr = bytes;
+    *out_len = payload_len + 1;
+    return 1;
+}
 {% endfor %}
 {% for primitive in support.owned_primitives() %}
 {% if primitive.is_bool() %}
