@@ -249,6 +249,7 @@ fn generate_apple_bindings(
             target: GenerateTarget::Swift,
             output: Some(swift_output_directory),
             experimental: false,
+            ir: false,
         },
     )?;
 
@@ -258,6 +259,7 @@ fn generate_apple_bindings(
             target: GenerateTarget::Header,
             output: Some(header_output_directory.to_path_buf()),
             experimental: false,
+            ir: false,
         },
     )
 }

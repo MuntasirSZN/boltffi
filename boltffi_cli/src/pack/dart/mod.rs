@@ -79,6 +79,7 @@ pub(crate) fn pack_dart(
                 target: GenerateTarget::Dart,
                 output: Some(config.dart_output()),
                 experimental: options.experimental,
+                ir: false,
             },
         )?;
 

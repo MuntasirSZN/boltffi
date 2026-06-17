@@ -75,6 +75,7 @@ pub(crate) fn pack_android(
                 target: GenerateTarget::Kotlin,
                 output: Some(config.android_kotlin_output()),
                 experimental: false,
+                ir: false,
             },
         )?;
         step.finish_success();
@@ -86,6 +87,7 @@ pub(crate) fn pack_android(
                 target: GenerateTarget::Header,
                 output: Some(config.android_header_output()),
                 experimental: false,
+                ir: false,
             },
         )?;
         step.finish_success();

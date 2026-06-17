@@ -6,10 +6,12 @@ use boltffi_bindgen::render::kotlin::{
     FactoryStyle as BindgenFactoryStyle, KotlinApiStyle, KotlinDesktopLoader,
 };
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::SourceCrate;
 use crate::commands::generate::generator::{GenerateRequest, LanguageGenerator, ScanPointerWidth};
-use crate::config::{FactoryStyle as ConfigFactoryStyle, Target};
+use crate::config::KotlinFactoryStyle as ConfigKotlinFactoryStyle;
 
 pub struct KMPGenerator;
 
@@ -36,8 +38,8 @@ impl KMPGenerator {
         desktop_fallback_library_name: Option<&str>,
     ) -> KotlinOptions {
         let factory_style = match request.config().android_kotlin_factory_style() {
-            ConfigFactoryStyle::Constructors => BindgenFactoryStyle::Constructors,
-            ConfigFactoryStyle::CompanionMethods => BindgenFactoryStyle::CompanionMethods,
+            ConfigKotlinFactoryStyle::Constructors => BindgenFactoryStyle::Constructors,
+            ConfigKotlinFactoryStyle::CompanionMethods => BindgenFactoryStyle::CompanionMethods,
         };
         let desktop_fallback_library_name =
             desktop_fallback_library_name.unwrap_or_else(|| request.source_crate().crate_name());

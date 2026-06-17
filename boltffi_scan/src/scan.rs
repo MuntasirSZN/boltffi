@@ -5,11 +5,40 @@ use boltffi_ast::{PackageInfo, SourceContract};
 use crate::declared_types::DeclaredTypes;
 use crate::input::ScanInput;
 use crate::marked::MarkedItems;
+use crate::package_graph::{ExportedPackage, LoadError, PackageGraph};
 use crate::source_tree::SourceTree;
 use crate::{ScanError, items};
 
 pub fn scan(input: &ScanInput) -> Result<SourceContract, ScanError> {
     scan_source(input.root(), input.package().clone())
+}
+
+pub struct PackageScan {
+    root: SourceContract,
+    complete: SourceContract,
+}
+
+impl PackageScan {
+    pub fn root(&self) -> &SourceContract {
+        &self.root
+    }
+
+    pub fn complete(&self) -> &SourceContract {
+        &self.complete
+    }
+
+    pub fn into_complete(self) -> SourceContract {
+        self.complete
+    }
+}
+
+pub fn scan_package(input: &ScanInput) -> Result<PackageScan, ScanError> {
+    let root_tree = SourceTree::load(input.root(), &input.package().name)?;
+    let complete_tree = complete_tree(input, root_tree.clone())?;
+    let root = scan_tree_with_declarations(&root_tree, &complete_tree, input.package().clone())?;
+    let complete =
+        scan_tree_with_declarations(&complete_tree, &complete_tree, input.package().clone())?;
+    Ok(PackageScan { root, complete })
 }
 
 pub fn scan_source(
@@ -26,8 +55,17 @@ pub fn scan_file(file: syn::File, package: PackageInfo) -> Result<SourceContract
 }
 
 fn scan_tree(source_tree: SourceTree, package: PackageInfo) -> Result<SourceContract, ScanError> {
-    let marked = MarkedItems::collect(&source_tree)?;
-    let declared_types = DeclaredTypes::index(&source_tree, &marked)?;
+    scan_tree_with_declarations(&source_tree, &source_tree, package)
+}
+
+fn scan_tree_with_declarations(
+    source_tree: &SourceTree,
+    declaration_tree: &SourceTree,
+    package: PackageInfo,
+) -> Result<SourceContract, ScanError> {
+    let marked = MarkedItems::collect(source_tree)?;
+    let declaration_marked = MarkedItems::collect(declaration_tree)?;
+    let declared_types = DeclaredTypes::index(declaration_tree, &declaration_marked)?;
     let classes = items::class::scan(marked.classes(), &declared_types)?;
     let mut records = scan_each(marked.records(), &declared_types, items::record::scan)?;
     let mut enums = scan_each(marked.enums(), &declared_types, items::enumeration::scan)?;
@@ -48,6 +86,37 @@ fn scan_tree(source_tree: SourceTree, package: PackageInfo) -> Result<SourceCont
     contract.constants = constants;
     contract.customs = customs;
     Ok(contract)
+}
+
+fn complete_tree(input: &ScanInput, root_tree: SourceTree) -> Result<SourceTree, ScanError> {
+    let Some(manifest_dir) = input.manifest_dir() else {
+        return Ok(root_tree);
+    };
+    let dependencies = dependency_trees(manifest_dir)?;
+    Ok(SourceTree::combine(
+        dependencies.into_iter().chain(std::iter::once(root_tree)),
+    ))
+}
+
+fn dependency_trees(manifest_dir: &FsPath) -> Result<Vec<SourceTree>, ScanError> {
+    let Some(graph) = PackageGraph::load(manifest_dir).map_err(package_graph_error)? else {
+        return Ok(Vec::new());
+    };
+    graph
+        .reachable_exported_dependencies(graph.root_id())
+        .into_iter()
+        .map(dependency_tree)
+        .collect()
+}
+
+fn dependency_tree(package: ExportedPackage) -> Result<SourceTree, ScanError> {
+    SourceTree::load(package.source_file(), package.module_name())
+}
+
+fn package_graph_error(error: LoadError) -> ScanError {
+    ScanError::PackageGraph {
+        message: error.to_string(),
+    }
 }
 
 fn scan_each<I, T>(

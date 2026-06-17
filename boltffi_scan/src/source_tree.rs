@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 use crate::path::SpanMap;
 use crate::{ModulePath, ModuleScope, ScanError};
 
-pub(super) struct SourceTree {
+#[derive(Clone)]
+pub struct SourceTree {
     modules: Vec<SourceModule>,
 }
 
 impl SourceTree {
-    pub(super) fn load(root: &Path, crate_name: &str) -> Result<Self, ScanError> {
+    pub fn load(root: &Path, crate_name: &str) -> Result<Self, ScanError> {
         walk(
             ModulePath::root(crate_name),
             &module_dir(root),
@@ -18,7 +19,7 @@ impl SourceTree {
         .map(|modules| Self { modules })
     }
 
-    pub(super) fn inline(crate_name: &str, file: syn::File) -> Result<Self, ScanError> {
+    pub fn inline(crate_name: &str, file: syn::File) -> Result<Self, ScanError> {
         walk(
             ModulePath::root(crate_name),
             Path::new("."),
@@ -28,8 +29,14 @@ impl SourceTree {
         .map(|modules| Self { modules })
     }
 
+    pub fn combine(trees: impl IntoIterator<Item = Self>) -> Self {
+        Self {
+            modules: trees.into_iter().flat_map(|tree| tree.modules).collect(),
+        }
+    }
+
     #[cfg(test)]
-    pub(super) fn in_memory(crate_name: &str, items: Vec<syn::Item>) -> Result<Self, ScanError> {
+    pub fn in_memory(crate_name: &str, items: Vec<syn::Item>) -> Result<Self, ScanError> {
         walk(
             ModulePath::root(crate_name),
             Path::new("."),
@@ -39,12 +46,13 @@ impl SourceTree {
         .map(|modules| Self { modules })
     }
 
-    pub(super) fn modules(&self) -> &[SourceModule] {
+    pub fn modules(&self) -> &[SourceModule] {
         &self.modules
     }
 }
 
-pub(super) struct SourceModule {
+#[derive(Clone)]
+pub struct SourceModule {
     scope: ModuleScope,
     items: Vec<syn::Item>,
 }
@@ -57,11 +65,11 @@ impl SourceModule {
         }
     }
 
-    pub(super) fn scope(&self) -> &ModuleScope {
+    pub fn scope(&self) -> &ModuleScope {
         &self.scope
     }
 
-    pub(super) fn items(&self) -> &[syn::Item] {
+    pub fn items(&self) -> &[syn::Item] {
         &self.items
     }
 }

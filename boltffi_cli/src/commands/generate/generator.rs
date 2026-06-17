@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::cli::{CliError, Result};
+use crate::config::{
+    Config, Experimental, TypeConversion as ConfigTypeConversion, TypeMapping as ConfigTypeMapping,
+};
+use boltffi_bindgen::target::Target;
 use boltffi_bindgen::{
     TypeConversion as BindgenTypeConversion, TypeMapping as BindgenTypeMapping, TypeMappings, ir,
     scan_crate_with_pointer_width,
-};
-
-use crate::cli::{CliError, Result};
-use crate::config::{
-    Config, Experimental, Target, TypeConversion as ConfigTypeConversion,
-    TypeMapping as ConfigTypeMapping,
 };
 
 #[derive(Debug, Clone)]

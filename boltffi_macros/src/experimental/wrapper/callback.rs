@@ -821,6 +821,14 @@ struct MethodAbi<'expansion, 'lowered, S: RenderSurface> {
 impl<'expansion, 'lowered, S> MethodAbi<'expansion, 'lowered, S>
 where
     S: CallbackMethodSurface,
+    wrapper::returns::direct_vec::Incoming:
+        Render<S, wrapper::returns::direct_vec::IncomingInput, Output = TokenStream>,
+    wrapper::returns::direct_vec::Renderer:
+        Render<S, wrapper::returns::direct_vec::Input, Output = wrapper::returns::Tokens>,
+    wrapper::returns::scalar_option::Incoming:
+        Render<S, wrapper::returns::scalar_option::IncomingInput, Output = TokenStream>,
+    wrapper::returns::scalar_option::Renderer:
+        Render<S, wrapper::returns::scalar_option::Input, Output = wrapper::returns::Tokens>,
     wrapper::returns::closure::Write: Render<
             S,
             wrapper::returns::closure::WriteInput<'expansion, 'lowered, S>,
@@ -1765,6 +1773,14 @@ struct LocalReturn<'lowered, S: CallbackMethodSurface> {
 impl<'expansion, 'lowered, S> MethodReturn<'expansion, 'lowered, S>
 where
     S: CallbackMethodSurface,
+    wrapper::returns::direct_vec::Incoming:
+        Render<S, wrapper::returns::direct_vec::IncomingInput, Output = TokenStream>,
+    wrapper::returns::direct_vec::Renderer:
+        Render<S, wrapper::returns::direct_vec::Input, Output = wrapper::returns::Tokens>,
+    wrapper::returns::scalar_option::Incoming:
+        Render<S, wrapper::returns::scalar_option::IncomingInput, Output = TokenStream>,
+    wrapper::returns::scalar_option::Renderer:
+        Render<S, wrapper::returns::scalar_option::Input, Output = wrapper::returns::Tokens>,
     wrapper::returns::closure::Write: Render<
             S,
             wrapper::returns::closure::WriteInput<'expansion, 'lowered, S>,
@@ -1829,6 +1845,26 @@ where
                     target,
                     presence,
                 } => Self::handle_abi(target, *carrier, *presence),
+                ReturnPlan::ScalarOptionViaReturnSlot { primitive } => {
+                    source.scalar_option(*primitive)?;
+                    let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                    let optional =
+                        <wrapper::returns::scalar_option::Renderer as Render<S, _>>::render(
+                            wrapper::returns::scalar_option::Renderer,
+                            wrapper::returns::scalar_option::Input::new(*primitive, result),
+                        )?;
+                    Ok(CallbackReturnAbi::direct(optional.return_type().clone()))
+                }
+                ReturnPlan::DirectVecViaReturnSlot { .. } => {
+                    source.direct_vec()?;
+                    let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                    let sequence =
+                        <wrapper::returns::direct_vec::Renderer as Render<S, _>>::render(
+                            wrapper::returns::direct_vec::Renderer,
+                            wrapper::returns::direct_vec::Input::new(result),
+                        )?;
+                    Ok(CallbackReturnAbi::direct(sequence.return_type().clone()))
+                }
                 ReturnPlan::ClosureViaOutPointer(_) => Ok(S::callback_closure_return_abi()),
                 _ => Err(Error::UnsupportedExpansion("callback method return shape")),
             },
@@ -2315,6 +2351,28 @@ where
             } => {
                 self.foreign_handle_value(target, *carrier, *presence, quote! { unsafe { #call } })
             }
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => {
+                self.source.scalar_option(*primitive)?;
+                let rust_type = self.direct_source_type()?;
+                <wrapper::returns::scalar_option::Incoming as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Incoming,
+                    wrapper::returns::scalar_option::IncomingInput::new(
+                        *primitive,
+                        rust_type,
+                        quote! { unsafe { #call } },
+                    ),
+                )
+            }
+            ReturnPlan::DirectVecViaReturnSlot { .. } => {
+                let element = self.source.direct_vec_element_type()?;
+                <wrapper::returns::direct_vec::Incoming as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Incoming,
+                    wrapper::returns::direct_vec::IncomingInput::new(
+                        element,
+                        quote! { unsafe { #call } },
+                    ),
+                )
+            }
             ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_return_body(
                 closure,
                 self.source.closure(closure.presence())?,
@@ -2361,6 +2419,25 @@ where
                 carrier,
                 presence,
             } => self.foreign_handle_value(target, *carrier, *presence, quote! { #call }),
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => {
+                self.source.scalar_option(*primitive)?;
+                let rust_type = self.direct_source_type()?;
+                <wrapper::returns::scalar_option::Incoming as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Incoming,
+                    wrapper::returns::scalar_option::IncomingInput::new(
+                        *primitive,
+                        rust_type,
+                        quote! { #call },
+                    ),
+                )
+            }
+            ReturnPlan::DirectVecViaReturnSlot { .. } => {
+                let element = self.source.direct_vec_element_type()?;
+                <wrapper::returns::direct_vec::Incoming as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Incoming,
+                    wrapper::returns::direct_vec::IncomingInput::new(element, quote! { #call }),
+                )
+            }
             ReturnPlan::ClosureViaOutPointer(_) => match self.plan {
                 ReturnPlan::ClosureViaOutPointer(closure) => S::foreign_closure_return_body(
                     closure,
@@ -2469,6 +2546,36 @@ where
                     {
                         let #result = #call;
                         #value
+                    }
+                }))
+            }
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => {
+                self.source.scalar_option(*primitive)?;
+                let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                let optional = <wrapper::returns::scalar_option::Renderer as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Renderer,
+                    wrapper::returns::scalar_option::Input::new(*primitive, result.clone()),
+                )?;
+                let body = optional.body();
+                Ok(LocalMethodBody::new(quote! {
+                    {
+                        let #result = #call;
+                        #body
+                    }
+                }))
+            }
+            ReturnPlan::DirectVecViaReturnSlot { .. } => {
+                self.source.direct_vec()?;
+                let result = wrapper::names::Wrapper::new(Span::call_site()).result();
+                let sequence = <wrapper::returns::direct_vec::Renderer as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Renderer,
+                    wrapper::returns::direct_vec::Input::new(result.clone()),
+                )?;
+                let body = sequence.body();
+                Ok(LocalMethodBody::new(quote! {
+                    {
+                        let #result = #call;
+                        #body
                     }
                 }))
             }

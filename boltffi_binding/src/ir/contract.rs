@@ -389,6 +389,46 @@ pub enum BindingMetadataSurface {
     Wasm32,
 }
 
+/// Environment variable the bindgen metadata build sets to switch the macro
+/// metadata emitter on.
+///
+/// The variable carries no payload: its presence is the whole signal. The
+/// metadata build sets it, the proc-macro reads it, and normal builds leave
+/// it unset so they never pay for the scan-and-lower pass.
+pub const BINDING_METADATA_BUILD_ENV: &str = "BOLTFFI_BINDING_METADATA";
+
+/// Environment variable carrying the crate source root the macro must scan.
+///
+/// Bindgen resolves the target's source path through Cargo and sets this so
+/// the proc-macro never guesses crate layout. The value is an absolute path
+/// to the crate root file, such as the `src_path` Cargo reports for the
+/// library target.
+pub const BINDING_METADATA_SOURCE_ENV: &str = "BOLTFFI_BINDING_METADATA_SOURCE";
+
+/// Environment variable carrying the manifest directory of the crate bindgen
+/// is generating bindings for.
+///
+/// `RUSTFLAGS` enables the metadata cfg for the whole build graph, so the
+/// macro fires inside dependency crates too. The macro emits metadata only
+/// when its own `CARGO_MANIFEST_DIR` matches this value, which keeps a single
+/// generation targeted at one crate. Per-dependency metadata is a multicrate
+/// concern handled separately.
+pub const BINDING_METADATA_ROOT_ENV: &str = "BOLTFFI_BINDING_METADATA_ROOT";
+
+impl BindingMetadataSurface {
+    /// Selects the surface a Cargo target triple compiles for.
+    ///
+    /// Any `wasm32*` triple resolves to [`Self::Wasm32`]; everything else,
+    /// including the absence of an explicit triple, resolves to
+    /// [`Self::Native`].
+    pub fn from_target_triple(triple: Option<&str>) -> Self {
+        match triple {
+            Some(triple) if triple.starts_with("wasm32") => Self::Wasm32,
+            _ => Self::Native,
+        }
+    }
+}
+
 /// A linker section used to store binding metadata records.
 ///
 /// The section names are intentionally short enough for the object
@@ -553,6 +593,11 @@ impl BindingMetadataEnvelope {
     /// Returns the serialized binding payload.
     pub const fn bindings(&self) -> &SerializedBindings {
         &self.bindings
+    }
+
+    /// Consumes the envelope and returns the serialized binding payload.
+    pub fn into_bindings(self) -> SerializedBindings {
+        self.bindings
     }
 
     fn validate(&self) -> Result<(), BindingMetadataError> {

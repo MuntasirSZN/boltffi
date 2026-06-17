@@ -32,7 +32,7 @@ use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ByteSize, ImportedCallable, NativeSymbol};
+use crate::{Bindings, ByteSize, ImportedCallable, NativeSymbol, SerializedBindings};
 
 /// A target whose call surface a binding contract describes.
 ///
@@ -50,6 +50,14 @@ pub trait Surface:
 {
     /// Size of a pointer on this surface.
     const POINTER_SIZE: ByteSize;
+
+    /// Extracts the binding contract for this surface from a
+    /// surface-tagged serialized payload.
+    ///
+    /// Returns `None` when the payload was produced for a different
+    /// surface, so a consumer selecting the contract for one target never
+    /// silently reads bindings classified for another.
+    fn from_serialized(serialized: SerializedBindings) -> Option<Bindings<Self>>;
 
     /// Protocol foreign code uses to install and dispatch a callback
     /// trait. Native targets bind a vtable struct; wasm targets bind a
@@ -156,6 +164,13 @@ pub struct Native;
 impl Surface for Native {
     const POINTER_SIZE: ByteSize = ByteSize::new(8);
 
+    fn from_serialized(serialized: SerializedBindings) -> Option<Bindings<Self>> {
+        match serialized {
+            SerializedBindings::Native(bindings) => Some(bindings),
+            SerializedBindings::Wasm32(_) => None,
+        }
+    }
+
     type CallbackProtocol = native::CallbackProtocol;
     type BufferShape = native::BufferShape;
     type HandleCarrier = native::HandleCarrier;
@@ -175,6 +190,13 @@ pub struct Wasm32;
 
 impl Surface for Wasm32 {
     const POINTER_SIZE: ByteSize = ByteSize::new(4);
+
+    fn from_serialized(serialized: SerializedBindings) -> Option<Bindings<Self>> {
+        match serialized {
+            SerializedBindings::Wasm32(bindings) => Some(bindings),
+            SerializedBindings::Native(_) => None,
+        }
+    }
 
     type CallbackProtocol = wasm32::CallbackProtocol;
     type BufferShape = wasm32::BufferShape;

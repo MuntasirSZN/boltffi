@@ -3,17 +3,17 @@ mod layout;
 mod plan;
 mod wheel;
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::run_generate_python_with_output_from_source_dir;
 use crate::commands::pack::PackPythonOptions;
-use crate::config::{Config, Target};
+use crate::config::Config;
 use crate::reporter::Reporter;
 
 use self::build::PythonSharedLibraryBuilder;
+use self::plan::PythonPackagingPlan;
 use self::wheel::PythonWheelBuilder;
-
-pub use self::layout::PythonPackageLayout;
-pub use self::plan::{PythonCargoContext, PythonInterpreterSelection, PythonPackagingPlan};
 
 pub(crate) fn pack_python(
     config: &Config,

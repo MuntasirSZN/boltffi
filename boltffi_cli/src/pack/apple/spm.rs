@@ -264,7 +264,7 @@ fn relative_path(from_dir: &std::path::Path, to_path: &std::path::Path) -> PathB
 #[cfg(test)]
 mod tests {
     use crate::config::{PackageConfig, SpmDistribution, TargetsConfig};
-    use crate::target::AppleArchitecture;
+    use crate::target::Architecture;
 
     use super::*;
 
@@ -308,13 +308,12 @@ mod tests {
         }
 
         fn with_macos_arm64_slice(mut self) -> Self {
-            self.config.targets.apple.macos_architectures = Some(vec![AppleArchitecture::Arm64]);
+            self.config.targets.apple.macos_architectures = Some(vec![Architecture::Arm64]);
             self
         }
 
         fn with_simulator_arm64_slice(mut self) -> Self {
-            self.config.targets.apple.simulator_architectures =
-                Some(vec![AppleArchitecture::Arm64]);
+            self.config.targets.apple.simulator_architectures = Some(vec![Architecture::Arm64]);
             self
         }
 

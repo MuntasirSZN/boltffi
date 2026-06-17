@@ -32,9 +32,113 @@ pub fn derive_ffi_type(input: TokenStream) -> TokenStream {
     TokenStream::from(quote! {})
 }
 
+fn expand_or_experimental(
+    item: TokenStream,
+    legacy: impl FnOnce(TokenStream) -> TokenStream,
+) -> TokenStream {
+    match experimental::metadata_build::render() {
+        experimental::metadata_build::Rendered::Inactive => legacy(item),
+        experimental::metadata_build::Rendered::OriginalOnly => strip_boltffi_attrs(item),
+        experimental::metadata_build::Rendered::Tokens(tokens) => {
+            let item = proc_macro2::TokenStream::from(strip_boltffi_attrs(item));
+            TokenStream::from(quote! {
+                #item
+                #tokens
+            })
+        }
+    }
+}
+
+fn strip_boltffi_attrs(item: TokenStream) -> TokenStream {
+    let Ok(mut item) = syn::parse::<syn::Item>(item.clone()) else {
+        return item;
+    };
+    strip_item_attrs(&mut item);
+    TokenStream::from(quote!(#item))
+}
+
+fn strip_item_attrs(item: &mut syn::Item) {
+    match item {
+        syn::Item::Const(item) => strip_attrs(&mut item.attrs),
+        syn::Item::Enum(item) => {
+            strip_attrs(&mut item.attrs);
+            item.variants.iter_mut().for_each(|variant| {
+                strip_attrs(&mut variant.attrs);
+                strip_fields_attrs(&mut variant.fields);
+            });
+        }
+        syn::Item::Fn(item) => strip_attrs(&mut item.attrs),
+        syn::Item::Impl(item) => {
+            strip_attrs(&mut item.attrs);
+            item.items.iter_mut().for_each(strip_impl_item_attrs);
+        }
+        syn::Item::Struct(item) => {
+            strip_attrs(&mut item.attrs);
+            strip_fields_attrs(&mut item.fields);
+        }
+        syn::Item::Trait(item) => {
+            strip_attrs(&mut item.attrs);
+            item.items.iter_mut().for_each(strip_trait_item_attrs);
+        }
+        _ => {}
+    }
+}
+
+fn strip_fields_attrs(fields: &mut syn::Fields) {
+    match fields {
+        syn::Fields::Named(fields) => fields
+            .named
+            .iter_mut()
+            .for_each(|field| strip_attrs(&mut field.attrs)),
+        syn::Fields::Unnamed(fields) => fields
+            .unnamed
+            .iter_mut()
+            .for_each(|field| strip_attrs(&mut field.attrs)),
+        syn::Fields::Unit => {}
+    }
+}
+
+fn strip_impl_item_attrs(item: &mut syn::ImplItem) {
+    match item {
+        syn::ImplItem::Const(item) => strip_attrs(&mut item.attrs),
+        syn::ImplItem::Fn(item) => strip_attrs(&mut item.attrs),
+        syn::ImplItem::Type(item) => strip_attrs(&mut item.attrs),
+        _ => {}
+    }
+}
+
+fn strip_trait_item_attrs(item: &mut syn::TraitItem) {
+    match item {
+        syn::TraitItem::Const(item) => strip_attrs(&mut item.attrs),
+        syn::TraitItem::Fn(item) => strip_attrs(&mut item.attrs),
+        syn::TraitItem::Type(item) => strip_attrs(&mut item.attrs),
+        _ => {}
+    }
+}
+
+fn strip_attrs(attrs: &mut Vec<syn::Attribute>) {
+    attrs.retain(|attr| !is_boltffi_helper_attr(attr));
+}
+
+fn is_boltffi_helper_attr(attr: &syn::Attribute) -> bool {
+    let path = attr.path();
+    if path.is_ident("skip") || path.is_ident("name") || path.is_ident("ffi_stream") {
+        return true;
+    }
+    match path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+    {
+        Some(name) if path.segments.len() == 2 && name == "default" => true,
+        Some(name) if name == "default" => matches!(attr.meta, syn::Meta::List(_)),
+        _ => false,
+    }
+}
+
 #[proc_macro_attribute]
 pub fn ffi_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    exports::function::ffi_export_impl(item)
+    expand_or_experimental(item, exports::function::ffi_export_impl)
 }
 
 #[proc_macro_attribute]
@@ -44,7 +148,7 @@ pub fn ffi_stream(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn ffi_trait(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    callbacks::trait_export::ffi_trait_impl(item)
+    expand_or_experimental(item, callbacks::trait_export::ffi_trait_impl)
 }
 
 #[proc_macro_attribute]
@@ -61,14 +165,14 @@ pub fn custom_type(item: TokenStream) -> TokenStream {
 pub fn data(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr_str = attr.to_string();
     if attr_str.trim() == "impl" {
-        return data::expansion::data_impl_block(item);
+        return expand_or_experimental(item, data::expansion::data_impl_block);
     }
-    data::expansion::data_impl(item)
+    expand_or_experimental(item, data::expansion::data_impl)
 }
 
 #[proc_macro_attribute]
 pub fn error(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    data::expansion::data_impl(item)
+    expand_or_experimental(item, data::expansion::data_impl)
 }
 
 #[proc_macro_derive(Data)]
@@ -81,11 +185,15 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_clone = item.clone();
 
     if let Ok(item_fn) = syn::parse::<ItemFn>(item_clone.clone()) {
-        return exports::function::ffi_export_impl(TokenStream::from(quote!(#item_fn)));
+        return expand_or_experimental(TokenStream::from(quote!(#item_fn)), |item| {
+            exports::function::ffi_export_impl(item)
+        });
     }
 
     if let Ok(item_impl) = syn::parse::<syn::ItemImpl>(item_clone.clone()) {
-        return exports::methods::export_impl(attr, TokenStream::from(quote!(#item_impl)));
+        return expand_or_experimental(TokenStream::from(quote!(#item_impl)), |item| {
+            exports::methods::export_impl(attr, item)
+        });
     }
 
     if let Ok(item_trait) = syn::parse::<syn::ItemTrait>(item_clone) {

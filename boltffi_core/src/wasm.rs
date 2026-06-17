@@ -2,6 +2,8 @@ pub const WASM_ABI_VERSION: u32 = 1;
 
 #[cfg(any(test, target_arch = "wasm32"))]
 use std::alloc::{Layout, alloc, dealloc};
+#[cfg(target_arch = "wasm32")]
+use std::mem;
 
 #[cfg(target_arch = "wasm32")]
 #[repr(C)]
@@ -127,6 +129,28 @@ pub fn write_return_slot(ptr: u32, len: u32, cap: u32, align: u32) {
         core::ptr::write_volatile(&raw mut RETURN_SLOT[1], len);
         core::ptr::write_volatile(&raw mut RETURN_SLOT[2], cap);
         core::ptr::write_volatile(&raw mut RETURN_SLOT[3], align);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub unsafe fn take_return_slot_vec<T>() -> Vec<T> {
+    let pointer = unsafe { core::ptr::read_volatile(&raw const RETURN_SLOT[0]) };
+    let length = unsafe { core::ptr::read_volatile(&raw const RETURN_SLOT[1]) };
+    let capacity = unsafe { core::ptr::read_volatile(&raw const RETURN_SLOT[2]) };
+    let alignment = unsafe { core::ptr::read_volatile(&raw const RETURN_SLOT[3]) };
+    write_return_slot(0, 0, 0, 0);
+    if pointer == 0 || length == 0 {
+        return Vec::new();
+    }
+    debug_assert_eq!(alignment as usize, mem::align_of::<T>());
+    debug_assert_eq!((length as usize) % mem::size_of::<T>(), 0);
+    debug_assert_eq!((capacity as usize) % mem::size_of::<T>(), 0);
+    unsafe {
+        Vec::from_raw_parts(
+            pointer as *mut T,
+            length as usize / mem::size_of::<T>(),
+            capacity as usize / mem::size_of::<T>(),
+        )
     }
 }
 

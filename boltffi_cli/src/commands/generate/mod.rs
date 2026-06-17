@@ -1,5 +1,6 @@
 mod generator;
 mod header;
+mod ir;
 mod languages;
 
 use std::path::{Path, PathBuf};
@@ -12,8 +13,10 @@ use languages::{
     SwiftGenerator, TypeScriptGenerator,
 };
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::Result;
-use crate::config::{Config, Target};
+use crate::config::Config;
 
 pub enum GenerateTarget {
     Swift,
@@ -32,9 +35,14 @@ pub struct GenerateOptions {
     pub target: GenerateTarget,
     pub output: Option<PathBuf>,
     pub experimental: bool,
+    pub ir: bool,
 }
 
 pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Result<()> {
+    if options.ir {
+        return ir::run_ir_generation(config, &options);
+    }
+
     let request = GenerateRequest::for_current_crate(config, options.output);
 
     match options.target {

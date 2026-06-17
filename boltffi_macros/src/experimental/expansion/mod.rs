@@ -1009,6 +1009,28 @@ mod tests {
         source
     }
 
+    fn direct_returning_listener_contract() -> SourceContract {
+        let mut listener = listener_trait();
+        let mut optional = MethodDef::new(
+            MethodId::new("maybe_count"),
+            CanonicalName::single("maybe_count"),
+            Receiver::Shared,
+        );
+        optional.returns = ReturnDef::value(TypeExpr::option(TypeExpr::Primitive(Primitive::I32)));
+        let mut vector = MethodDef::new(
+            MethodId::new("numbers"),
+            CanonicalName::single("numbers"),
+            Receiver::Shared,
+        );
+        vector.returns = ReturnDef::value(TypeExpr::vec(TypeExpr::Primitive(Primitive::I32)));
+        listener.methods.push(optional);
+        listener.methods.push(vector);
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener);
+        source
+    }
+
     fn borrowed_string_listener_contract() -> SourceContract {
         let mut listener = listener_trait();
         let mut method = MethodDef::new(
@@ -6315,6 +6337,53 @@ mod tests {
         assert!(!rendered.contains(
             "__boltffi_local_demo_listener_payload (self . handle , & mut __boltffi_callback_out)"
         ));
+    }
+
+    #[test]
+    fn native_callback_method_direct_returns_use_return_renderers() {
+        let source = direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "pub maybe_count : extern \"C\" fn (handle : u64) -> :: boltffi :: __private :: FfiBuf"
+        ));
+        assert!(rendered.contains(
+            "pub numbers : extern \"C\" fn (handle : u64) -> :: boltffi :: __private :: FfiBuf"
+        ));
+        assert!(rendered.contains("wire :: decode :: < Option < i32 > >"));
+        assert!(rendered.contains(":: boltffi :: __private :: FfiBuf :: wire_encode"));
+        assert!(rendered.contains("< _ as :: boltffi :: __private :: VecTransport > :: pack_vec"));
+        assert!(
+            rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: unpack_vec")
+        );
+    }
+
+    #[test]
+    fn wasm_callback_method_direct_returns_use_return_renderers() {
+        let source = direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "fn __boltffi_callback_method_demo_listener_maybe_count (handle : u32) -> f64"
+        ));
+        assert!(
+            rendered.contains("fn __boltffi_callback_method_demo_listener_numbers (handle : u32)")
+        );
+        assert!(rendered.contains("f64 :: NAN"));
+        assert!(rendered.contains(":: boltffi :: __private :: write_return_slot"));
+        assert!(rendered.contains(":: boltffi :: __private :: take_return_slot_vec :: < i32 >"));
     }
 
     #[test]

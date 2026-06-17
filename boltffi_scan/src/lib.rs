@@ -8,10 +8,11 @@ mod items;
 mod marked;
 mod marker;
 mod name;
+mod package_graph;
 mod path;
 mod repr;
 mod scan;
-mod source_tree;
+pub(crate) mod source_tree;
 mod spelling;
 pub(crate) mod type_expr;
 mod unsupported;
@@ -19,7 +20,7 @@ mod visibility;
 
 pub use error::ScanError;
 pub use input::ScanInput;
-pub use scan::{scan, scan_file, scan_source};
+pub use scan::{PackageScan, scan, scan_file, scan_package, scan_source};
 pub use unsupported::{UnsupportedFeature, UnsupportedInfo};
 
 use path::{ModulePath, ModuleScope};

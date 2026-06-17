@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::Result;
 use crate::config::{
-    AndroidConfig, AndroidKotlinConfig, AndroidPackConfig, AppleConfig, AppleSwiftConfig,
-    CSharpConfig, CargoConfig, Config, DartConfig, DebugSymbolsConfig, ErrorStyle, FactoryStyle,
-    HeaderConfig, JavaConfig, KotlinMultiplatformConfig, PackageConfig, PythonConfig, SpmConfig,
-    TargetsConfig, WasmConfig, XcframeworkConfig,
+    AndroidConfig, AndroidPackConfig, AppleConfig, CSharpConfig, CargoConfig, Config, DartConfig,
+    DebugSymbolsConfig, ErrorStyle, HeaderConfig, JavaConfig, KotlinConfig, KotlinFactoryStyle,
+    KotlinMultiplatformConfig, PackageConfig, PythonConfig, SpmConfig, SwiftConfig, TargetsConfig,
+    WasmConfig, XcframeworkConfig,
 };
 
 pub struct InitOptions {
@@ -83,7 +83,7 @@ fn create_default_config(package_name: &str) -> Config {
                 ios_architectures: None,
                 simulator_architectures: None,
                 macos_architectures: None,
-                swift: AppleSwiftConfig {
+                swift: SwiftConfig {
                     module_name: Some(module_name),
                     output: None,
                     ffi_module_name: None,
@@ -112,7 +112,7 @@ fn create_default_config(package_name: &str) -> Config {
                 min_sdk: 24,
                 ndk_version: None,
                 architectures: None,
-                kotlin: AndroidKotlinConfig {
+                kotlin: KotlinConfig {
                     package: Some(format!("com.example.{}", normalized_kotlin_name)),
                     output: None,
                     module_name: None,
@@ -120,7 +120,7 @@ fn create_default_config(package_name: &str) -> Config {
                     desktop_loader: Default::default(),
                     api_style: Default::default(),
                     error_style: ErrorStyle::default(),
-                    factory_style: FactoryStyle::default(),
+                    factory_style: KotlinFactoryStyle::default(),
                     type_mappings: Default::default(),
                 },
                 header: HeaderConfig { output: None },

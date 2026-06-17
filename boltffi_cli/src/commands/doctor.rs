@@ -244,7 +244,7 @@ fn print_config_summary(summary: &ConfigSummary, config_path: &Path, overlay_pat
                 config
                     .dart_native_architectures()
                     .iter()
-                    .map(|architecture| architecture.canonical_name())
+                    .filter_map(|target| target.dart_native_name())
                     .collect::<Vec<_>>()
                     .join(", ")
             );

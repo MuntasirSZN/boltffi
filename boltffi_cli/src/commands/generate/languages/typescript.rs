@@ -2,9 +2,10 @@ use boltffi_bindgen::render::typescript::{
     TypeScriptEmitter, TypeScriptLowerError, TypeScriptLowerer,
 };
 
+use boltffi_bindgen::target::Target;
+
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{GenerateRequest, LanguageGenerator, ScanPointerWidth};
-use crate::config::Target;
 
 pub struct TypeScriptGenerator;
 

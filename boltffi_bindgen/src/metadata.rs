@@ -5,7 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use boltffi_binding::BindingMetadataEnvelope;
+use boltffi_binding::{
+    BINDING_METADATA_BUILD_ENV, BINDING_METADATA_ROOT_ENV, BINDING_METADATA_SOURCE_ENV,
+    BindingMetadataEnvelope,
+};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -40,7 +43,8 @@ impl BindingMetadataBuild {
 
     /// Runs Cargo and returns the validated metadata envelopes.
     pub fn read(&self) -> Result<Vec<BindingMetadataEnvelope>, BindingMetadataBuildError> {
-        let output = CargoBuild::new(self).output()?;
+        let source_root = SourceRoot::resolve(&self.manifest_path)?;
+        let output = CargoBuild::new(self, &source_root).output()?;
         let manifest = CargoManifest::new(&self.manifest_path)?;
         let artifacts = output.artifacts(&manifest)?;
         BindingMetadataReader::new(artifacts.into_paths())
@@ -85,6 +89,12 @@ pub enum BindingMetadataBuildError {
     /// Cargo did not report a readable compiled artifact.
     #[error("cargo build for `{manifest_path}` did not report compiled library artifacts")]
     NoArtifacts {
+        /// Manifest path passed to Cargo.
+        manifest_path: PathBuf,
+    },
+    /// Cargo metadata did not expose a library target source path.
+    #[error("cargo metadata for `{manifest_path}` did not report a library target source")]
+    NoLibrarySource {
         /// Manifest path passed to Cargo.
         manifest_path: PathBuf,
     },
@@ -144,14 +154,112 @@ impl CargoManifest {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SourceRoot {
+    path: PathBuf,
+}
+
+impl SourceRoot {
+    fn resolve(manifest_path: &Path) -> Result<Self, BindingMetadataBuildError> {
+        let manifest = CargoManifest::new(manifest_path)?;
+        CargoMetadata::load(&manifest)?
+            .library_source(&manifest)
+            .map(|path| Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct CargoMetadata {
+    packages: Vec<MetadataPackage>,
+}
+
+impl CargoMetadata {
+    fn load(manifest: &CargoManifest) -> Result<Self, BindingMetadataBuildError> {
+        let output = Command::new(CargoProgram::from_env().into_os_string())
+            .arg("metadata")
+            .arg("--format-version=1")
+            .arg("--no-deps")
+            .arg("--manifest-path")
+            .arg(manifest.path())
+            .output()
+            .map_err(|source| BindingMetadataBuildError::CargoSpawn { source })?;
+        if !output.status.success() {
+            return Err(BindingMetadataBuildError::CargoFailed {
+                status: CargoStatus::from_status(output.status),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        serde_json::from_slice(&output.stdout).map_err(|source| {
+            BindingMetadataBuildError::CargoJson {
+                line: String::from_utf8_lossy(&output.stdout).into_owned(),
+                source,
+            }
+        })
+    }
+
+    fn library_source(
+        self,
+        manifest: &CargoManifest,
+    ) -> Result<PathBuf, BindingMetadataBuildError> {
+        self.packages
+            .into_iter()
+            .find(|package| manifest.matches(&package.manifest_path))
+            .and_then(MetadataPackage::library_source)
+            .ok_or_else(|| BindingMetadataBuildError::NoLibrarySource {
+                manifest_path: manifest.path().to_path_buf(),
+            })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MetadataPackage {
+    manifest_path: PathBuf,
+    targets: Vec<MetadataTarget>,
+}
+
+impl MetadataPackage {
+    fn library_source(self) -> Option<PathBuf> {
+        self.targets
+            .into_iter()
+            .find(MetadataTarget::is_library)
+            .map(MetadataTarget::into_source)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MetadataTarget {
+    kind: Vec<String>,
+    src_path: PathBuf,
+}
+
+impl MetadataTarget {
+    fn is_library(&self) -> bool {
+        self.kind.iter().any(|kind| {
+            matches!(
+                kind.as_str(),
+                "lib" | "rlib" | "dylib" | "cdylib" | "staticlib"
+            )
+        })
+    }
+
+    fn into_source(self) -> PathBuf {
+        self.src_path
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CargoBuild<'build> {
     build: &'build BindingMetadataBuild,
+    source_root: &'build SourceRoot,
 }
 
 impl<'build> CargoBuild<'build> {
-    const fn new(build: &'build BindingMetadataBuild) -> Self {
-        Self { build }
+    const fn new(build: &'build BindingMetadataBuild, source_root: &'build SourceRoot) -> Self {
+        Self { build, source_root }
     }
 
     fn output(self) -> Result<CargoOutput, BindingMetadataBuildError> {
@@ -164,6 +272,11 @@ impl<'build> CargoBuild<'build> {
             .arg(&self.build.manifest_path);
         if let Some(target) = &self.build.target {
             command.arg("--target").arg(target);
+        }
+        command.env(BINDING_METADATA_BUILD_ENV, "1");
+        command.env(BINDING_METADATA_SOURCE_ENV, self.source_root.path());
+        if let Some(root) = self.build.manifest_path.parent() {
+            command.env(BINDING_METADATA_ROOT_ENV, root);
         }
         MetadataRustflags::from_env().apply(&mut command);
         command

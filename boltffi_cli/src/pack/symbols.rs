@@ -415,7 +415,7 @@ fn build_manifest_entry(artifact: &DebugSymbolArtifact) -> DebugSymbolManifestEn
         kind: artifact.kind.as_str(),
         target_triple: artifact.target_triple.clone(),
         platform: artifact.platform.map(platform_name),
-        architecture: artifact.architecture.map(architecture_name),
+        architecture: artifact.architecture.map(Architecture::canonical_name),
         abi: artifact.abi.clone(),
         host_target: artifact.host_target.clone(),
     }
@@ -1226,16 +1226,6 @@ fn platform_name(platform: Platform) -> &'static str {
         Platform::Android => "android",
         Platform::Wasm => "wasm",
         Platform::Linux => "linux",
-    }
-}
-
-fn architecture_name(architecture: Architecture) -> &'static str {
-    match architecture {
-        Architecture::Arm64 => "arm64",
-        Architecture::X86_64 => "x86_64",
-        Architecture::Armv7 => "armv7",
-        Architecture::X86 => "x86",
-        Architecture::Wasm32 => "wasm32",
     }
 }
 

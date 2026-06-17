@@ -25,6 +25,7 @@ use super::{
     surface::SurfaceLower,
     symbol::{
         CallbackSlot, SymbolAllocator, SymbolOwner, initializer_symbol_name, member_symbol_name,
+        source_member_name,
     },
 };
 
@@ -277,8 +278,7 @@ fn mint_method_symbol(
     owner: callable::CallableOwner<'_>,
     method: &MethodDef,
 ) -> Result<NativeSymbol, LowerError> {
-    let method_name = method.name.parts().last().map_or("", |part| part.as_str());
-    let symbol_name = member_symbol_name(symbol_owner(owner), method_name);
+    let symbol_name = member_symbol_name(symbol_owner(owner), &source_member_name(&method.name));
     allocator.mint(symbol_name)
 }
 
@@ -287,8 +287,8 @@ fn mint_initializer_symbol(
     owner: callable::CallableOwner<'_>,
     method: &MethodDef,
 ) -> Result<NativeSymbol, LowerError> {
-    let method_name = method.name.parts().last().map_or("", |part| part.as_str());
-    let symbol_name = initializer_symbol_name(symbol_owner(owner), method_name);
+    let symbol_name =
+        initializer_symbol_name(symbol_owner(owner), &source_member_name(&method.name));
     allocator.mint(symbol_name)
 }
 
@@ -328,8 +328,7 @@ where
         .enumerate()
         .map(|(index, method)| {
             require_callback_receiver(method.receiver)?;
-            let raw_method_name = method.name.parts().last().map_or("", |part| part.as_str());
-            let slot = CallbackSlot::from_method_name(raw_method_name);
+            let slot = CallbackSlot::from_source_name(&method.name);
             let surface = surface_for(allocator, method, &slot)?;
             let callable_decl = callable::lower_imported_method::<S>(
                 idx,

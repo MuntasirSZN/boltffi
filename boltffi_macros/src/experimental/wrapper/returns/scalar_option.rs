@@ -1,6 +1,7 @@
 use boltffi_binding::{Native, Primitive, Wasm32};
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
+use syn::Type;
 
 use crate::experimental::{
     error::Error,
@@ -11,15 +12,32 @@ pub struct Renderer;
 pub struct Failure;
 pub struct FailureInput;
 pub struct Empty;
+pub struct Incoming;
 
 pub struct Input {
     primitive: Primitive,
     value: syn::Ident,
 }
 
+pub struct IncomingInput {
+    primitive: Primitive,
+    rust_type: Type,
+    value: TokenStream,
+}
+
 impl Input {
     pub fn new(primitive: Primitive, value: syn::Ident) -> Self {
         Self { primitive, value }
+    }
+}
+
+impl IncomingInput {
+    pub fn new(primitive: Primitive, rust_type: Type, value: TokenStream) -> Self {
+        Self {
+            primitive,
+            rust_type,
+            value,
+        }
     }
 }
 
@@ -106,6 +124,48 @@ impl Render<Wasm32, Empty> for Renderer {
             ffi_parameters: Vec::new(),
             return_type: quote! { -> f64 },
             body: quote! { f64::NAN },
+        })
+    }
+}
+
+impl Render<Native, IncomingInput> for Incoming {
+    type Output = TokenStream;
+
+    fn render(self, input: IncomingInput) -> Result<Self::Output, Error> {
+        let rust_type = input.rust_type;
+        let value = input.value;
+        Ok(quote! {
+            {
+                let __boltffi_result = #value;
+                match ::boltffi::__private::wire::decode::<#rust_type>(unsafe {
+                    __boltffi_result.as_byte_slice()
+                }) {
+                    Ok(__boltffi_value) => __boltffi_value,
+                    Err(error) => {
+                        panic!("callback method optional scalar return conversion failed: {:?}", error)
+                    }
+                }
+            }
+        })
+    }
+}
+
+impl Render<Wasm32, IncomingInput> for Incoming {
+    type Output = TokenStream;
+
+    fn render(self, input: IncomingInput) -> Result<Self::Output, Error> {
+        let value = input.value;
+        let result = names::Wrapper::new(Span::call_site()).result();
+        let some = Scalar::new(input.primitive, &result).tokens()?;
+        Ok(quote! {
+            {
+                let #result = #value;
+                if #result.is_nan() {
+                    None
+                } else {
+                    Some(#some)
+                }
+            }
         })
     }
 }

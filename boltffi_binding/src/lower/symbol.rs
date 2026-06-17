@@ -7,6 +7,8 @@
 //! `free`, `release`, or `new` cannot collide with symbols the runtime
 //! needs for ownership management.
 
+use boltffi_ast::SourceName;
+
 use crate::{NativeSymbol, SymbolId, SymbolName};
 
 use super::LowerError;
@@ -100,6 +102,13 @@ pub fn member_symbol_name(owner: SymbolOwner<'_>, member_name: &str) -> String {
         symbol_path(owner.source_id()),
         member_name
     )
+}
+
+pub fn source_member_name(name: &SourceName) -> String {
+    name.parts()
+        .map(|part| to_snake_case(part.as_str()))
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 /// Builds the symbol used for an initializer owned by `owner`.
@@ -350,6 +359,10 @@ impl CallbackSlot {
         Self(to_snake_case(method_name))
     }
 
+    pub fn from_source_name(name: &SourceName) -> Self {
+        Self(source_member_name(name))
+    }
+
     /// Returns the canonical slot name.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -469,6 +482,16 @@ mod tests {
             member_symbol_name(SymbolOwner::record("demo::MyRecord"), "translate"),
             "boltffi_method_record_demo_my_record_translate"
         );
+    }
+
+    #[test]
+    fn source_member_name_snake_cases_each_source_part() {
+        let name = SourceName::from_canonical(boltffi_ast::CanonicalName::new(vec![
+            boltffi_ast::NamePart::new("from"),
+            boltffi_ast::NamePart::new("HTTPRequest"),
+        ]));
+
+        assert_eq!(source_member_name(&name), "from_http_request");
     }
 
     #[test]

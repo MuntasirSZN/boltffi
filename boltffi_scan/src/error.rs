@@ -16,6 +16,9 @@ pub enum ScanError {
         module: String,
         searched: Vec<String>,
     },
+    PackageGraph {
+        message: String,
+    },
     UnsupportedType {
         spelling: String,
     },
@@ -125,6 +128,9 @@ impl fmt::Display for ScanError {
                     "cannot find module `{module}`, looked for {}",
                     searched.join(", ")
                 )
+            }
+            Self::PackageGraph { message } => {
+                write!(formatter, "cannot load Cargo package graph: {message}")
             }
             Self::UnsupportedType { spelling } => {
                 write!(formatter, "unsupported source type `{spelling}`")

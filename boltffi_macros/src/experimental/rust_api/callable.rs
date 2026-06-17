@@ -506,6 +506,16 @@ impl<'source> Return<'source> {
         }
     }
 
+    pub fn direct_vec_element_type(self) -> Result<Type, Error> {
+        let type_expr = self.value_type()?;
+        let TypeExpr::Vec(element) = type_expr.as_ref() else {
+            return Err(Error::SourceSyntaxMismatch(
+                "source direct-vector return is missing element type",
+            ));
+        };
+        TypeTokens::new(element.as_ref()).map(TypeTokens::into_type)
+    }
+
     pub fn fallible(self) -> Result<Fallible<'source>, Error> {
         match self.value_type()? {
             Cow::Borrowed(TypeExpr::Result { ok, err }) => Ok(Fallible::Borrowed { ok, err }),
