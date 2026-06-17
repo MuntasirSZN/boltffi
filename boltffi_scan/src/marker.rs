@@ -235,6 +235,22 @@ mod tests {
     }
 
     #[test]
+    fn detects_custom_ffi_on_trait_impls() {
+        assert_eq!(
+            Marker::detect(&impl_attrs(
+                "#[custom_ffi] impl CustomFfiConvertible for Email {}"
+            )),
+            Ok(Some(Marker::CustomFfi))
+        );
+        assert_eq!(
+            Marker::detect(&impl_attrs(
+                "#[boltffi::custom_ffi] impl boltffi::CustomFfiConvertible for Email {}"
+            )),
+            Ok(Some(Marker::CustomFfi))
+        );
+    }
+
+    #[test]
     fn detects_data_impl_distinctly_from_data() {
         assert_eq!(
             Marker::detect(&impl_attrs("#[data(impl)] impl S {}")),

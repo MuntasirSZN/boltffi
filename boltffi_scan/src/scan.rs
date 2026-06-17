@@ -392,6 +392,27 @@ mod tests {
     }
 
     #[test]
+    fn explicit_import_resolves_type_reexported_by_name() {
+        let contract = scan(
+            "pub mod model { #[data] pub enum ForeignKind { Guest, Member } } \
+             pub mod session { pub use crate::model::ForeignKind; } \
+             pub mod api { \
+                 use crate::session::ForeignKind; \
+                 #[export] pub fn echo(kind: ForeignKind) -> ForeignKind { kind } \
+             }",
+        );
+
+        assert_eq!(
+            contract.functions[0].parameters[0].type_expr,
+            enumeration("demo::model::ForeignKind", "ForeignKind")
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns),
+            &enumeration("demo::model::ForeignKind", "ForeignKind")
+        );
+    }
+
+    #[test]
     fn scans_marked_items_nested_several_modules_deep() {
         let contract = scan(
             "pub mod a { pub mod b { \
@@ -486,6 +507,52 @@ mod tests {
         assert_eq!(
             value_return(&contract.functions[0].returns),
             &custom("demo::UtcDateTime", "DateTime")
+        );
+    }
+
+    #[test]
+    fn scans_custom_ffi_trait_impl_and_resolves_remote_uses() {
+        let contract = scan(
+            "pub struct Email(String); \
+             #[custom_ffi] impl CustomFfiConvertible for Email { \
+                 type FfiRepr = String; \
+                 type Error = String; \
+                 fn into_ffi(&self) -> String { self.0.clone() } \
+                 fn try_from_ffi(value: String) -> Result<Self, String> { Ok(Self(value)) } \
+             } \
+             #[export] pub fn round_trip(value: Email) -> Email { value }",
+        );
+
+        assert_eq!(contract.customs.len(), 1);
+        assert_eq!(contract.customs[0].id, CustomTypeId::new("demo::Email"));
+        assert_eq!(
+            contract.customs[0].remote,
+            CustomRemoteType::single_path("Email")
+        );
+        assert_eq!(contract.customs[0].repr, TypeExpr::String);
+        assert_eq!(
+            contract.customs[0].error,
+            Some(CustomRemoteType::single_path("String"))
+        );
+        assert!(matches!(
+            &contract.customs[0].converters.into_ffi,
+            CustomTypeConverter::Expr(expr)
+                if expr.source.replace(' ', "")
+                    == "<Emailas::boltffi::CustomFfiConvertible>::into_ffi"
+        ));
+        assert!(matches!(
+            &contract.customs[0].converters.try_from_ffi,
+            CustomTypeConverter::Expr(expr)
+                if expr.source.replace(' ', "")
+                    == "<Emailas::boltffi::CustomFfiConvertible>::try_from_ffi"
+        ));
+        assert_eq!(
+            contract.functions[0].parameters[0].type_expr,
+            custom("demo::Email", "Email")
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns),
+            &custom("demo::Email", "Email")
         );
     }
 

@@ -1939,6 +1939,10 @@ where
                 let ty = carrier.ty();
                 Ok(quote! { ::boltffi::__private::AsyncCallback<#ty> })
             }
+            (ReturnPlan::ScalarOptionViaReturnSlot { .. }, ErrorDecl::None(_))
+            | (ReturnPlan::DirectVecViaReturnSlot { .. }, ErrorDecl::None(_)) => {
+                Ok(quote! { ::boltffi::__private::AsyncCallback<::boltffi::__private::FfiBuf> })
+            }
             _ => Err(Error::UnsupportedExpansion(
                 "async callback method return shape",
             )),
@@ -1999,6 +2003,38 @@ where
                 )?;
                 Ok(self.native_async_value_body(carrier_type.clone(), call, value))
             }
+            (ReturnPlan::ScalarOptionViaReturnSlot { primitive }, ErrorDecl::None(_)) => {
+                self.source.scalar_option(*primitive)?;
+                let rust_type = self.direct_source_type()?;
+                let value = <wrapper::returns::scalar_option::Incoming as Render<S, _>>::render(
+                    wrapper::returns::scalar_option::Incoming,
+                    wrapper::returns::scalar_option::IncomingInput::new(
+                        *primitive,
+                        rust_type,
+                        quote! { __boltffi_result },
+                    ),
+                )?;
+                Ok(self.native_async_value_body(
+                    quote! { ::boltffi::__private::FfiBuf },
+                    call,
+                    value,
+                ))
+            }
+            (ReturnPlan::DirectVecViaReturnSlot { .. }, ErrorDecl::None(_)) => {
+                let element = self.source.direct_vec_element_type()?;
+                let value = <wrapper::returns::direct_vec::Incoming as Render<S, _>>::render(
+                    wrapper::returns::direct_vec::Incoming,
+                    wrapper::returns::direct_vec::IncomingInput::new(
+                        element,
+                        quote! { __boltffi_result },
+                    ),
+                )?;
+                Ok(self.native_async_value_body(
+                    quote! { ::boltffi::__private::FfiBuf },
+                    call,
+                    value,
+                ))
+            }
             _ => Err(Error::UnsupportedExpansion(
                 "async callback method return shape",
             )),
@@ -2010,6 +2046,14 @@ where
             (ReturnPlan::Void, ErrorDecl::None(_)) => Ok(self.wasm_async_void_body(call)),
             (ReturnPlan::EncodedViaReturnSlot { codec, .. }, ErrorDecl::None(_)) => {
                 let value = self.wasm_async_encoded_value(codec.root())?;
+                Ok(self.wasm_async_value_body(call, value))
+            }
+            (ReturnPlan::ScalarOptionViaReturnSlot { primitive }, ErrorDecl::None(_)) => {
+                let value = self.wasm_async_scalar_option_value(*primitive)?;
+                Ok(self.wasm_async_value_body(call, value))
+            }
+            (ReturnPlan::DirectVecViaReturnSlot { .. }, ErrorDecl::None(_)) => {
+                let value = self.wasm_async_direct_vec_value()?;
                 Ok(self.wasm_async_value_body(call, value))
             }
             _ => Err(Error::UnsupportedExpansion(
@@ -2052,6 +2096,55 @@ where
                 },
             ),
         )
+    }
+
+    fn wasm_async_scalar_option_value(
+        &self,
+        primitive: boltffi_binding::Primitive,
+    ) -> Result<TokenStream, Error> {
+        self.source.scalar_option(primitive)?;
+        let rust_type = self.direct_source_type()?;
+        Ok(quote! {
+            match ::boltffi::__private::wire::decode::<#rust_type>(
+                __boltffi_completion.data.as_slice()
+            ) {
+                Ok(__boltffi_value) => __boltffi_value,
+                Err(error) => {
+                    panic!(
+                        "async callback optional scalar return conversion failed: {:?}",
+                        error
+                    )
+                }
+            }
+        })
+    }
+
+    fn wasm_async_direct_vec_value(&self) -> Result<TokenStream, Error> {
+        let element = self.source.direct_vec_element_type()?;
+        Ok(quote! {
+            if __boltffi_completion.data.is_empty() {
+                Vec::new()
+            } else {
+                let __boltffi_byte_len = __boltffi_completion.data.len();
+                let __boltffi_element_size =
+                    ::core::mem::size_of::<<#element as ::boltffi::__private::Passable>::In>();
+                if __boltffi_byte_len % __boltffi_element_size == 0 {
+                    unsafe {
+                        <#element as ::boltffi::__private::VecTransport>::unpack_vec(
+                            __boltffi_completion.data.as_ptr(),
+                            __boltffi_byte_len,
+                        )
+                    }
+                } else {
+                    panic!(
+                        "invalid async callback Vec<{}> return byte length {} for element size {}",
+                        ::core::any::type_name::<#element>(),
+                        __boltffi_byte_len,
+                        __boltffi_element_size,
+                    )
+                }
+            }
+        })
     }
 
     fn native_async_void_body(&self, call: TokenStream) -> TokenStream {

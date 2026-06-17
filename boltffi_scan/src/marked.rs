@@ -108,6 +108,10 @@ impl<'source> MarkedItems<'source> {
                 self.impls.push(Marked::new(scope, marker, item));
                 Ok(())
             }
+            (Marker::CustomFfi, syn::Item::Impl(item)) => {
+                self.customs.push(MarkedCustom::trait_impl(scope, item));
+                Ok(())
+            }
             (Marker::Export(export), syn::Item::Fn(item)) if !export.requires_class_impl() => {
                 self.functions.push(Marked::new(scope, marker, item));
                 Ok(())
@@ -131,12 +135,27 @@ impl<'source> MarkedItems<'source> {
 
 pub(super) struct MarkedCustom<'source> {
     scope: &'source ModuleScope,
-    item: &'source syn::ItemMacro,
+    item: MarkedCustomItem<'source>,
+}
+
+pub enum MarkedCustomItem<'source> {
+    Macro(&'source syn::ItemMacro),
+    TraitImpl(&'source syn::ItemImpl),
 }
 
 impl<'source> MarkedCustom<'source> {
-    pub(super) fn new(scope: &'source ModuleScope, item: &'source syn::ItemMacro) -> Self {
-        Self { scope, item }
+    pub fn new(scope: &'source ModuleScope, item: &'source syn::ItemMacro) -> Self {
+        Self {
+            scope,
+            item: MarkedCustomItem::Macro(item),
+        }
+    }
+
+    pub fn trait_impl(scope: &'source ModuleScope, item: &'source syn::ItemImpl) -> Self {
+        Self {
+            scope,
+            item: MarkedCustomItem::TraitImpl(item),
+        }
     }
 
     pub(super) fn module(&self) -> &'source ModulePath {
@@ -147,8 +166,22 @@ impl<'source> MarkedCustom<'source> {
         self.scope
     }
 
-    pub(super) fn item(&self) -> &'source syn::ItemMacro {
-        self.item
+    pub fn item(&self) -> &MarkedCustomItem<'source> {
+        &self.item
+    }
+
+    pub fn attrs(&self) -> &'source [syn::Attribute] {
+        match self.item {
+            MarkedCustomItem::Macro(item) => &item.attrs,
+            MarkedCustomItem::TraitImpl(item) => &item.attrs,
+        }
+    }
+
+    pub fn span(&self) -> proc_macro2::Span {
+        match self.item {
+            MarkedCustomItem::Macro(item) => syn::spanned::Spanned::span(item),
+            MarkedCustomItem::TraitImpl(item) => syn::spanned::Spanned::span(item),
+        }
     }
 }
 
@@ -266,6 +299,7 @@ mod tests {
              #[export] impl Engine {} \
              #[export] const ANSWER: u32 = 42; \
              custom_type!(UtcDateTime, remote = DateTime<Utc>, repr = i64, into_ffi = to_millis, try_from_ffi = from_millis); \
+             #[custom_ffi] impl CustomFfiConvertible for Email { type FfiRepr = String; type Error = String; } \
              #[data(impl)] impl Point {}",
         );
 
@@ -279,7 +313,7 @@ mod tests {
         assert_eq!(marked.traits().len(), 1);
         assert_eq!(marked.classes().len(), 1);
         assert_eq!(marked.constants().len(), 1);
-        assert_eq!(marked.customs().len(), 1);
+        assert_eq!(marked.customs().len(), 2);
         assert_eq!(marked.impls().len(), 1);
     }
 

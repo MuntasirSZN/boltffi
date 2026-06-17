@@ -1083,6 +1083,30 @@ mod tests {
         source
     }
 
+    fn async_direct_returning_listener_contract() -> SourceContract {
+        let mut listener = listener_trait();
+        let mut optional = MethodDef::new(
+            MethodId::new("maybe_count"),
+            CanonicalName::single("maybe_count"),
+            Receiver::Shared,
+        );
+        optional.execution = ExecutionKind::Async;
+        optional.returns = ReturnDef::value(TypeExpr::option(TypeExpr::Primitive(Primitive::I32)));
+        let mut vector = MethodDef::new(
+            MethodId::new("numbers"),
+            CanonicalName::single("numbers"),
+            Receiver::Shared,
+        );
+        vector.execution = ExecutionKind::Async;
+        vector.returns = ReturnDef::value(TypeExpr::vec(TypeExpr::Primitive(Primitive::I32)));
+        listener.methods.push(optional);
+        listener.methods.push(vector);
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.traits.push(listener);
+        source
+    }
+
     fn closure_taking_listener_contract() -> SourceContract {
         let mut listener = listener_trait();
         let mut method = MethodDef::new(
@@ -6482,6 +6506,48 @@ mod tests {
             !rendered
                 .contains("impl :: boltffi :: __private :: CallbackForeignType for dyn Listener")
         );
+    }
+
+    #[test]
+    fn native_async_callback_method_direct_returns_use_buffer_completion() {
+        let source = async_direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_native_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "completion : :: boltffi :: __private :: AsyncCallback < :: boltffi :: __private :: FfiBuf >"
+        ));
+        assert!(rendered.contains("wire :: decode :: < Option < i32 > >"));
+        assert!(
+            rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: unpack_vec")
+        );
+    }
+
+    #[test]
+    fn wasm_async_callback_method_direct_returns_use_completion_bytes() {
+        let source = async_direct_returning_listener_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens =
+            expand_wasm_callback(&expansion, &source.traits[0]).expect("expanded callback");
+        let rendered = tokens.to_string();
+        syn::parse2::<syn::File>(tokens.clone()).expect("expanded callback parses");
+
+        assert!(rendered.contains(
+            "fn __boltffi_callback_async_start_demo_listener_maybe_count (handle : u32 , request_id : u32)"
+        ));
+        assert!(rendered.contains("wire :: decode :: < Option < i32 > >"));
+        assert!(rendered.contains("__boltffi_completion . data . as_slice ()"));
+        assert!(
+            rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: unpack_vec")
+        );
+        assert!(rendered.contains("__boltffi_completion . data . as_ptr ()"));
     }
 
     #[test]
