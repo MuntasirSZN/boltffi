@@ -41,20 +41,31 @@ pub struct Function {
 
 impl Function {
     pub fn supports(callable: &ExportedCallable<Native>) -> bool {
-        matches!(callable.execution(), ExecutionDecl::Synchronous(_))
-            && callable.params().iter().all(argument::Conversion::supports)
-            && match callable.error() {
-                ErrorDecl::None(_) => result::Conversion::supports(callable.returns().plan()),
-                ErrorDecl::EncodedViaReturnSlot {
-                    ty,
-                    shape: native::BufferShape::Buffer,
-                    ..
-                } => {
-                    result::Conversion::supports_out(callable.returns().plan())
-                        && result::Conversion::supports_encoded(ty)
-                }
-                _ => false,
+        Self::unsupported(callable).is_none()
+    }
+
+    pub fn unsupported(callable: &ExportedCallable<Native>) -> Option<&'static str> {
+        if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
+            return Some("async function");
+        }
+        if !callable.params().iter().all(argument::Conversion::supports) {
+            return Some("function parameter");
+        }
+        match callable.error() {
+            ErrorDecl::None(_) if result::Conversion::supports(callable.returns().plan()) => None,
+            ErrorDecl::None(_) => Some("function return"),
+            ErrorDecl::EncodedViaReturnSlot {
+                ty,
+                shape: native::BufferShape::Buffer,
+                ..
+            } if result::Conversion::supports_out(callable.returns().plan())
+                && result::Conversion::supports_encoded(ty) =>
+            {
+                None
             }
+            ErrorDecl::EncodedViaReturnSlot { .. } => Some("fallible function"),
+            _ => Some("function error channel"),
+        }
     }
 
     pub fn from_declaration(

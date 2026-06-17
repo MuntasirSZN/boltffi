@@ -103,3 +103,14 @@ static PyObject *{{ boxer }}({{ c_type }} value) {
     }
     return {{ box_from_wire_tag }}(wire_tag);
 }
+
+static PyObject *{{ owned_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 4)) {
+        goto done;
+    }
+    result = {{ box_from_wire_tag }}((int32_t)boltffi_python_read_u32_le(buffer.ptr));
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}

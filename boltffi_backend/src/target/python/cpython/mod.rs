@@ -8,10 +8,11 @@ use boltffi_binding::{
 use crate::{
     bridge::python_cext::PythonCExtBridgeContract,
     core::{
-        BindingCapability, BridgeCapability, CapabilityRequirements, Emitted, GeneratedOutput,
-        HostCapabilities, RenderContext, RenderedDeclaration, Result, contract::sealed, host,
+        BindingCapability, BridgeCapability, CapabilityRequirements, Diagnostic, Emitted,
+        GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result,
+        contract::sealed, host,
     },
-    target::python::name_style::PackageModule,
+    target::python::name_style::{Name, PackageModule},
 };
 
 /// Python host renderer for a CPython extension bridge.
@@ -82,6 +83,13 @@ impl host::HostBackend for PythonCExtHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
+        if let Some(reason) = render::Function::unsupported(decl.callable()) {
+            return Ok(Emitted::diagnostic(Diagnostic::new(format!(
+                "python target skipped unsupported function {}: {}",
+                Name::new(decl.name()).function(),
+                reason
+            ))));
+        }
         render::Function::from_declaration(decl, bridge, context)?.render()
     }
 
@@ -169,7 +177,7 @@ mod tests {
 
     use crate::{
         bridge::{c::CBridge, python_cext::PythonCExtBridge},
-        core::{BridgeLayer, Error, GeneratedOutput, Target},
+        core::{BridgeLayer, GeneratedOutput, Target},
         target::python::PythonCExtHost,
     };
 
@@ -408,7 +416,7 @@ mod tests {
             "boltffi_python_parse_vec_point(args[0], &values_wire, &values_ptr, &values_len)"
         ));
         assert!(extension.contains(
-            "result = boltffi_python_decode_owned_vec_point(boltffi_python_boltffi_function_demo_echo_points(values_ptr, values_len));"
+            "result = boltffi_python_decode_owned_vec_point(boltffi_python_boltffi_function_demo_echo_points((const ___Point *)values_ptr, values_len));"
         ));
         assert!(stub.contains("def echo_points(values: list[Point]) -> list[Point]: ..."));
     }
@@ -435,7 +443,7 @@ mod tests {
             "boltffi_python_parse_vec_i32(args[0], &values_wire, &values_ptr, &values_len)"
         ));
         assert!(extension.contains(
-            "result = boltffi_python_decode_owned_vec_i32(boltffi_python_boltffi_function_demo_echo_numbers(values_ptr, values_len));"
+            "result = boltffi_python_decode_owned_vec_i32(boltffi_python_boltffi_function_demo_echo_numbers((const int32_t *)values_ptr, values_len));"
         ));
         assert!(stub.contains("def echo_numbers(values: list[int]) -> list[int]: ..."));
     }
@@ -1002,8 +1010,8 @@ mod tests {
     }
 
     #[test]
-    fn python_target_rejects_async_functions() {
-        let error = target()
+    fn python_target_omits_async_functions_with_diagnostic() {
+        let output = target()
             .render(&bindings(
                 r#"
                 #[export]
@@ -1012,15 +1020,18 @@ mod tests {
                 }
                 "#,
             ))
-            .expect_err("Python target should reject async functions");
+            .expect("Python target should render remaining declarations");
 
         assert_eq!(
-            error,
-            Error::UnsupportedTarget {
-                target: "python",
-                shape: "async function",
-            }
+            output.diagnostics()[0].message(),
+            "python target skipped unsupported function fetch: async function"
         );
+        assert!(
+            !file(&output, "_native.c").contains("callable_wrapper_boltffi_function_demo_fetch")
+        );
+        assert!(!file(&output, "_native.c").contains("{\"fetch\""));
+        assert!(!file(&output, "demo/__init__.py").contains("fetch"));
+        assert!(!file(&output, "demo/__init__.pyi").contains("fetch"));
     }
 
     #[test]

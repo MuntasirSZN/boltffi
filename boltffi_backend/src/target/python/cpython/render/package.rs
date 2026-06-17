@@ -8,7 +8,7 @@ use boltffi_binding::{
     EncodedRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedCallable, ExportedMethodDecl, FieldKey,
     FunctionDecl, HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native,
     NativeSymbol, OutOfRust, ParamDecl, ParamPlan, Primitive, Receive, RecordDecl, RecordId,
-    ReturnPlan, StreamDecl, StreamItemPlan, StreamMode, TypeRef, native,
+    ReturnPlan, StreamDecl, StreamItemPlan, TypeRef, native,
 };
 
 use crate::{
@@ -1324,12 +1324,6 @@ impl ClassStream {
         class_name: &str,
         package: &Package<'_, '_>,
     ) -> Result<Self> {
-        if matches!(declaration.mode(), StreamMode::Callback) {
-            return Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "callback-mode stream package",
-            });
-        }
         let symbols = stream::Symbols::new(declaration);
         let item = StreamItem::from_plan(declaration.item(), package)?;
         let pop_batch_body = item.pop_batch_body(symbols.pop_batch());

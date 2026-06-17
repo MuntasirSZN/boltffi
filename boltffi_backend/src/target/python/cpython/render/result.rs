@@ -58,16 +58,8 @@ impl Conversion {
         )
     }
 
-    pub fn supports_encoded(ty: &TypeRef) -> bool {
-        matches!(
-            ty,
-            TypeRef::Primitive(_)
-                | TypeRef::String
-                | TypeRef::Bytes
-                | TypeRef::Record(_)
-                | TypeRef::Enum(_)
-                | TypeRef::Custom(_)
-        )
+    pub fn supports_encoded(_ty: &TypeRef) -> bool {
+        true
     }
 
     pub fn from_plan(
@@ -139,14 +131,7 @@ impl Conversion {
                 ty: TypeRef::Enum(enumeration),
                 shape: native::BufferShape::Buffer,
                 ..
-            } => Ok(Self {
-                void: false,
-                converter: enumeration::Symbols::from_enum_id(*enumeration, bridge, context)?
-                    .boxer()
-                    .to_owned(),
-                primitive: None,
-                owned_buffer: None,
-            }),
+            } => Self::from_encoded_type(&TypeRef::Enum(*enumeration), bridge, context),
             ReturnPlan::EncodedViaReturnSlot {
                 ty: TypeRef::Custom(custom_type),
                 shape: native::BufferShape::Buffer,
@@ -298,7 +283,7 @@ impl Conversion {
             TypeRef::Enum(enumeration) => Ok(Self {
                 void: false,
                 converter: enumeration::Symbols::from_enum_id(*enumeration, bridge, context)?
-                    .boxer()
+                    .owned_decoder()
                     .to_owned(),
                 primitive: None,
                 owned_buffer: None,
@@ -307,10 +292,7 @@ impl Conversion {
                 let custom_types = custom::CustomTypes::from_context(context);
                 Self::from_encoded_type(custom_types.representation(*custom_type)?, bridge, context)
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "unsupported encoded return",
-            }),
+            _ => Self::from_owned_buffer(OwnedBuffer::RawWire),
         }
     }
 

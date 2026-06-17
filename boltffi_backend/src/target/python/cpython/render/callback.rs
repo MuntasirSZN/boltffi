@@ -147,6 +147,10 @@ impl Callback {
         &self.symbols.register
     }
 
+    pub fn parser_declarations(&self) -> Vec<String> {
+        self.symbols.parser_declarations().into_iter().collect()
+    }
+
     pub fn primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
         self.methods.iter().flat_map(Method::primitives)
     }
@@ -224,6 +228,19 @@ impl Symbols {
             HandlePresence::Nullable => &self.optional_parser,
             _ => &self.parser,
         }
+    }
+
+    fn parser_declarations(&self) -> [String; 2] {
+        [
+            format!(
+                "static int {}(PyObject *value, BoltFFICallbackHandle *out);",
+                self.parser
+            ),
+            format!(
+                "static int {}(PyObject *value, BoltFFICallbackHandle *out);",
+                self.optional_parser
+            ),
+        ]
     }
 
     fn from_declaration(callback: &CallbackDecl<Native>) -> Result<Self> {
@@ -1331,6 +1348,7 @@ impl<'signature> CompletionSignature<'signature> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CompletionPayload {
     value: String,
+    c_type: String,
     default_value: String,
     parser: String,
     error_parser: String,
@@ -1516,6 +1534,7 @@ impl CompletionPayload {
     fn void() -> Self {
         Self {
             value: String::new(),
+            c_type: String::new(),
             default_value: String::new(),
             parser: String::new(),
             error_parser: String::new(),
@@ -1571,6 +1590,7 @@ impl CompletionPayload {
         };
         Self {
             value: "completion_value".to_owned(),
+            c_type: String::new(),
             default_value,
             parser,
             error_parser: String::new(),
@@ -1607,8 +1627,9 @@ impl CompletionPayload {
             });
         }
         let encoded = Self::wire_parser(ty, bridge, context)?;
-        Ok(Self {
+        Self {
             value: "completion_value".to_owned(),
+            c_type: String::new(),
             default_value: "{0}".to_owned(),
             parser: encoded.parser,
             error_parser: String::new(),
@@ -1628,7 +1649,8 @@ impl CompletionPayload {
             string: encoded.string,
             bytes: encoded.bytes,
             raw_wire: encoded.raw_wire,
-        })
+        }
+        .with_payload_type(payload)
     }
 
     fn vector(
@@ -1644,8 +1666,9 @@ impl CompletionPayload {
             });
         }
         let element = direct_vector::Element::from_type_ref(element, bridge, context)?;
-        Ok(Self {
+        Self {
             value: "completion_value".to_owned(),
+            c_type: String::new(),
             default_value: "{0}".to_owned(),
             parser: element.vector_encoder().to_owned(),
             error_parser: String::new(),
@@ -1665,7 +1688,8 @@ impl CompletionPayload {
             string: false,
             bytes: false,
             raw_wire: false,
-        })
+        }
+        .with_payload_type(payload)
     }
 
     fn scalar_option(primitive: Primitive, payload: &c::Type) -> Result<Self> {
@@ -1676,8 +1700,9 @@ impl CompletionPayload {
             });
         }
         let primitive = primitive::Runtime::new(primitive);
-        Ok(Self {
+        Self {
             value: "completion_value".to_owned(),
+            c_type: String::new(),
             default_value: "{0}".to_owned(),
             parser: primitive.optional_wire_encoder()?,
             error_parser: String::new(),
@@ -1697,7 +1722,8 @@ impl CompletionPayload {
             string: false,
             bytes: false,
             raw_wire: false,
-        })
+        }
+        .with_payload_type(payload)
     }
 
     fn fallible_success(
@@ -1772,8 +1798,9 @@ impl CompletionPayload {
             }
             _ => unreachable!(),
         };
-        Ok(Self {
+        Self {
             value: "completion_value".to_owned(),
+            c_type: String::new(),
             default_value: "{0}".to_owned(),
             parser,
             error_parser: String::new(),
@@ -1793,7 +1820,8 @@ impl CompletionPayload {
             string: false,
             bytes: false,
             raw_wire: false,
-        })
+        }
+        .with_payload_type(payload)
     }
 
     fn wire_empty(payload: &c::Type) -> Result<Self> {
@@ -1803,8 +1831,9 @@ impl CompletionPayload {
                 shape: "async empty callback payload ABI mismatch",
             });
         }
-        Ok(Self {
+        Self {
             value: "completion_value".to_owned(),
+            c_type: String::new(),
             default_value: "{0}".to_owned(),
             parser: String::new(),
             error_parser: String::new(),
@@ -1824,7 +1853,8 @@ impl CompletionPayload {
             string: false,
             bytes: false,
             raw_wire: false,
-        })
+        }
+        .with_payload_type(payload)
     }
 
     fn wire_parser(
@@ -1858,6 +1888,7 @@ impl CompletionPayload {
 
     fn with_payload_type(mut self, payload: &c::Type) -> Result<Self> {
         let payload_type = TypeSyntax::new(payload).anonymous()?;
+        self.c_type = payload_type.clone();
         self.default_value = match self.default_value.as_str() {
             "{0}" => format!("({payload_type}){{0}}"),
             value => value.to_owned(),

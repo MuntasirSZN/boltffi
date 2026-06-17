@@ -26,6 +26,7 @@ struct NativeModuleTemplate {
     records: Vec<String>,
     enums: Vec<String>,
     classes: Vec<String>,
+    callback_declarations: Vec<String>,
     callbacks: Vec<String>,
     streams: Vec<String>,
     constants: Vec<String>,
@@ -111,6 +112,10 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 .map(|enumeration| enumeration.source.clone())
                 .collect(),
             classes: classes.iter().map(|class| class.source.clone()).collect(),
+            callback_declarations: callbacks
+                .iter()
+                .flat_map(|callback| callback.wrapper.parser_declarations())
+                .collect(),
             callbacks: callbacks
                 .iter()
                 .map(|callback| callback.source.clone())
@@ -607,6 +612,7 @@ impl ModuleSupport {
             || !self.direct_vector_elements.is_empty()
             || self.encoded_records
             || self.data_enums
+            || self.c_style_enums
     }
 
     fn uses_wire_strings(&self) -> bool {

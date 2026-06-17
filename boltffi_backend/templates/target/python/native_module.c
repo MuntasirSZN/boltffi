@@ -1122,6 +1122,9 @@ done:
 {% for enumeration in enums %}
 {{ enumeration }}
 {% endfor %}
+{% for declaration in callback_declarations %}
+{{ declaration }}
+{% endfor %}
 {% for class in classes %}
 {{ class }}
 {% endfor %}

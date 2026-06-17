@@ -250,7 +250,7 @@ impl Conversion {
     pub fn call_args(&self) -> Vec<String> {
         match &self.kind {
             Kind::Direct(_) => vec![self.name.clone()],
-            Kind::Encoded(encoded) => vec![encoded.pointer.clone(), encoded.length.clone()],
+            Kind::Encoded(encoded) => encoded.call_args(),
         }
     }
 
@@ -565,6 +565,22 @@ struct EncodedParam {
     wire: String,
     pointer: String,
     length: String,
+}
+
+impl EncodedParam {
+    fn call_args(&self) -> Vec<String> {
+        match &self.value {
+            Encoded::DirectVector(element) => vec![
+                format!("(const {} *){}", element.c_type(), self.pointer),
+                self.length.clone(),
+            ],
+            Encoded::String
+            | Encoded::Bytes
+            | Encoded::Primitive(_)
+            | Encoded::RegisteredType(_)
+            | Encoded::RawWire => vec![self.pointer.clone(), self.length.clone()],
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -44,7 +44,7 @@ static {{ method.returns.c_type }} {{ method.function }}(uint64_t handle{% if le
     {{ completion.payload.error_direct_type }} {{ completion.payload.error_direct_value }} = ({{ completion.payload.error_direct_type }}){0};
 {%- endif %}
 {%- if completion.payload.has_value() %}
-    {{ completion.payload.value }} = {{ completion.payload.default_value }};
+    {{ completion.payload.c_type }} {{ completion.payload.value }} = {{ completion.payload.default_value }};
 {%- endif %}
     FfiStatus completion_status = FFI_STATUS_OK;
 {%- endif %}

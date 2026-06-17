@@ -31,6 +31,7 @@ struct CStyleTemplate {
     parser: String,
     wire_encoder: String,
     boxer: String,
+    owned_decoder: String,
     box_from_wire_tag: String,
     native_to_wire_tag: String,
     repr_parser: String,
@@ -101,6 +102,7 @@ impl Enumeration {
                     parser: symbols.parser,
                     wire_encoder: symbols.wire_encoder,
                     boxer: symbols.boxer,
+                    owned_decoder: symbols.owned_decoder,
                     box_from_wire_tag,
                     native_to_wire_tag,
                     repr_parser: primitive.parser()?.to_owned(),
@@ -397,6 +399,7 @@ pub struct Symbols {
     parser: String,
     wire_encoder: String,
     boxer: String,
+    owned_decoder: String,
     borrowed_decoder: String,
     direct_vec_parser: Option<String>,
     direct_vec_decoder: Option<String>,
@@ -476,6 +479,10 @@ impl Symbols {
         &self.boxer
     }
 
+    pub fn owned_decoder(&self) -> &str {
+        &self.owned_decoder
+    }
+
     pub fn borrowed_decoder(&self) -> &str {
         &self.borrowed_decoder
     }
@@ -535,6 +542,7 @@ impl Symbols {
             parser: format!("boltffi_python_parse_{stem}"),
             wire_encoder: format!("boltffi_python_wire_{stem}"),
             boxer: format!("boltffi_python_box_{stem}"),
+            owned_decoder: format!("boltffi_python_decode_owned_{stem}"),
             borrowed_decoder: String::new(),
             direct_vec_parser: Some(format!("boltffi_python_parse_vec_{stem}")),
             direct_vec_decoder: Some(format!("boltffi_python_decode_owned_vec_{stem}")),
@@ -560,6 +568,7 @@ impl Symbols {
             parser: format!("boltffi_python_wire_{stem}"),
             wire_encoder: format!("boltffi_python_wire_{stem}"),
             boxer: format!("boltffi_python_decode_owned_{stem}"),
+            owned_decoder: format!("boltffi_python_decode_owned_{stem}"),
             borrowed_decoder: format!("boltffi_python_decode_borrowed_{stem}"),
             direct_vec_parser: None,
             direct_vec_decoder: None,

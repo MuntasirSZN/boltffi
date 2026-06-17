@@ -42,15 +42,17 @@ pub struct Stream {
 
 impl Stream {
     pub fn supports(declaration: &StreamDecl<Native>) -> bool {
-        matches!(declaration.mode(), StreamMode::Async | StreamMode::Batch)
-            && matches!(
-                declaration.item(),
-                StreamItemPlan::Direct { .. }
-                    | StreamItemPlan::Encoded {
-                        shape: native::BufferShape::Buffer,
-                        ..
-                    }
-            )
+        matches!(
+            declaration.mode(),
+            StreamMode::Async | StreamMode::Batch | StreamMode::Callback
+        ) && matches!(
+            declaration.item(),
+            StreamItemPlan::Direct { .. }
+                | StreamItemPlan::Encoded {
+                    shape: native::BufferShape::Buffer,
+                    ..
+                }
+        )
     }
 
     pub fn from_declaration(
@@ -58,12 +60,6 @@ impl Stream {
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        if matches!(declaration.mode(), StreamMode::Callback) {
-            return Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "callback-mode stream",
-            });
-        }
         let symbols = Symbols::new(declaration);
         Ok(Self {
             subscribe: Method::new(
