@@ -5,7 +5,7 @@ use boltffi_binding::{
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Ident, Type, parse_quote};
+use syn::{Type, parse_quote};
 
 use crate::experimental::{
     error::Error,
@@ -34,7 +34,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Input<'expansion, 'lowered, S> {
     pub fn new(
         function: &'lowered FunctionDecl<S>,
         source: rust_api::Callable<'lowered>,
-        function_ident: Ident,
+        rust_call: export::RustCall,
         visibility: TokenStream,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
@@ -42,7 +42,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Input<'expansion, 'lowered, S> {
             function.symbol(),
             function.callable(),
             source,
-            export::RustCall::function(function_ident),
+            rust_call,
             export::ReceiverTokens::none(),
             visibility,
             expansion,
@@ -274,7 +274,7 @@ where
             .iter()
             .chain(params.conversions())
             .collect::<Vec<_>>();
-        let rust_call = self.rust_call.expression(params.rust_arguments());
+        let rust_call = self.rust_call.awaited_expression(params.rust_arguments());
         let safety = (!ffi_parameters.is_empty()).then(|| quote! { unsafe });
         let start = quote! {
             #cfg
@@ -282,7 +282,7 @@ where
             #visibility #safety extern "C" fn #start_ident(#(#ffi_parameters),*) -> ::boltffi::__private::RustFutureHandle {
                 #(#conversions)*
                 ::boltffi::__private::rustfuture::rust_future_new(async move {
-                    #rust_call.await
+                    #rust_call
                 })
             }
         };

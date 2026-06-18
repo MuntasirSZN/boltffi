@@ -1,4 +1,6 @@
-use boltffi_ast::{ClassDef, SourceContract, StreamDef};
+use std::collections::HashMap;
+
+use boltffi_ast::{ClassDef, Path, PathRoot, SourceContract, StreamDef, TraitDef};
 use boltffi_binding::{Native, SerializedBindings, Wasm32};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -18,17 +20,37 @@ use crate::experimental::{
 /// bindings cannot be crossed accidentally.
 pub struct Expander<'lowered> {
     source: &'lowered SourceContract,
+    support: &'lowered SourceContract,
+    visible_paths: HashMap<String, Path>,
 }
 
 struct SurfaceExpander<'expansion, 'lowered, S: RenderSurface> {
     source: &'lowered SourceContract,
+    support: &'lowered SourceContract,
+    visible_paths: &'expansion HashMap<String, Path>,
     expansion: &'expansion Expansion<'lowered, S>,
 }
 
 impl<'lowered> Expander<'lowered> {
     /// Creates an expander over the scanned source contract.
-    pub const fn new(source: &'lowered SourceContract) -> Self {
-        Self { source }
+    pub fn new(source: &'lowered SourceContract) -> Self {
+        Self {
+            source,
+            support: source,
+            visible_paths: HashMap::new(),
+        }
+    }
+
+    pub fn with_support(
+        source: &'lowered SourceContract,
+        support: &'lowered SourceContract,
+        visible_paths: impl IntoIterator<Item = (String, Path)>,
+    ) -> Self {
+        Self {
+            source,
+            support,
+            visible_paths: visible_paths.into_iter().collect(),
+        }
     }
 
     /// Expands wrappers for the native surface.
@@ -36,7 +58,9 @@ impl<'lowered> Expander<'lowered> {
         &self,
         expansion: &'expansion Expansion<'lowered, Native>,
     ) -> Result<TokenStream, Error> {
-        let wrappers = SurfaceExpander::new(self.source, expansion).expand()?;
+        let wrappers =
+            SurfaceExpander::new(self.source, self.support, &self.visible_paths, expansion)
+                .expand()?;
         let metadata = metadata::render(SerializedBindings::native(expansion.bindings().clone()))?;
 
         Ok(quote! {
@@ -50,7 +74,9 @@ impl<'lowered> Expander<'lowered> {
         &self,
         expansion: &'expansion Expansion<'lowered, Wasm32>,
     ) -> Result<TokenStream, Error> {
-        let wrappers = SurfaceExpander::new(self.source, expansion).expand()?;
+        let wrappers =
+            SurfaceExpander::new(self.source, self.support, &self.visible_paths, expansion)
+                .expand()?;
         let metadata = metadata::render(SerializedBindings::wasm32(expansion.bindings().clone()))?;
 
         Ok(quote! {
@@ -141,9 +167,16 @@ where
 {
     const fn new(
         source: &'lowered SourceContract,
+        support: &'lowered SourceContract,
+        visible_paths: &'expansion HashMap<String, Path>,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
-        Self { source, expansion }
+        Self {
+            source,
+            support,
+            visible_paths,
+            expansion,
+        }
     }
 
     fn expand(self) -> Result<TokenStream, Error> {
@@ -167,20 +200,60 @@ where
     }
 
     fn callbacks(&self) -> Result<Vec<TokenStream>, Error> {
-        self.source
+        self.support
             .traits
             .iter()
             .map(|source| {
                 let callback = wrapper::callback::Trait::new(
                     self.expansion.callback_trait(source)?,
                     self.expansion,
-                );
+                )
+                .with_path(self.trait_path(source)?, self.trait_object_impls(source));
                 <wrapper::callback::Renderer as Render<S, _>>::render(
                     wrapper::callback::Renderer,
                     callback,
                 )
             })
             .collect()
+    }
+
+    fn trait_path(&self, source: &TraitDef) -> Result<Option<TokenStream>, Error> {
+        self.visible_paths
+            .get(source.id.as_str())
+            .map(Self::path_tokens)
+            .transpose()
+    }
+
+    fn trait_object_impls(&self, source: &TraitDef) -> bool {
+        let package = self.source.package.name.replace('-', "_");
+        source.id.as_str().split("::").next() == Some(package.as_str())
+    }
+
+    fn path_tokens(path: &Path) -> Result<TokenStream, Error> {
+        let prefix = match path.root {
+            PathRoot::Relative => TokenStream::new(),
+            PathRoot::Crate => quote! { crate:: },
+            PathRoot::Self_ => quote! { self:: },
+            PathRoot::Super(levels) => {
+                let parents =
+                    std::iter::repeat_n(quote! { super }, levels.get()).collect::<Vec<_>>();
+                quote! { #(#parents)::*:: }
+            }
+            PathRoot::Absolute => quote! { :: },
+        };
+        let segments = path
+            .segments
+            .iter()
+            .map(|segment| {
+                if !segment.arguments.is_empty() {
+                    return Err(Error::UnsupportedExpansion("generic callback trait path"));
+                }
+                syn::parse_str::<syn::Ident>(segment.name.as_str()).map_err(|_| {
+                    Error::SourceSyntaxMismatch("callback trait path is not Rust syntax")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(quote! { #prefix #(#segments)::* })
     }
 
     fn records(&self) -> Result<Vec<TokenStream>, Error> {
@@ -251,12 +324,18 @@ where
     }
 
     fn functions(&self) -> Result<Vec<TokenStream>, Error> {
-        self.source
+        self.support
             .functions
             .iter()
             .map(|source| {
-                wrapper::function::Renderer::new(self.expansion.function(source)?, self.expansion)
-                    .render()
+                let renderer = wrapper::function::Renderer::new(
+                    self.expansion.function(source)?,
+                    self.expansion,
+                );
+                match self.visible_paths.get(source.id.as_str()) {
+                    Some(path) => renderer.with_path(path)?.render(),
+                    None => renderer.render(),
+                }
             })
             .collect()
     }

@@ -35,6 +35,7 @@ pub struct ReceiverTokens {
 enum RustCallTarget {
     Constant(syn::Ident),
     Function(syn::Ident),
+    FunctionPath(TokenStream),
     Associated {
         owner: TokenStream,
         method: syn::Ident,
@@ -198,6 +199,13 @@ impl RustCall {
         }
     }
 
+    pub fn function_path(owner: syn::Ident, path: TokenStream) -> Self {
+        Self {
+            owner,
+            target: RustCallTarget::FunctionPath(path),
+        }
+    }
+
     pub fn associated(owner: TokenStream, method: syn::Ident) -> Self {
         Self {
             owner: method.clone(),
@@ -242,6 +250,7 @@ impl RustCall {
                 quote! { #constant }
             }
             RustCallTarget::Function(function) => quote! { #function(#(#arguments),*) },
+            RustCallTarget::FunctionPath(path) => quote! { #path(#(#arguments),*) },
             RustCallTarget::Associated { owner, method } => {
                 quote! { #owner::#method(#(#arguments),*) }
             }
@@ -256,6 +265,24 @@ impl RustCall {
                 method,
             } => {
                 Self::class_method_expression(*receive, class, handle, receiver, method, arguments)
+            }
+        }
+    }
+
+    pub fn awaited_expression(&self, arguments: &[TokenStream]) -> TokenStream {
+        match &self.target {
+            RustCallTarget::ClassMethod {
+                class,
+                handle,
+                receiver,
+                receive,
+                method,
+            } => Self::class_method_awaited_expression(
+                *receive, class, handle, receiver, method, arguments,
+            ),
+            _ => {
+                let expression = self.expression(arguments);
+                quote! { #expression.await }
             }
         }
     }
@@ -277,6 +304,23 @@ impl RustCall {
             {
                 #receiver
                 #handle.#method(#(#arguments),*)
+            }
+        }
+    }
+
+    fn class_method_awaited_expression(
+        receive: Receive,
+        class: &syn::Ident,
+        handle: &syn::Ident,
+        receiver: &ClassReceiverBinding,
+        method: &syn::Ident,
+        arguments: &[TokenStream],
+    ) -> TokenStream {
+        let receiver = receiver.access(receive, class, handle);
+        quote! {
+            {
+                #receiver
+                #handle.#method(#(#arguments),*).await
             }
         }
     }

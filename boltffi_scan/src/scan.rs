@@ -1,13 +1,15 @@
+use std::collections::{HashMap, HashSet};
 use std::path::Path as FsPath;
 
-use boltffi_ast::{PackageInfo, SourceContract};
+use boltffi_ast::{PackageInfo, Path, PathRoot, PathSegment, SourceContract};
 
 use crate::declared_types::DeclaredTypes;
 use crate::input::ScanInput;
 use crate::marked::MarkedItems;
 use crate::package_graph::{ExportedPackage, LoadError, PackageGraph};
+use crate::path::ImportLookup;
 use crate::source_tree::SourceTree;
-use crate::{ScanError, items};
+use crate::{ModuleScope, ScanError, items};
 
 pub fn scan(input: &ScanInput) -> Result<SourceContract, ScanError> {
     scan_source(input.root(), input.package().clone())
@@ -16,9 +18,16 @@ pub fn scan(input: &ScanInput) -> Result<SourceContract, ScanError> {
 pub struct PackageScan {
     root: SourceContract,
     complete: SourceContract,
+    root_visible_paths: HashMap<String, Path>,
 }
 
 impl PackageScan {
+    pub fn root_visible_paths(&self) -> impl Iterator<Item = (&str, &Path)> {
+        self.root_visible_paths
+            .iter()
+            .map(|(id, path)| (id.as_str(), path))
+    }
+
     pub fn root(&self) -> &SourceContract {
         &self.root
     }
@@ -27,18 +36,105 @@ impl PackageScan {
         &self.complete
     }
 
+    pub fn root_with_support(&self) -> SourceContract {
+        let root = self.root_crate();
+        let mut source = self.root.clone();
+        source.records = self
+            .complete
+            .records
+            .iter()
+            .cloned()
+            .map(|mut record| {
+                if !root.owns(record.id.as_str()) {
+                    record.methods.clear();
+                }
+                record
+            })
+            .collect();
+        source.enums = self
+            .complete
+            .enums
+            .iter()
+            .cloned()
+            .map(|mut enumeration| {
+                if !root.owns(enumeration.id.as_str()) {
+                    enumeration.methods.clear();
+                }
+                enumeration
+            })
+            .collect();
+        source.traits = self.complete.traits.clone();
+        source.customs = self.complete.customs.clone();
+        source.functions = self
+            .complete
+            .functions
+            .iter()
+            .filter(|function| {
+                root.owns(function.id.as_str())
+                    || self.root_visible_paths.contains_key(function.id.as_str())
+            })
+            .cloned()
+            .collect();
+        source
+    }
+
     pub fn into_complete(self) -> SourceContract {
         self.complete
+    }
+
+    fn root_crate(&self) -> RootCrate {
+        RootCrate::new(&self.root.package.name)
+    }
+}
+
+struct RootCrate {
+    name: String,
+    prefix: String,
+}
+
+impl RootCrate {
+    fn new(name: &str) -> Self {
+        let name = name.replace('-', "_");
+        Self {
+            prefix: format!("{name}::"),
+            name,
+        }
+    }
+
+    fn owns(&self, id: &str) -> bool {
+        id == self.name || id.starts_with(&self.prefix)
     }
 }
 
 pub fn scan_package(input: &ScanInput) -> Result<PackageScan, ScanError> {
     let root_tree = SourceTree::load(input.root(), &input.package().name)?;
-    let complete_tree = complete_tree(input, root_tree.clone())?;
-    let root = scan_tree_with_declarations(&root_tree, &complete_tree, input.package().clone())?;
+    let dependencies = dependencies(input.manifest_dir())?;
+    let direct_dependency_modules = dependencies.direct_modules();
+    let complete_tree = SourceTree::combine(
+        dependencies
+            .reachable
+            .into_iter()
+            .chain(std::iter::once(root_tree.clone())),
+    );
+    let root_marked = MarkedItems::collect(&root_tree)?;
+    let complete_marked = MarkedItems::collect(&complete_tree)?;
+    let declared_types = DeclaredTypes::index(&complete_tree, &complete_marked)?;
+    let root =
+        scan_marked_with_declarations(&root_marked, &declared_types, input.package().clone())?;
     let complete =
-        scan_tree_with_declarations(&complete_tree, &complete_tree, input.package().clone())?;
-    Ok(PackageScan { root, complete })
+        scan_marked_with_declarations(&complete_marked, &declared_types, input.package().clone())?;
+    let root_visible_paths = root_visible_paths(
+        &declared_types,
+        &complete_tree,
+        &complete_marked,
+        &input.package().name,
+        &direct_dependency_modules,
+    );
+    Ok(PackageScan {
+        root,
+        complete,
+        root_visible_paths,
+    })
 }
 
 pub fn scan_source(
@@ -66,15 +162,23 @@ fn scan_tree_with_declarations(
     let marked = MarkedItems::collect(source_tree)?;
     let declaration_marked = MarkedItems::collect(declaration_tree)?;
     let declared_types = DeclaredTypes::index(declaration_tree, &declaration_marked)?;
-    let classes = items::class::scan(marked.classes(), &declared_types)?;
-    let mut records = scan_each(marked.records(), &declared_types, items::record::scan)?;
-    let mut enums = scan_each(marked.enums(), &declared_types, items::enumeration::scan)?;
-    let traits = scan_each(marked.traits(), &declared_types, items::callback::scan)?;
-    let customs = scan_each(marked.customs(), &declared_types, items::custom_type::scan)?;
-    let streams = items::stream::scan(marked.classes(), &declared_types)?;
-    items::impl_block::attach_methods(marked.impls(), &declared_types, &mut records, &mut enums)?;
-    let functions = scan_each(marked.functions(), &declared_types, items::function::scan)?;
-    let constants = scan_each(marked.constants(), &declared_types, items::constant::scan)?;
+    scan_marked_with_declarations(&marked, &declared_types, package)
+}
+
+fn scan_marked_with_declarations(
+    marked: &MarkedItems<'_>,
+    declared_types: &DeclaredTypes,
+    package: PackageInfo,
+) -> Result<SourceContract, ScanError> {
+    let classes = items::class::scan(marked.classes(), declared_types)?;
+    let mut records = scan_each(marked.records(), declared_types, items::record::scan)?;
+    let mut enums = scan_each(marked.enums(), declared_types, items::enumeration::scan)?;
+    let traits = scan_each(marked.traits(), declared_types, items::callback::scan)?;
+    let customs = scan_each(marked.customs(), declared_types, items::custom_type::scan)?;
+    let streams = items::stream::scan(marked.classes(), declared_types)?;
+    items::impl_block::attach_methods(marked.impls(), declared_types, &mut records, &mut enums)?;
+    let functions = scan_each(marked.functions(), declared_types, items::function::scan)?;
+    let constants = scan_each(marked.constants(), declared_types, items::constant::scan)?;
 
     let mut contract = SourceContract::new(package);
     contract.records = records;
@@ -88,25 +192,41 @@ fn scan_tree_with_declarations(
     Ok(contract)
 }
 
-fn complete_tree(input: &ScanInput, root_tree: SourceTree) -> Result<SourceTree, ScanError> {
-    let Some(manifest_dir) = input.manifest_dir() else {
-        return Ok(root_tree);
-    };
-    let dependencies = dependency_trees(manifest_dir)?;
-    Ok(SourceTree::combine(
-        dependencies.into_iter().chain(std::iter::once(root_tree)),
-    ))
+struct PackageDependencies {
+    direct: Vec<ExportedPackage>,
+    reachable: Vec<SourceTree>,
 }
 
-fn dependency_trees(manifest_dir: &FsPath) -> Result<Vec<SourceTree>, ScanError> {
-    let Some(graph) = PackageGraph::load(manifest_dir).map_err(package_graph_error)? else {
-        return Ok(Vec::new());
+impl PackageDependencies {
+    fn empty() -> Self {
+        Self {
+            direct: Vec::new(),
+            reachable: Vec::new(),
+        }
+    }
+
+    fn direct_modules(&self) -> Vec<String> {
+        self.direct
+            .iter()
+            .map(|package| package.module_name().to_owned())
+            .collect()
+    }
+}
+
+fn dependencies(manifest_dir: Option<&FsPath>) -> Result<PackageDependencies, ScanError> {
+    let Some(manifest_dir) = manifest_dir else {
+        return Ok(PackageDependencies::empty());
     };
-    graph
+    let Some(graph) = PackageGraph::load(manifest_dir).map_err(package_graph_error)? else {
+        return Ok(PackageDependencies::empty());
+    };
+    let direct = graph.direct_exported_dependencies(graph.root_id());
+    let reachable = graph
         .reachable_exported_dependencies(graph.root_id())
         .into_iter()
         .map(dependency_tree)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PackageDependencies { direct, reachable })
 }
 
 fn dependency_tree(package: ExportedPackage) -> Result<SourceTree, ScanError> {
@@ -116,6 +236,167 @@ fn dependency_tree(package: ExportedPackage) -> Result<SourceTree, ScanError> {
 fn package_graph_error(error: LoadError) -> ScanError {
     ScanError::PackageGraph {
         message: error.to_string(),
+    }
+}
+
+fn root_visible_paths(
+    declared_types: &DeclaredTypes,
+    source_tree: &SourceTree,
+    marked: &MarkedItems<'_>,
+    root_crate: &str,
+    direct_dependencies: &[String],
+) -> HashMap<String, Path> {
+    let mut paths = declared_types
+        .paths()
+        .filter_map(|id| {
+            declared_types
+                .root_visible_path(id, root_crate, direct_dependencies)
+                .map(|path| (id.to_owned(), contract_path(root_crate, &path)))
+        })
+        .collect::<HashMap<_, _>>();
+    paths.extend(
+        FunctionPaths::new(source_tree, marked.functions())
+            .root_visible_paths(root_crate, direct_dependencies)
+            .map(|(id, path)| (id, contract_path(root_crate, &path))),
+    );
+    paths
+}
+
+struct FunctionPaths<'source> {
+    by_path: HashSet<String>,
+    scopes: HashMap<String, &'source ModuleScope>,
+}
+
+impl<'source> FunctionPaths<'source> {
+    fn new(
+        source_tree: &'source SourceTree,
+        functions: &[crate::marked::Marked<'source, syn::ItemFn>],
+    ) -> Self {
+        let by_path = functions
+            .iter()
+            .map(|function| {
+                function
+                    .scope()
+                    .path()
+                    .qualified(&function.item().sig.ident.to_string())
+            })
+            .collect();
+        let scopes = source_tree
+            .modules()
+            .iter()
+            .map(|module| (module.scope().path().segments().join("::"), module.scope()))
+            .collect();
+        Self { by_path, scopes }
+    }
+
+    fn root_visible_paths<'dependency>(
+        &'source self,
+        root_crate: &'dependency str,
+        direct_dependencies: &'dependency [String],
+    ) -> impl Iterator<Item = (String, String)> + 'dependency
+    where
+        'source: 'dependency,
+    {
+        self.by_path.iter().filter_map(move |id| {
+            self.root_visible_path(id, root_crate, direct_dependencies)
+                .map(|path| (id.clone(), path))
+        })
+    }
+
+    fn root_visible_path(
+        &self,
+        id: &str,
+        root_crate: &str,
+        direct_dependencies: &[String],
+    ) -> Option<String> {
+        let segments = id.split("::").collect::<Vec<_>>();
+        let root = segments.first().copied()?;
+        if root == root_crate
+            || direct_dependencies
+                .iter()
+                .any(|dependency| dependency == root)
+        {
+            return Some(id.to_owned());
+        }
+        let leaf = segments.last().copied()?;
+        direct_dependencies.iter().find_map(|dependency| {
+            let candidate = format!("{dependency}::{leaf}");
+            (self.resolve_public_path(&candidate).as_deref() == Some(id)).then_some(candidate)
+        })
+    }
+
+    fn resolve_public_path(&self, path: &str) -> Option<String> {
+        self.by_path
+            .contains(path)
+            .then(|| path.to_owned())
+            .or_else(|| self.resolve_reexported(path, &mut HashSet::new()))
+    }
+
+    fn resolve_reexported(&self, path: &str, visited: &mut HashSet<String>) -> Option<String> {
+        if !visited.insert(path.to_owned()) {
+            return None;
+        }
+        let segments = path.split("::").map(ToOwned::to_owned).collect::<Vec<_>>();
+        let (name, module_segments) = segments.split_last()?;
+        let scope = self.scopes.get(&module_segments.join("::"))?;
+        self.resolve_explicit_reexport(scope, name, visited)
+            .or_else(|| self.resolve_glob_reexport(scope, name, visited))
+    }
+
+    fn resolve_explicit_reexport(
+        &self,
+        scope: &ModuleScope,
+        name: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<String> {
+        match scope.reexported(name) {
+            ImportLookup::Unique(imported) => {
+                let candidate = imported.join("::");
+                self.by_path
+                    .contains(&candidate)
+                    .then(|| candidate.clone())
+                    .or_else(|| self.resolve_reexported(&candidate, visited))
+            }
+            ImportLookup::None | ImportLookup::Ambiguous => None,
+        }
+    }
+
+    fn resolve_glob_reexport(
+        &self,
+        scope: &ModuleScope,
+        name: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<String> {
+        let mut matches = scope
+            .reexport_glob_candidates_for_segments(&[name.to_owned()])
+            .into_iter()
+            .filter_map(|candidate| {
+                self.by_path
+                    .contains(&candidate)
+                    .then(|| candidate.clone())
+                    .or_else(|| self.resolve_reexported(&candidate, visited))
+            })
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.dedup();
+        match matches.as_slice() {
+            [path] => Some(path.clone()),
+            [] | [_, ..] => None,
+        }
+    }
+}
+
+fn contract_path(root_crate: &str, path: &str) -> Path {
+    let segments = path.split("::").collect::<Vec<_>>();
+    match segments.split_first() {
+        Some((root, rest)) if *root == root_crate => Path::new(
+            PathRoot::Crate,
+            rest.iter().copied().map(PathSegment::new).collect(),
+        ),
+        Some(_) | None => Path::new(
+            PathRoot::Relative,
+            segments.into_iter().map(PathSegment::new).collect(),
+        ),
     }
 }
 
@@ -151,6 +432,10 @@ mod tests {
 
     fn scan(source: &str) -> SourceContract {
         try_scan(source).expect("scan")
+    }
+
+    fn source_tree(crate_name: &str, source: &str) -> SourceTree {
+        SourceTree::in_memory(crate_name, parse(source).items).expect("source tree")
     }
 
     fn point(contract: &SourceContract) -> &RecordDef {
@@ -541,18 +826,19 @@ mod tests {
             contract.customs[0].error,
             Some(CustomRemoteType::single_path("String"))
         );
-        assert!(matches!(
-            &contract.customs[0].converters.into_ffi,
-            CustomTypeConverter::Expr(expr)
-                if expr.source.replace(' ', "")
-                    == "<Emailas::boltffi::CustomFfiConvertible>::into_ffi"
-        ));
-        assert!(matches!(
-            &contract.customs[0].converters.try_from_ffi,
-            CustomTypeConverter::Expr(expr)
-                if expr.source.replace(' ', "")
-                    == "<Emailas::boltffi::CustomFfiConvertible>::try_from_ffi"
-        ));
+        let CustomTypeConverter::TraitMethod(into_ffi) = &contract.customs[0].converters.into_ffi
+        else {
+            panic!("expected trait method converter");
+        };
+        let CustomTypeConverter::TraitMethod(try_from_ffi) =
+            &contract.customs[0].converters.try_from_ffi
+        else {
+            panic!("expected trait method converter");
+        };
+        assert_eq!(into_ffi.receiver, source_path("Email"));
+        assert_eq!(into_ffi.method.as_str(), "into_ffi");
+        assert_eq!(try_from_ffi.receiver, source_path("Email"));
+        assert_eq!(try_from_ffi.method.as_str(), "try_from_ffi");
         assert_eq!(
             contract.functions[0].parameters[0].type_expr,
             custom("demo::Email", "Email")
@@ -659,6 +945,58 @@ mod tests {
         assert_custom(
             value_return(&contract.functions[0].returns),
             "demo::custom::UtcDateTime",
+        );
+    }
+
+    #[test]
+    fn root_visible_paths_use_direct_dependency_reexports() {
+        let root = source_tree(
+            "demo",
+            "pub mod api { \
+                use session::Thing; \
+                #[export] pub fn keep(value: Thing) -> Thing { value } \
+            }",
+        );
+        let session = source_tree("session", "pub use model::{Thing, model_echo_kind};");
+        let model = source_tree(
+            "model",
+            "#[data] pub struct Thing { pub value: u32 } \
+             #[export] pub fn model_echo_kind(kind: u32) -> u32 { kind }",
+        );
+        let complete = SourceTree::combine([model, session, root]);
+        let marked = MarkedItems::collect(&complete).expect("marked items");
+        let declared_types = DeclaredTypes::index(&complete, &marked).expect("declared types");
+        let paths = root_visible_paths(
+            &declared_types,
+            &complete,
+            &marked,
+            "demo",
+            &["session".to_owned()],
+        );
+        let path = paths
+            .get("model::Thing")
+            .expect("reexported model type is visible through session");
+
+        assert_eq!(path.root, PathRoot::Relative);
+        assert_eq!(
+            path.segments
+                .iter()
+                .map(|segment| segment.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session", "Thing"]
+        );
+
+        let path = paths
+            .get("model::model_echo_kind")
+            .expect("reexported model function is visible through session");
+
+        assert_eq!(path.root, PathRoot::Relative);
+        assert_eq!(
+            path.segments
+                .iter()
+                .map(|segment| segment.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session", "model_echo_kind"]
         );
     }
 

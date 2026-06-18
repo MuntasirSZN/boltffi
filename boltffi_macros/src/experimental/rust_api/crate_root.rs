@@ -1,17 +1,31 @@
+use std::collections::HashMap;
+
 use boltffi_ast::{
-    BaseTrait, ConstantDef, CustomTypeDef, EnumDef, FieldDef, FnSig, FunctionDef, MethodDef,
-    PackageInfo, Path, PathRoot, PathSegment, RecordDef, ReturnDef, SourceContract, StreamDef,
-    TraitBounds, TraitDef, TypeExpr, VariantPayload,
+    BaseTrait, ConstantDef, CustomTypeConverter, CustomTypeDef, EnumDef, FieldDef, FnSig,
+    FunctionDef, MethodDef, PackageInfo, Path, PathRoot, PathSegment, RecordDef, ReturnDef,
+    SourceContract, StreamDef, TraitBounds, TraitDef, TypeExpr, VariantPayload,
 };
 
 pub struct RootModuleTypes {
     crate_name: String,
+    visible_paths: HashMap<String, Path>,
 }
 
 impl RootModuleTypes {
     pub fn new(package: &PackageInfo) -> Self {
         Self {
             crate_name: package.name.replace('-', "_"),
+            visible_paths: HashMap::new(),
+        }
+    }
+
+    pub fn with_visible_paths(
+        package: &PackageInfo,
+        paths: impl IntoIterator<Item = (String, Path)>,
+    ) -> Self {
+        Self {
+            crate_name: package.name.replace('-', "_"),
+            visible_paths: paths.into_iter().collect(),
         }
     }
 
@@ -108,6 +122,8 @@ impl RootModuleTypes {
 
     fn custom(&self, custom: &mut CustomTypeDef) {
         self.type_expr(&mut custom.repr);
+        self.custom_converter(custom.id.as_str(), &mut custom.converters.into_ffi);
+        self.custom_converter(custom.id.as_str(), &mut custom.converters.try_from_ffi);
     }
 
     fn method(&self, method: &mut MethodDef) {
@@ -137,7 +153,7 @@ impl RootModuleTypes {
             TypeExpr::Record { id, path } => self.root_declaration_path(id.as_str(), path),
             TypeExpr::Enum { id, path } => self.root_declaration_path(id.as_str(), path),
             TypeExpr::Class { id, path } => self.root_declaration_path(id.as_str(), path),
-            TypeExpr::Custom { .. } => {}
+            TypeExpr::Custom { id, path } => self.custom_path(id.as_str(), path),
             TypeExpr::Dyn(bounds) | TypeExpr::ImplTrait(bounds) => self.trait_bounds(bounds),
             TypeExpr::Boxed(inner)
             | TypeExpr::Arc(inner)
@@ -184,12 +200,33 @@ impl RootModuleTypes {
     }
 
     fn root_declaration_path(&self, id: &str, path: &mut Path) {
+        if let Some(visible_path) = self.visible_paths.get(id) {
+            *path = visible_path.clone();
+            return;
+        }
         let segments = id.split("::").collect::<Vec<_>>();
         if segments.first().copied() != Some(self.crate_name.as_str()) {
             return;
         }
         let segments = segments.into_iter().skip(1).map(PathSegment::new).collect();
         *path = Path::new(PathRoot::Crate, segments);
+    }
+
+    fn custom_path(&self, id: &str, path: &mut Path) {
+        let same_leaf = id
+            .rsplit("::")
+            .next()
+            .zip(path.segments.last())
+            .is_some_and(|(id_leaf, path_leaf)| id_leaf == path_leaf.name.as_str());
+        if same_leaf {
+            self.root_declaration_path(id, path);
+        }
+    }
+
+    fn custom_converter(&self, id: &str, converter: &mut CustomTypeConverter) {
+        if let CustomTypeConverter::TraitMethod(converter) = converter {
+            self.custom_path(id, &mut converter.receiver);
+        }
     }
 }
 
@@ -266,6 +303,95 @@ mod tests {
                 .map(|segment| segment.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["ForeignLabeler"]
+        );
+    }
+
+    #[test]
+    fn rewrites_dependency_declared_type_paths_when_visible_from_root() {
+        let mut contract = SourceContract::new(PackageInfo::new("demo", None));
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::format"),
+            CanonicalName::single("format"),
+        );
+        function.returns = ReturnDef::value(TypeExpr::impl_trait(
+            TraitId::new("demo_multicrate_model::ForeignLabeler"),
+            boltffi_ast::Path::single("ForeignLabeler"),
+        ));
+        contract.functions.push(function);
+
+        let rooted = RootModuleTypes::with_visible_paths(
+            &contract.package,
+            [(
+                "demo_multicrate_model::ForeignLabeler".to_owned(),
+                boltffi_ast::Path::new(
+                    PathRoot::Relative,
+                    vec![
+                        boltffi_ast::PathSegment::new("demo_multicrate_session"),
+                        boltffi_ast::PathSegment::new("ForeignLabeler"),
+                    ],
+                ),
+            )],
+        )
+        .contract(&contract);
+        let ReturnDef::Value(TypeExpr::ImplTrait(TraitBounds {
+            base: BaseTrait::Named { path, .. },
+            ..
+        })) = &rooted.functions[0].returns
+        else {
+            panic!("expected impl trait return");
+        };
+
+        assert_eq!(path.root, PathRoot::Relative);
+        assert_eq!(
+            path.segments
+                .iter()
+                .map(|segment| segment.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["demo_multicrate_session", "ForeignLabeler"]
+        );
+    }
+
+    #[test]
+    fn rewrites_same_leaf_custom_type_paths_when_visible_from_root() {
+        let mut contract = SourceContract::new(PackageInfo::new("demo", None));
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::format"),
+            CanonicalName::single("format"),
+        );
+        function.parameters.push(ParameterDef::value(
+            CanonicalName::single("code"),
+            TypeExpr::custom(
+                boltffi_ast::CustomTypeId::new("demo_multicrate_model::ForeignCode"),
+                boltffi_ast::Path::single("ForeignCode"),
+            ),
+        ));
+        contract.functions.push(function);
+
+        let rooted = RootModuleTypes::with_visible_paths(
+            &contract.package,
+            [(
+                "demo_multicrate_model::ForeignCode".to_owned(),
+                boltffi_ast::Path::new(
+                    PathRoot::Relative,
+                    vec![
+                        boltffi_ast::PathSegment::new("demo_multicrate_session"),
+                        boltffi_ast::PathSegment::new("ForeignCode"),
+                    ],
+                ),
+            )],
+        )
+        .contract(&contract);
+        let TypeExpr::Custom { path, .. } = &rooted.functions[0].parameters[0].type_expr else {
+            panic!("expected custom type");
+        };
+
+        assert_eq!(path.root, PathRoot::Relative);
+        assert_eq!(
+            path.segments
+                .iter()
+                .map(|segment| segment.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["demo_multicrate_session", "ForeignCode"]
         );
     }
 }

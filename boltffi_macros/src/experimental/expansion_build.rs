@@ -71,18 +71,27 @@ impl Request {
         let scan = boltffi_scan::scan_package(
             &ScanInput::new(&self.source, self.package).with_manifest_dir(&self.root),
         )?;
+        let source = scan.root_with_support();
         let complete = scan.complete();
-        let root = RootModuleTypes::new(&complete.package).contract(scan.root());
-        let expander = Expander::new(&root);
+        let visible_paths = scan
+            .root_visible_paths()
+            .map(|(id, path)| (id.to_owned(), path.clone()))
+            .collect::<Vec<_>>();
+        let root_types =
+            RootModuleTypes::with_visible_paths(&complete.package, visible_paths.clone());
+        let root = root_types.contract(scan.root());
+        let source = root_types.contract(&source);
+        let complete = root_types.contract(complete);
+        let expander = Expander::with_support(&root, &complete, visible_paths);
 
         match requested_surface()? {
             BindingMetadataSurface::Native => {
-                let lowered = lower_with_declarations::<Native>(complete)?;
+                let lowered = lower_with_declarations::<Native>(&source)?;
                 let expansion = Expansion::new(&lowered);
                 expander.native(&expansion).map_err(Into::into)
             }
             BindingMetadataSurface::Wasm32 => {
-                let lowered = lower_with_declarations::<Wasm32>(complete)?;
+                let lowered = lower_with_declarations::<Wasm32>(&source)?;
                 let expansion = Expansion::new(&lowered);
                 expander.wasm32(&expansion).map_err(Into::into)
             }

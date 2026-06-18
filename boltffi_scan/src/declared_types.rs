@@ -112,6 +112,10 @@ impl DeclaredTypes {
         self.by_path.get(path)
     }
 
+    pub(super) fn paths(&self) -> impl Iterator<Item = &str> {
+        self.by_path.keys().map(String::as_str)
+    }
+
     pub(super) fn resolve_type_in_scope(
         &self,
         scope: &ModuleScope,
@@ -125,6 +129,42 @@ impl DeclaredTypes {
             None if self.source_types.contains_path(&path) => SourceType::Unregistered,
             None => SourceType::External(path),
         })
+    }
+
+    pub(super) fn root_visible_path(
+        &self,
+        id: &str,
+        root_crate: &str,
+        direct_dependencies: &[String],
+    ) -> Option<String> {
+        let segments = id.split("::").collect::<Vec<_>>();
+        let root = segments.first().copied()?;
+        if root == root_crate
+            || direct_dependencies
+                .iter()
+                .any(|dependency| dependency == root)
+        {
+            return Some(id.to_owned());
+        }
+        let leaf = segments.last().copied()?;
+        let mut candidates = direct_dependencies
+            .iter()
+            .filter_map(|dependency| {
+                let candidate = format!("{dependency}::{leaf}");
+                match self.source_types.resolve_public_path(candidate.clone()) {
+                    TypeResolution::Known(path) if path == id => Some(candidate),
+                    TypeResolution::Known(_)
+                    | TypeResolution::Ambiguous
+                    | TypeResolution::Unknown => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        match candidates.as_slice() {
+            [candidate] => Some(candidate.clone()),
+            [] | [_, ..] => None,
+        }
     }
 
     pub(super) fn resolve_impl_target(
@@ -399,6 +439,13 @@ impl TypeNamespace {
             Some(TypeBinding::Unique(path)) => TypeResolution::Known(path.clone()),
             Some(TypeBinding::Ambiguous) => TypeResolution::Ambiguous,
             None => TypeResolution::Unknown,
+        }
+    }
+
+    fn resolve_public_path(&self, path: String) -> TypeResolution {
+        match self.resolve_qualified(path.clone()) {
+            TypeResolution::Unknown => self.resolve_reexported(&path),
+            resolution => resolution,
         }
     }
 

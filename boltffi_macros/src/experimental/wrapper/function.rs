@@ -1,6 +1,7 @@
-use boltffi_ast::FunctionDef;
+use boltffi_ast::{FunctionDef, Path, PathRoot};
 use boltffi_binding::{ExecutionDecl, FunctionDecl};
 use proc_macro2::TokenStream;
+use quote::quote;
 use syn::{Ident, parse_str};
 
 use crate::experimental::{
@@ -20,6 +21,7 @@ use super::export;
 pub struct Renderer<'expansion, 'lowered, S: RenderSurface> {
     pair: DeclarationPair<'lowered, FunctionDef, FunctionDecl<S>>,
     expansion: &'expansion Expansion<'lowered, S>,
+    rust_path: Option<TokenStream>,
 }
 
 impl<'expansion, 'lowered, S> Renderer<'expansion, 'lowered, S>
@@ -45,7 +47,16 @@ where
         pair: DeclarationPair<'lowered, FunctionDef, FunctionDecl<S>>,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
-        Self { pair, expansion }
+        Self {
+            pair,
+            expansion,
+            rust_path: None,
+        }
+    }
+
+    pub fn with_path(mut self, path: &Path) -> Result<Self, Error> {
+        self.rust_path = Some(Self::path_tokens(path)?);
+        Ok(self)
     }
 
     /// Renders the generated extern wrapper.
@@ -54,6 +65,7 @@ where
         let source = self.pair.source();
         let source_signature = rust_api::Callable::function(source);
         let function_ident = Self::function_ident(source)?;
+        let rust_call = self.rust_call(function_ident.clone());
         let visibility =
             rust_api::VisibilityTokens::new(&source.source.visibility).into_tokens()?;
         if matches!(
@@ -65,7 +77,7 @@ where
                 wrapper::async_call::Input::new(
                     function,
                     source_signature,
-                    function_ident,
+                    rust_call,
                     visibility,
                     self.expansion,
                 ),
@@ -76,7 +88,7 @@ where
             function.symbol(),
             function.callable(),
             source_signature,
-            export::RustCall::function(function_ident),
+            rust_call,
             export::ReceiverTokens::none(),
             visibility,
             self.expansion,
@@ -88,5 +100,39 @@ where
         parse_str(source.name.spelling()).map_err(|_| {
             Error::SourceSyntaxMismatch("source function name is not a Rust identifier")
         })
+    }
+
+    fn rust_call(&self, function_ident: Ident) -> export::RustCall {
+        match &self.rust_path {
+            Some(path) => export::RustCall::function_path(function_ident, path.clone()),
+            None => export::RustCall::function(function_ident),
+        }
+    }
+
+    fn path_tokens(path: &Path) -> Result<TokenStream, Error> {
+        let prefix = match path.root {
+            PathRoot::Relative => TokenStream::new(),
+            PathRoot::Crate => quote! { crate:: },
+            PathRoot::Self_ => quote! { self:: },
+            PathRoot::Super(levels) => {
+                let parents =
+                    std::iter::repeat_n(quote! { super }, levels.get()).collect::<Vec<_>>();
+                quote! { #(#parents)::*:: }
+            }
+            PathRoot::Absolute => quote! { :: },
+        };
+        let segments = path
+            .segments
+            .iter()
+            .map(|segment| {
+                if !segment.arguments.is_empty() {
+                    return Err(Error::UnsupportedExpansion("generic function path"));
+                }
+                parse_str::<Ident>(segment.name.as_str()).map_err(|_| {
+                    Error::SourceSyntaxMismatch("function path segment is not Rust syntax")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(quote! { #prefix #(#segments)::* })
     }
 }

@@ -104,6 +104,10 @@ impl PackageGraph {
         self.collect_reachable_exported_dependencies(id, &mut HashSet::new())
     }
 
+    pub fn direct_exported_dependencies(&self, id: &PackageId) -> Vec<ExportedPackage> {
+        self.exported_dependencies(id)
+    }
+
     fn from_metadata(metadata: CargoMetadata, root_id: PackageId) -> Self {
         let packages = metadata
             .packages
