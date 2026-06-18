@@ -7,7 +7,7 @@ pub mod outgoing;
 
 mod custom;
 
-pub use self::custom::{BorrowedOutgoing, Incoming};
+pub use self::custom::{BorrowedOutgoing, Incoming, Outgoing};
 
 pub fn require_runtime_wire(codec: &CodecNode) -> Result<(), Error> {
     RuntimeWireCodec::new(codec).require_supported()

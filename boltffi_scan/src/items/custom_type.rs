@@ -51,7 +51,7 @@ pub struct Spec {
 
 enum ConverterSource {
     Macro,
-    Trait(CustomTypeConverters),
+    Trait { receiver: Path },
 }
 
 impl Spec {
@@ -80,6 +80,7 @@ impl Spec {
         }
         let self_type = item.self_ty.as_ref();
         let name = impl_target_name(self_type)?;
+        let receiver = impl_target_path(self_type)?;
         let remote_type = RemoteType::scan(self_type)?;
         let repr = associated_type(item, "FfiRepr")?;
         let error = Some(RemoteType::scan(&associated_type(item, "Error")?)?);
@@ -89,10 +90,7 @@ impl Spec {
             remote_type,
             repr,
             error,
-            converters: ConverterSource::Trait(CustomTypeConverters::new(
-                trait_converter(self_type, "into_ffi"),
-                trait_converter(self_type, "try_from_ffi"),
-            )),
+            converters: ConverterSource::Trait { receiver },
         })
     }
 
@@ -126,7 +124,10 @@ impl Spec {
                 CustomTypeConverter::path(self.macro_helper(module, "into_ffi")),
                 CustomTypeConverter::path(self.macro_helper(module, "try_from_ffi")),
             ),
-            ConverterSource::Trait(converters) => converters.clone(),
+            ConverterSource::Trait { receiver } => CustomTypeConverters::new(
+                trait_converter(receiver.clone(), "into_ffi"),
+                trait_converter(receiver.clone(), "try_from_ffi"),
+            ),
         }
     }
 
@@ -184,6 +185,33 @@ fn impl_target_name(ty: &syn::Type) -> Result<syn::Ident, ScanError> {
         .ok_or_else(|| invalid_custom_type_message("custom_ffi target path is empty".to_owned()))
 }
 
+fn impl_target_path(ty: &syn::Type) -> Result<Path, ScanError> {
+    let syn::Type::Path(path) = ty else {
+        return Err(invalid_custom_type_message(format!(
+            "custom_ffi target is not a path `{}`",
+            crate::spelling::ty(ty)
+        )));
+    };
+    if path.qself.is_some() {
+        return Err(invalid_custom_type_message(format!(
+            "custom_ffi target cannot use qualified self type `{}`",
+            crate::spelling::ty(ty)
+        )));
+    }
+    let (root, segments) = PathParts::split_root(&path.path)?;
+    segments
+        .into_iter()
+        .map(|segment| match segment.arguments {
+            syn::PathArguments::None => Ok(PathSegment::new(segment.ident.to_string())),
+            _ => Err(invalid_custom_type_message(format!(
+                "custom_ffi target cannot use generic arguments `{}`",
+                crate::spelling::ty(ty)
+            ))),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|segments| Path::new(root, segments))
+}
+
 fn associated_type(item: &syn::ItemImpl, name: &str) -> Result<syn::Type, ScanError> {
     item.items
         .iter()
@@ -198,14 +226,8 @@ fn associated_type(item: &syn::ItemImpl, name: &str) -> Result<syn::Type, ScanEr
         })
 }
 
-fn trait_converter(self_type: &syn::Type, method: &str) -> CustomTypeConverter {
-    let method = syn::Ident::new(method, proc_macro2::Span::call_site());
-    CustomTypeConverter::expr(
-        quote::quote! {
-            <#self_type as ::boltffi::CustomFfiConvertible>::#method
-        }
-        .to_string(),
-    )
+fn trait_converter(receiver: Path, method: &str) -> CustomTypeConverter {
+    CustomTypeConverter::trait_method(receiver, NamePart::new(method))
 }
 
 impl Parse for ParsedSpec {

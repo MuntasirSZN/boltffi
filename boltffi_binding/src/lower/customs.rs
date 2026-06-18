@@ -65,6 +65,10 @@ fn lower_converters(converters: &SourceConverters) -> Result<CustomTypeConverter
 fn lower_converter(converter: &SourceConverter) -> Result<CustomTypeConverter, LowerError> {
     match converter {
         SourceConverter::Path(path) => lower_path(path).map(CustomTypeConverter::path),
+        SourceConverter::TraitMethod(converter) => Ok(CustomTypeConverter::trait_method(
+            lower_path(&converter.receiver)?,
+            NamePart::new(converter.method.as_str()),
+        )),
         SourceConverter::Expr(expression) => Ok(CustomTypeConverter::expression(
             CustomConverterExpression::new(expression.source.clone()),
         )),

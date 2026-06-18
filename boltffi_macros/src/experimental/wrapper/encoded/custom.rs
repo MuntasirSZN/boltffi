@@ -465,6 +465,16 @@ impl<'lowered> ConverterRenderer<'lowered> {
     fn render(self) -> Result<TokenStream, Error> {
         match self.converter {
             CustomTypeConverter::Path(path) => PathRenderer::new(path).render(),
+            CustomTypeConverter::TraitMethod(converter) => {
+                let receiver = PathRenderer::new(converter.receiver()).render_type()?;
+                let method =
+                    parse_str::<syn::Ident>(converter.method().as_str()).map_err(|_| {
+                        Error::SourceSyntaxMismatch("custom converter method is not Rust syntax")
+                    })?;
+                Ok(quote! {
+                    <#receiver as ::boltffi::CustomFfiConvertible>::#method
+                })
+            }
             CustomTypeConverter::Expression(expression) => parse_str::<Expr>(expression.source())
                 .map(|expression| quote! { #expression })
                 .map_err(|_| Error::SourceSyntaxMismatch("custom converter is not Rust syntax")),
@@ -482,6 +492,12 @@ impl<'lowered> PathRenderer<'lowered> {
         parse_str::<ExprPath>(&self.source()?)
             .map(|path| quote! { #path })
             .map_err(|_| Error::SourceSyntaxMismatch("custom converter path is not Rust syntax"))
+    }
+
+    fn render_type(self) -> Result<syn::Type, Error> {
+        parse_str::<syn::Type>(&self.source()?).map_err(|_| {
+            Error::SourceSyntaxMismatch("custom converter receiver is not Rust syntax")
+        })
     }
 
     fn source(&self) -> Result<String, Error> {

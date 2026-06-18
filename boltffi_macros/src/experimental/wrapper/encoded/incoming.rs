@@ -242,8 +242,9 @@ impl<'decode> Input<'decode> {
                 .ok_or(Error::UnsupportedExpansion(
                     "custom codec representation type",
                 ))?;
+        let type_annotation = (!converted.changed()).then(|| quote! { : #rust_type });
         Ok(quote! {
-            let #mutability #binding: #rust_type = {
+            let #mutability #binding #type_annotation = {
                 if #pointer.is_null() && #length > 0 {
                     ::boltffi::__private::set_last_error(format!(
                         "{}: null pointer with non-zero length (buf_len={})",
