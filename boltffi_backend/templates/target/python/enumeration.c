@@ -68,16 +68,20 @@ static int {{ native_to_wire_tag }}({{ c_type }} value, int32_t *out) {
 
 static int {{ wire_encoder }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {
     {{ c_type }} native_value = 0;
-    int32_t wire_tag = 0;
-    uint8_t bytes[4] = {0};
+    uint8_t bytes[{{ repr_wire_size }}] = {0};
     if (!{{ parser }}(value, &native_value)) {
         return 0;
     }
-    if (!{{ native_to_wire_tag }}(native_value, &wire_tag)) {
-        return 0;
-    }
-    boltffi_python_write_u32_le(bytes, (uint32_t)wire_tag);
-    return boltffi_python_wire_fixed(bytes, 4, out_wire, out_ptr, out_len);
+{%- if repr_wire_size == 1 %}
+    bytes[0] = (uint8_t)native_value;
+{%- elif repr_wire_size == 2 %}
+    boltffi_python_write_u16_le(bytes, (uint16_t)native_value);
+{%- elif repr_wire_size == 4 %}
+    boltffi_python_write_u32_le(bytes, (uint32_t)native_value);
+{%- elif repr_wire_size == 8 %}
+    boltffi_python_write_u64_le(bytes, (uint64_t)native_value);
+{%- endif %}
+    return boltffi_python_wire_fixed(bytes, {{ repr_wire_size }}, out_wire, out_ptr, out_len);
 }
 
 static PyObject *{{ box_from_wire_tag }}(int32_t wire_tag) {
@@ -106,10 +110,20 @@ static PyObject *{{ boxer }}({{ c_type }} value) {
 
 static PyObject *{{ owned_decoder }}(FfiBuf_u8 buffer) {
     PyObject *result = NULL;
-    if (!boltffi_python_validate_owned_fixed_buffer(buffer, 4)) {
+    {{ c_type }} native_value = 0;
+    if (!boltffi_python_validate_owned_fixed_buffer(buffer, {{ repr_wire_size }})) {
         goto done;
     }
-    result = {{ box_from_wire_tag }}((int32_t)boltffi_python_read_u32_le(buffer.ptr));
+{%- if repr_wire_size == 1 %}
+    native_value = ({{ c_type }})buffer.ptr[0];
+{%- elif repr_wire_size == 2 %}
+    native_value = ({{ c_type }})boltffi_python_read_u16_le(buffer.ptr);
+{%- elif repr_wire_size == 4 %}
+    native_value = ({{ c_type }})boltffi_python_read_u32_le(buffer.ptr);
+{%- elif repr_wire_size == 8 %}
+    native_value = ({{ c_type }})boltffi_python_read_u64_le(buffer.ptr);
+{%- endif %}
+    result = {{ boxer }}(native_value);
 done:
     boltffi_python_release_owned_buffer(buffer);
     return result;

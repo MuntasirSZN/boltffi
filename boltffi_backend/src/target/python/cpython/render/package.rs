@@ -70,6 +70,9 @@ pub struct Package<'binding, 'bridge> {
     bindings: &'binding Bindings<Native>,
     bridge: &'bridge PythonCExtBridgeContract,
     module: PackageModule,
+    distribution: String,
+    version: Option<String>,
+    library: String,
 }
 
 impl<'binding, 'bridge> Package<'binding, 'bridge> {
@@ -77,18 +80,24 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
         bindings: &'binding Bindings<Native>,
         bridge: &'bridge PythonCExtBridgeContract,
         module: PackageModule,
+        distribution: String,
+        version: Option<String>,
+        library: String,
     ) -> Self {
         Self {
             bindings,
             bridge,
             module,
+            distribution,
+            version,
+            library,
         }
     }
 
     pub fn render(self) -> Result<GeneratedOutput> {
         let module = self.module_name();
-        let package = self.package_name();
-        let version = self.package_version();
+        let package = self.distribution.clone();
+        let version = self.version.clone();
         let records = self.records()?;
         let enums = self.enums()?;
         let classes = self.classes()?;
@@ -149,7 +158,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                             .as_deref()
                             .map(Self::literal)
                             .unwrap_or_else(|| "None".to_owned()),
-                        library_name: package.clone(),
+                        library_name: self.library.clone(),
                         uses_sequence_annotations,
                         uses_callable_annotations,
                         uses_wire_helpers,
@@ -185,14 +194,6 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
 
     fn module_name(&self) -> String {
         self.module.as_str().to_owned()
-    }
-
-    fn package_name(&self) -> String {
-        Name::new(self.bindings.package().name()).function()
-    }
-
-    fn package_version(&self) -> Option<String> {
-        self.bindings.package().version().map(str::to_owned)
     }
 
     fn functions(&self) -> Vec<&'binding FunctionDecl<Native>> {

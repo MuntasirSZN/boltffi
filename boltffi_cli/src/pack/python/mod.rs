@@ -55,6 +55,8 @@ pub(crate) fn pack_python(
             config,
             Some(plan.layout.root_directory.clone()),
             plan.cargo_context.manifest_path.clone(),
+            plan.cargo_context.artifact_name.clone(),
+            plan.cargo_context.cargo_command_args.clone(),
         )?;
         step.finish_success();
     }

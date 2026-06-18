@@ -176,8 +176,10 @@ pub fn run_generate_python_with_manifest(
     config: &Config,
     output: Option<PathBuf>,
     manifest_path: PathBuf,
+    artifact_name: String,
+    cargo_args: Vec<String>,
 ) -> Result<()> {
-    ir::run_python_generation(config, output, manifest_path)
+    ir::run_python_generation(config, output, manifest_path, artifact_name, cargo_args)
 }
 
 pub fn run_generate_csharp_with_output_from_source_dir(

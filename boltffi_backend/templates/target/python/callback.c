@@ -185,7 +185,7 @@ done:
 {%- for param in method.params %}
     Py_XDECREF({{ param.object }});
 {%- endfor %}
-{%- if method.returns.wire %}
+{%- if method.wire_payload %}
     Py_XDECREF(return_wire);
 {%- endif %}
     Py_XDECREF(result);

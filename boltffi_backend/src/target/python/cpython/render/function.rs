@@ -122,7 +122,7 @@ impl Function {
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        if let Some(unsupported) = UnsupportedCallable::from_callable(callable) {
+        if let Some(unsupported) = UnsupportedCallable::from_parts(callable, &receiver_args) {
             return Ok(Self {
                 body: Body::Skipped(SkippedFunction::new(python_name, unsupported)),
             });
@@ -294,6 +294,21 @@ struct UnsupportedCallable {
 }
 
 impl UnsupportedCallable {
+    fn from_parts(
+        callable: &ExportedCallable<Native>,
+        receiver_args: &[argument::Conversion],
+    ) -> Option<Self> {
+        if matches!(callable.execution(), ExecutionDecl::Asynchronous(_))
+            && receiver_args.iter().any(argument::Conversion::has_mutation)
+        {
+            return Some(Self {
+                shape: "async mutable encoded receiver",
+            });
+        }
+
+        Self::from_callable(callable)
+    }
+
     fn from_callable(callable: &ExportedCallable<Native>) -> Option<Self> {
         callable
             .params()

@@ -17,7 +17,7 @@ use crate::{
         GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result, Target,
         contract::sealed, host,
     },
-    target::python::name_style::PackageModule,
+    target::python::name_style::{Name, PackageModule},
 };
 
 /// Python host renderer for a CPython extension bridge.
@@ -25,6 +25,9 @@ use crate::{
 #[non_exhaustive]
 pub struct PythonCExtHost {
     module: Option<PackageModule>,
+    distribution: Option<String>,
+    version: Option<String>,
+    library: Option<String>,
 }
 
 impl PythonCExtHost {
@@ -37,6 +40,24 @@ impl PythonCExtHost {
     pub fn module_name(mut self, module: impl Into<String>) -> Result<Self> {
         self.module = Some(PackageModule::parse(module)?);
         Ok(self)
+    }
+
+    /// Selects the generated Python wheel distribution name.
+    pub fn distribution_name(mut self, name: impl Into<String>) -> Self {
+        self.distribution = Some(name.into());
+        self
+    }
+
+    /// Selects the generated Python wheel version.
+    pub fn version(mut self, version: Option<String>) -> Self {
+        self.version = version;
+        self
+    }
+
+    /// Selects the native shared library artifact loaded by the Python package.
+    pub fn native_library(mut self, library: impl Into<String>) -> Self {
+        self.library = Some(library.into());
+        self
     }
 
     /// Creates the backend target stack for this Python host.
@@ -168,7 +189,15 @@ impl host::HostBackend for PythonCExtHost {
             .collect();
         let mut output = GeneratedOutput::combine([
             render::NativeModule::new(bridge, context, declarations).render()?,
-            render::Package::new(bindings, bridge, self.package_module(bindings)).render()?,
+            render::Package::new(
+                bindings,
+                bridge,
+                self.package_module(bindings),
+                self.resolved_distribution(bindings),
+                self.package_version(bindings),
+                self.native_library_name(bindings),
+            )
+            .render()?,
         ]);
         output.append(GeneratedOutput::new(Vec::new(), diagnostics));
         Ok(output)
@@ -180,6 +209,24 @@ impl PythonCExtHost {
         self.module
             .clone()
             .unwrap_or_else(|| PackageModule::from_canonical(bindings.package().name()))
+    }
+
+    fn resolved_distribution(&self, bindings: &Bindings<Native>) -> String {
+        self.distribution
+            .clone()
+            .unwrap_or_else(|| Name::new(bindings.package().name()).function())
+    }
+
+    fn package_version(&self, bindings: &Bindings<Native>) -> Option<String> {
+        self.version
+            .clone()
+            .or_else(|| bindings.package().version().map(str::to_owned))
+    }
+
+    fn native_library_name(&self, bindings: &Bindings<Native>) -> String {
+        self.library
+            .clone()
+            .unwrap_or_else(|| Name::new(bindings.package().name()).function())
     }
 }
 
@@ -217,8 +264,14 @@ mod tests {
     }
 
     fn target() -> Target<PythonCExtHost, BridgeLayer<CBridge, PythonCExtBridge>> {
+        target_with_host(PythonCExtHost::new())
+    }
+
+    fn target_with_host(
+        host: PythonCExtHost,
+    ) -> Target<PythonCExtHost, BridgeLayer<CBridge, PythonCExtBridge>> {
         Target::new(
-            PythonCExtHost::new(),
+            host,
             BridgeLayer::new(
                 CBridge::default_header().expect("C header bridge"),
                 PythonCExtBridge::native_module().expect("CPython extension bridge"),
@@ -229,14 +282,10 @@ mod tests {
     fn target_with_module(
         module: &str,
     ) -> Target<PythonCExtHost, BridgeLayer<CBridge, PythonCExtBridge>> {
-        Target::new(
+        target_with_host(
             PythonCExtHost::new()
                 .module_name(module)
                 .expect("Python package module"),
-            BridgeLayer::new(
-                CBridge::default_header().expect("C header bridge"),
-                PythonCExtBridge::native_module().expect("CPython extension bridge"),
-            ),
         )
     }
 
@@ -371,6 +420,35 @@ mod tests {
         assert!(setup.contains("packages=[\"demo_api\"]"));
         assert!(setup.contains("Extension(\n            \"demo_api._native\","));
         assert!(setup.contains("sources=[\"_native.c\"]"));
+    }
+
+    #[test]
+    fn python_target_uses_configured_package_and_library_names() {
+        let host = PythonCExtHost::new()
+            .module_name("demo_api")
+            .expect("Python package module")
+            .distribution_name("demo-wheel")
+            .version(Some("1.2.3".to_owned()))
+            .native_library("demo_ffi");
+        let output = target_with_host(host)
+            .render(&bindings(
+                r#"
+                #[export]
+                pub fn add(left: i32, right: i32) -> i32 {
+                    left + right
+                }
+                "#,
+            ))
+            .expect("Python target should render custom package names");
+        let init = file(&output, "demo_api/__init__.py");
+        let setup = file(&output, "setup.py");
+
+        assert!(init.contains("PACKAGE_NAME = \"demo-wheel\""));
+        assert!(init.contains("PACKAGE_VERSION = \"1.2.3\""));
+        assert!(init.contains("return \"libdemo_ffi.dylib\""));
+        assert!(setup.contains("name=\"demo-wheel\""));
+        assert!(setup.contains("version=\"1.2.3\""));
+        assert!(setup.contains("packages=[\"demo_api\"]"));
     }
 
     #[test]
@@ -562,12 +640,12 @@ mod tests {
         let output = target()
             .render(&bindings(
                 r#"
-                #[repr(i32)]
+                #[repr(i16)]
                 #[data]
                 pub enum Status {
-                    Active = 0,
-                    Inactive = 1,
-                    Pending = 2,
+                    Active = -3,
+                    Inactive = 8,
+                    Pending = 13,
                 }
 
                 #[export]
@@ -588,6 +666,10 @@ mod tests {
         assert!(extension.contains("static PyObject *boltffi_python_wrapper_register_status"));
         assert!(extension.contains("static int boltffi_python_parse_status"));
         assert!(extension.contains("static PyObject *boltffi_python_box_status"));
+        assert!(extension.contains("uint8_t bytes[2] = {0};"));
+        assert!(extension.contains("boltffi_python_write_u16_le(bytes, (uint16_t)native_value);"));
+        assert!(extension.contains("boltffi_python_validate_owned_fixed_buffer(buffer, 2)"));
+        assert!(extension.contains("native_value = (___Status)boltffi_python_read_u16_le"));
         assert!(extension.contains("___Status value;"));
         assert!(extension.contains("boltffi_python_parse_status(args[0], &value)"));
         assert!(extension.contains(
@@ -601,9 +683,9 @@ mod tests {
         ));
         assert!(init.contains("from enum import IntEnum"));
         assert!(init.contains("class Status(IntEnum):"));
-        assert!(init.contains("    ACTIVE = 0"));
-        assert!(init.contains("    INACTIVE = 1"));
-        assert!(init.contains("    PENDING = 2"));
+        assert!(init.contains("    ACTIVE = -3"));
+        assert!(init.contains("    INACTIVE = 8"));
+        assert!(init.contains("    PENDING = 13"));
         assert!(init.contains("_native._register_status(Status)"));
         assert!(stub.contains("class Status(IntEnum):"));
         assert!(stub.contains("def echo_status(value: Status) -> Status: ..."));

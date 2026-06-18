@@ -36,6 +36,7 @@ struct CStyleTemplate {
     native_to_wire_tag: String,
     repr_parser: String,
     repr_boxer: String,
+    repr_wire_size: usize,
     variants: Vec<Variant>,
 }
 
@@ -107,6 +108,7 @@ impl Enumeration {
                     native_to_wire_tag,
                     repr_parser: primitive.parser()?.to_owned(),
                     repr_boxer: primitive.boxer()?.to_owned(),
+                    repr_wire_size: primitive.wire_size()?,
                     variants,
                 }
                 .render()?

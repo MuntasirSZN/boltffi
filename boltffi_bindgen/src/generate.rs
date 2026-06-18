@@ -22,7 +22,11 @@ use crate::target::Target;
 pub struct Generation {
     manifest_path: PathBuf,
     triple: Option<String>,
+    cargo_args: Vec<String>,
     python_package_module: Option<String>,
+    python_distribution_name: Option<String>,
+    python_package_version: Option<String>,
+    python_native_library: Option<String>,
 }
 
 impl Generation {
@@ -31,7 +35,11 @@ impl Generation {
         Self {
             manifest_path: manifest_path.into(),
             triple: None,
+            cargo_args: Vec::new(),
             python_package_module: None,
+            python_distribution_name: None,
+            python_package_version: None,
+            python_native_library: None,
         }
     }
 
@@ -41,9 +49,33 @@ impl Generation {
         self
     }
 
+    /// Passes Cargo build arguments to metadata generation.
+    pub fn cargo_args(mut self, cargo_args: impl IntoIterator<Item = String>) -> Self {
+        self.cargo_args = cargo_args.into_iter().collect();
+        self
+    }
+
     /// Sets the generated Python package module name.
     pub fn python_module_name(mut self, module_name: impl Into<String>) -> Self {
         self.python_package_module = Some(module_name.into());
+        self
+    }
+
+    /// Sets the generated Python distribution name.
+    pub fn python_distribution_name(mut self, distribution_name: impl Into<String>) -> Self {
+        self.python_distribution_name = Some(distribution_name.into());
+        self
+    }
+
+    /// Sets the generated Python package version.
+    pub fn python_package_version(mut self, package_version: Option<String>) -> Self {
+        self.python_package_version = package_version;
+        self
+    }
+
+    /// Sets the native library artifact name loaded by the Python package.
+    pub fn python_native_library(mut self, native_library: impl Into<String>) -> Self {
+        self.python_native_library = Some(native_library.into());
         self
     }
 
@@ -94,12 +126,22 @@ impl Generation {
     }
 
     fn python_host(&self) -> Result<PythonCExtHost, GenerationError> {
-        self.python_package_module
+        let host = self
+            .python_package_module
             .as_deref()
             .map(|module| PythonCExtHost::new().module_name(module))
             .transpose()
             .map_err(GenerationError::Render)
-            .map(Option::unwrap_or_default)
+            .map(Option::unwrap_or_default)?;
+        let host = self
+            .python_distribution_name
+            .iter()
+            .fold(host, |host, name| host.distribution_name(name.clone()));
+        let host = self
+            .python_native_library
+            .iter()
+            .fold(host, |host, library| host.native_library(library.clone()));
+        Ok(host.version(self.python_package_version.clone()))
     }
 
     fn write_output(
@@ -121,6 +163,9 @@ impl Generation {
     fn bindings<S: Surface>(&self) -> Result<Bindings<S>, GenerationError> {
         let surface = BindingMetadataSurface::from_target_triple(self.triple.as_deref());
         let mut build = BindingMetadataBuild::new(&self.manifest_path);
+        if !self.cargo_args.is_empty() {
+            build = build.cargo_args(self.cargo_args.clone());
+        }
         if let Some(triple) = &self.triple {
             build = build.target(triple);
         }
