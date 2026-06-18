@@ -33,9 +33,6 @@ impl Class {
     ) -> Result<Self> {
         let symbols = Symbols::new(declaration);
         let initializers = declaration.initializers().iter().map(|initializer| {
-            if !function::Function::supports(initializer.callable()) {
-                return Ok(None);
-            }
             function::Function::from_export(
                 symbols.initializer(initializer.name()),
                 initializer.symbol(),
@@ -44,12 +41,8 @@ impl Class {
                 bridge,
                 context,
             )
-            .map(Some)
         });
         let methods = declaration.methods().iter().map(|method| {
-            if !function::Function::supports(method.callable()) {
-                return Ok(None);
-            }
             let receiver = method
                 .callable()
                 .receiver()
@@ -65,16 +58,10 @@ impl Class {
                 bridge,
                 context,
             )
-            .map(Some)
         });
         Ok(Self {
             release: Release::new(declaration, bridge)?,
-            callables: initializers
-                .chain(methods)
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect(),
+            callables: initializers.chain(methods).collect::<Result<Vec<_>>>()?,
         })
     }
 
@@ -98,7 +85,7 @@ impl Class {
 
     pub fn methods(&self) -> impl Iterator<Item = &ExtensionMethod> {
         std::iter::once(self.release.method())
-            .chain(self.callables.iter().map(function::Function::method))
+            .chain(self.callables.iter().flat_map(function::Function::methods))
     }
 
     pub fn primitives(&self) -> Vec<primitive::Runtime> {
@@ -143,6 +130,12 @@ impl Class {
         self.callables
             .iter()
             .any(function::Function::has_raw_wire_argument)
+    }
+
+    pub fn uses_async_protocol(&self) -> bool {
+        self.callables
+            .iter()
+            .any(function::Function::uses_async_protocol)
     }
 }
 

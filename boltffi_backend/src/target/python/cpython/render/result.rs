@@ -17,51 +17,6 @@ pub struct Conversion {
 }
 
 impl Conversion {
-    pub fn supports(plan: &ReturnPlan<Native, OutOfRust>) -> bool {
-        matches!(
-            plan,
-            ReturnPlan::Void
-                | ReturnPlan::DirectViaReturnSlot {
-                    ty: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-                }
-                | ReturnPlan::EncodedViaReturnSlot {
-                    shape: native::BufferShape::Buffer,
-                    ..
-                }
-                | ReturnPlan::HandleViaReturnSlot {
-                    target: HandleTarget::Class(_),
-                    presence: HandlePresence::Required,
-                    ..
-                }
-                | ReturnPlan::DirectVecViaReturnSlot {
-                    element: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-                }
-        )
-    }
-
-    pub fn supports_out(plan: &ReturnPlan<Native, OutOfRust>) -> bool {
-        matches!(
-            plan,
-            ReturnPlan::Void
-                | ReturnPlan::DirectViaOutPointer {
-                    ty: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-                }
-                | ReturnPlan::EncodedViaOutPointer {
-                    shape: native::BufferShape::Buffer,
-                    ..
-                }
-                | ReturnPlan::HandleViaOutPointer {
-                    target: HandleTarget::Class(_),
-                    presence: HandlePresence::Required,
-                    ..
-                }
-        )
-    }
-
-    pub fn supports_encoded(_ty: &TypeRef) -> bool {
-        true
-    }
-
     pub fn from_plan(
         plan: &ReturnPlan<Native, OutOfRust>,
         bridge: &PythonCExtBridgeContract,
@@ -149,6 +104,9 @@ impl Conversion {
             } => Self::from_owned_buffer(OwnedBuffer::DirectVector(
                 direct_vector::Element::from_type_ref(element, bridge, context)?,
             )),
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => Self::from_owned_buffer(
+                OwnedBuffer::OptionalPrimitive(primitive::Runtime::new(*primitive)),
+            ),
             ReturnPlan::HandleViaReturnSlot {
                 target: HandleTarget::Class(_),
                 carrier,
@@ -162,10 +120,24 @@ impl Conversion {
                     owned_buffer: None,
                 })
             }
+            ReturnPlan::HandleViaReturnSlot {
+                target: HandleTarget::Callback(_),
+                ..
+            } => Ok(Self {
+                void: false,
+                converter: "boltffi_python_box_callback_handle".to_owned(),
+                primitive: None,
+                owned_buffer: None,
+            }),
+            ReturnPlan::HandleViaReturnSlot {
+                target: HandleTarget::Class(_),
+                ..
+            } => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "nullable class handle return",
+            }),
             ReturnPlan::DirectViaReturnSlot { .. }
             | ReturnPlan::EncodedViaReturnSlot { .. }
-            | ReturnPlan::HandleViaReturnSlot { .. }
-            | ReturnPlan::ScalarOptionViaReturnSlot { .. }
             | ReturnPlan::DirectVecViaReturnSlot { .. }
             | ReturnPlan::DirectViaOutPointer { .. }
             | ReturnPlan::EncodedViaOutPointer { .. }
@@ -242,9 +214,24 @@ impl Conversion {
                     owned_buffer: None,
                 })
             }
+            ReturnPlan::HandleViaOutPointer {
+                target: HandleTarget::Callback(_),
+                ..
+            } => Ok(Self {
+                void: false,
+                converter: "boltffi_python_box_callback_handle".to_owned(),
+                primitive: None,
+                owned_buffer: None,
+            }),
+            ReturnPlan::HandleViaOutPointer {
+                target: HandleTarget::Class(_),
+                ..
+            } => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "fallible nullable class handle success",
+            }),
             ReturnPlan::DirectViaOutPointer { .. }
             | ReturnPlan::EncodedViaOutPointer { .. }
-            | ReturnPlan::HandleViaOutPointer { .. }
             | ReturnPlan::ClosureViaOutPointer(_)
             | ReturnPlan::DirectViaReturnSlot { .. }
             | ReturnPlan::EncodedViaReturnSlot { .. }
@@ -311,7 +298,8 @@ impl Conversion {
                 OwnedBuffer::String
                 | OwnedBuffer::Bytes
                 | OwnedBuffer::RawWire
-                | OwnedBuffer::Primitive(_),
+                | OwnedBuffer::Primitive(_)
+                | OwnedBuffer::OptionalPrimitive(_),
             )
             | None => None,
         }
@@ -338,6 +326,7 @@ pub enum OwnedBuffer {
     RawWire,
     DirectVector(direct_vector::Element),
     Primitive(primitive::Runtime),
+    OptionalPrimitive(primitive::Runtime),
 }
 
 impl OwnedBuffer {
@@ -348,12 +337,13 @@ impl OwnedBuffer {
             Self::RawWire => Ok("boltffi_python_decode_owned_raw_wire".to_owned()),
             Self::DirectVector(element) => Ok(element.vector_decoder().to_owned()),
             Self::Primitive(primitive) => primitive.owned_wire_decoder(),
+            Self::OptionalPrimitive(primitive) => primitive.optional_owned_wire_decoder(),
         }
     }
 
     pub fn primitive(&self) -> Option<primitive::Runtime> {
         match self {
-            Self::Primitive(primitive) => Some(*primitive),
+            Self::Primitive(primitive) | Self::OptionalPrimitive(primitive) => Some(*primitive),
             Self::String | Self::Bytes | Self::RawWire | Self::DirectVector(_) => None,
         }
     }

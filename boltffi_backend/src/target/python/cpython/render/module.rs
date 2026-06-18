@@ -79,9 +79,13 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
             .chain(
                 constants
                     .iter()
-                    .filter_map(|constant| constant.wrapper.method()),
+                    .flat_map(|constant| constant.wrapper.methods()),
             )
-            .chain(functions.iter().map(|function| function.wrapper.method()))
+            .chain(
+                functions
+                    .iter()
+                    .flat_map(|function| function.wrapper.methods()),
+            )
             .map(method::Entry::from_method)
             .collect();
         let support = ModuleSupport::new(
@@ -184,7 +188,6 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .filter(|(function, _)| function::Function::supports(function.callable()))
             .map(|(function, emitted)| {
                 let wrapper =
                     function::Function::from_declaration(function, self.bridge, self.context)?;
@@ -260,7 +263,6 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .filter(|(declaration, _)| callback::Callback::supports(declaration, self.bridge))
             .map(|(declaration, emitted)| {
                 let wrapper =
                     callback::Callback::from_declaration(declaration, self.bridge, self.context)?;
@@ -285,7 +287,6 @@ impl<'bridge, 'context, 'decl> NativeModule<'bridge, 'context, 'decl> {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .filter(|(declaration, _)| stream::Stream::supports(declaration))
             .map(|(declaration, emitted)| {
                 let wrapper =
                     stream::Stream::from_declaration(declaration, self.bridge, self.context)?;
@@ -383,6 +384,8 @@ struct ModuleSupport {
     data_enums: bool,
     record_types: bool,
     c_style_enums: bool,
+    callback_handles: bool,
+    async_functions: bool,
 }
 
 impl ModuleSupport {
@@ -400,6 +403,14 @@ impl ModuleSupport {
         let data_enums = enums
             .iter()
             .any(|enumeration| enumeration.needs_owned_buffer());
+        let async_functions = functions
+            .iter()
+            .any(|function| function.uses_async_protocol())
+            || records.iter().any(|record| record.uses_async_protocol())
+            || enums
+                .iter()
+                .any(|enumeration| enumeration.uses_async_protocol())
+            || classes.iter().any(|class| class.uses_async_protocol());
         let owned_buffers = functions
             .iter()
             .flat_map(|function| function.owned_buffers())
@@ -424,7 +435,8 @@ impl ModuleSupport {
                 result::OwnedBuffer::String
                 | result::OwnedBuffer::Bytes
                 | result::OwnedBuffer::RawWire
-                | result::OwnedBuffer::Primitive(_) => None,
+                | result::OwnedBuffer::Primitive(_)
+                | result::OwnedBuffer::OptionalPrimitive(_) => None,
             })
             .chain(
                 functions
@@ -506,7 +518,8 @@ impl ModuleSupport {
         let owned_primitives = owned_buffers
             .iter()
             .filter_map(|buffer| match buffer {
-                result::OwnedBuffer::Primitive(primitive) => Some(*primitive),
+                result::OwnedBuffer::Primitive(primitive)
+                | result::OwnedBuffer::OptionalPrimitive(primitive) => Some(*primitive),
                 result::OwnedBuffer::String
                 | result::OwnedBuffer::Bytes
                 | result::OwnedBuffer::RawWire
@@ -574,6 +587,8 @@ impl ModuleSupport {
             data_enums,
             record_types: !records.is_empty(),
             c_style_enums: !enums.is_empty(),
+            callback_handles: !callbacks.is_empty(),
+            async_functions,
         })
     }
 
@@ -613,6 +628,7 @@ impl ModuleSupport {
             || self.encoded_records
             || self.data_enums
             || self.c_style_enums
+            || self.async_functions
     }
 
     fn uses_wire_strings(&self) -> bool {
@@ -632,7 +648,7 @@ impl ModuleSupport {
     }
 
     fn uses_owned_utf8(&self) -> bool {
-        self.string_returns
+        self.string_returns || self.async_functions
     }
 
     fn uses_owned_bytes(&self) -> bool {
@@ -647,8 +663,16 @@ impl ModuleSupport {
         self.c_style_enums
     }
 
+    fn uses_callback_handles(&self) -> bool {
+        self.callback_handles
+    }
+
     fn uses_registered_types(&self) -> bool {
         self.record_types || self.c_style_enums
+    }
+
+    fn uses_async_functions(&self) -> bool {
+        self.async_functions
     }
 
     fn free_buffer_storage(bridge: &PythonCExtBridgeContract) -> Result<String> {

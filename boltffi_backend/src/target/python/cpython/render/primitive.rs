@@ -16,7 +16,9 @@ pub struct Support {
     pub boxer: &'static str,
     pub wire_encoder: String,
     pub optional_wire_encoder: String,
+    pub optional_owned_wire_decoder: String,
     pub owned_wire_decoder: String,
+    pub wire_size: usize,
 }
 
 impl Support {
@@ -27,7 +29,9 @@ impl Support {
             boxer: runtime.boxer()?,
             wire_encoder: runtime.wire_encoder()?,
             optional_wire_encoder: runtime.optional_wire_encoder()?,
+            optional_owned_wire_decoder: runtime.optional_owned_wire_decoder()?,
             owned_wire_decoder: runtime.owned_wire_decoder()?,
+            wire_size: runtime.wire_size()?,
         })
     }
 
@@ -172,8 +176,34 @@ impl Runtime {
         ))
     }
 
+    pub fn optional_owned_wire_decoder(self) -> Result<String> {
+        Ok(format!(
+            "boltffi_python_decode_owned_optional_{}",
+            self.wire_stem()?
+        ))
+    }
+
     pub fn owned_wire_decoder(self) -> Result<String> {
         Ok(format!("boltffi_python_decode_owned_{}", self.wire_stem()?))
+    }
+
+    pub fn wire_size(self) -> Result<usize> {
+        Ok(match self.primitive {
+            Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
+            Primitive::I16 | Primitive::U16 => 2,
+            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
+            Primitive::I64
+            | Primitive::U64
+            | Primitive::ISize
+            | Primitive::USize
+            | Primitive::F64 => 8,
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unknown primitive wire size",
+                });
+            }
+        })
     }
 
     pub fn direct_vec_decoder(self) -> Result<String> {

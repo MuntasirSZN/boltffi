@@ -5,12 +5,14 @@ use boltffi_binding::{
 
 use crate::{
     bridge::{
-        c::{Type, identifier::Identifier, syntax::TypeSyntax},
+        c::{self, Type, identifier::Identifier, syntax::TypeSyntax},
         python_cext::PythonCExtBridgeContract,
     },
     core::{Error, RenderContext, Result},
     target::python::{
-        cpython::render::{callback, custom, direct_vector, enumeration, primitive, record},
+        cpython::render::{
+            callback, closure, custom, direct_vector, enumeration, primitive, record,
+        },
         name_style::Name,
     },
 };
@@ -23,39 +25,11 @@ pub struct Conversion {
 }
 
 impl Conversion {
-    pub fn supports(parameter: &ParamDecl<Native, IntoRust>) -> bool {
-        match parameter.payload() {
-            IncomingParam::Value(ParamPlan::Direct {
-                ty: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-                receive: Receive::ByValue | Receive::ByRef,
-            })
-            | IncomingParam::Value(ParamPlan::Encoded {
-                shape: native::BufferShape::Slice,
-                receive: Receive::ByValue | Receive::ByRef,
-                ..
-            })
-            | IncomingParam::Value(ParamPlan::Handle {
-                target: HandleTarget::Class(_),
-                presence: HandlePresence::Required,
-                receive: Receive::ByValue,
-                ..
-            })
-            | IncomingParam::Value(ParamPlan::Handle {
-                target: HandleTarget::Callback(_),
-                carrier: native::HandleCarrier::CallbackHandle,
-                receive: Receive::ByValue,
-                ..
-            })
-            | IncomingParam::Value(ParamPlan::DirectVec {
-                element: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-            }) => true,
-            IncomingParam::Closure(_) | IncomingParam::Value(_) => false,
-        }
-    }
-
     pub fn from_parameter(
+        owner: &str,
         index: usize,
         parameter: &ParamDecl<Native, IntoRust>,
+        c_parameters: &[c::Parameter],
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -105,14 +79,7 @@ impl Conversion {
                 shape: native::BufferShape::Slice,
                 receive,
                 ..
-            }) => Self::from_encoded_type(
-                index,
-                parameter,
-                *receive,
-                &TypeRef::Record(*record),
-                bridge,
-                context,
-            ),
+            }) => Self::from_encoded_record(index, parameter, *record, *receive, bridge, context),
             IncomingParam::Value(ParamPlan::Encoded {
                 ty: TypeRef::Enum(enumeration),
                 shape: native::BufferShape::Slice,
@@ -142,11 +109,16 @@ impl Conversion {
                     element, bridge, context,
                 )?),
             ),
+            IncomingParam::Value(ParamPlan::ScalarOption { primitive }) => Self::encoded(
+                index,
+                parameter,
+                Receive::ByValue,
+                Encoded::OptionalPrimitive(primitive::Runtime::new(*primitive)),
+            ),
             IncomingParam::Value(ParamPlan::Handle {
                 target: HandleTarget::Class(_),
                 carrier,
-                presence: HandlePresence::Required,
-                receive: Receive::ByValue,
+                ..
             }) => Self::from_handle(index, parameter, *carrier),
             IncomingParam::Value(ParamPlan::Handle {
                 target: HandleTarget::Callback(callback),
@@ -154,10 +126,15 @@ impl Conversion {
                 presence,
                 receive: Receive::ByValue,
             }) => Self::from_callback(index, parameter, *callback, *presence, bridge, context),
-            IncomingParam::Closure(_) => Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "closure parameter",
-            }),
+            IncomingParam::Closure(closure) => Self::from_closure(
+                owner,
+                index,
+                parameter,
+                closure,
+                c_parameters,
+                bridge,
+                context,
+            ),
             IncomingParam::Value(ParamPlan::Direct { .. }) => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "borrowed direct parameter",
@@ -166,13 +143,20 @@ impl Conversion {
                 target: "python",
                 shape: "unsupported encoded parameter",
             }),
-            IncomingParam::Value(
-                ParamPlan::Handle { .. }
-                | ParamPlan::ScalarOption { .. }
-                | ParamPlan::DirectVec { .. },
-            ) => Err(Error::UnsupportedTarget {
+            IncomingParam::Value(ParamPlan::Handle {
+                target: HandleTarget::Callback(_),
+                ..
+            }) => Err(Error::UnsupportedTarget {
                 target: "python",
-                shape: "unsupported parameter",
+                shape: "unsupported callback handle parameter",
+            }),
+            IncomingParam::Value(ParamPlan::Handle { .. }) => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unknown handle parameter",
+            }),
+            IncomingParam::Value(ParamPlan::DirectVec { .. }) => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unsupported direct vector parameter",
             }),
             IncomingParam::Value(_) => Err(Error::UnsupportedTarget {
                 target: "python",
@@ -214,7 +198,7 @@ impl Conversion {
             0,
             "receiver",
             receive,
-            Encoded::RegisteredType(symbols.parser().to_owned()),
+            Encoded::RegisteredType(RegisteredType::new(symbols.parser(), symbols.boxer())),
         )
     }
 
@@ -243,7 +227,10 @@ impl Conversion {
             0,
             "receiver",
             receive,
-            Encoded::RegisteredType(symbols.parser().to_owned()),
+            Encoded::RegisteredType(RegisteredType::new(
+                symbols.parser(),
+                symbols.owned_decoder(),
+            )),
         )
     }
 
@@ -251,6 +238,15 @@ impl Conversion {
         match &self.kind {
             Kind::Direct(_) => vec![self.name.clone()],
             Kind::Encoded(encoded) => encoded.call_args(),
+            Kind::Closure(closure) => closure.call_args().into_iter().collect(),
+        }
+    }
+
+    pub fn c_arity(&self) -> usize {
+        match &self.kind {
+            Kind::Direct(_) => 1,
+            Kind::Encoded(encoded) => encoded.c_arity(),
+            Kind::Closure(_) => closure::Parameter::c_arity(),
         }
     }
 
@@ -270,6 +266,10 @@ impl Conversion {
         matches!(self.kind, Kind::Encoded(_))
     }
 
+    pub fn is_closure(&self) -> bool {
+        matches!(self.kind, Kind::Closure(_))
+    }
+
     pub fn is_string(&self) -> bool {
         matches!(&self.kind, Kind::Encoded(encoded) if matches!(encoded.value, Encoded::String))
     }
@@ -282,17 +282,45 @@ impl Conversion {
         matches!(&self.kind, Kind::Encoded(encoded) if matches!(encoded.value, Encoded::RawWire))
     }
 
+    pub fn has_closure_string_argument(&self) -> bool {
+        matches!(&self.kind, Kind::Closure(closure) if closure.has_string_argument())
+    }
+
+    pub fn has_closure_bytes_argument(&self) -> bool {
+        matches!(&self.kind, Kind::Closure(closure) if closure.has_bytes_argument())
+    }
+
+    pub fn has_closure_raw_wire_argument(&self) -> bool {
+        matches!(&self.kind, Kind::Closure(closure) if closure.has_raw_wire_argument())
+    }
+
     pub fn wire_primitive(&self) -> Option<primitive::Runtime> {
         match &self.kind {
             Kind::Encoded(encoded) => match encoded.value {
-                Encoded::Primitive(primitive) => Some(primitive),
+                Encoded::Primitive(primitive) | Encoded::OptionalPrimitive(primitive) => {
+                    Some(primitive)
+                }
                 Encoded::String
                 | Encoded::Bytes
                 | Encoded::RegisteredType(_)
                 | Encoded::RawWire
                 | Encoded::DirectVector(_) => None,
             },
-            Kind::Direct(_) => None,
+            Kind::Closure(_) | Kind::Direct(_) => None,
+        }
+    }
+
+    pub fn closure_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
+        match &self.kind {
+            Kind::Closure(closure) => EitherIter::left(closure.primitives()),
+            Kind::Direct(_) | Kind::Encoded(_) => EitherIter::right(std::iter::empty()),
+        }
+    }
+
+    pub fn closure_wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
+        match &self.kind {
+            Kind::Closure(closure) => EitherIter::left(closure.wire_primitives()),
+            Kind::Direct(_) | Kind::Encoded(_) => EitherIter::right(std::iter::empty()),
         }
     }
 
@@ -303,17 +331,27 @@ impl Conversion {
                 Encoded::String
                 | Encoded::Bytes
                 | Encoded::Primitive(_)
+                | Encoded::OptionalPrimitive(_)
                 | Encoded::RegisteredType(_)
                 | Encoded::RawWire => None,
             },
-            Kind::Direct(_) => None,
+            Kind::Closure(_) | Kind::Direct(_) => None,
+        }
+    }
+
+    pub fn closure_direct_vector_elements(
+        &self,
+    ) -> impl Iterator<Item = direct_vector::Element> + '_ {
+        match &self.kind {
+            Kind::Closure(closure) => EitherIter::left(closure.direct_vector_elements()),
+            Kind::Direct(_) | Kind::Encoded(_) => EitherIter::right(std::iter::empty()),
         }
     }
 
     pub fn c_type(&self) -> &str {
         match &self.kind {
             Kind::Direct(direct) => direct.c_type.as_str(),
-            Kind::Encoded(_) => "",
+            Kind::Encoded(_) | Kind::Closure(_) => "",
         }
     }
 
@@ -321,6 +359,7 @@ impl Conversion {
         match &self.kind {
             Kind::Direct(direct) => direct.parser.as_str(),
             Kind::Encoded(encoded) => encoded.parser.as_str(),
+            Kind::Closure(closure) => closure.parser(),
         }
     }
 
@@ -328,6 +367,7 @@ impl Conversion {
         match &self.kind {
             Kind::Direct(_) => "",
             Kind::Encoded(encoded) => encoded.wire.as_str(),
+            Kind::Closure(_) => "",
         }
     }
 
@@ -335,6 +375,7 @@ impl Conversion {
         match &self.kind {
             Kind::Direct(_) => "",
             Kind::Encoded(encoded) => encoded.pointer.as_str(),
+            Kind::Closure(_) => "",
         }
     }
 
@@ -342,6 +383,85 @@ impl Conversion {
         match &self.kind {
             Kind::Direct(_) => "",
             Kind::Encoded(encoded) => encoded.length.as_str(),
+            Kind::Closure(_) => "",
+        }
+    }
+
+    pub fn has_mutation(&self) -> bool {
+        matches!(&self.kind, Kind::Encoded(encoded) if encoded.mutation.is_some())
+    }
+
+    pub fn mutation_buffer(&self) -> &str {
+        match &self.kind {
+            Kind::Encoded(encoded) => encoded
+                .mutation
+                .as_ref()
+                .map(MutationOutput::buffer)
+                .unwrap_or(""),
+            Kind::Direct(_) | Kind::Closure(_) => "",
+        }
+    }
+
+    pub fn mutation(&self) -> Option<MutationOutput> {
+        match &self.kind {
+            Kind::Encoded(encoded) => encoded.mutation.clone(),
+            Kind::Direct(_) | Kind::Closure(_) => None,
+        }
+    }
+
+    pub fn closure_declaration(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.declaration(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
+        }
+    }
+
+    pub fn closure_call_declaration(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.call_declaration(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
+        }
+    }
+
+    pub fn closure_call(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.call(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
+        }
+    }
+
+    pub fn closure_context_declaration(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.context_declaration(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
+        }
+    }
+
+    pub fn closure_context(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.context(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
+        }
+    }
+
+    pub fn closure_release_declaration(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.release_declaration(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
+        }
+    }
+
+    pub fn closure_release(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.release(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
+        }
+    }
+
+    pub fn closure_release_needed(&self) -> &str {
+        match &self.kind {
+            Kind::Closure(closure) => closure.release_needed(),
+            Kind::Direct(_) | Kind::Encoded(_) => "",
         }
     }
 
@@ -364,6 +484,23 @@ impl Conversion {
         let symbols = record::Symbols::from_record_id(record, bridge, context)?;
         let name = Identifier::escape(Name::new(parameter.name()).function())?.to_string();
         Self::direct_with_name(index, name, symbols.c_type()?.to_owned(), symbols.parser())
+    }
+
+    fn from_encoded_record(
+        index: usize,
+        parameter: &ParamDecl<Native, IntoRust>,
+        record: RecordId,
+        receive: Receive,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let symbols = record::Symbols::from_record_id(record, bridge, context)?;
+        Self::encoded(
+            index,
+            parameter,
+            receive,
+            Encoded::RegisteredType(RegisteredType::new(symbols.parser(), symbols.boxer())),
+        )
     }
 
     fn from_handle(
@@ -414,6 +551,33 @@ impl Conversion {
         })
     }
 
+    fn from_closure(
+        owner: &str,
+        index: usize,
+        parameter: &ParamDecl<Native, IntoRust>,
+        closure: &boltffi_binding::ClosureParameter<Native, IntoRust>,
+        c_parameters: &[c::Parameter],
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let name = Identifier::escape(Name::new(parameter.name()).function())?.to_string();
+        let closure = closure::Parameter::new(
+            owner,
+            index,
+            name.clone(),
+            closure,
+            c_parameters,
+            bridge,
+            context,
+        )?;
+        Ok(Self {
+            index,
+            name,
+            kind: Kind::Closure(Box::new(closure)),
+            primitive: None,
+        })
+    }
+
     fn from_enum(
         index: usize,
         parameter: &ParamDecl<Native, IntoRust>,
@@ -432,15 +596,8 @@ impl Conversion {
         receive: Receive,
         encoded: Encoded,
     ) -> Result<Self> {
-        if matches!(receive, Receive::ByMutRef) {
-            Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "mutable encoded parameter",
-            })
-        } else {
-            let name = Identifier::escape(Name::new(parameter.name()).function())?.to_string();
-            Self::encoded_with_name(index, name, receive, encoded)
-        }
+        let name = Identifier::escape(Name::new(parameter.name()).function())?.to_string();
+        Self::encoded_with_name(index, name, receive, encoded)
     }
 
     fn from_encoded_type(
@@ -466,7 +623,7 @@ impl Conversion {
                     index,
                     parameter,
                     receive,
-                    Encoded::RegisteredType(symbols.parser().to_owned()),
+                    Encoded::RegisteredType(RegisteredType::new(symbols.parser(), symbols.boxer())),
                 )
             }
             TypeRef::Enum(enumeration) => {
@@ -475,7 +632,10 @@ impl Conversion {
                     index,
                     parameter,
                     receive,
-                    Encoded::RegisteredType(symbols.parser().to_owned()),
+                    Encoded::RegisteredType(RegisteredType::new(
+                        symbols.parser(),
+                        symbols.owned_decoder(),
+                    )),
                 )
             }
             _ => Self::encoded(index, parameter, receive, Encoded::RawWire),
@@ -522,16 +682,20 @@ impl Conversion {
         receive: Receive,
         encoded: Encoded,
     ) -> Result<Self> {
-        if matches!(receive, Receive::ByMutRef) {
-            return Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "mutable encoded parameter",
-            });
-        }
         let name = name.into();
         let wire = format!("{name}_wire");
         let pointer = format!("{name}_ptr");
         let length = format!("{name}_len");
+        let mutation = match receive {
+            Receive::ByMutRef => encoded.mutation_output(&name)?,
+            Receive::ByValue | Receive::ByRef => None,
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unknown encoded parameter receive mode",
+                });
+            }
+        };
         let parser = encoded.parser()?;
         let primitive = encoded.primitive();
         Ok(Self {
@@ -543,6 +707,7 @@ impl Conversion {
                 wire,
                 pointer,
                 length,
+                mutation,
             })),
             primitive,
         })
@@ -552,11 +717,42 @@ impl Conversion {
 enum Kind {
     Direct(Direct),
     Encoded(Box<EncodedParam>),
+    Closure(Box<closure::Parameter>),
 }
 
 struct Direct {
     c_type: String,
     parser: String,
+}
+
+enum EitherIter<Left, Right> {
+    Left(Left),
+    Right(Right),
+}
+
+impl<Left, Right> EitherIter<Left, Right> {
+    fn left(left: Left) -> Self {
+        Self::Left(left)
+    }
+
+    fn right(right: Right) -> Self {
+        Self::Right(right)
+    }
+}
+
+impl<Item, Left, Right> Iterator for EitherIter<Left, Right>
+where
+    Left: Iterator<Item = Item>,
+    Right: Iterator<Item = Item>,
+{
+    type Item = Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Left(left) => left.next(),
+            Self::Right(right) => right.next(),
+        }
+    }
 }
 
 struct EncodedParam {
@@ -565,6 +761,7 @@ struct EncodedParam {
     wire: String,
     pointer: String,
     length: String,
+    mutation: Option<MutationOutput>,
 }
 
 impl EncodedParam {
@@ -577,9 +774,21 @@ impl EncodedParam {
             Encoded::String
             | Encoded::Bytes
             | Encoded::Primitive(_)
+            | Encoded::OptionalPrimitive(_)
             | Encoded::RegisteredType(_)
-            | Encoded::RawWire => vec![self.pointer.clone(), self.length.clone()],
+            | Encoded::RawWire => [self.pointer.clone(), self.length.clone()]
+                .into_iter()
+                .chain(
+                    self.mutation
+                        .iter()
+                        .map(|mutation| format!("&{}", mutation.buffer())),
+                )
+                .collect(),
         }
+    }
+
+    fn c_arity(&self) -> usize {
+        2 + usize::from(self.mutation.is_some())
     }
 }
 
@@ -588,7 +797,8 @@ enum Encoded {
     String,
     Bytes,
     Primitive(primitive::Runtime),
-    RegisteredType(String),
+    OptionalPrimitive(primitive::Runtime),
+    RegisteredType(RegisteredType),
     RawWire,
     DirectVector(direct_vector::Element),
 }
@@ -599,20 +809,77 @@ impl Encoded {
             Self::String => Ok("boltffi_python_wire_string".to_owned()),
             Self::Bytes => Ok("boltffi_python_wire_bytes".to_owned()),
             Self::Primitive(primitive) => primitive.wire_encoder(),
-            Self::RegisteredType(parser) => Ok(parser.clone()),
+            Self::OptionalPrimitive(primitive) => primitive.optional_wire_encoder(),
+            Self::RegisteredType(registered) => Ok(registered.parser.clone()),
             Self::RawWire => Ok("boltffi_python_wire_raw".to_owned()),
             Self::DirectVector(element) => Ok(element.vector_parser().to_owned()),
         }
     }
 
+    fn mutation_output(&self, name: &str) -> Result<Option<MutationOutput>> {
+        match self {
+            Self::RegisteredType(registered) => Ok(Some(MutationOutput::new(
+                format!("{name}_out"),
+                registered.owned_decoder.clone(),
+            ))),
+            Self::String
+            | Self::Bytes
+            | Self::Primitive(_)
+            | Self::OptionalPrimitive(_)
+            | Self::RawWire
+            | Self::DirectVector(_) => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "mutable encoded parameter",
+            }),
+        }
+    }
+
     fn primitive(&self) -> Option<primitive::Runtime> {
         match self {
-            Self::Primitive(primitive) => Some(*primitive),
+            Self::Primitive(primitive) | Self::OptionalPrimitive(primitive) => Some(*primitive),
             Self::String
             | Self::Bytes
             | Self::RegisteredType(_)
             | Self::RawWire
             | Self::DirectVector(_) => None,
         }
+    }
+}
+
+#[derive(Clone)]
+struct RegisteredType {
+    parser: String,
+    owned_decoder: String,
+}
+
+impl RegisteredType {
+    fn new(parser: impl Into<String>, owned_decoder: impl Into<String>) -> Self {
+        Self {
+            parser: parser.into(),
+            owned_decoder: owned_decoder.into(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct MutationOutput {
+    buffer: String,
+    decoder: String,
+}
+
+impl MutationOutput {
+    fn new(buffer: impl Into<String>, decoder: impl Into<String>) -> Self {
+        Self {
+            buffer: buffer.into(),
+            decoder: decoder.into(),
+        }
+    }
+
+    pub fn buffer(&self) -> &str {
+        &self.buffer
+    }
+
+    pub fn decoder(&self) -> &str {
+        &self.decoder
     }
 }

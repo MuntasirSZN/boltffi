@@ -1,4 +1,4 @@
-use boltffi_binding::{CodecNode, ErrorDecl, OutOfRust, ReadPlan, ReturnDecl, ReturnPlan, TypeRef};
+use boltffi_binding::{CodecNode, ErrorDecl, OutOfRust, ReturnDecl, ReturnPlan, TypeRef};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Type;
@@ -264,6 +264,13 @@ where
                 };
                 let encoded =
                     <encoded::Renderer as Render<S, _>>::render(encoded::Renderer, encoded_input)?;
+                let type_annotation =
+                    match wrapper::encoded::Outgoing::new(codec.root(), input.expansion)
+                        .has_custom_conversion()?
+                    {
+                        true => TokenStream::new(),
+                        false => quote! { : #rust_type },
+                    };
                 let return_type = encoded.return_type().clone();
                 let value = encoded.value();
                 Ok(Tokens {
@@ -272,7 +279,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #call;
+                        let #result #type_annotation = #call;
                         #(#writebacks)*
                         #value
                     },
@@ -463,6 +470,7 @@ impl<'expansion, 'lowered, S: RenderSurface> ErrorFailure<'expansion, 'lowered, 
 
     fn tokens(self) -> Result<TokenStream, Error>
     where
+        encoded::Renderer: Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
         encoded::Renderer:
             Render<S, encoded::Input<'expansion, 'lowered, 'lowered, S>, Output = encoded::Tokens>,
     {
@@ -481,9 +489,7 @@ impl<'expansion, 'lowered, S: RenderSurface> ErrorFailure<'expansion, 'lowered, 
                     return #value;
                 })
             }
-            ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } => {
-                self.typed_encoded_error(codec, *shape)
-            }
+            ErrorDecl::EncodedViaReturnSlot { shape, .. } => self.typed_encoded_error(*shape),
             ErrorDecl::StatusViaReturnSlot { .. } => {
                 Err(Error::UnsupportedExpansion("status error failure"))
             }
@@ -491,27 +497,17 @@ impl<'expansion, 'lowered, S: RenderSurface> ErrorFailure<'expansion, 'lowered, 
         }
     }
 
-    fn typed_encoded_error(
-        self,
-        codec: &'lowered ReadPlan,
-        shape: S::BufferShape,
-    ) -> Result<TokenStream, Error>
+    fn typed_encoded_error(self, shape: S::BufferShape) -> Result<TokenStream, Error>
     where
-        encoded::Renderer:
-            Render<S, encoded::Input<'expansion, 'lowered, 'lowered, S>, Output = encoded::Tokens>,
+        encoded::Renderer: Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
     {
-        let error = names::Wrapper::new(Span::call_site()).error();
-        let error_type = self.source.fallible()?.error_written_type()?;
-        let encoded = <encoded::Renderer as Render<S, _>>::render(
+        self.source.fallible()?;
+        let empty = <encoded::Renderer as Render<S, _>>::render(
             encoded::Renderer,
-            encoded::Input::new(codec, shape, error.clone(), self.expansion),
+            encoded::Empty::new(shape),
         )?;
-        let value = encoded.value();
+        let value = empty.value();
         Ok(quote! {
-            let #error: #error_type =
-                <#error_type as ::core::convert::From<::boltffi::UnexpectedFfiCallbackError>>::from(
-                    ::boltffi::UnexpectedFfiCallbackError::new("invalid argument")
-                );
             return #value;
         })
     }

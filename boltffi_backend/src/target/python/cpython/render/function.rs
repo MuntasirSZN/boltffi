@@ -1,7 +1,7 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    ErrorDecl, ExecutionDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol, OutOfRust,
-    ReturnPlan, TypeRef, native,
+    ErrorDecl, ExecutionDecl, ExportedCallable, FunctionDecl, IncomingParam, Native, NativeSymbol,
+    OutOfRust, ParamPlan, Receive, ReturnPlan, TypeRef, native,
 };
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
         c::{self, syntax::TypeSyntax},
         python_cext::{ExtensionMethod, LoadedFunction, MethodFlags, PythonCExtBridgeContract},
     },
-    core::{Emitted, Error, RenderContext, Result},
+    core::{Diagnostic, Emitted, Error, RenderContext, Result},
     target::python::{
         cpython::render::{argument, direct_vector, primitive, result},
         name_style::Name,
@@ -18,56 +18,87 @@ use crate::{
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/python/function.c", escape = "none")]
-struct FunctionTemplate {
+struct SyncTemplate {
     python_name: String,
     wrapper: String,
     storage: String,
     params: Vec<argument::Conversion>,
     call_args: Vec<String>,
     returns: result::Conversion,
+    mutation: Option<argument::MutationOutput>,
+    fallible: Option<FallibleResult>,
+}
+
+#[derive(AskamaTemplate)]
+#[template(path = "target/python/async_function.c", escape = "none")]
+struct AsyncTemplate {
+    python_name: String,
+    start_wrapper: String,
+    start_storage: String,
+    poll_python_name: String,
+    poll_wrapper: String,
+    poll_storage: String,
+    complete_wrapper: String,
+    complete_storage: String,
+    panic_message_wrapper: String,
+    panic_storage: String,
+    cancel_wrapper: String,
+    cancel_storage: String,
+    free_wrapper: String,
+    free_storage: String,
+    params: Vec<argument::Conversion>,
+    call_args: Vec<String>,
+    complete_call_args: Vec<String>,
+    returns: result::Conversion,
     fallible: Option<FallibleResult>,
 }
 
 pub struct Function {
+    body: Body,
+}
+
+struct SyncFunction {
     pub python_name: String,
     pub wrapper: String,
     pub storage: String,
     pub params: Vec<argument::Conversion>,
     pub call_args: Vec<String>,
     pub returns: result::Conversion,
+    mutation: Option<argument::MutationOutput>,
     fallible: Option<FallibleResult>,
-    method: ExtensionMethod,
+    methods: Vec<ExtensionMethod>,
+}
+
+struct AsyncFunction {
+    python_name: String,
+    start_wrapper: String,
+    start_storage: String,
+    poll_python_name: String,
+    poll_wrapper: String,
+    poll_storage: String,
+    complete_wrapper: String,
+    complete_storage: String,
+    panic_message_wrapper: String,
+    panic_storage: String,
+    cancel_wrapper: String,
+    cancel_storage: String,
+    free_wrapper: String,
+    free_storage: String,
+    params: Vec<argument::Conversion>,
+    call_args: Vec<String>,
+    complete_call_args: Vec<String>,
+    returns: result::Conversion,
+    fallible: Option<FallibleResult>,
+    methods: Vec<ExtensionMethod>,
+}
+
+enum Body {
+    Sync(SyncFunction),
+    Async(Box<AsyncFunction>),
+    Skipped(SkippedFunction),
 }
 
 impl Function {
-    pub fn supports(callable: &ExportedCallable<Native>) -> bool {
-        Self::unsupported(callable).is_none()
-    }
-
-    pub fn unsupported(callable: &ExportedCallable<Native>) -> Option<&'static str> {
-        if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
-            return Some("async function");
-        }
-        if !callable.params().iter().all(argument::Conversion::supports) {
-            return Some("function parameter");
-        }
-        match callable.error() {
-            ErrorDecl::None(_) if result::Conversion::supports(callable.returns().plan()) => None,
-            ErrorDecl::None(_) => Some("function return"),
-            ErrorDecl::EncodedViaReturnSlot {
-                ty,
-                shape: native::BufferShape::Buffer,
-                ..
-            } if result::Conversion::supports_out(callable.returns().plan())
-                && result::Conversion::supports_encoded(ty) =>
-            {
-                None
-            }
-            ErrorDecl::EncodedViaReturnSlot { .. } => Some("fallible function"),
-            _ => Some("function error channel"),
-        }
-    }
-
     pub fn from_declaration(
         declaration: &FunctionDecl<Native>,
         bridge: &PythonCExtBridgeContract,
@@ -91,21 +122,206 @@ impl Function {
         bridge: &PythonCExtBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        match callable.execution() {
-            ExecutionDecl::Synchronous(_) => {}
-            ExecutionDecl::Asynchronous(_) => {
-                return Err(Error::UnsupportedTarget {
-                    target: "python",
-                    shape: "async function",
-                });
-            }
-            _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: "python",
-                    shape: "unknown function execution",
-                });
-            }
+        if let Some(unsupported) = UnsupportedCallable::from_callable(callable) {
+            return Ok(Self {
+                body: Body::Skipped(SkippedFunction::new(python_name, unsupported)),
+            });
         }
+        match callable.execution() {
+            ExecutionDecl::Synchronous(_) => SyncFunction::from_export(
+                python_name,
+                symbol,
+                callable,
+                receiver_args,
+                bridge,
+                context,
+            )
+            .map(Body::Sync)
+            .map(|body| Self { body }),
+            ExecutionDecl::Asynchronous(native::AsyncProtocol::PollHandle {
+                poll,
+                complete,
+                cancel,
+                free,
+                panic_message,
+                ..
+            }) => AsyncFunction::from_export(
+                python_name,
+                AsyncSymbols {
+                    start: symbol,
+                    poll,
+                    complete,
+                    cancel,
+                    free,
+                    panic_message,
+                },
+                callable,
+                receiver_args,
+                bridge,
+                context,
+            )
+            .map(Box::new)
+            .map(Body::Async)
+            .map(|body| Self { body }),
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unknown function execution",
+            }),
+        }
+    }
+
+    pub fn methods(&self) -> impl Iterator<Item = &ExtensionMethod> {
+        self.body.methods().iter()
+    }
+
+    pub fn render(self) -> Result<Emitted> {
+        match self.body {
+            Body::Sync(function) => function.render(),
+            Body::Async(function) => function.render(),
+            Body::Skipped(function) => Ok(function.render()),
+        }
+    }
+
+    pub fn primitives(&self) -> Vec<primitive::Runtime> {
+        match &self.body {
+            Body::Sync(function) => function.primitives(),
+            Body::Async(function) => function.primitives(),
+            Body::Skipped(_) => Vec::new(),
+        }
+    }
+
+    pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> {
+        match &self.body {
+            Body::Sync(function) => function.wire_primitives().collect::<Vec<_>>(),
+            Body::Async(function) => function.wire_primitives().collect::<Vec<_>>(),
+            Body::Skipped(_) => Vec::new(),
+        }
+        .into_iter()
+    }
+
+    pub fn direct_vector_elements(&self) -> impl Iterator<Item = direct_vector::Element> {
+        match &self.body {
+            Body::Sync(function) => function.direct_vector_elements().collect::<Vec<_>>(),
+            Body::Async(function) => function.direct_vector_elements().collect::<Vec<_>>(),
+            Body::Skipped(_) => Vec::new(),
+        }
+        .into_iter()
+    }
+
+    pub fn owned_buffer(&self) -> Option<result::OwnedBuffer> {
+        self.owned_buffers().next()
+    }
+
+    pub fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> {
+        match &self.body {
+            Body::Sync(function) => function.owned_buffers().collect::<Vec<_>>(),
+            Body::Async(function) => function.owned_buffers().collect::<Vec<_>>(),
+            Body::Skipped(_) => Vec::new(),
+        }
+        .into_iter()
+    }
+
+    pub fn has_string_argument(&self) -> bool {
+        match &self.body {
+            Body::Sync(function) => function.has_string_argument(),
+            Body::Async(function) => function.has_string_argument(),
+            Body::Skipped(_) => false,
+        }
+    }
+
+    pub fn has_bytes_argument(&self) -> bool {
+        match &self.body {
+            Body::Sync(function) => function.has_bytes_argument(),
+            Body::Async(function) => function.has_bytes_argument(),
+            Body::Skipped(_) => false,
+        }
+    }
+
+    pub fn has_raw_wire_argument(&self) -> bool {
+        match &self.body {
+            Body::Sync(function) => function.has_raw_wire_argument(),
+            Body::Async(function) => function.has_raw_wire_argument(),
+            Body::Skipped(_) => false,
+        }
+    }
+
+    pub fn uses_async_protocol(&self) -> bool {
+        matches!(self.body, Body::Async(_))
+    }
+
+    pub fn can_render(callable: &ExportedCallable<Native>) -> bool {
+        UnsupportedCallable::from_callable(callable).is_none()
+    }
+}
+
+impl Body {
+    fn methods(&self) -> &[ExtensionMethod] {
+        match self {
+            Self::Sync(function) => &function.methods,
+            Self::Async(function) => &function.methods,
+            Self::Skipped(function) => &function.methods,
+        }
+    }
+}
+
+struct SkippedFunction {
+    python_name: String,
+    shape: &'static str,
+    methods: Vec<ExtensionMethod>,
+}
+
+impl SkippedFunction {
+    fn new(python_name: String, unsupported: UnsupportedCallable) -> Self {
+        Self {
+            python_name,
+            shape: unsupported.shape(),
+            methods: Vec::new(),
+        }
+    }
+
+    fn render(self) -> Emitted {
+        Emitted::diagnostic(Diagnostic::new(format!(
+            "python target skipped unsupported callable {}: {}",
+            self.python_name, self.shape
+        )))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct UnsupportedCallable {
+    shape: &'static str,
+}
+
+impl UnsupportedCallable {
+    fn from_callable(callable: &ExportedCallable<Native>) -> Option<Self> {
+        callable
+            .params()
+            .iter()
+            .find_map(|parameter| match parameter.payload() {
+                IncomingParam::Value(ParamPlan::Encoded {
+                    receive: Receive::ByMutRef,
+                    ..
+                }) => Some(Self {
+                    shape: "mutable encoded parameter",
+                }),
+                IncomingParam::Value(_) | IncomingParam::Closure(_) => None,
+            })
+    }
+
+    fn shape(self) -> &'static str {
+        self.shape
+    }
+}
+
+impl SyncFunction {
+    fn from_export(
+        python_name: String,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        receiver_args: Vec<argument::Conversion>,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         let loaded = bridge
             .loaded_function(symbol)
             .ok_or(Error::UnsupportedTarget {
@@ -119,11 +335,30 @@ impl Function {
             .params()
             .iter()
             .enumerate()
-            .map(|(offset, parameter)| {
-                let index = receiver_args.len() + offset;
-                argument::Conversion::from_parameter(index, parameter, bridge, context)
-            })
-            .collect::<Result<Vec<_>>>()?;
+            .try_fold(
+                (
+                    receiver_args
+                        .iter()
+                        .map(argument::Conversion::c_arity)
+                        .sum::<usize>(),
+                    Vec::new(),
+                ),
+                |(c_offset, mut conversions), (offset, parameter)| {
+                    let index = receiver_args.len() + offset;
+                    let conversion = argument::Conversion::from_parameter(
+                        symbol.name().as_str(),
+                        index,
+                        parameter,
+                        &loaded.function().params()[c_offset..],
+                        bridge,
+                        context,
+                    )?;
+                    let c_offset = c_offset + conversion.c_arity();
+                    conversions.push(conversion);
+                    Ok::<_, Error>((c_offset, conversions))
+                },
+            )?
+            .1;
         let params = receiver_args
             .into_iter()
             .chain(value_args)
@@ -144,6 +379,7 @@ impl Function {
             }
             None => result::Conversion::from_plan(callable.returns().plan(), bridge, context),
         }?;
+        let mutation = Self::mutation(&params, &returns, fallible.is_some())?;
         Ok(Self {
             python_name,
             wrapper,
@@ -151,34 +387,59 @@ impl Function {
             params,
             call_args,
             returns,
+            mutation,
             fallible,
-            method,
+            methods: vec![method],
         })
     }
 
-    pub fn method(&self) -> &ExtensionMethod {
-        &self.method
-    }
-
-    pub fn render(self) -> Result<Emitted> {
-        let source = FunctionTemplate {
+    fn render(self) -> Result<Emitted> {
+        let source = SyncTemplate {
             python_name: self.python_name,
             wrapper: self.wrapper,
             storage: self.storage,
             params: self.params,
             call_args: self.call_args,
             returns: self.returns,
+            mutation: self.mutation,
             fallible: self.fallible,
         }
         .render()?;
         Ok(Emitted::primary(source))
     }
 
-    pub fn primitives(&self) -> Vec<primitive::Runtime> {
+    fn mutation(
+        params: &[argument::Conversion],
+        returns: &result::Conversion,
+        fallible: bool,
+    ) -> Result<Option<argument::MutationOutput>> {
+        let mut mutations = params.iter().filter_map(argument::Conversion::mutation);
+        let mutation = mutations.next();
+        if mutations.next().is_some() {
+            return Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "multiple mutable encoded parameters",
+            });
+        }
+        if mutation.is_some() && (fallible || !returns.is_void()) {
+            return Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "mutable encoded parameter with non-void return",
+            });
+        }
+        Ok(mutation)
+    }
+
+    fn primitives(&self) -> Vec<primitive::Runtime> {
         let params = self
             .params
             .iter()
             .filter_map(argument::Conversion::primitive)
+            .chain(
+                self.params
+                    .iter()
+                    .flat_map(argument::Conversion::closure_primitives),
+            )
             .collect::<Vec<_>>();
         params
             .into_iter()
@@ -187,16 +448,26 @@ impl Function {
             .collect()
     }
 
-    pub fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
+    fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
         self.params
             .iter()
             .filter_map(argument::Conversion::wire_primitive)
+            .chain(
+                self.params
+                    .iter()
+                    .flat_map(argument::Conversion::closure_wire_primitives),
+            )
     }
 
-    pub fn direct_vector_elements(&self) -> impl Iterator<Item = direct_vector::Element> + '_ {
+    fn direct_vector_elements(&self) -> impl Iterator<Item = direct_vector::Element> + '_ {
         self.params
             .iter()
             .filter_map(argument::Conversion::direct_vector_element)
+            .chain(
+                self.params
+                    .iter()
+                    .flat_map(argument::Conversion::closure_direct_vector_elements),
+            )
             .chain(self.returns.direct_vector_element())
             .chain(
                 self.fallible
@@ -205,11 +476,7 @@ impl Function {
             )
     }
 
-    pub fn owned_buffer(&self) -> Option<result::OwnedBuffer> {
-        self.owned_buffers().next()
-    }
-
-    pub fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
+    fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
         self.returns.owned_buffer().into_iter().chain(
             self.fallible
                 .iter()
@@ -217,16 +484,309 @@ impl Function {
         )
     }
 
-    pub fn has_string_argument(&self) -> bool {
+    fn has_string_argument(&self) -> bool {
         self.params.iter().any(argument::Conversion::is_string)
+            || self
+                .params
+                .iter()
+                .any(|param| param.has_closure_string_argument())
     }
 
-    pub fn has_bytes_argument(&self) -> bool {
+    fn has_bytes_argument(&self) -> bool {
         self.params.iter().any(argument::Conversion::is_bytes)
+            || self
+                .params
+                .iter()
+                .any(|param| param.has_closure_bytes_argument())
     }
 
-    pub fn has_raw_wire_argument(&self) -> bool {
+    fn has_raw_wire_argument(&self) -> bool {
         self.params.iter().any(argument::Conversion::is_raw_wire)
+            || self
+                .params
+                .iter()
+                .any(|param| param.has_closure_raw_wire_argument())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AsyncSymbols<'symbol> {
+    start: &'symbol NativeSymbol,
+    poll: &'symbol NativeSymbol,
+    complete: &'symbol NativeSymbol,
+    cancel: &'symbol NativeSymbol,
+    free: &'symbol NativeSymbol,
+    panic_message: &'symbol NativeSymbol,
+}
+
+impl AsyncFunction {
+    fn from_export(
+        python_name: String,
+        symbols: AsyncSymbols<'_>,
+        callable: &ExportedCallable<Native>,
+        receiver_args: Vec<argument::Conversion>,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let start = Self::loaded(symbols.start, bridge, "async start symbol")?;
+        let poll = Self::loaded(symbols.poll, bridge, "async poll symbol")?;
+        let complete = Self::loaded(symbols.complete, bridge, "async complete symbol")?;
+        let cancel = Self::loaded(symbols.cancel, bridge, "async cancel symbol")?;
+        let free = Self::loaded(symbols.free, bridge, "async free symbol")?;
+        let panic_message = Self::loaded(symbols.panic_message, bridge, "async panic symbol")?;
+        let start_wrapper = Self::wrapper(symbols.start);
+        let poll_python_name = format!("{python_name}__poll");
+        let poll_wrapper = Self::wrapper(symbols.poll);
+        let complete_wrapper = Self::wrapper(symbols.complete);
+        let panic_message_wrapper = Self::wrapper(symbols.panic_message);
+        let cancel_wrapper = Self::wrapper(symbols.cancel);
+        let free_wrapper = Self::wrapper(symbols.free);
+        let value_args = callable
+            .params()
+            .iter()
+            .enumerate()
+            .try_fold(
+                (
+                    receiver_args
+                        .iter()
+                        .map(argument::Conversion::c_arity)
+                        .sum::<usize>(),
+                    Vec::new(),
+                ),
+                |(c_offset, mut conversions), (offset, parameter)| {
+                    let index = receiver_args.len() + offset;
+                    let conversion = argument::Conversion::from_parameter(
+                        symbols.start.name().as_str(),
+                        index,
+                        parameter,
+                        &start.function().params()[c_offset..],
+                        bridge,
+                        context,
+                    )?;
+                    let c_offset = c_offset + conversion.c_arity();
+                    conversions.push(conversion);
+                    Ok::<_, Error>((c_offset, conversions))
+                },
+            )?
+            .1;
+        let params = receiver_args
+            .into_iter()
+            .chain(value_args)
+            .collect::<Vec<_>>();
+        let call_args = params
+            .iter()
+            .flat_map(argument::Conversion::call_args)
+            .collect::<Vec<_>>();
+        let fallible = FallibleResult::new(callable, complete, 2, bridge, context)?;
+        let complete_call_args = fallible
+            .iter()
+            .filter_map(FallibleResult::success_argument)
+            .collect::<Vec<_>>();
+        let returns = match &fallible {
+            Some(_) => {
+                result::Conversion::from_out_plan(callable.returns().plan(), bridge, context)
+            }
+            None => Self::completion_return(callable.returns().plan(), bridge, context),
+        }?;
+        let methods = [
+            ExtensionMethod::new(
+                python_name.clone(),
+                start_wrapper.clone(),
+                MethodFlags::FastCall,
+            ),
+            ExtensionMethod::new(
+                poll_python_name.clone(),
+                poll_wrapper.clone(),
+                MethodFlags::FastCall,
+            ),
+            ExtensionMethod::new(
+                format!("{python_name}__complete"),
+                complete_wrapper.clone(),
+                MethodFlags::OneObject,
+            ),
+            ExtensionMethod::new(
+                format!("{python_name}__panic_message"),
+                panic_message_wrapper.clone(),
+                MethodFlags::OneObject,
+            ),
+            ExtensionMethod::new(
+                format!("{python_name}__cancel"),
+                cancel_wrapper.clone(),
+                MethodFlags::OneObject,
+            ),
+            ExtensionMethod::new(
+                format!("{python_name}__free"),
+                free_wrapper.clone(),
+                MethodFlags::OneObject,
+            ),
+        ]
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            python_name,
+            start_wrapper,
+            start_storage: start.storage_name().to_owned(),
+            poll_python_name,
+            poll_wrapper,
+            poll_storage: poll.storage_name().to_owned(),
+            complete_wrapper,
+            complete_storage: complete.storage_name().to_owned(),
+            panic_message_wrapper,
+            panic_storage: panic_message.storage_name().to_owned(),
+            cancel_wrapper,
+            cancel_storage: cancel.storage_name().to_owned(),
+            free_wrapper,
+            free_storage: free.storage_name().to_owned(),
+            params,
+            call_args,
+            complete_call_args,
+            returns,
+            fallible,
+            methods,
+        })
+    }
+
+    fn render(self) -> Result<Emitted> {
+        let source = AsyncTemplate {
+            python_name: self.python_name,
+            start_wrapper: self.start_wrapper,
+            start_storage: self.start_storage,
+            poll_python_name: self.poll_python_name,
+            poll_wrapper: self.poll_wrapper,
+            poll_storage: self.poll_storage,
+            complete_wrapper: self.complete_wrapper,
+            complete_storage: self.complete_storage,
+            panic_message_wrapper: self.panic_message_wrapper,
+            panic_storage: self.panic_storage,
+            cancel_wrapper: self.cancel_wrapper,
+            cancel_storage: self.cancel_storage,
+            free_wrapper: self.free_wrapper,
+            free_storage: self.free_storage,
+            params: self.params,
+            call_args: self.call_args,
+            complete_call_args: self.complete_call_args,
+            returns: self.returns,
+            fallible: self.fallible,
+        }
+        .render()?;
+        Ok(Emitted::primary(source))
+    }
+
+    fn primitives(&self) -> Vec<primitive::Runtime> {
+        self.params
+            .iter()
+            .filter_map(argument::Conversion::primitive)
+            .chain(
+                self.params
+                    .iter()
+                    .flat_map(argument::Conversion::closure_primitives),
+            )
+            .chain(self.returns.primitive())
+            .chain(self.fallible.iter().filter_map(FallibleResult::primitive))
+            .collect()
+    }
+
+    fn wire_primitives(&self) -> impl Iterator<Item = primitive::Runtime> + '_ {
+        self.params
+            .iter()
+            .filter_map(argument::Conversion::wire_primitive)
+            .chain(
+                self.params
+                    .iter()
+                    .flat_map(argument::Conversion::closure_wire_primitives),
+            )
+    }
+
+    fn direct_vector_elements(&self) -> impl Iterator<Item = direct_vector::Element> + '_ {
+        self.params
+            .iter()
+            .filter_map(argument::Conversion::direct_vector_element)
+            .chain(
+                self.params
+                    .iter()
+                    .flat_map(argument::Conversion::closure_direct_vector_elements),
+            )
+            .chain(self.returns.direct_vector_element())
+            .chain(
+                self.fallible
+                    .iter()
+                    .filter_map(FallibleResult::direct_vector_element),
+            )
+    }
+
+    fn owned_buffers(&self) -> impl Iterator<Item = result::OwnedBuffer> + '_ {
+        self.returns.owned_buffer().into_iter().chain(
+            self.fallible
+                .iter()
+                .filter_map(FallibleResult::owned_buffer),
+        )
+    }
+
+    fn has_string_argument(&self) -> bool {
+        self.params.iter().any(argument::Conversion::is_string)
+            || self
+                .params
+                .iter()
+                .any(|param| param.has_closure_string_argument())
+    }
+
+    fn has_bytes_argument(&self) -> bool {
+        self.params.iter().any(argument::Conversion::is_bytes)
+            || self
+                .params
+                .iter()
+                .any(|param| param.has_closure_bytes_argument())
+    }
+
+    fn has_raw_wire_argument(&self) -> bool {
+        self.params.iter().any(argument::Conversion::is_raw_wire)
+            || self
+                .params
+                .iter()
+                .any(|param| param.has_closure_raw_wire_argument())
+    }
+
+    fn loaded<'bridge>(
+        symbol: &NativeSymbol,
+        bridge: &'bridge PythonCExtBridgeContract,
+        shape: &'static str,
+    ) -> Result<&'bridge LoadedFunction> {
+        bridge
+            .loaded_function(symbol)
+            .ok_or(Error::UnsupportedTarget {
+                target: "python",
+                shape,
+            })
+    }
+
+    fn wrapper(symbol: &NativeSymbol) -> String {
+        format!("boltffi_python_callable_wrapper_{}", symbol.name().as_str())
+    }
+
+    fn completion_return(
+        plan: &ReturnPlan<Native, OutOfRust>,
+        bridge: &PythonCExtBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<result::Conversion> {
+        match plan {
+            ReturnPlan::DirectViaOutPointer { .. }
+            | ReturnPlan::EncodedViaOutPointer { .. }
+            | ReturnPlan::HandleViaOutPointer { .. } => {
+                result::Conversion::from_out_plan(plan, bridge, context)
+            }
+            ReturnPlan::Void
+            | ReturnPlan::DirectViaReturnSlot { .. }
+            | ReturnPlan::EncodedViaReturnSlot { .. }
+            | ReturnPlan::HandleViaReturnSlot { .. }
+            | ReturnPlan::ScalarOptionViaReturnSlot { .. }
+            | ReturnPlan::DirectVecViaReturnSlot { .. } => {
+                result::Conversion::from_plan(plan, bridge, context)
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "async completion return",
+            }),
+        }
     }
 }
 

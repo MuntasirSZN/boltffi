@@ -25,6 +25,8 @@ use crate::experimental::{
 pub struct Trait<'expansion, 'lowered, S: RenderSurface> {
     pair: DeclarationPair<'lowered, TraitDef, CallbackDecl<S>>,
     expansion: &'expansion Expansion<'lowered, S>,
+    path: Option<TokenStream>,
+    trait_object_impls: bool,
 }
 
 impl<'expansion, 'lowered, S: RenderSurface> Trait<'expansion, 'lowered, S> {
@@ -33,7 +35,18 @@ impl<'expansion, 'lowered, S: RenderSurface> Trait<'expansion, 'lowered, S> {
         pair: DeclarationPair<'lowered, TraitDef, CallbackDecl<S>>,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
-        Self { pair, expansion }
+        Self {
+            pair,
+            expansion,
+            path: None,
+            trait_object_impls: true,
+        }
+    }
+
+    pub fn with_path(mut self, path: Option<TokenStream>, trait_object_impls: bool) -> Self {
+        self.path = path;
+        self.trait_object_impls = trait_object_impls;
+        self
     }
 }
 
@@ -47,6 +60,8 @@ impl<'expansion, 'lowered> Render<Native, Trait<'expansion, 'lowered, Native>> f
         NativeProtocol::new(
             wrapper.pair.source(),
             wrapper.pair.binding(),
+            wrapper.path,
+            wrapper.trait_object_impls,
             wrapper.expansion,
         )
         .tokens()
@@ -60,6 +75,8 @@ impl<'expansion, 'lowered> Render<Wasm32, Trait<'expansion, 'lowered, Wasm32>> f
         WasmProtocol::new(
             wrapper.pair.source(),
             wrapper.pair.binding(),
+            wrapper.path,
+            wrapper.trait_object_impls,
             wrapper.expansion,
         )
         .tokens()
@@ -69,6 +86,8 @@ impl<'expansion, 'lowered> Render<Wasm32, Trait<'expansion, 'lowered, Wasm32>> f
 struct NativeProtocol<'expansion, 'lowered> {
     source: &'lowered TraitDef,
     binding: &'lowered CallbackDecl<Native>,
+    path: Option<TokenStream>,
+    trait_object_impls: bool,
     expansion: &'expansion Expansion<'lowered, Native>,
 }
 
@@ -76,11 +95,15 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
     fn new(
         source: &'lowered TraitDef,
         binding: &'lowered CallbackDecl<Native>,
+        path: Option<TokenStream>,
+        trait_object_impls: bool,
         expansion: &'expansion Expansion<'lowered, Native>,
     ) -> Self {
         Self {
             source,
             binding,
+            path,
+            trait_object_impls,
             expansion,
         }
     }
@@ -149,6 +172,7 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
             .map(|method| method.function.clone())
             .collect::<Vec<_>>();
         let trait_ident = &names.trait_ident;
+        let trait_path = self.path.unwrap_or_else(|| quote! { #trait_ident });
         let foreign_ident = &names.foreign_ident;
         let vtable_ident = &names.vtable_ident;
         let foreign_vtable_static = &names.foreign_vtable_static;
@@ -166,7 +190,7 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
                 let local_handle_ident = &local_names.handle_ident;
                 quote! {
                     #cfg
-                    type #local_state_ident = ::std::sync::Arc<dyn #trait_ident>;
+                    type #local_state_ident = ::std::sync::Arc<dyn #trait_path>;
 
                     #cfg
                     extern "C" fn #local_free_ident(handle: u64) {
@@ -198,7 +222,7 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
 
                     #cfg
                     pub(crate) fn #local_handle_ident(
-                        callback: ::std::sync::Arc<dyn #trait_ident>,
+                        callback: ::std::sync::Arc<dyn #trait_path>,
                     ) -> ::boltffi::__private::CallbackHandle {
                         ::boltffi::__private::CallbackHandle::new(
                             Box::into_raw(Box::new(callback)) as u64,
@@ -208,10 +232,10 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
                 }
             })
             .unwrap_or_default();
-        let trait_object_tokens = if supports_trait_object {
+        let trait_object_tokens = if supports_trait_object && self.trait_object_impls {
             quote! {
                 #cfg
-                impl ::boltffi::__private::ArcFromCallbackHandle for dyn #trait_ident {
+                impl ::boltffi::__private::ArcFromCallbackHandle for dyn #trait_path {
                     unsafe fn arc_from_callback_handle(
                         handle: ::boltffi::__private::CallbackHandle,
                     ) -> ::std::sync::Arc<Self> {
@@ -224,7 +248,7 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
                 }
 
                 #cfg
-                impl ::boltffi::__private::BoxFromCallbackHandle for dyn #trait_ident {
+                impl ::boltffi::__private::BoxFromCallbackHandle for dyn #trait_path {
                     unsafe fn box_from_callback_handle(
                         handle: ::boltffi::__private::CallbackHandle,
                     ) -> Box<Self> {
@@ -237,7 +261,7 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
                 }
 
                 #cfg
-                impl ::boltffi::__private::CallbackForeignType for dyn #trait_ident {
+                impl ::boltffi::__private::CallbackForeignType for dyn #trait_path {
                     type Foreign = #foreign_ident;
                 }
             }
@@ -286,7 +310,7 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
             }
 
             #cfg
-            impl #trait_ident for #foreign_ident {
+            impl #trait_path for #foreign_ident {
                 #(#foreign_methods)*
             }
 
@@ -348,6 +372,8 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
 struct WasmProtocol<'expansion, 'lowered> {
     source: &'lowered TraitDef,
     binding: &'lowered CallbackDecl<Wasm32>,
+    path: Option<TokenStream>,
+    trait_object_impls: bool,
     expansion: &'expansion Expansion<'lowered, Wasm32>,
 }
 
@@ -355,11 +381,15 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
     fn new(
         source: &'lowered TraitDef,
         binding: &'lowered CallbackDecl<Wasm32>,
+        path: Option<TokenStream>,
+        trait_object_impls: bool,
         expansion: &'expansion Expansion<'lowered, Wasm32>,
     ) -> Self {
         Self {
             source,
             binding,
+            path,
+            trait_object_impls,
             expansion,
         }
     }
@@ -430,6 +460,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let trait_ident = &names.trait_ident;
+        let trait_path = self.path.unwrap_or_else(|| quote! { #trait_ident });
         let foreign_ident = &names.foreign_ident;
         let create_ident = RustIdent::new(protocol.create_handle().name().as_str())?;
         let free_import = WasmImport::new(protocol.free())?;
@@ -444,14 +475,14 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
         });
         let cfg = Wasm32::cfg_attr();
         let wasm_foreign_callback_handle_start = wasm32::FOREIGN_CALLBACK_HANDLE_START;
-        let trait_object_tokens = if supports_trait_object {
+        let trait_object_tokens = if supports_trait_object && self.trait_object_impls {
             match local_names {
                 Some(local_names) => {
                     let local_proxy_ident = &local_names.proxy_ident;
                     let local_clone_ident = &local_names.clone_ident;
                     quote! {
                         #cfg
-                        impl ::boltffi::__private::ArcFromCallbackHandle for dyn #trait_ident {
+                        impl ::boltffi::__private::ArcFromCallbackHandle for dyn #trait_path {
                             unsafe fn arc_from_callback_handle(
                                 handle: ::boltffi::__private::CallbackHandle,
                             ) -> ::std::sync::Arc<Self> {
@@ -466,7 +497,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
                         }
 
                         #cfg
-                        impl ::boltffi::__private::BoxFromCallbackHandle for dyn #trait_ident {
+                        impl ::boltffi::__private::BoxFromCallbackHandle for dyn #trait_path {
                             unsafe fn box_from_callback_handle(
                                 handle: ::boltffi::__private::CallbackHandle,
                             ) -> Box<Self> {
@@ -481,14 +512,14 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
                         }
 
                         #cfg
-                        impl ::boltffi::__private::CallbackForeignType for dyn #trait_ident {
+                        impl ::boltffi::__private::CallbackForeignType for dyn #trait_path {
                             type Foreign = #foreign_ident;
                         }
                     }
                 }
                 None => quote! {
                     #cfg
-                    impl ::boltffi::__private::ArcFromCallbackHandle for dyn #trait_ident {
+                    impl ::boltffi::__private::ArcFromCallbackHandle for dyn #trait_path {
                         unsafe fn arc_from_callback_handle(
                             handle: ::boltffi::__private::CallbackHandle,
                             ) -> ::std::sync::Arc<Self> {
@@ -502,7 +533,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
                         }
 
                     #cfg
-                    impl ::boltffi::__private::BoxFromCallbackHandle for dyn #trait_ident {
+                    impl ::boltffi::__private::BoxFromCallbackHandle for dyn #trait_path {
                         unsafe fn box_from_callback_handle(
                             handle: ::boltffi::__private::CallbackHandle,
                         ) -> Box<Self> {
@@ -516,7 +547,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
                     }
 
                     #cfg
-                    impl ::boltffi::__private::CallbackForeignType for dyn #trait_ident {
+                    impl ::boltffi::__private::CallbackForeignType for dyn #trait_path {
                         type Foreign = #foreign_ident;
                     }
                 },
@@ -536,7 +567,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
                 let local_handle_ident = &local_names.handle_ident;
                 quote! {
                     #cfg
-                    type #local_state_ident = ::std::sync::Arc<dyn #trait_ident>;
+                    type #local_state_ident = ::std::sync::Arc<dyn #trait_path>;
 
                     #cfg
                     #[derive(Debug)]
@@ -552,7 +583,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
                     }
 
                     #cfg
-                    impl #trait_ident for #local_proxy_ident {
+                    impl #trait_path for #local_proxy_ident {
                         #(#local_proxy_methods)*
                     }
 
@@ -599,7 +630,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
 
                     #cfg
                     pub(crate) fn #local_handle_ident(
-                        callback: ::std::sync::Arc<dyn #trait_ident>,
+                        callback: ::std::sync::Arc<dyn #trait_path>,
                     ) -> ::boltffi::__private::CallbackHandle {
                         let handle = #local_registry_ident.with(|registry| {
                             #local_next_ident.with(|next_handle| {
@@ -659,7 +690,7 @@ impl<'expansion, 'lowered> WasmProtocol<'expansion, 'lowered> {
             }
 
             #cfg
-            impl #trait_ident for #foreign_ident {
+            impl #trait_path for #foreign_ident {
                 #(#foreign_methods)*
             }
 
@@ -894,17 +925,19 @@ where
         let arguments = parameters.foreign_arguments;
         if matches!(self.callable.execution(), ExecutionDecl::Asynchronous(_)) {
             let call = quote! {
-                ((*self.vtable).#slot)(
-                    self.handle,
-                    #(#arguments,)*
-                    __boltffi_completion,
-                    __boltffi_completion_data
-                )
+                {
+                    #(#setup)*
+                    ((*self.vtable).#slot)(
+                        self.handle,
+                        #(#arguments,)*
+                        __boltffi_completion,
+                        __boltffi_completion_data
+                    )
+                }
             };
             let body = return_tokens.native_async_foreign_body(call)?;
             return Ok(quote! {
                 async fn #method_ident(#receiver #(, #source_parameters)*) #return_signature {
-                    #(#setup)*
                     #body
                 }
             });
@@ -995,16 +1028,18 @@ where
         let arguments = parameters.foreign_arguments;
         if matches!(self.callable.execution(), ExecutionDecl::Asynchronous(_)) {
             let call = quote! {
-                #import(
-                    self.handle,
-                    __boltffi_request.as_u32()
-                    #(, #arguments)*
-                )
+                {
+                    #(#setup)*
+                    #import(
+                        self.handle,
+                        __boltffi_request.as_u32()
+                        #(, #arguments)*
+                    )
+                }
             };
             let body = return_tokens.wasm_async_foreign_body(call)?;
             return Ok(quote! {
                 async fn #method_ident(#receiver #(, #source_parameters)*) #return_signature {
-                    #(#setup)*
                     #body
                 }
             });
@@ -2137,12 +2172,11 @@ where
         match InfallibleMethodReturn::new(self.plan, self.error)? {
             InfallibleMethodReturn::Void => Ok(self.native_async_void_body(call)),
             InfallibleMethodReturn::Encoded { codec, .. } => {
-                let value = self.native_async_encoded_value(codec.root())?;
-                Ok(self.native_async_value_body(
-                    quote! { ::boltffi::__private::FfiBuf },
-                    call,
-                    value,
-                ))
+                let value = self.native_async_encoded_value(
+                    codec.root(),
+                    quote! { __boltffi_result.as_slice() },
+                )?;
+                Ok(self.native_async_bytes_body(call, value))
             }
             InfallibleMethodReturn::Direct {
                 ty: TypeRef::Primitive(primitive),
@@ -2189,14 +2223,12 @@ where
                     wrapper::returns::scalar_option::IncomingInput::new(
                         primitive,
                         rust_type,
-                        quote! { __boltffi_result },
+                        quote! {
+                            ::boltffi::__private::FfiBuf::from_vec(__boltffi_result)
+                        },
                     ),
                 )?;
-                Ok(self.native_async_value_body(
-                    quote! { ::boltffi::__private::FfiBuf },
-                    call,
-                    value,
-                ))
+                Ok(self.native_async_bytes_body(call, value))
             }
             InfallibleMethodReturn::DirectVec => {
                 let element = self.source.direct_vec_element_type()?;
@@ -2204,14 +2236,12 @@ where
                     wrapper::returns::direct_vec::Incoming,
                     wrapper::returns::direct_vec::IncomingInput::new(
                         element,
-                        quote! { __boltffi_result },
+                        quote! {
+                            ::boltffi::__private::FfiBuf::from_vec(__boltffi_result)
+                        },
                     ),
                 )?;
-                Ok(self.native_async_value_body(
-                    quote! { ::boltffi::__private::FfiBuf },
-                    call,
-                    value,
-                ))
+                Ok(self.native_async_bytes_body(call, value))
             }
             InfallibleMethodReturn::Closure { .. } => {
                 Err(Error::UnsupportedExpansion("async callback closure return"))
@@ -2303,6 +2333,7 @@ where
     fn native_async_encoded_value(
         &self,
         codec: &boltffi_binding::CodecNode,
+        bytes: TokenStream,
     ) -> Result<TokenStream, Error> {
         let source = self.source.value_type()?;
         let rust_type = rust_api::TypeTokens::new(source.as_ref())?.into_type();
@@ -2310,7 +2341,7 @@ where
             wrapper::encoded::incoming::Bytes::new(
                 &rust_type,
                 source.as_ref(),
-                quote! { unsafe { __boltffi_result.as_byte_slice() } },
+                bytes,
                 quote! {
                     panic!("async callback return conversion failed: {:?}", error)
                 },
@@ -2487,13 +2518,11 @@ where
     ) -> Result<TokenStream, Error> {
         S::callback_encoded_error(error_shape)?;
         let success = self.async_fallible_success_value(quote! {
-            unsafe { __boltffi_result.as_byte_slice() }
+            __boltffi_result.as_slice()
         })?;
-        let error = self.async_fallible_error_value(
-            error_codec,
-            quote! { unsafe { __boltffi_result.as_byte_slice() } },
-        )?;
-        Ok(self.native_async_result_body(call, success, error))
+        let error =
+            self.async_fallible_error_value(error_codec, quote! { __boltffi_result.as_slice() })?;
+        Ok(self.native_async_bytes_result_body(call, success, error))
     }
 
     fn wasm_async_fallible_body(
@@ -2650,6 +2679,74 @@ where
         }
     }
 
+    fn native_async_bytes_body(&self, call: TokenStream, value: TokenStream) -> TokenStream {
+        quote! {
+            use std::sync::{Arc, Mutex};
+            use std::task::Waker;
+
+            struct __BoltffiAsyncState {
+                result: Option<Vec<u8>>,
+                status: ::boltffi::__private::FfiStatus,
+                waker: Option<Waker>,
+            }
+
+            struct __BoltffiAsyncContext {
+                state: Mutex<__BoltffiAsyncState>,
+            }
+
+            extern "C" fn __boltffi_completion(
+                completion_data: *mut ::core::ffi::c_void,
+                status: ::boltffi::__private::FfiStatus,
+                result: ::boltffi::__private::FfiBuf,
+            ) {
+                let context =
+                    unsafe { Arc::from_raw(completion_data as *const __BoltffiAsyncContext) };
+                let bytes = unsafe { result.as_byte_slice() }.to_vec();
+                let waker = context
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|mut state| {
+                        state.result = Some(bytes);
+                        state.status = status;
+                        state.waker.take()
+                    });
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }
+
+            let __boltffi_context = Arc::new(__BoltffiAsyncContext {
+                state: Mutex::new(__BoltffiAsyncState {
+                    result: None,
+                    status: ::boltffi::__private::FfiStatus::OK,
+                    waker: None,
+                }),
+            });
+            let __boltffi_completion_data =
+                Arc::into_raw(Arc::clone(&__boltffi_context)) as *mut ::core::ffi::c_void;
+            unsafe {
+                #call;
+            }
+
+            std::future::poll_fn(move |task| {
+                let mut state = __boltffi_context
+                    .state
+                    .lock()
+                    .expect("async callback mutex poisoned");
+                if let Some(__boltffi_result) = state.result.take() {
+                    if state.status.is_err() {
+                        panic!("async callback failed");
+                    }
+                    std::task::Poll::Ready(#value)
+                } else {
+                    state.waker = Some(task.waker().clone());
+                    std::task::Poll::Pending
+                }
+            }).await
+        }
+    }
+
     fn native_async_result_body(
         &self,
         call: TokenStream,
@@ -2683,6 +2780,81 @@ where
                     .ok()
                     .and_then(|mut state| {
                         state.result = Some(result);
+                        state.status = status;
+                        state.waker.take()
+                    });
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }
+
+            let __boltffi_context = Arc::new(__BoltffiAsyncContext {
+                state: Mutex::new(__BoltffiAsyncState {
+                    result: None,
+                    status: ::boltffi::__private::FfiStatus::OK,
+                    waker: None,
+                }),
+            });
+            let __boltffi_completion_data =
+                Arc::into_raw(Arc::clone(&__boltffi_context)) as *mut ::core::ffi::c_void;
+            unsafe {
+                #call;
+            }
+
+            std::future::poll_fn(move |task| {
+                let mut state = __boltffi_context
+                    .state
+                    .lock()
+                    .expect("async callback mutex poisoned");
+                if let Some(__boltffi_result) = state.result.take() {
+                    let __boltffi_return = if state.status.is_err() {
+                        Err(#error)
+                    } else {
+                        Ok(#success)
+                    };
+                    std::task::Poll::Ready(__boltffi_return)
+                } else {
+                    state.waker = Some(task.waker().clone());
+                    std::task::Poll::Pending
+                }
+            }).await
+        }
+    }
+
+    fn native_async_bytes_result_body(
+        &self,
+        call: TokenStream,
+        success: TokenStream,
+        error: TokenStream,
+    ) -> TokenStream {
+        quote! {
+            use std::sync::{Arc, Mutex};
+            use std::task::Waker;
+
+            struct __BoltffiAsyncState {
+                result: Option<Vec<u8>>,
+                status: ::boltffi::__private::FfiStatus,
+                waker: Option<Waker>,
+            }
+
+            struct __BoltffiAsyncContext {
+                state: Mutex<__BoltffiAsyncState>,
+            }
+
+            extern "C" fn __boltffi_completion(
+                completion_data: *mut ::core::ffi::c_void,
+                status: ::boltffi::__private::FfiStatus,
+                result: ::boltffi::__private::FfiBuf,
+            ) {
+                let context =
+                    unsafe { Arc::from_raw(completion_data as *const __BoltffiAsyncContext) };
+                let bytes = unsafe { result.as_byte_slice() }.to_vec();
+                let waker = context
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|mut state| {
+                        state.result = Some(bytes);
                         state.status = status;
                         state.waker.take()
                     });
@@ -4021,15 +4193,25 @@ impl CallbackMethodSurface for Native {
         expansion: &Expansion<'lowered, Self>,
     ) -> Result<TokenStream, Error> {
         match shape {
-            native::BufferShape::Buffer => wrapper::encoded::incoming::Value::new(codec, expansion)
-                .expression(wrapper::encoded::incoming::Bytes::new(
-                    &rust_type,
-                    source,
-                    quote! { unsafe { #value.as_byte_slice() } },
-                    quote! {
-                        panic!("callback method success conversion failed: {:?}", error)
-                    },
-                )),
+            native::BufferShape::Buffer => {
+                let decoded = wrapper::encoded::incoming::Value::new(codec, expansion).expression(
+                    wrapper::encoded::incoming::Bytes::new(
+                        &rust_type,
+                        source,
+                        quote! { __boltffi_bytes },
+                        quote! {
+                            panic!("callback method success conversion failed: {:?}", error)
+                        },
+                    ),
+                )?;
+                Ok(quote! {
+                    {
+                        let __boltffi_buffer = #value;
+                        let __boltffi_bytes = unsafe { __boltffi_buffer.as_byte_slice() };
+                        #decoded
+                    }
+                })
+            }
             native::BufferShape::Slice | native::BufferShape::BufferPointer => Err(
                 Error::UnsupportedExpansion("native callback encoded out-pointer"),
             ),

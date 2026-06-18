@@ -5,10 +5,10 @@ use boltffi_binding::{
     Bindings, BuiltinType, CStyleEnumDecl, CanonicalName, ClassDecl, ClassId, ConstantDecl,
     ConstantValueDecl, CustomTypeId, DataEnumDecl, DataVariantDecl, DataVariantPayload,
     DeclarationRef, DefaultValue, DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl,
-    EncodedRecordDecl, EnumDecl, EnumId, ErrorDecl, ExportedCallable, ExportedMethodDecl, FieldKey,
-    FunctionDecl, HandlePresence, HandleTarget, IncomingParam, InitializerDecl, IntoRust, Native,
-    NativeSymbol, OutOfRust, ParamDecl, ParamPlan, Primitive, Receive, RecordDecl, RecordId,
-    ReturnPlan, StreamDecl, StreamItemPlan, TypeRef, native,
+    EncodedRecordDecl, EnumDecl, EnumId, ErrorDecl, ExecutionDecl, ExportedCallable,
+    ExportedMethodDecl, FieldKey, FunctionDecl, HandlePresence, HandleTarget, IncomingParam,
+    InitializerDecl, IntoRust, Native, NativeSymbol, OutOfRust, ParamDecl, ParamPlan, Primitive,
+    Receive, RecordDecl, RecordId, ReturnPlan, StreamDecl, StreamItemPlan, TypeRef, native,
 };
 
 use crate::{
@@ -28,7 +28,9 @@ struct InitTemplate {
     package_version_literal: String,
     library_name: String,
     uses_sequence_annotations: bool,
+    uses_callable_annotations: bool,
     uses_wire_helpers: bool,
+    uses_async_helpers: bool,
     has_data_enums: bool,
     records: Vec<RecordClass>,
     enums: Vec<EnumClass>,
@@ -41,6 +43,7 @@ struct InitTemplate {
 #[template(path = "target/python/package.pyi", escape = "none")]
 struct StubTemplate {
     uses_sequence_annotations: bool,
+    uses_callable_annotations: bool,
     has_data_enums: bool,
     records: Vec<RecordClass>,
     enums: Vec<EnumClass>,
@@ -100,6 +103,10 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             || enums.iter().any(EnumClass::uses_sequence_annotations)
             || classes.iter().any(Class::uses_sequence_annotations)
             || stubs.iter().any(FunctionStub::uses_sequence_annotations);
+        let uses_callable_annotations = records.iter().any(RecordClass::uses_callable_annotations)
+            || enums.iter().any(EnumClass::uses_callable_annotations)
+            || classes.iter().any(Class::uses_callable_annotations)
+            || stubs.iter().any(FunctionStub::uses_callable_annotations);
         let uses_wire_helpers = records.iter().any(RecordClass::has_wire)
             || records.iter().any(RecordClass::uses_wire_helpers)
             || enums.iter().any(EnumClass::has_wire)
@@ -107,6 +114,10 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             || classes.iter().any(Class::uses_wire_helpers)
             || constants.iter().any(ConstantStub::uses_wire_helpers)
             || stubs.iter().any(FunctionStub::uses_wire_helpers);
+        let uses_async_helpers = records.iter().any(RecordClass::uses_async_helpers)
+            || enums.iter().any(EnumClass::uses_async_helpers)
+            || classes.iter().any(Class::uses_async_helpers)
+            || stubs.iter().any(FunctionStub::uses_async_helpers);
         Ok(GeneratedOutput::new(
             vec![
                 self.file("pyproject.toml", PyprojectTemplate.render()?)?,
@@ -140,7 +151,9 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                             .unwrap_or_else(|| "None".to_owned()),
                         library_name: package.clone(),
                         uses_sequence_annotations,
+                        uses_callable_annotations,
                         uses_wire_helpers,
+                        uses_async_helpers,
                         has_data_enums: enums.iter().any(EnumClass::has_wire),
                         records: records.clone(),
                         enums: enums.clone(),
@@ -154,6 +167,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
                     PathBuf::from(&module).join("__init__.pyi"),
                     StubTemplate {
                         uses_sequence_annotations,
+                        uses_callable_annotations,
                         has_data_enums: enums.iter().any(EnumClass::has_wire),
                         records,
                         enums,
@@ -187,7 +201,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .iter()
             .filter_map(|decl| match DeclarationRef::from(decl) {
                 DeclarationRef::Function(function)
-                    if function::Function::supports(function.callable()) =>
+                    if function::Function::can_render(function.callable()) =>
                 {
                     Some(function)
                 }
@@ -294,11 +308,7 @@ impl<'binding, 'bridge> Package<'binding, 'bridge> {
             .decls()
             .iter()
             .filter_map(|decl| match DeclarationRef::from(decl) {
-                DeclarationRef::Stream(stream)
-                    if stream.owner() == Some(class) && stream::Stream::supports(stream) =>
-                {
-                    Some(stream)
-                }
+                DeclarationRef::Stream(stream) if stream.owner() == Some(class) => Some(stream),
                 DeclarationRef::Record(_)
                 | DeclarationRef::Enum(_)
                 | DeclarationRef::Function(_)
@@ -546,8 +556,10 @@ struct FunctionStub {
     python_name: String,
     parameters: Vec<ParameterStub>,
     return_annotation: String,
-    body: String,
+    asynchronous: bool,
+    body: Vec<String>,
     uses_wire_helpers: bool,
+    uses_async_helpers: bool,
 }
 
 impl FunctionStub {
@@ -567,17 +579,23 @@ impl FunctionStub {
             .collect::<Vec<_>>()
             .join(", ");
         let returned = ReturnStub::from_callable(function.callable(), package)?;
-        let native_call = format!(
-            "_native.{}({arguments})",
-            Name::new(function.name()).function()
-        );
+        let native_name = Name::new(function.name()).function();
+        let native_call = format!("_native.{}({arguments})", native_name);
+        let body = CallableBody::from_callable(
+            function.callable(),
+            &native_name,
+            native_call,
+            &returned.value,
+        )?;
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers)
             || returned.value.uses_wire_helpers();
         Ok(Self {
             python_name: Name::new(function.name()).function(),
             parameters,
             return_annotation: returned.annotation,
-            body: returned.value.statement(native_call),
+            asynchronous: body.is_async(),
+            uses_async_helpers: body.uses_async_helpers(),
+            body: body.into_lines(),
             uses_wire_helpers,
         })
     }
@@ -586,10 +604,20 @@ impl FunctionStub {
         self.uses_wire_helpers
     }
 
+    fn uses_async_helpers(&self) -> bool {
+        self.uses_async_helpers
+    }
+
     fn uses_sequence_annotations(&self) -> bool {
         self.parameters
             .iter()
             .any(ParameterStub::uses_sequence_annotation)
+    }
+
+    fn uses_callable_annotations(&self) -> bool {
+        self.parameters
+            .iter()
+            .any(ParameterStub::uses_callable_annotation)
     }
 
     fn validate_names(&self) -> Result<()> {
@@ -797,9 +825,18 @@ impl RecordClass {
         self.callables().any(AssociatedCallable::uses_wire_helpers)
     }
 
+    fn uses_async_helpers(&self) -> bool {
+        self.callables().any(AssociatedCallable::uses_async_helpers)
+    }
+
     fn uses_sequence_annotations(&self) -> bool {
         self.callables()
             .any(AssociatedCallable::uses_sequence_annotations)
+    }
+
+    fn uses_callable_annotations(&self) -> bool {
+        self.callables()
+            .any(AssociatedCallable::uses_callable_annotations)
     }
 
     fn validate_names(&self) -> Result<()> {
@@ -834,7 +871,7 @@ impl RecordClass {
     ) -> Result<Vec<AssociatedCallable>> {
         initializers
             .iter()
-            .filter(|initializer| function::Function::supports(initializer.callable()))
+            .filter(|initializer| function::Function::can_render(initializer.callable()))
             .map(|initializer| {
                 AssociatedCallable::from_value_initializer(
                     initializer,
@@ -853,13 +890,14 @@ impl RecordClass {
         methods
             .iter()
             .filter(|method| {
-                function::Function::supports(method.callable())
+                function::Function::can_render(method.callable())
                     && method.callable().receiver().is_none()
             })
             .map(|method| {
                 AssociatedCallable::from_value_method(
                     method,
                     symbols.method(method.name()),
+                    None,
                     None,
                     package,
                 )
@@ -875,14 +913,19 @@ impl RecordClass {
         methods
             .iter()
             .filter(|method| {
-                function::Function::supports(method.callable())
-                    && !matches!(method.callable().receiver(), None | Some(Receive::ByMutRef))
+                function::Function::can_render(method.callable())
+                    && method.callable().receiver().is_some()
             })
             .map(|method| {
                 AssociatedCallable::from_value_method(
                     method,
                     symbols.method(method.name()),
                     Some("self"),
+                    method
+                        .callable()
+                        .receiver()
+                        .filter(|receiver| matches!(receiver, Receive::ByMutRef))
+                        .map(|_| symbols.class_name()),
                     package,
                 )
             })
@@ -1000,7 +1043,11 @@ impl WireValue {
             TypeRef::Enum(enumeration) => match package.enum_wire(*enumeration)? {
                 EnumWire::CStyle(primitive) => {
                     let stem = primitive::Runtime::new(primitive).wire_stem()?;
-                    Ok(format!("_boltffi_wire_{stem}(int({value}))"))
+                    let enum_name = package.enum_name(*enumeration)?;
+                    let enum_name_literal = Package::literal(&enum_name);
+                    Ok(format!(
+                        "_boltffi_wire_{stem}(_boltffi_enum_value({value}, {enum_name}, {enum_name_literal}))"
+                    ))
                 }
                 EnumWire::Data { .. } => Ok(format!("{value}._boltffi_wire()")),
             },
@@ -1222,9 +1269,18 @@ impl EnumClass {
         self.callables().any(AssociatedCallable::uses_wire_helpers)
     }
 
+    fn uses_async_helpers(&self) -> bool {
+        self.callables().any(AssociatedCallable::uses_async_helpers)
+    }
+
     fn uses_sequence_annotations(&self) -> bool {
         self.callables()
             .any(AssociatedCallable::uses_sequence_annotations)
+    }
+
+    fn uses_callable_annotations(&self) -> bool {
+        self.callables()
+            .any(AssociatedCallable::uses_callable_annotations)
     }
 
     fn callables(&self) -> impl Iterator<Item = &AssociatedCallable> {
@@ -1280,7 +1336,7 @@ impl EnumClass {
     ) -> Result<Vec<AssociatedCallable>> {
         initializers
             .iter()
-            .filter(|initializer| function::Function::supports(initializer.callable()))
+            .filter(|initializer| function::Function::can_render(initializer.callable()))
             .map(|initializer| {
                 AssociatedCallable::from_value_initializer(
                     initializer,
@@ -1299,13 +1355,14 @@ impl EnumClass {
         methods
             .iter()
             .filter(|method| {
-                function::Function::supports(method.callable())
+                function::Function::can_render(method.callable())
                     && method.callable().receiver().is_none()
             })
             .map(|method| {
                 AssociatedCallable::from_value_method(
                     method,
                     symbols.method(method.name()),
+                    None,
                     None,
                     package,
                 )
@@ -1321,14 +1378,19 @@ impl EnumClass {
         methods
             .iter()
             .filter(|method| {
-                function::Function::supports(method.callable())
-                    && !matches!(method.callable().receiver(), None | Some(Receive::ByMutRef))
+                function::Function::can_render(method.callable())
+                    && method.callable().receiver().is_some()
             })
             .map(|method| {
                 AssociatedCallable::from_value_method(
                     method,
                     symbols.method(method.name()),
                     Some("self"),
+                    method
+                        .callable()
+                        .receiver()
+                        .filter(|receiver| matches!(receiver, Receive::ByMutRef))
+                        .map(|_| symbols.class_name()),
                     package,
                 )
             })
@@ -1441,7 +1503,7 @@ impl Class {
         let constructors = declaration
             .initializers()
             .iter()
-            .filter(|initializer| function::Function::supports(initializer.callable()))
+            .filter(|initializer| function::Function::can_render(initializer.callable()))
             .map(|initializer| {
                 AssociatedCallable::from_class_initializer(initializer, &symbols, package)
             })
@@ -1451,6 +1513,12 @@ impl Class {
             .filter(|constructor| constructor.python_name == "new")
             .cloned()
             .collect::<Vec<_>>();
+        if init.iter().any(AssociatedCallable::is_async) {
+            return Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "async __init__",
+            });
+        }
         let constructors = constructors
             .into_iter()
             .filter(|constructor| constructor.python_name != "new")
@@ -1458,7 +1526,7 @@ impl Class {
         let methods = declaration
             .methods()
             .iter()
-            .filter(|method| function::Function::supports(method.callable()))
+            .filter(|method| function::Function::can_render(method.callable()))
             .map(|method| AssociatedCallable::from_class_method(method, &symbols, package))
             .collect::<Result<Vec<_>>>()?;
         let (instance_methods, static_methods): (Vec<_>, Vec<_>) =
@@ -1484,9 +1552,18 @@ impl Class {
             || self.streams.iter().any(ClassStream::uses_wire_helpers)
     }
 
+    fn uses_async_helpers(&self) -> bool {
+        self.callables().any(AssociatedCallable::uses_async_helpers)
+    }
+
     fn uses_sequence_annotations(&self) -> bool {
         self.callables()
             .any(AssociatedCallable::uses_sequence_annotations)
+    }
+
+    fn uses_callable_annotations(&self) -> bool {
+        self.callables()
+            .any(AssociatedCallable::uses_callable_annotations)
     }
 
     fn callables(&self) -> impl Iterator<Item = &AssociatedCallable> {
@@ -1629,8 +1706,10 @@ struct AssociatedCallable {
     parameters: Vec<ParameterStub>,
     arguments: String,
     return_annotation: String,
-    body: String,
+    asynchronous: bool,
+    body: Vec<String>,
     uses_wire_helpers: bool,
+    uses_async_helpers: bool,
 }
 
 impl AssociatedCallable {
@@ -1647,11 +1726,21 @@ impl AssociatedCallable {
             .collect::<Result<Vec<_>>>()?;
         let arguments = Self::arguments(None, &parameters);
         let native_name = symbols.initializer(initializer.name());
+        let native_call = format!("_native.{native_name}({arguments})");
+        let returned = ReturnedValue::ClassHandle(symbols.class_name().to_owned());
+        let body = CallableBody::from_callable(
+            initializer.callable(),
+            &native_name,
+            native_call,
+            &returned,
+        )?;
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers);
         Ok(Self {
             receiver: false,
             python_name: Name::new(initializer.name()).function(),
-            body: format!("return cls._from_handle(_native.{native_name}({arguments}))"),
+            asynchronous: body.is_async(),
+            uses_async_helpers: body.uses_async_helpers(),
+            body: body.into_lines(),
             native_name,
             arguments,
             return_annotation: symbols.class_name().to_owned(),
@@ -1676,12 +1765,20 @@ impl AssociatedCallable {
         let arguments = Self::arguments(receiver.then_some("self._handle"), &parameters);
         let native_name = symbols.method(method.name());
         let native_call = format!("_native.{native_name}({arguments})");
+        let body = CallableBody::from_callable(
+            method.callable(),
+            &native_name,
+            native_call,
+            &returned.value,
+        )?;
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers)
             || returned.value.uses_wire_helpers();
         Ok(Self {
             receiver,
             python_name: Name::new(method.name()).function(),
-            body: returned.value.statement(native_call),
+            asynchronous: body.is_async(),
+            uses_async_helpers: body.uses_async_helpers(),
+            body: body.into_lines(),
             native_name,
             arguments,
             parameters,
@@ -1699,12 +1796,20 @@ impl AssociatedCallable {
         let returned = ReturnStub::from_callable(initializer.callable(), package)?;
         let arguments = Self::arguments(None, &parameters);
         let native_call = format!("_native.{native_name}({arguments})");
+        let body = CallableBody::from_callable(
+            initializer.callable(),
+            &native_name,
+            native_call,
+            &returned.value,
+        )?;
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers)
             || returned.value.uses_wire_helpers();
         Ok(Self {
             receiver: false,
             python_name: Name::new(initializer.name()).function(),
-            body: returned.value.statement(native_call),
+            asynchronous: body.is_async(),
+            uses_async_helpers: body.uses_async_helpers(),
+            body: body.into_lines(),
             native_name,
             arguments,
             return_annotation: returned.annotation,
@@ -1717,18 +1822,30 @@ impl AssociatedCallable {
         method: &ExportedMethodDecl<Native, NativeSymbol>,
         native_name: String,
         receiver: Option<&str>,
+        mutated_receiver_type: Option<&str>,
         package: &Package<'_, '_>,
     ) -> Result<Self> {
         let parameters = Self::parameters(method.callable().params(), package)?;
-        let returned = ReturnStub::from_callable(method.callable(), package)?;
+        let returned = match mutated_receiver_type {
+            Some(annotation) => ReturnStub::native(annotation),
+            None => ReturnStub::from_callable(method.callable(), package)?,
+        };
         let arguments = Self::arguments(receiver, &parameters);
         let native_call = format!("_native.{native_name}({arguments})");
+        let body = CallableBody::from_callable(
+            method.callable(),
+            &native_name,
+            native_call,
+            &returned.value,
+        )?;
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers)
             || returned.value.uses_wire_helpers();
         Ok(Self {
             receiver: receiver.is_some(),
             python_name: Name::new(method.name()).function(),
-            body: returned.value.statement(native_call),
+            asynchronous: body.is_async(),
+            uses_async_helpers: body.uses_async_helpers(),
+            body: body.into_lines(),
             native_name,
             arguments,
             parameters,
@@ -1741,10 +1858,24 @@ impl AssociatedCallable {
         self.uses_wire_helpers
     }
 
+    fn uses_async_helpers(&self) -> bool {
+        self.uses_async_helpers
+    }
+
+    fn is_async(&self) -> bool {
+        self.asynchronous
+    }
+
     fn uses_sequence_annotations(&self) -> bool {
         self.parameters
             .iter()
             .any(ParameterStub::uses_sequence_annotation)
+    }
+
+    fn uses_callable_annotations(&self) -> bool {
+        self.parameters
+            .iter()
+            .any(ParameterStub::uses_callable_annotation)
     }
 
     fn validate_names(&self, owner: &str) -> Result<()> {
@@ -1792,6 +1923,7 @@ struct ParameterStub {
     annotation: String,
     argument: String,
     uses_sequence_annotation: bool,
+    uses_callable_annotation: bool,
     uses_wire_helpers: bool,
 }
 
@@ -1801,9 +1933,13 @@ impl ParameterStub {
         package: &Package<'_, '_>,
     ) -> Result<Self> {
         let IncomingParam::Value(plan) = parameter.payload() else {
-            return Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "closure parameter stub",
+            return Ok(Self {
+                name: Name::new(parameter.name()).function(),
+                annotation: "Callable[..., object]".to_owned(),
+                argument: Name::new(parameter.name()).function(),
+                uses_sequence_annotation: false,
+                uses_callable_annotation: true,
+                uses_wire_helpers: false,
             });
         };
         let argument = Self::argument(plan, parameter.name(), package)?;
@@ -1812,6 +1948,7 @@ impl ParameterStub {
         Ok(Self {
             name: Name::new(parameter.name()).function(),
             uses_sequence_annotation: annotation.uses_sequence(),
+            uses_callable_annotation: false,
             annotation: annotation.into_string(),
             argument,
             uses_wire_helpers,
@@ -1824,6 +1961,10 @@ impl ParameterStub {
 
     fn uses_sequence_annotation(&self) -> bool {
         self.uses_sequence_annotation
+    }
+
+    fn uses_callable_annotation(&self) -> bool {
+        self.uses_callable_annotation
     }
 
     fn parameter_name(&self) -> (String, String) {
@@ -1842,6 +1983,11 @@ impl ParameterStub {
                 presence: HandlePresence::Required,
                 ..
             } => format!("{name}._handle"),
+            ParamPlan::Handle {
+                target: HandleTarget::Class(_),
+                presence: HandlePresence::Nullable,
+                ..
+            } => format!("(0 if {name} is None else {name}._handle)"),
             ParamPlan::Encoded { ty, .. } => Self::encoded_argument(name, ty, package)?,
             _ => name,
         })
@@ -1892,6 +2038,13 @@ struct ReturnStub {
 }
 
 impl ReturnStub {
+    fn native(annotation: impl Into<String>) -> Self {
+        Self {
+            annotation: annotation.into(),
+            value: ReturnedValue::Native,
+        }
+    }
+
     fn from_callable(
         callable: &ExportedCallable<Native>,
         package: &Package<'_, '_>,
@@ -1928,6 +2081,68 @@ impl ReturnStub {
             annotation: PythonTypeHint::from_return(plan, package)?.into_string(),
             value: ReturnedValue::from_success_plan(plan, package)?,
         })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CallableBody {
+    asynchronous: bool,
+    lines: Vec<String>,
+}
+
+impl CallableBody {
+    fn from_callable(
+        callable: &ExportedCallable<Native>,
+        native_name: &str,
+        native_call: String,
+        returned: &ReturnedValue,
+    ) -> Result<Self> {
+        match callable.execution() {
+            ExecutionDecl::Synchronous(_) => Ok(Self::sync(returned.statement(native_call))),
+            ExecutionDecl::Asynchronous(native::AsyncProtocol::PollHandle { .. }) => {
+                Ok(Self::native_future(native_name, native_call, returned))
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: "python",
+                shape: "unknown async callable",
+            }),
+        }
+    }
+
+    fn is_async(&self) -> bool {
+        self.asynchronous
+    }
+
+    fn uses_async_helpers(&self) -> bool {
+        self.asynchronous
+    }
+
+    fn into_lines(self) -> Vec<String> {
+        self.lines
+    }
+
+    fn sync(line: String) -> Self {
+        Self {
+            asynchronous: false,
+            lines: vec![line],
+        }
+    }
+
+    fn native_future(native_name: &str, native_call: String, returned: &ReturnedValue) -> Self {
+        let future = "__boltffi_future";
+        Self {
+            asynchronous: true,
+            lines: std::iter::once(format!("{future} = _BoltFfiNativeFuture("))
+                .chain(std::iter::once(format!("    {native_call},")))
+                .chain(
+                    ["poll", "complete", "cancel", "free", "panic_message"]
+                        .into_iter()
+                        .map(|suffix| format!("    _native.{native_name}__{suffix},")),
+                )
+                .chain(std::iter::once(")".to_owned()))
+                .chain(returned.awaited_statement(format!("{future}.wait()")))
+                .collect(),
+        }
     }
 }
 
@@ -2004,6 +2219,22 @@ impl ReturnedValue {
 
     fn uses_wire_helpers(&self) -> bool {
         matches!(self, Self::Wire(_))
+    }
+
+    fn awaited_statement(&self, wait_call: String) -> Vec<String> {
+        let value = "__boltffi_value";
+        match self {
+            Self::Void => vec![format!("await {wait_call}")],
+            Self::Native => vec![format!("return await {wait_call}")],
+            Self::ClassHandle(class_name) => vec![
+                format!("{value} = await {wait_call}"),
+                format!("return {class_name}._from_handle({value})"),
+            ],
+            Self::Wire(decode) => vec![
+                format!("{value} = await {wait_call}"),
+                format!("return _boltffi_read_wire({value}, lambda reader: {decode})"),
+            ],
+        }
     }
 
     fn from_encoded_type(ty: &TypeRef, package: &Package<'_, '_>) -> Result<Self> {
@@ -2103,6 +2334,14 @@ impl PythonTypeHint {
                 ..
             } => Ok(Self::new(package.class_name(class_id)?)),
             ParamPlan::Handle {
+                target: HandleTarget::Class(class_id),
+                presence: HandlePresence::Nullable,
+                ..
+            } => Ok(Self::new(format!(
+                "{} | None",
+                package.class_name(class_id)?
+            ))),
+            ParamPlan::Handle {
                 target: HandleTarget::Callback(_),
                 ..
             } => Ok(Self::new("object")),
@@ -2141,13 +2380,16 @@ impl PythonTypeHint {
             ParamPlan::DirectVec { element } => {
                 Self::from_direct_vector_parameter(element, package)
             }
-            ParamPlan::Direct { .. }
-            | ParamPlan::Encoded { .. }
-            | ParamPlan::Handle { .. }
-            | ParamPlan::ScalarOption { .. } => Err(Error::UnsupportedTarget {
-                target: "python",
-                shape: "unsupported parameter stub",
-            }),
+            ParamPlan::ScalarOption { primitive } => Ok(Self::new(format!(
+                "{} | None",
+                Self::from_primitive(*primitive)?.into_string()
+            ))),
+            ParamPlan::Direct { .. } | ParamPlan::Encoded { .. } | ParamPlan::Handle { .. } => {
+                Err(Error::UnsupportedTarget {
+                    target: "python",
+                    shape: "unsupported parameter stub",
+                })
+            }
             _ => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "unknown parameter stub",
@@ -2257,10 +2499,13 @@ impl PythonTypeHint {
                 "list[{}]",
                 Self::from_type_ref(element, package)?.into_string()
             ))),
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => Ok(Self::new(format!(
+                "{} | None",
+                Self::from_primitive(*primitive)?.into_string()
+            ))),
             ReturnPlan::DirectViaReturnSlot { .. }
             | ReturnPlan::EncodedViaReturnSlot { .. }
             | ReturnPlan::HandleViaReturnSlot { .. }
-            | ReturnPlan::ScalarOptionViaReturnSlot { .. }
             | ReturnPlan::ClosureViaOutPointer(_) => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "unsupported return stub",

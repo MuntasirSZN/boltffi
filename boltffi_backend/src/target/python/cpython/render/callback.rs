@@ -45,19 +45,6 @@ pub struct Callback {
 }
 
 impl Callback {
-    pub fn supports(declaration: &CallbackDecl<Native>, bridge: &PythonCExtBridgeContract) -> bool {
-        bridge
-            .source_callback(declaration.id())
-            .is_some_and(|callback| {
-                declaration
-                    .protocol()
-                    .vtable()
-                    .methods()
-                    .iter()
-                    .all(|method| Method::supports(method, callback))
-            })
-    }
-
     pub fn from_declaration(
         declaration: &CallbackDecl<Native>,
         bridge: &PythonCExtBridgeContract,
@@ -302,67 +289,6 @@ struct Method {
 }
 
 impl Method {
-    fn supports(method: &ImportedMethodDecl<Native, VTableSlot>, c_callback: &c::Callback) -> bool {
-        if !matches!(
-            method.callable().execution(),
-            ExecutionDecl::Synchronous(_) | ExecutionDecl::Asynchronous(_)
-        ) {
-            return false;
-        }
-        let Some(c_field) = c_callback
-            .vtable()
-            .fields()
-            .iter()
-            .find(|field| field.name() == method.target().as_str())
-        else {
-            return false;
-        };
-        let Ok(signature) = MethodSignature::from_field(c_field) else {
-            return false;
-        };
-        method
-            .callable()
-            .params()
-            .iter()
-            .map(MethodParam::arity)
-            .collect::<Result<Vec<_>>>()
-            .and_then(|arity| match method.callable().execution() {
-                ExecutionDecl::Synchronous(_) => match method.callable().error() {
-                    ErrorDecl::None(_) => signature.value_params(&arity).map(|_| ()),
-                    ErrorDecl::EncodedViaReturnSlot { .. } => signature
-                        .fallible_value_params(method.callable().returns().plan(), &arity)
-                        .map(|_| ()),
-                    _ => Err(Error::UnsupportedTarget {
-                        target: "python",
-                        shape: "callback method error channel",
-                    }),
-                },
-                ExecutionDecl::Asynchronous(_) => signature.async_value_params(&arity).map(|_| ()),
-                _ => Err(Error::UnsupportedTarget {
-                    target: "python",
-                    shape: "unknown callback method execution",
-                }),
-            })
-            .is_ok()
-            && match method.callable().execution() {
-                ExecutionDecl::Synchronous(_) => match method.callable().error() {
-                    ErrorDecl::None(_) => {
-                        MethodReturn::supports(method.callable().returns().plan())
-                    }
-                    ErrorDecl::EncodedViaReturnSlot { .. } => FallibleReturn::supports(
-                        method.callable().returns().plan(),
-                        method.callable().error(),
-                    ),
-                    _ => false,
-                },
-                ExecutionDecl::Asynchronous(_) => AsyncCompletion::supports(
-                    method.callable().returns().plan(),
-                    method.callable().error(),
-                ),
-                _ => false,
-            }
-    }
-
     fn new(
         method: &ImportedMethodDecl<Native, VTableSlot>,
         c_callback: &c::Callback,
@@ -961,21 +887,6 @@ struct FallibleReturn {
 }
 
 impl FallibleReturn {
-    fn supports(plan: &ReturnPlan<Native, IntoRust>, error: &ErrorDecl<Native, IntoRust>) -> bool {
-        matches!(error, ErrorDecl::EncodedViaReturnSlot { .. })
-            && matches!(
-                plan,
-                ReturnPlan::Void
-                    | ReturnPlan::DirectViaOutPointer {
-                        ty: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-                    }
-                    | ReturnPlan::EncodedViaOutPointer {
-                        shape: native::BufferShape::Buffer,
-                        ..
-                    }
-            )
-    }
-
     fn new(
         plan: &ReturnPlan<Native, IntoRust>,
         error: &ErrorDecl<Native, IntoRust>,
@@ -1258,17 +1169,6 @@ struct AsyncCompletion {
 }
 
 impl AsyncCompletion {
-    fn supports(plan: &ReturnPlan<Native, IntoRust>, error: &ErrorDecl<Native, IntoRust>) -> bool {
-        match error {
-            ErrorDecl::None(_) => CompletionPayload::supports_infallible(plan),
-            ErrorDecl::EncodedViaReturnSlot { ty, .. } => {
-                CompletionPayload::supports_fallible_success(plan)
-                    && CompletionPayload::supports_wire_type(ty)
-            }
-            _ => false,
-        }
-    }
-
     fn new(
         plan: &ReturnPlan<Native, IntoRust>,
         error: &ErrorDecl<Native, IntoRust>,
@@ -1371,53 +1271,6 @@ struct CompletionPayload {
 }
 
 impl CompletionPayload {
-    fn supports_infallible(plan: &ReturnPlan<Native, IntoRust>) -> bool {
-        matches!(
-            plan,
-            ReturnPlan::Void
-                | ReturnPlan::DirectViaReturnSlot {
-                    ty: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-                }
-                | ReturnPlan::EncodedViaReturnSlot {
-                    shape: native::BufferShape::Buffer,
-                    ..
-                }
-                | ReturnPlan::ScalarOptionViaReturnSlot { .. }
-                | ReturnPlan::DirectVecViaReturnSlot { .. }
-        )
-    }
-
-    fn supports_fallible_success(plan: &ReturnPlan<Native, IntoRust>) -> bool {
-        matches!(
-            plan,
-            ReturnPlan::Void
-                | ReturnPlan::DirectViaOutPointer { .. }
-                | ReturnPlan::EncodedViaOutPointer {
-                    shape: native::BufferShape::Buffer,
-                    ..
-                }
-                | ReturnPlan::HandleViaOutPointer { .. }
-        )
-    }
-
-    fn supports_wire_type(ty: &TypeRef) -> bool {
-        matches!(
-            ty,
-            TypeRef::Primitive(_)
-                | TypeRef::String
-                | TypeRef::Bytes
-                | TypeRef::Record(_)
-                | TypeRef::Enum(_)
-                | TypeRef::Sequence(_)
-                | TypeRef::Optional(_)
-                | TypeRef::Result { .. }
-                | TypeRef::Tuple(_)
-                | TypeRef::Map { .. }
-                | TypeRef::Builtin(_)
-                | TypeRef::Custom(_)
-        )
-    }
-
     fn infallible(
         plan: &ReturnPlan<Native, IntoRust>,
         payload: Option<&c::Type>,
@@ -2013,22 +1866,6 @@ impl MethodReturn {
             raw_wire: false,
             void: false,
         })
-    }
-
-    fn supports(plan: &ReturnPlan<Native, IntoRust>) -> bool {
-        matches!(
-            plan,
-            ReturnPlan::Void
-                | ReturnPlan::DirectViaReturnSlot {
-                    ty: TypeRef::Primitive(_) | TypeRef::Record(_) | TypeRef::Enum(_),
-                }
-                | ReturnPlan::EncodedViaReturnSlot {
-                    shape: native::BufferShape::Buffer,
-                    ..
-                }
-                | ReturnPlan::ScalarOptionViaReturnSlot { .. }
-                | ReturnPlan::DirectVecViaReturnSlot { .. }
-        )
     }
 
     fn new(

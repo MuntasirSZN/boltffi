@@ -210,6 +210,45 @@ static void boltffi_python_release_owned_buffer(FfiBuf_u8 buffer) {
     {{ support.free_buffer() }}(buffer);
 }
 {% endif %}
+{% if support.uses_callback_handles() %}
+typedef struct {
+    void (*free)(uint64_t);
+    uint64_t (*clone)(uint64_t);
+} boltffi_python_callback_vtable_header;
+
+static void boltffi_python_release_callback_handle_value(BoltFFICallbackHandle handle) {
+    const boltffi_python_callback_vtable_header *vtable = (const boltffi_python_callback_vtable_header *)handle.vtable;
+    if (vtable != NULL && vtable->free != NULL) {
+        vtable->free(handle.handle);
+    }
+}
+
+static void boltffi_python_release_callback_capsule(PyObject *capsule) {
+    BoltFFICallbackHandle *handle = PyCapsule_GetPointer(capsule, "boltffi.callback");
+    if (handle == NULL) {
+        PyErr_Clear();
+        return;
+    }
+    boltffi_python_release_callback_handle_value(*handle);
+    PyMem_Free(handle);
+}
+
+static PyObject *boltffi_python_box_callback_handle(BoltFFICallbackHandle handle) {
+    BoltFFICallbackHandle *stored = PyMem_Malloc(sizeof(BoltFFICallbackHandle));
+    PyObject *capsule = NULL;
+    if (stored == NULL) {
+        boltffi_python_release_callback_handle_value(handle);
+        return PyErr_NoMemory();
+    }
+    *stored = handle;
+    capsule = PyCapsule_New(stored, "boltffi.callback", boltffi_python_release_callback_capsule);
+    if (capsule == NULL) {
+        boltffi_python_release_callback_handle_value(*stored);
+        PyMem_Free(stored);
+    }
+    return capsule;
+}
+{% endif %}
 {% if support.uses_owned_utf8() %}
 static PyObject *boltffi_python_decode_owned_utf8(FfiBuf_u8 buffer) {
     PyObject *result = NULL;
@@ -262,6 +301,71 @@ static PyObject *boltffi_python_decode_owned_raw_wire(FfiBuf_u8 buffer) {
 done:
     boltffi_python_release_owned_buffer(buffer);
     return result;
+}
+{% endif %}
+{% if support.uses_async_functions() %}
+static PyObject *boltffi_python_box_future_handle(RustFutureHandle handle) {
+    if (handle == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "native future handle is null");
+        return NULL;
+    }
+    return PyLong_FromVoidPtr((void *)handle);
+}
+
+static int boltffi_python_parse_future_handle(PyObject *value, RustFutureHandle *out) {
+    void *handle = PyLong_AsVoidPtr(value);
+    if (handle == NULL && PyErr_Occurred()) {
+        return 0;
+    }
+    if (handle == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "native future handle is null");
+        return 0;
+    }
+    *out = (RustFutureHandle)handle;
+    return 1;
+}
+
+static void boltffi_python_future_wake(uint64_t callback_data, int8_t poll_result) {
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyObject *state = (PyObject *)(uintptr_t)callback_data;
+    PyObject *loop = PyTuple_GET_ITEM(state, 0);
+    PyObject *future = PyTuple_GET_ITEM(state, 1);
+    PyObject *set_result = PyObject_GetAttrString(future, "set_result");
+    PyObject *result = PyLong_FromLong((long)poll_result);
+    PyObject *scheduled = NULL;
+    if (set_result != NULL && result != NULL) {
+        scheduled = PyObject_CallMethod(loop, "call_soon_threadsafe", "OO", set_result, result);
+    }
+    if (scheduled == NULL) {
+        PyErr_WriteUnraisable(state);
+    }
+    Py_XDECREF(scheduled);
+    Py_XDECREF(result);
+    Py_XDECREF(set_result);
+    Py_DECREF(state);
+    PyGILState_Release(gil);
+}
+
+static int boltffi_python_check_future_status(
+    FfiStatus status,
+    RustFutureHandle handle,
+    FfiBuf_u8 (*panic_message)(RustFutureHandle)
+) {
+    PyObject *message = NULL;
+    if (status.code == 0) {
+        return 1;
+    }
+    if (status.code == 100 && panic_message != NULL) {
+        message = boltffi_python_decode_owned_utf8(panic_message(handle));
+        if (message != NULL) {
+            PyErr_SetObject(PyExc_RuntimeError, message);
+            Py_DECREF(message);
+            return 0;
+        }
+        PyErr_Clear();
+    }
+    PyErr_Format(PyExc_RuntimeError, "native future failed with status %d", status.code);
+    return 0;
 }
 {% endif %}
 {% if support.uses_registered_types() %}
@@ -1018,6 +1122,91 @@ done:
     return result;
 }
 {% endif %}
+static PyObject *{{ primitive.optional_owned_wire_decoder }}(FfiBuf_u8 buffer) {
+    PyObject *result = NULL;
+{% if primitive.is_f32() %}
+    uint32_t bits = 0;
+    float value = 0.0f;
+{% endif %}
+{% if primitive.is_f64() %}
+    uint64_t bits = 0;
+    double value = 0.0;
+{% endif %}
+    if (!boltffi_python_validate_owned_memory(buffer)) {
+        goto done;
+    }
+    if (buffer.len < 1) {
+        PyErr_SetString(PyExc_RuntimeError, "native function returned truncated optional scalar");
+        goto done;
+    }
+    if (buffer.ptr[0] == 0) {
+        if (buffer.len != 1) {
+            PyErr_SetString(PyExc_RuntimeError, "native function returned invalid none scalar payload");
+            goto done;
+        }
+        Py_INCREF(Py_None);
+        result = Py_None;
+        goto done;
+    }
+    if (buffer.ptr[0] != 1) {
+        PyErr_SetString(PyExc_RuntimeError, "native function returned invalid optional scalar tag");
+        goto done;
+    }
+    if (buffer.len != 1 + {{ primitive.wire_size }}) {
+        PyErr_SetString(PyExc_RuntimeError, "native function returned invalid optional scalar payload");
+        goto done;
+    }
+{% if primitive.is_bool() %}
+    if (buffer.ptr[1] > 1) {
+        PyErr_SetString(PyExc_RuntimeError, "native function returned invalid bool wire value");
+        goto done;
+    }
+    result = {{ primitive.boxer }}(buffer.ptr[1] == 1);
+{% endif %}
+{% if primitive.is_i8() %}
+    result = {{ primitive.boxer }}((int8_t)buffer.ptr[1]);
+{% endif %}
+{% if primitive.is_u8() %}
+    result = {{ primitive.boxer }}(buffer.ptr[1]);
+{% endif %}
+{% if primitive.is_i16() %}
+    result = {{ primitive.boxer }}((int16_t)boltffi_python_read_u16_le(buffer.ptr + 1));
+{% endif %}
+{% if primitive.is_u16() %}
+    result = {{ primitive.boxer }}(boltffi_python_read_u16_le(buffer.ptr + 1));
+{% endif %}
+{% if primitive.is_i32() %}
+    result = {{ primitive.boxer }}((int32_t)boltffi_python_read_u32_le(buffer.ptr + 1));
+{% endif %}
+{% if primitive.is_u32() %}
+    result = {{ primitive.boxer }}(boltffi_python_read_u32_le(buffer.ptr + 1));
+{% endif %}
+{% if primitive.is_i64() %}
+    result = {{ primitive.boxer }}((int64_t)boltffi_python_read_u64_le(buffer.ptr + 1));
+{% endif %}
+{% if primitive.is_u64() %}
+    result = {{ primitive.boxer }}(boltffi_python_read_u64_le(buffer.ptr + 1));
+{% endif %}
+{% if primitive.is_isize() %}
+    result = {{ primitive.boxer }}((intptr_t)((int64_t)boltffi_python_read_u64_le(buffer.ptr + 1)));
+{% endif %}
+{% if primitive.is_usize() %}
+    result = {{ primitive.boxer }}((uintptr_t)boltffi_python_read_u64_le(buffer.ptr + 1));
+{% endif %}
+{% if primitive.is_f32() %}
+    bits = boltffi_python_read_u32_le(buffer.ptr + 1);
+    memcpy(&value, &bits, sizeof(value));
+    result = {{ primitive.boxer }}(value);
+{% endif %}
+{% if primitive.is_f64() %}
+    bits = boltffi_python_read_u64_le(buffer.ptr + 1);
+    memcpy(&value, &bits, sizeof(value));
+    result = {{ primitive.boxer }}(value);
+{% endif %}
+done:
+    boltffi_python_release_owned_buffer(buffer);
+    return result;
+}
 {% endfor %}
 {% for element in support.direct_vector_elements() %}
 static int {{ element.vector_parser() }}(PyObject *value, PyObject **out_wire, const uint8_t **out_ptr, uintptr_t *out_len) {

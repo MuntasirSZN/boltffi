@@ -1,7 +1,7 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
     ClassDecl, DeclarationRef, Native, NativeSymbol, Primitive, StreamDecl, StreamItemPlan,
-    StreamMode, TypeRef, native,
+    TypeRef, native,
 };
 
 use crate::{
@@ -41,20 +41,6 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub fn supports(declaration: &StreamDecl<Native>) -> bool {
-        matches!(
-            declaration.mode(),
-            StreamMode::Async | StreamMode::Batch | StreamMode::Callback
-        ) && matches!(
-            declaration.item(),
-            StreamItemPlan::Direct { .. }
-                | StreamItemPlan::Encoded {
-                    shape: native::BufferShape::Buffer,
-                    ..
-                }
-        )
-    }
-
     pub fn from_declaration(
         declaration: &StreamDecl<Native>,
         bridge: &PythonCExtBridgeContract,

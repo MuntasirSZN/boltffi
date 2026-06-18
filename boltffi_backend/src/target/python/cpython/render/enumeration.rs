@@ -143,7 +143,8 @@ impl Enumeration {
     }
 
     pub fn methods(&self) -> impl Iterator<Item = &ExtensionMethod> {
-        std::iter::once(&self.method).chain(self.callables.iter().map(function::Function::method))
+        std::iter::once(&self.method)
+            .chain(self.callables.iter().flat_map(function::Function::methods))
     }
 
     pub fn primitive(&self) -> Option<primitive::Runtime> {
@@ -204,6 +205,12 @@ impl Enumeration {
         self.callables
             .iter()
             .any(function::Function::has_raw_wire_argument)
+    }
+
+    pub fn uses_async_protocol(&self) -> bool {
+        self.callables
+            .iter()
+            .any(function::Function::uses_async_protocol)
     }
 
     fn from_c_style(
@@ -284,15 +291,11 @@ impl Enumeration {
         let initializers = enumeration
             .initializers()
             .iter()
-            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| Self::initializer(initializer, symbols, bridge, context));
         let methods = enumeration
             .methods()
             .iter()
-            .filter(|method| {
-                function::Function::supports(method.callable())
-                    && !matches!(method.callable().receiver(), Some(Receive::ByMutRef))
-            })
+            .filter(|method| !matches!(method.callable().receiver(), Some(Receive::ByMutRef)))
             .map(|method| {
                 let receiver = method
                     .callable()
@@ -321,15 +324,11 @@ impl Enumeration {
         let initializers = enumeration
             .initializers()
             .iter()
-            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| Self::initializer(initializer, symbols, bridge, context));
         let methods = enumeration
             .methods()
             .iter()
-            .filter(|method| {
-                function::Function::supports(method.callable())
-                    && !matches!(method.callable().receiver(), Some(Receive::ByMutRef))
-            })
+            .filter(|method| !matches!(method.callable().receiver(), Some(Receive::ByMutRef)))
             .map(|method| {
                 let receiver = method
                     .callable()

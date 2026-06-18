@@ -483,13 +483,14 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
             }
             false => quote! { #decoded },
         };
+        let type_annotation = (!converted.changed()).then(|| quote! { : #rust_type });
         Ok(quote! {
             let (#decoded, #used) =
                 <#decoded_type as ::boltffi::__private::wire::WireDecode>::decode_from(
                     &buffer[__boltffi_offset..]
                 )?;
             __boltffi_offset += #used;
-            let #field: #rust_type = #value;
+            let #field #type_annotation = #value;
         })
     }
 }

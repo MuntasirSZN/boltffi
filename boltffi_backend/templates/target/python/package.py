@@ -8,8 +8,12 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 {% endif %}
-{% if uses_sequence_annotations %}
-from collections.abc import Sequence
+{% if uses_sequence_annotations || uses_callable_annotations %}
+from collections.abc import {% if uses_callable_annotations %}Callable{% if uses_sequence_annotations %}, {% endif %}{% endif %}{% if uses_sequence_annotations %}Sequence{% endif %}
+
+{% endif %}
+{% if uses_async_helpers %}
+import asyncio
 
 {% endif %}
 import sys
@@ -28,6 +32,61 @@ def _shared_library_filename() -> str:
 
 _native._initialize_loader(str(Path(__file__).resolve().with_name(_shared_library_filename())))
 
+{% if uses_async_helpers %}
+class _BoltFfiNativeFuture:
+    __slots__ = ("_handle", "_poll", "_complete", "_cancel", "_free", "_panic_message")
+
+    def __init__(self, handle, poll, complete, cancel, free, panic_message) -> None:
+        self._handle = handle
+        self._poll = poll
+        self._complete = complete
+        self._cancel = cancel
+        self._free = free
+        self._panic_message = panic_message
+
+    def __del__(self) -> None:
+        try:
+            self.release()
+        except Exception:
+            pass
+
+    async def wait(self):
+        loop = asyncio.get_running_loop()
+        handle = self._require_handle()
+        try:
+            while True:
+                ready = loop.create_future()
+                self._poll(handle, loop, ready)
+                if await ready == 0:
+                    break
+        except BaseException:
+            self.cancel()
+            raise
+        try:
+            return self._complete(handle)
+        finally:
+            self.release()
+
+    def cancel(self) -> None:
+        handle = self._handle
+        if handle is not None:
+            self._handle = None
+            self._cancel(handle)
+            self._free(handle)
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is not None:
+            self._handle = None
+            self._free(handle)
+
+    def _require_handle(self):
+        handle = self._handle
+        if handle is None:
+            raise RuntimeError("native future is closed")
+        return handle
+
+{% endif %}
 {% if uses_wire_helpers %}
 def _boltffi_u32(value: int) -> bytes:
     return int(value).to_bytes(4, "little", signed=False)
@@ -161,6 +220,12 @@ def _boltffi_wire_map(value, encode_key, encode_value) -> bytes:
     return _boltffi_u32(len(items)) + b"".join(
         encode_key(key) + encode_value(item) for key, item in items
     )
+
+
+def _boltffi_enum_value(value, enum_type, enum_name: str) -> int:
+    if not isinstance(value, enum_type):
+        raise TypeError(f"expected {enum_name}")
+    return int(value)
 
 
 class _BoltFfiWireReader:
@@ -309,19 +374,25 @@ class {{ record.class_name }}:
 {%- for constructor in record.constructors %}
 
     @classmethod
-    def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}":
-        {{ constructor.body }}
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}":
+{%- for line in constructor.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in record.static_methods %}
 
     @staticmethod
-    def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in record.instance_methods %}
 
-    def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 
 
@@ -351,19 +422,25 @@ class {{ enumeration.class_name }}:
 {%- for constructor in enumeration.constructors %}
 
     @classmethod
-    def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
-        {{ constructor.body }}
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
+{%- for line in constructor.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in enumeration.static_methods %}
 
     @staticmethod
-    def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in enumeration.instance_methods %}
 
-    def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 
 {% for variant in wire.variants %}
@@ -409,19 +486,25 @@ class {{ enumeration.class_name }}(IntEnum):
 {%- for constructor in enumeration.constructors %}
 
     @classmethod
-    def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
-        {{ constructor.body }}
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
+{%- for line in constructor.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in enumeration.static_methods %}
 
     @staticmethod
-    def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in enumeration.instance_methods %}
 
-    def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 
 {%- endif %}
@@ -457,19 +540,25 @@ class {{ class.class_name }}:
 {%- for constructor in class.constructors %}
 
     @classmethod
-    def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ class.class_name }}":
-        {{ constructor.body }}
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ class.class_name }}":
+{%- for line in constructor.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in class.static_methods %}
 
     @staticmethod
-    def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for method in class.instance_methods %}
 
-    def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-        {{ method.body }}
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
 {%- endfor %}
 {%- for stream in class.streams %}
 
@@ -522,8 +611,10 @@ class {{ stream.subscription_class }}:
 {{ constant.python_name }}: {{ constant.annotation }} = {{ constant.expression }}
 {% endfor %}
 {% for function in functions %}
-def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_annotation }}:
-    {{ function.body }}
+{% if function.asynchronous %}async {% endif %}def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_annotation }}:
+{%- for line in function.body %}
+    {{ line }}
+{%- endfor %}
 
 {%- endfor %}
 

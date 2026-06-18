@@ -41,8 +41,11 @@ impl Constant {
         Ok(Self { function })
     }
 
-    pub fn method(&self) -> Option<&ExtensionMethod> {
-        self.function.as_ref().map(function::Function::method)
+    pub fn methods(&self) -> impl Iterator<Item = &ExtensionMethod> {
+        self.function
+            .as_ref()
+            .into_iter()
+            .flat_map(function::Function::methods)
     }
 
     pub fn render(self) -> Result<Emitted> {

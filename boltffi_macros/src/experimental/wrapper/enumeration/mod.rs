@@ -598,13 +598,14 @@ impl<'expansion, 'lowered, S: RenderSurface> DataField<'expansion, 'lowered, S> 
             }
             false => quote! { #decoded },
         };
+        let type_annotation = (!converted.changed()).then(|| quote! { : #rust_type });
         Ok(quote! {
             let (#decoded, #used) =
                 <#decoded_type as ::boltffi::__private::wire::WireDecode>::decode_from(
                     &buffer[__boltffi_offset..]
                 )?;
             __boltffi_offset += #used;
-            let #binding: #rust_type = #value;
+            let #binding #type_annotation = #value;
         })
     }
 }

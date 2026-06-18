@@ -13,11 +13,11 @@ use crate::{
         python_cext::{PythonCExtBridge, PythonCExtBridgeContract},
     },
     core::{
-        BindingCapability, BridgeCapability, BridgeLayer, CapabilityRequirements, Diagnostic,
-        Emitted, GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result,
-        Target, contract::sealed, host,
+        BindingCapability, BridgeCapability, BridgeLayer, CapabilityRequirements, Emitted,
+        GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result, Target,
+        contract::sealed, host,
     },
-    target::python::name_style::{Name, PackageModule},
+    target::python::name_style::PackageModule,
 };
 
 /// Python host renderer for a CPython extension bridge.
@@ -107,13 +107,6 @@ impl host::HostBackend for PythonCExtHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        if let Some(reason) = render::Function::unsupported(decl.callable()) {
-            return Ok(Emitted::diagnostic(Diagnostic::new(format!(
-                "python target skipped unsupported function {}: {}",
-                Name::new(decl.name()).function(),
-                reason
-            ))));
-        }
         render::Function::from_declaration(decl, bridge, context)?.render()
     }
 
@@ -654,10 +647,10 @@ mod tests {
             "result = boltffi_python_decode_owned_raw_wire(boltffi_python_boltffi_function_demo_echo_statuses(values_ptr, values_len));"
         ));
         assert!(init.contains(
-            "_boltffi_wire_sequence(values, lambda value: _boltffi_wire_i32(int(value)))"
+            "_boltffi_wire_sequence(values, lambda value: _boltffi_wire_i32(_boltffi_enum_value(value, Status, \"Status\")))"
         ));
         assert!(init.contains(
-            "_boltffi_read_wire(_native.echo_statuses(_boltffi_wire_sequence(values, lambda value: _boltffi_wire_i32(int(value)))), lambda reader: reader.sequence(lambda: Status(reader.i32())))"
+            "_boltffi_read_wire(_native.echo_statuses(_boltffi_wire_sequence(values, lambda value: _boltffi_wire_i32(_boltffi_enum_value(value, Status, \"Status\")))), lambda reader: reader.sequence(lambda: Status(reader.i32())))"
         ));
         assert!(stub.contains("from collections.abc import Sequence"));
         assert!(stub.contains("def echo_statuses(values: Sequence[Status]) -> list[Status]: ..."));
@@ -1054,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn python_target_omits_async_functions_with_diagnostic() {
+    fn python_target_renders_async_functions_through_native_future_protocol() {
         let output = target()
             .render(&bindings(
                 r#"
@@ -1064,18 +1057,26 @@ mod tests {
                 }
                 "#,
             ))
-            .expect("Python target should render remaining declarations");
+            .expect("Python target should render async functions");
+        let header = file(&output, "boltffi.h");
+        let extension = extension(&output);
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
 
-        assert_eq!(
-            output.diagnostics()[0].message(),
-            "python target skipped unsupported function fetch: async function"
-        );
-        assert!(
-            !file(&output, "_native.c").contains("callable_wrapper_boltffi_function_demo_fetch")
-        );
-        assert!(!file(&output, "_native.c").contains("{\"fetch\""));
-        assert!(!file(&output, "demo/__init__.py").contains("fetch"));
-        assert!(!file(&output, "demo/__init__.pyi").contains("fetch"));
+        assert!(header.contains("RustFutureHandle boltffi_function_demo_fetch(void);"));
+        assert!(header.contains("void boltffi_async_function_demo_fetch_poll("));
+        assert!(header.contains("int32_t boltffi_async_function_demo_fetch_complete("));
+        assert!(extension.contains("static PyObject *boltffi_python_box_future_handle"));
+        assert!(extension.contains("static void boltffi_python_future_wake"));
+        assert!(extension.contains(
+            "{\"fetch__complete\", (PyCFunction)boltffi_python_callable_wrapper_boltffi_async_function_demo_fetch_complete, METH_O, NULL}"
+        ));
+        assert!(init.contains("import asyncio"));
+        assert!(init.contains("class _BoltFfiNativeFuture:"));
+        assert!(init.contains("async def fetch() -> int:"));
+        assert!(init.contains("__boltffi_future = _BoltFfiNativeFuture("));
+        assert!(init.contains("return await __boltffi_future.wait()"));
+        assert!(stub.contains("async def fetch() -> int: ..."));
     }
 
     #[test]

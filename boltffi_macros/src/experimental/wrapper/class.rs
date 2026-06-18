@@ -206,7 +206,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Renderer<'expansion, 'lowered, S> {
                     handle: ::core::ptr::NonNull<#handle_type>,
                 }
 
-                unsafe impl Send for #retained_handle_type where #class: Send {}
+                unsafe impl Send for #retained_handle_type {}
 
                 impl #retained_handle_type {
                     #retained_shared
@@ -229,8 +229,8 @@ impl<'expansion, 'lowered, S: RenderSurface> Renderer<'expansion, 'lowered, S> {
                 released: ::std::sync::atomic::AtomicBool,
             }
 
-            unsafe impl Send for #handle_type where #class: Send {}
-            unsafe impl Sync for #handle_type where #class: Sync {}
+            unsafe impl Send for #handle_type {}
+            unsafe impl Sync for #handle_type {}
 
             impl #handle_type {
                 unsafe fn release(handle: *mut Self) {

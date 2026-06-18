@@ -1,6 +1,7 @@
 mod argument;
 mod callback;
 mod class;
+mod closure;
 mod constant;
 mod custom;
 mod direct_vector;

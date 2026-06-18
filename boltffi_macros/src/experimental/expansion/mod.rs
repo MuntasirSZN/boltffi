@@ -2263,7 +2263,7 @@ mod tests {
 
         assert_generated_crate_checks("native_custom_slice_constant", generated);
         let rendered = tokens.to_string();
-        assert!(rendered.contains("let __boltffi_result : & [Timestamp] = TIMES"));
+        assert!(rendered.contains("let __boltffi_result = TIMES"));
         assert!(rendered.contains("(timestamp_into_ffi) (value)"));
         assert!(!rendered.contains("(timestamp_into_ffi) (& value)"));
     }
@@ -2416,7 +2416,7 @@ mod tests {
                     __boltffi_when_ptr: *const u8,
                     __boltffi_when_len: usize
                 ) -> u32 {
-                    let when: Timestamp = {
+                    let when = {
                         if __boltffi_when_ptr.is_null() && __boltffi_when_len > 0 {
                             ::boltffi::__private::set_last_error(format!(
                                 "{}: null pointer with non-zero length (buf_len={})",
@@ -3712,7 +3712,7 @@ mod tests {
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_stamp() -> ::boltffi::__private::FfiBuf {
-                    let __boltffi_result: Timestamp = stamp();
+                    let __boltffi_result = stamp();
                     {
                         let __boltffi_wire = (timestamp_into_ffi)(&__boltffi_result);
                         ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_wire)
@@ -3766,10 +3766,7 @@ mod tests {
             expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
         let rendered = tokens.to_string();
 
-        assert!(
-            rendered
-                .contains("let __boltffi_result : Vec < Option < Timestamp > > = timeline () ;")
-        );
+        assert!(rendered.contains("let __boltffi_result = timeline () ;"));
         assert!(rendered.contains(". into_iter () . map (| value | value . map (| value | (timestamp_into_ffi) (& value))) . collect :: < Vec < _ >> ()"));
         assert!(
             rendered
@@ -6894,15 +6891,9 @@ mod tests {
             rendered.contains("async fn try_numbers (& self) -> Result < Vec < u8 > , String >")
         );
         assert!(rendered.contains("if state . status . is_err ()"));
-        assert!(rendered.contains(
-            ":: boltffi :: __private :: wire :: decode :: < u32 > (unsafe { __boltffi_result . as_byte_slice () })"
-        ));
-        assert!(rendered.contains(
-            ":: boltffi :: __private :: wire :: decode :: < Vec < u8 > > (unsafe { __boltffi_result . as_byte_slice () })"
-        ));
-        assert!(rendered.contains(
-            ":: boltffi :: __private :: wire :: decode :: < String > (unsafe { __boltffi_result . as_byte_slice () })"
-        ));
+        assert!(rendered.contains(":: boltffi :: __private :: wire :: decode :: < u32 >"));
+        assert!(rendered.contains(":: boltffi :: __private :: wire :: decode :: < Vec < u8 > >"));
+        assert!(rendered.contains(":: boltffi :: __private :: wire :: decode :: < String >"));
     }
 
     #[test]

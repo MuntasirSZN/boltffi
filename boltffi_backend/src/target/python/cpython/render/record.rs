@@ -1,7 +1,7 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
     DeclarationRef, DirectFieldDecl, DirectRecordDecl, EncodedRecordDecl, ExportedMethodDecl,
-    FieldKey, InitializerDecl, Native, NativeSymbol, Receive, RecordDecl, RecordId, TypeRef,
+    FieldKey, InitializerDecl, Native, NativeSymbol, RecordDecl, RecordId, TypeRef,
 };
 
 use crate::{
@@ -110,7 +110,8 @@ impl Record {
     }
 
     pub fn methods(&self) -> impl Iterator<Item = &ExtensionMethod> {
-        std::iter::once(&self.method).chain(self.callables.iter().map(function::Function::method))
+        std::iter::once(&self.method)
+            .chain(self.callables.iter().flat_map(function::Function::methods))
     }
 
     pub fn primitives(&self) -> Vec<primitive::Runtime> {
@@ -169,6 +170,12 @@ impl Record {
         self.callables
             .iter()
             .any(function::Function::has_raw_wire_argument)
+    }
+
+    pub fn uses_async_protocol(&self) -> bool {
+        self.callables
+            .iter()
+            .any(function::Function::uses_async_protocol)
     }
 
     fn from_direct(
@@ -240,27 +247,17 @@ impl Record {
         let initializers = record
             .initializers()
             .iter()
-            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| Self::initializer(initializer, symbols, bridge, context));
-        let methods = record
-            .methods()
-            .iter()
-            .filter(|method| {
-                function::Function::supports(method.callable())
-                    && !matches!(method.callable().receiver(), Some(Receive::ByMutRef))
-            })
-            .map(|method| {
-                let receiver = method
-                    .callable()
-                    .receiver()
-                    .map(|_| {
-                        argument::Conversion::direct_record_receiver(record.id(), bridge, context)
-                    })
-                    .transpose()?
-                    .into_iter()
-                    .collect();
-                Self::method(method, symbols, receiver, bridge, context)
-            });
+        let methods = record.methods().iter().map(|method| {
+            let receiver = method
+                .callable()
+                .receiver()
+                .map(|_| argument::Conversion::direct_record_receiver(record.id(), bridge, context))
+                .transpose()?
+                .into_iter()
+                .collect();
+            Self::method(method, symbols, receiver, bridge, context)
+        });
         initializers.chain(methods).collect()
     }
 
@@ -273,32 +270,24 @@ impl Record {
         let initializers = record
             .initializers()
             .iter()
-            .filter(|initializer| function::Function::supports(initializer.callable()))
             .map(|initializer| Self::initializer(initializer, symbols, bridge, context));
-        let methods = record
-            .methods()
-            .iter()
-            .filter(|method| {
-                function::Function::supports(method.callable())
-                    && !matches!(method.callable().receiver(), Some(Receive::ByMutRef))
-            })
-            .map(|method| {
-                let receiver = method
-                    .callable()
-                    .receiver()
-                    .map(|receive| {
-                        argument::Conversion::encoded_record_receiver(
-                            record.id(),
-                            receive,
-                            bridge,
-                            context,
-                        )
-                    })
-                    .transpose()?
-                    .into_iter()
-                    .collect();
-                Self::method(method, symbols, receiver, bridge, context)
-            });
+        let methods = record.methods().iter().map(|method| {
+            let receiver = method
+                .callable()
+                .receiver()
+                .map(|receive| {
+                    argument::Conversion::encoded_record_receiver(
+                        record.id(),
+                        receive,
+                        bridge,
+                        context,
+                    )
+                })
+                .transpose()?
+                .into_iter()
+                .collect();
+            Self::method(method, symbols, receiver, bridge, context)
+        });
         initializers.chain(methods).collect()
     }
 
