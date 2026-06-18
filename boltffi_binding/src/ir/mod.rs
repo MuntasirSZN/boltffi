@@ -91,10 +91,10 @@ mod types;
 
 pub use boltffi_ast::BuiltinType;
 pub use callable::{
-    CallableDecl, ClosureForm, ClosureParameter, ClosureRegistration, ClosureReturn, ErrorDecl,
-    ExecutionDecl, ExportedCallable, ImportedCallable, IncomingParam, OutgoingParam, ParamDecl,
-    ParamDirection, ParamPlan, ParamPlanRender, Receive, ReturnDecl, ReturnPlan, ReturnPlanRender,
-    ReturnValueSlot,
+    CallableDecl, ClosureForm, ClosureParameter, ClosureRegistration, ClosureReturn, ErrorChannel,
+    ErrorDecl, ErrorPlacement, ExecutionDecl, ExportedCallable, ImportedCallable, IncomingParam,
+    OutgoingParam, ParamDecl, ParamDirection, ParamPlan, ParamPlanRender, Receive, ReturnDecl,
+    ReturnPlan, ReturnPlanRender, ReturnValueSlot,
 };
 pub use codec::{CodecNode, CodecPlan, CodecRead, CodecWrite, ReadPlan, WritePlan};
 pub use contract::{

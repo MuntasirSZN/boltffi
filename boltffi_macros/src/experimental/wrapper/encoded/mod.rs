@@ -37,7 +37,7 @@ impl<'codec> RuntimeWireCodec<'codec> {
             | CodecNode::EncodedRecord(_)
             | CodecNode::CStyleEnum(_)
             | CodecNode::DataEnum(_)
-            | CodecNode::Custom(_)
+            | CodecNode::Custom { .. }
             | CodecNode::Builtin(_) => Ok(()),
             CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
                 self.require_supported_codec(inner)
@@ -65,7 +65,7 @@ impl<'codec> RuntimeWireCodec<'codec> {
             CodecNode::Primitive(Primitive::F32 | Primitive::F64) => Err(
                 Error::UnsupportedExpansion("floating-point encoded map key"),
             ),
-            CodecNode::Custom(_) => Err(Error::UnsupportedExpansion("custom encoded map key")),
+            CodecNode::Custom { .. } => Err(Error::UnsupportedExpansion("custom encoded map key")),
             CodecNode::Map { .. } => Err(Error::UnsupportedExpansion("nested encoded map key")),
             CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
                 self.require_supported_map_key(inner)

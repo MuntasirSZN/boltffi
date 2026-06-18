@@ -94,7 +94,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Incoming<'expansion, 'lowered, S> {
         value: TokenStream,
     ) -> Result<IncomingConversion, Error> {
         match codec {
-            CodecNode::Custom(id) => {
+            CodecNode::Custom { id, .. } => {
                 let custom = self.expansion.custom_type(*id)?;
                 let converter =
                     ConverterRenderer::new(custom.converters().try_from_ffi()).render()?;
@@ -303,7 +303,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Outgoing<'expansion, 'lowered, S> {
 
     fn convert_node(&self, codec: &CodecNode, value: TokenStream) -> Result<TokenStream, Error> {
         match codec {
-            CodecNode::Custom(id) => {
+            CodecNode::Custom { id, .. } => {
                 let custom = self.expansion.custom_type(*id)?;
                 let converter = ConverterRenderer::new(custom.converters().into_ffi()).render()?;
                 Ok(quote! { (#converter)(&#value) })
@@ -389,7 +389,7 @@ impl<'expansion, 'lowered, S: RenderSurface> BorrowedOutgoing<'expansion, 'lower
 
     fn convert_node(&self, codec: &CodecNode, value: TokenStream) -> Result<TokenStream, Error> {
         match codec {
-            CodecNode::Custom(id) => {
+            CodecNode::Custom { id, .. } => {
                 let custom = self.expansion.custom_type(*id)?;
                 let converter = ConverterRenderer::new(custom.converters().into_ffi()).render()?;
                 Ok(quote! { (#converter)(#value) })
@@ -556,7 +556,7 @@ fn representation_type<S: RenderSurface>(
                 &ty,
             )
         }
-        CodecNode::Custom(id) => {
+        CodecNode::Custom { id, .. } => {
             let custom = expansion.custom_type(*id)?;
             <wrapper::type_ref::Renderer as Render<S, &boltffi_binding::TypeRef>>::render(
                 wrapper::type_ref::Renderer,
@@ -649,7 +649,7 @@ fn contains_custom<S: RenderSurface>(
     expansion: &Expansion<'_, S>,
 ) -> Result<bool, Error> {
     match codec {
-        CodecNode::Custom(_) => Ok(true),
+        CodecNode::Custom { .. } => Ok(true),
         CodecNode::EncodedRecord(_) => Ok(false),
         CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
             contains_custom(inner, expansion)

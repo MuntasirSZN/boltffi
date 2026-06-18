@@ -1068,10 +1068,63 @@ pub enum ErrorDecl<S: Surface, D: Direction> {
     },
 }
 
+/// The error transport selected for one callable.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorChannel<'error, S: Surface, D: Direction> {
+    /// The callable has no error transport.
+    None,
+    /// The callable reports errors through a status value.
+    Status,
+    /// The callable reports errors through an encoded payload.
+    Encoded {
+        /// The slot used by the encoded payload.
+        placement: ErrorPlacement,
+        /// The source error type.
+        ty: &'error TypeRef,
+        /// The codec selected for the encoded payload.
+        codec: &'error D::Codec,
+        /// The buffer shape used by the payload.
+        shape: S::BufferShape,
+    },
+}
+
+/// Where an error value is transported in the C-facing call shape.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorPlacement {
+    /// The error uses the return slot.
+    ReturnSlot,
+    /// The error uses an out-pointer parameter.
+    OutPointer,
+}
+
 impl<S: Surface, D: Direction> ErrorDecl<S, D> {
     /// Builds the `None` variant.
     pub fn none() -> Self {
         Self::None(PhantomData)
+    }
+
+    /// Returns the selected error transport.
+    pub fn channel(&self) -> ErrorChannel<'_, S, D> {
+        match self {
+            Self::None(_) => ErrorChannel::None,
+            Self::StatusViaReturnSlot { .. } | Self::StatusViaOutPointer { .. } => {
+                ErrorChannel::Status
+            }
+            Self::EncodedViaReturnSlot { ty, codec, shape } => ErrorChannel::Encoded {
+                placement: ErrorPlacement::ReturnSlot,
+                ty,
+                codec,
+                shape: *shape,
+            },
+            Self::EncodedViaOutPointer { ty, codec, shape } => ErrorChannel::Encoded {
+                placement: ErrorPlacement::OutPointer,
+                ty,
+                codec,
+                shape: *shape,
+            },
+        }
     }
 
     pub(crate) const fn uses_return_slot(&self) -> bool {
