@@ -71,6 +71,16 @@ impl CapabilityStatus {
     pub const fn is_stable(self) -> bool {
         matches!(self, Self::Stable)
     }
+
+    /// Returns the diagnostic reason for this support state.
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::Stable => "supported",
+            Self::Experimental { reason }
+            | Self::InProgress { reason }
+            | Self::Unsupported { reason } => reason,
+        }
+    }
 }
 
 /// Capability table for one backend subject.
@@ -239,7 +249,8 @@ impl CapabilitySet<BridgeCapability> {
 }
 
 impl BindingCapability {
-    fn from_decl<S: Surface>(decl: &Decl<S>) -> Self {
+    /// Returns the host capability required by a declaration.
+    pub fn from_decl<S: Surface>(decl: &Decl<S>) -> Self {
         match DeclarationRef::from(decl) {
             DeclarationRef::Record(_) => Self::Records,
             DeclarationRef::Enum(_) => Self::Enums,

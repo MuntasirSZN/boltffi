@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use boltffi_backend::{CoverageMode, GeneratedOutput};
 use boltffi_bindgen::generate::{Generation, GenerationError};
 use boltffi_bindgen::target::Target;
 
@@ -99,13 +100,36 @@ fn write_python(
 ) -> Result<()> {
     Generation::new(manifest_path)
         .cargo_args(cargo_args)
+        .coverage_mode(CoverageMode::Partial)
         .python_module_name(config.python_module_name())
         .python_distribution_name(config.package.name.clone())
         .python_package_version(config.package_version())
         .python_native_library(artifact_name)
-        .write(Target::Python, &output_directory)
+        .render(Target::Python)
+        .and_then(|output| {
+            print_coverage(&output);
+            Generation::write_output(output, &output_directory)
+        })
         .map(drop)
         .map_err(generation_error)
+}
+
+fn print_coverage(output: &GeneratedOutput) {
+    let unsupported = output.coverage().unsupported();
+    if unsupported.is_empty() {
+        return;
+    }
+
+    eprintln!("python generation skipped unsupported declarations");
+    eprintln!("{:<12} {:<48} reason", "kind", "name");
+    unsupported.iter().for_each(|item| {
+        eprintln!(
+            "{:<12} {:<48} {}",
+            item.declaration().kind(),
+            item.declaration().name(),
+            item.reason()
+        );
+    });
 }
 
 fn generation_error(error: GenerationError) -> CliError {

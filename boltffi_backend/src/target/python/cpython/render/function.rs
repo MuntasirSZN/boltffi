@@ -282,7 +282,7 @@ impl SkippedFunction {
 
     fn render(self) -> Emitted {
         Emitted::diagnostic(Diagnostic::new(format!(
-            "python target skipped unsupported callable {}: {}",
+            "unsupported callable {}: {}",
             self.python_name, self.shape
         )))
     }

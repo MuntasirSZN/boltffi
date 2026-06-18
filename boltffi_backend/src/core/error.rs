@@ -32,6 +32,14 @@ pub enum BackendError {
         /// Support status advertised by the bridge contract.
         status: CapabilityStatus,
     },
+    /// Complete rendering was requested but some declarations were skipped.
+    #[error("backend `{target}` did not render every declaration: {reason}")]
+    IncompleteCoverage {
+        /// Backend target name.
+        target: &'static str,
+        /// First unsupported declaration summary.
+        reason: String,
+    },
     /// A generated file path was empty.
     #[error("generated file path cannot be empty")]
     EmptyFilePath,

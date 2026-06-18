@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use boltffi_backend::core::{bridge, host};
+use boltffi_backend::core::{CoverageMode, bridge, host};
 use boltffi_backend::target::python::PythonCExtHost;
 use boltffi_backend::{GeneratedOutput, Target as BackendTarget};
 use boltffi_binding::{BindingMetadataSurface, Bindings, Native, Surface};
@@ -22,6 +22,7 @@ use crate::target::Target;
 pub struct Generation {
     manifest_path: PathBuf,
     triple: Option<String>,
+    coverage: CoverageMode,
     cargo_args: Vec<String>,
     python_package_module: Option<String>,
     python_distribution_name: Option<String>,
@@ -35,6 +36,7 @@ impl Generation {
         Self {
             manifest_path: manifest_path.into(),
             triple: None,
+            coverage: CoverageMode::Complete,
             cargo_args: Vec::new(),
             python_package_module: None,
             python_distribution_name: None,
@@ -52,6 +54,12 @@ impl Generation {
     /// Passes Cargo build arguments to metadata generation.
     pub fn cargo_args(mut self, cargo_args: impl IntoIterator<Item = String>) -> Self {
         self.cargo_args = cargo_args.into_iter().collect();
+        self
+    }
+
+    /// Sets how unsupported backend declarations are handled.
+    pub fn coverage_mode(mut self, coverage: CoverageMode) -> Self {
+        self.coverage = coverage;
         self
     }
 
@@ -101,7 +109,7 @@ impl Generation {
         output_dir: &Path,
     ) -> Result<Vec<PathBuf>, GenerationError> {
         let output = self.render(target)?;
-        self.write_output(output, output_dir)
+        Self::write_output(output, output_dir)
     }
 
     fn render_python(&self) -> Result<GeneratedOutput, GenerationError> {
@@ -122,7 +130,9 @@ impl Generation {
         H: host::HostBackend<Bridge = S::Contract, Surface = S::Surface>,
         S: bridge::BridgeStack,
     {
-        target.render(bindings).map_err(GenerationError::Render)
+        target
+            .render_with_coverage(bindings, self.coverage)
+            .map_err(GenerationError::Render)
     }
 
     fn python_host(&self) -> Result<PythonCExtHost, GenerationError> {
@@ -144,8 +154,8 @@ impl Generation {
         Ok(host.version(self.python_package_version.clone()))
     }
 
-    fn write_output(
-        &self,
+    /// Writes generated output to a directory.
+    pub fn write_output(
         output: GeneratedOutput,
         output_dir: &Path,
     ) -> Result<Vec<PathBuf>, GenerationError> {
