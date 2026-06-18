@@ -93,7 +93,7 @@ struct AsyncFunction {
 }
 
 enum Body {
-    Sync(SyncFunction),
+    Sync(Box<SyncFunction>),
     Async(Box<AsyncFunction>),
     Skipped(SkippedFunction),
 }
@@ -136,6 +136,7 @@ impl Function {
                 bridge,
                 context,
             )
+            .map(Box::new)
             .map(Body::Sync)
             .map(|body| Self { body }),
             ExecutionDecl::Asynchronous(native::AsyncProtocol::PollHandle {
