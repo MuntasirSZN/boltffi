@@ -1,17 +1,15 @@
-use boltffi_ast::{MapKind, TypeExpr};
+use std::marker::PhantomData;
+
 use boltffi_binding::{
-    CodecNode, CustomConverterPath, CustomConverterPathRoot, CustomTypeConverter,
+    BuiltinType, CallbackId, ClassId, CodecNode, CodecRead, CustomConverterPath,
+    CustomConverterPathRoot, CustomTypeConverter, CustomTypeId, ElementCount, EnumId, MapKind, Op,
+    Primitive, RecordId,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, ExprPath, Index, parse_str};
 
-use crate::experimental::{
-    error::Error,
-    expansion::Expansion,
-    surface::RenderSurface,
-    wrapper::{self, Render},
-};
+use crate::experimental::{error::Error, expansion::Expansion, surface::RenderSurface, wrapper};
 
 pub struct Incoming<'expansion, 'lowered, S: RenderSurface> {
     codec: &'lowered CodecNode,
@@ -34,12 +32,66 @@ pub struct IncomingConversion {
     changed: bool,
 }
 
+struct IncomingConverter<'expansion, 'lowered, S: RenderSurface> {
+    expansion: &'expansion Expansion<'lowered, S>,
+}
+
+struct OutgoingConverter<'expansion, 'lowered, S: RenderSurface, M> {
+    expansion: &'expansion Expansion<'lowered, S>,
+    mode: PhantomData<M>,
+}
+
+struct IncomingTransform {
+    tokens: TokenStream,
+    fallible: bool,
+    changed: bool,
+}
+
+enum OutgoingTransform {
+    Identity,
+    ReferenceConverter(TokenStream),
+    ValueConverter(TokenStream),
+    Optional(Box<OutgoingTransform>),
+    Sequence(Box<OutgoingTransform>),
+    Tuple(Vec<OutgoingTransform>),
+    Result {
+        ok: Box<OutgoingTransform>,
+        err: Box<OutgoingTransform>,
+    },
+    Map {
+        key: Box<OutgoingTransform>,
+        value: Box<OutgoingTransform>,
+    },
+    CustomRepresentation {
+        custom: Box<OutgoingTransform>,
+        representation: Box<OutgoingTransform>,
+    },
+}
+
+struct OwnedValue;
+
+struct BorrowedValue;
+
 struct ConverterRenderer<'lowered> {
     converter: &'lowered CustomTypeConverter,
 }
 
 struct PathRenderer<'lowered> {
     path: &'lowered CustomConverterPath,
+}
+
+struct RepresentationType;
+
+trait OutgoingMode {
+    fn custom(converter: TokenStream) -> OutgoingTransform;
+
+    fn optional(value: TokenStream, inner: TokenStream) -> TokenStream;
+
+    fn sequence(value: TokenStream, element: TokenStream) -> TokenStream;
+
+    fn tuple_field(value: TokenStream, index: Index) -> TokenStream;
+
+    fn map(value: TokenStream, key: TokenStream, item: TokenStream) -> TokenStream;
 }
 
 impl IncomingConversion {
@@ -69,6 +121,189 @@ impl IncomingConversion {
     }
 }
 
+impl IncomingTransform {
+    fn identity() -> Self {
+        Self {
+            tokens: TokenStream::new(),
+            fallible: false,
+            changed: false,
+        }
+    }
+
+    fn new(tokens: TokenStream, fallible: bool, changed: bool) -> Self {
+        Self {
+            tokens,
+            fallible,
+            changed,
+        }
+    }
+
+    fn apply(&self, value: TokenStream) -> IncomingConversion {
+        match self.changed {
+            true => IncomingConversion {
+                tokens: {
+                    let tokens = &self.tokens;
+                    quote! { (#tokens)(#value) }
+                },
+                fallible: self.fallible,
+                changed: true,
+            },
+            false => IncomingConversion {
+                tokens: value,
+                fallible: false,
+                changed: false,
+            },
+        }
+    }
+
+    fn value_or_return_error(&self, value: TokenStream) -> TokenStream {
+        self.apply(value).value_or_return_error()
+    }
+}
+
+impl OutgoingTransform {
+    fn changed(&self) -> bool {
+        !matches!(self, Self::Identity)
+    }
+
+    fn apply<M>(&self, value: TokenStream) -> TokenStream
+    where
+        M: OutgoingMode,
+    {
+        match self {
+            Self::Identity => value,
+            Self::ReferenceConverter(converter) => quote! { (#converter)(&#value) },
+            Self::ValueConverter(converter) => quote! { (#converter)(#value) },
+            Self::Optional(inner) => {
+                let inner = inner.apply::<M>(quote! { value });
+                M::optional(value, inner)
+            }
+            Self::Sequence(element) => {
+                let element = element.apply::<M>(quote! { value });
+                M::sequence(value, element)
+            }
+            Self::Tuple(elements) => {
+                let values = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        let field = M::tuple_field(value.clone(), Index::from(index));
+                        element.apply::<M>(field)
+                    })
+                    .collect::<Vec<_>>();
+                quote! { (#(#values,)*) }
+            }
+            Self::Result { ok, err } => {
+                let ok = ok.apply::<M>(quote! { value });
+                let err = err.apply::<M>(quote! { error });
+                quote! {
+                    match #value {
+                        Ok(value) => Ok(#ok),
+                        Err(error) => Err(#err),
+                    }
+                }
+            }
+            Self::Map { key, value: item } => {
+                let key = key.apply::<M>(quote! { key });
+                let item = item.apply::<M>(quote! { value });
+                M::map(value, key, item)
+            }
+            Self::CustomRepresentation {
+                custom,
+                representation,
+            } => {
+                let custom = custom.apply::<M>(value);
+                let representation = representation.apply::<M>(quote! { __boltffi_representation });
+                quote! {
+                    {
+                        let __boltffi_representation = #custom;
+                        #representation
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'expansion, 'lowered, S: RenderSurface> IncomingConverter<'expansion, 'lowered, S> {
+    fn new(expansion: &'expansion Expansion<'lowered, S>) -> Self {
+        Self { expansion }
+    }
+}
+
+impl<'expansion, 'lowered, S: RenderSurface, M> OutgoingConverter<'expansion, 'lowered, S, M> {
+    fn new(expansion: &'expansion Expansion<'lowered, S>) -> Self {
+        Self {
+            expansion,
+            mode: PhantomData,
+        }
+    }
+}
+
+impl OutgoingMode for OwnedValue {
+    fn custom(converter: TokenStream) -> OutgoingTransform {
+        OutgoingTransform::ReferenceConverter(converter)
+    }
+
+    fn optional(value: TokenStream, inner: TokenStream) -> TokenStream {
+        quote! { #value.map(|value| #inner) }
+    }
+
+    fn sequence(value: TokenStream, element: TokenStream) -> TokenStream {
+        quote! {
+            #value
+                .into_iter()
+                .map(|value| #element)
+                .collect::<Vec<_>>()
+        }
+    }
+
+    fn tuple_field(value: TokenStream, index: Index) -> TokenStream {
+        quote! { (#value).#index }
+    }
+
+    fn map(value: TokenStream, key: TokenStream, item: TokenStream) -> TokenStream {
+        quote! {
+            #value
+                .into_iter()
+                .map(|(key, value)| (#key, #item))
+                .collect::<Vec<_>>()
+        }
+    }
+}
+
+impl OutgoingMode for BorrowedValue {
+    fn custom(converter: TokenStream) -> OutgoingTransform {
+        OutgoingTransform::ValueConverter(converter)
+    }
+
+    fn optional(value: TokenStream, inner: TokenStream) -> TokenStream {
+        quote! { #value.as_ref().map(|value| #inner) }
+    }
+
+    fn sequence(value: TokenStream, element: TokenStream) -> TokenStream {
+        quote! {
+            #value
+                .iter()
+                .map(|value| #element)
+                .collect::<Vec<_>>()
+        }
+    }
+
+    fn tuple_field(value: TokenStream, index: Index) -> TokenStream {
+        quote! { &(#value).#index }
+    }
+
+    fn map(value: TokenStream, key: TokenStream, item: TokenStream) -> TokenStream {
+        quote! {
+            #value
+                .iter()
+                .map(|(key, value)| (#key, #item))
+                .collect::<Vec<_>>()
+        }
+    }
+}
+
 impl<'expansion, 'lowered, S: RenderSurface> Incoming<'expansion, 'lowered, S> {
     pub const fn new(
         codec: &'lowered CodecNode,
@@ -78,210 +313,399 @@ impl<'expansion, 'lowered, S: RenderSurface> Incoming<'expansion, 'lowered, S> {
     }
 
     pub fn convert(&self, value: TokenStream) -> Result<IncomingConversion, Error> {
-        self.convert_node(self.codec, value)
+        let transform = self
+            .codec
+            .render_read_with(&mut IncomingConverter::new(self.expansion))?;
+        Ok(transform.apply(value))
     }
 
-    pub fn decoded_type(&self, source: &TypeExpr) -> Result<Option<TokenStream>, Error> {
-        match contains_custom(self.codec, self.expansion)? {
-            true => representation_type(self.codec, source, self.expansion).map(Some),
+    pub fn decoded_type(&self) -> Result<Option<TokenStream>, Error> {
+        match self.codec.contains_custom() {
+            true => self
+                .codec
+                .render_read_with(&mut RepresentationType)
+                .map(Some),
             false => Ok(None),
         }
     }
+}
 
-    fn convert_node(
-        &self,
-        codec: &CodecNode,
-        value: TokenStream,
-    ) -> Result<IncomingConversion, Error> {
-        match codec {
-            CodecNode::Custom { id, .. } => {
-                let custom = self.expansion.custom_type(*id)?;
-                let converter =
-                    ConverterRenderer::new(custom.converters().try_from_ffi()).render()?;
-                Ok(IncomingConversion {
-                    tokens: quote! { (#converter)(#value) },
-                    fallible: true,
-                    changed: true,
+impl<S: RenderSurface> CodecRead for IncomingConverter<'_, '_, S> {
+    type Expr = Result<IncomingTransform, Error>;
+
+    fn primitive(&mut self, _: Primitive) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn string(&mut self) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn bytes(&mut self) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn direct_record(&mut self, _: RecordId) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn encoded_record(&mut self, _: RecordId) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn c_style_enum(&mut self, _: EnumId) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn data_enum(&mut self, _: EnumId) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn class_handle(&mut self, _: ClassId) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn callback_handle(&mut self, _: CallbackId) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn custom(&mut self, id: CustomTypeId, representation: Self::Expr) -> Self::Expr {
+        let representation = representation?;
+        let custom = self.expansion.custom_type(id)?;
+        let converter = ConverterRenderer::new(custom.converters().try_from_ffi()).render()?;
+        if !representation.changed {
+            return Ok(IncomingTransform::new(converter, true, true));
+        }
+        let representation_value = representation.value_or_return_error(quote! { __boltffi_value });
+        Ok(IncomingTransform::new(
+            quote! {
+                |__boltffi_value| {
+                    let __boltffi_representation = #representation_value;
+                    (#converter)(__boltffi_representation)
+                }
+            },
+            true,
+            true,
+        ))
+    }
+
+    fn builtin(&mut self, _: BuiltinType) -> Self::Expr {
+        Ok(IncomingTransform::identity())
+    }
+
+    fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
+        let inner = inner?;
+        match inner.changed {
+            true => {
+                let inner = inner.apply(quote! { value });
+                let inner_tokens = inner.tokens();
+                Ok(match inner.fallible {
+                    true => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                match __boltffi_value {
+                                    Some(value) => #inner_tokens.map(Some),
+                                    None => Ok(None),
+                                }
+                            }
+                        },
+                        true,
+                        true,
+                    ),
+                    false => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                __boltffi_value.map(|value| #inner_tokens)
+                            }
+                        },
+                        false,
+                        true,
+                    ),
                 })
             }
-            CodecNode::Optional(inner) => self.convert_optional(inner, value),
-            CodecNode::Sequence { element, .. } => self.convert_sequence(element, value),
-            CodecNode::Result { ok, err } => self.convert_result(ok, err, value),
-            CodecNode::EncodedRecord(_) => Ok(IncomingConversion {
-                tokens: value,
-                fallible: false,
-                changed: false,
-            }),
-            CodecNode::Tuple(elements) => self.convert_tuple(elements, value),
-            CodecNode::Map { key, value: item } => self.convert_map(key, item, value),
-            _ => Ok(IncomingConversion {
-                tokens: value,
-                fallible: false,
-                changed: false,
-            }),
+            false => Ok(IncomingTransform::identity()),
         }
     }
 
-    fn convert_optional(
-        &self,
-        inner: &CodecNode,
-        value: TokenStream,
-    ) -> Result<IncomingConversion, Error> {
-        let inner = self.convert_node(inner, quote! { value })?;
-        let inner_tokens = inner.tokens();
-        Ok(match inner.fallible {
-            true => IncomingConversion {
-                tokens: quote! {
-                    match #value {
-                        Some(value) => #inner_tokens.map(Some),
-                        None => Ok(None),
+    fn sequence(&mut self, _: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {
+        let element = element?;
+        match element.changed {
+            true => {
+                let element = element.apply(quote! { value });
+                let element_tokens = element.tokens();
+                Ok(match element.fallible {
+                    true => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                __boltffi_value
+                                    .into_iter()
+                                    .map(|value| #element_tokens)
+                                    .collect::<Result<Vec<_>, _>>()
+                            }
+                        },
+                        true,
+                        true,
+                    ),
+                    false => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                __boltffi_value
+                                    .into_iter()
+                                    .map(|value| #element_tokens)
+                                    .collect::<Vec<_>>()
+                            }
+                        },
+                        false,
+                        true,
+                    ),
+                })
+            }
+            false => Ok(IncomingTransform::identity()),
+        }
+    }
+
+    fn tuple(&mut self, elements: Vec<Self::Expr>) -> Self::Expr {
+        let elements = elements.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let changed = elements.iter().any(|element| element.changed);
+        let fallible = elements.iter().any(|element| element.fallible);
+        match changed {
+            true => {
+                let values = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        let index = Index::from(index);
+                        element.value_or_return_error(quote! { (__boltffi_value).#index })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(match fallible {
+                    true => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                Ok((#(#values,)*))
+                            }
+                        },
+                        true,
+                        true,
+                    ),
+                    false => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                (#(#values,)*)
+                            }
+                        },
+                        false,
+                        true,
+                    ),
+                })
+            }
+            false => Ok(IncomingTransform::identity()),
+        }
+    }
+
+    fn result(&mut self, ok: Self::Expr, err: Self::Expr) -> Self::Expr {
+        let ok = ok?;
+        let err = err?;
+        let changed = ok.changed || err.changed;
+        let fallible = ok.fallible || err.fallible;
+        match changed {
+            true => {
+                let ok = ok.apply(quote! { value });
+                let err = err.apply(quote! { error });
+                let ok_tokens = ok.tokens();
+                let err_tokens = err.tokens();
+                let ok_arm = match ok.fallible {
+                    true => quote! { #ok_tokens.map(Ok) },
+                    false => quote! { Ok(#ok_tokens) },
+                };
+                let err_arm = match err.fallible {
+                    true => quote! { #err_tokens.map(Err) },
+                    false => quote! { Err(#err_tokens) },
+                };
+                let tokens = match fallible {
+                    true => {
+                        let ok_arm = match ok.fallible {
+                            true => ok_arm,
+                            false => quote! { Ok(#ok_arm) },
+                        };
+                        let err_arm = match err.fallible {
+                            true => err_arm,
+                            false => quote! { Ok(#err_arm) },
+                        };
+                        quote! {
+                            |__boltffi_value| {
+                                match __boltffi_value {
+                                    Ok(value) => #ok_arm,
+                                    Err(error) => #err_arm,
+                                }
+                            }
+                        }
                     }
-                },
-                fallible: true,
-                changed: true,
-            },
-            false => IncomingConversion {
-                tokens: quote! { #value.map(|value| #inner_tokens) },
-                fallible: false,
-                changed: inner.changed,
-            },
-        })
+                    false => quote! {
+                        |__boltffi_value| {
+                            match __boltffi_value {
+                                Ok(value) => #ok_arm,
+                                Err(error) => #err_arm,
+                            }
+                        }
+                    },
+                };
+                Ok(IncomingTransform::new(tokens, fallible, true))
+            }
+            false => Ok(IncomingTransform::identity()),
+        }
     }
 
-    fn convert_sequence(
-        &self,
-        element: &CodecNode,
-        value: TokenStream,
-    ) -> Result<IncomingConversion, Error> {
-        let element = self.convert_node(element, quote! { value })?;
-        let element_tokens = element.tokens();
-        Ok(match element.fallible {
-            true => IncomingConversion {
-                tokens: quote! {
-                    #value
-                        .into_iter()
-                        .map(|value| #element_tokens)
-                        .collect::<Result<Vec<_>, _>>()
-                },
-                fallible: true,
-                changed: true,
-            },
-            false => IncomingConversion {
-                tokens: quote! {
-                    #value
-                        .into_iter()
-                        .map(|value| #element_tokens)
-                        .collect::<Vec<_>>()
-                },
-                fallible: false,
-                changed: element.changed,
-            },
-        })
+    fn map(&mut self, _: MapKind, key: Self::Expr, value: Self::Expr) -> Self::Expr {
+        let key = key?;
+        let value = value?;
+        let changed = key.changed || value.changed;
+        let fallible = key.fallible || value.fallible;
+        match changed {
+            true => {
+                let key = key.value_or_return_error(quote! { key });
+                let value = value.value_or_return_error(quote! { value });
+                Ok(match fallible {
+                    true => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                __boltffi_value
+                                    .into_iter()
+                                    .map(|(key, value)| {
+                                        Ok((#key, #value))
+                                    })
+                                    .collect::<Result<_, _>>()
+                            }
+                        },
+                        true,
+                        true,
+                    ),
+                    false => IncomingTransform::new(
+                        quote! {
+                            |__boltffi_value| {
+                                __boltffi_value
+                                    .into_iter()
+                                    .map(|(key, value)| (#key, #value))
+                                    .collect::<_>()
+                            }
+                        },
+                        false,
+                        true,
+                    ),
+                })
+            }
+            false => Ok(IncomingTransform::identity()),
+        }
+    }
+}
+
+impl<S, M> CodecRead for OutgoingConverter<'_, '_, S, M>
+where
+    S: RenderSurface,
+    M: OutgoingMode,
+{
+    type Expr = Result<OutgoingTransform, Error>;
+
+    fn primitive(&mut self, _: Primitive) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
     }
 
-    fn convert_result(
-        &self,
-        ok: &CodecNode,
-        err: &CodecNode,
-        value: TokenStream,
-    ) -> Result<IncomingConversion, Error> {
-        let ok = self.convert_node(ok, quote! { value })?;
-        let err = self.convert_node(err, quote! { error })?;
-        let ok_tokens = ok.tokens();
-        let err_tokens = err.tokens();
-        let ok_arm = match ok.fallible {
-            true => quote! { #ok_tokens.map(Ok) },
-            false => quote! { Ok(Ok(#ok_tokens)) },
-        };
-        let err_arm = match err.fallible {
-            true => quote! { #err_tokens.map(Err) },
-            false => quote! { Ok(Err(#err_tokens)) },
-        };
-        Ok(IncomingConversion {
-            tokens: quote! {
-                match #value {
-                    Ok(value) => #ok_arm,
-                    Err(error) => #err_arm,
-                }
-            },
-            fallible: ok.fallible || err.fallible,
-            changed: ok.changed || err.changed,
-        })
+    fn string(&mut self) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
     }
 
-    fn convert_tuple(
-        &self,
-        elements: &[CodecNode],
-        value: TokenStream,
-    ) -> Result<IncomingConversion, Error> {
-        let elements = elements
-            .iter()
-            .enumerate()
-            .map(|(index, element)| {
-                let index = Index::from(index);
-                self.convert_node(element, quote! { (#value).#index })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let fallible = elements.iter().any(IncomingConversion::fallible);
-        let changed = elements.iter().any(IncomingConversion::changed);
-        let values = elements
-            .iter()
-            .map(IncomingConversion::value_or_return_error)
-            .collect::<Vec<_>>();
-        Ok(match fallible {
-            true => IncomingConversion {
-                tokens: quote! {
-                    (|| {
-                        Ok((#(#values,)*))
-                    })()
-                },
-                fallible: true,
-                changed,
-            },
-            false => IncomingConversion {
-                tokens: quote! { (#(#values,)*) },
-                fallible: false,
-                changed,
-            },
-        })
+    fn bytes(&mut self) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
     }
 
-    fn convert_map(
-        &self,
-        key: &CodecNode,
-        item: &CodecNode,
-        value: TokenStream,
-    ) -> Result<IncomingConversion, Error> {
-        let key = self.convert_node(key, quote! { key })?;
-        let item = self.convert_node(item, quote! { value })?;
-        let key_value = key.value_or_return_error();
-        let item_value = item.value_or_return_error();
-        let fallible = key.fallible() || item.fallible();
-        let changed = key.changed() || item.changed();
-        Ok(match fallible {
-            true => IncomingConversion {
-                tokens: quote! {
-                    #value
-                        .into_iter()
-                        .map(|(key, value)| {
-                            Ok((#key_value, #item_value))
-                        })
-                        .collect::<Result<_, _>>()
-                },
-                fallible: true,
-                changed,
-            },
-            false => IncomingConversion {
-                tokens: quote! {
-                    #value
-                        .into_iter()
-                        .map(|(key, value)| (#key_value, #item_value))
-                        .collect::<_>()
-                },
-                fallible: false,
-                changed,
-            },
-        })
+    fn direct_record(&mut self, _: RecordId) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
+    }
+
+    fn encoded_record(&mut self, _: RecordId) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
+    }
+
+    fn c_style_enum(&mut self, _: EnumId) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
+    }
+
+    fn data_enum(&mut self, _: EnumId) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
+    }
+
+    fn class_handle(&mut self, _: ClassId) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
+    }
+
+    fn callback_handle(&mut self, _: CallbackId) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
+    }
+
+    fn custom(&mut self, id: CustomTypeId, representation: Self::Expr) -> Self::Expr {
+        let representation = representation?;
+        let custom = self.expansion.custom_type(id)?;
+        let converter = ConverterRenderer::new(custom.converters().into_ffi()).render()?;
+        let custom = M::custom(converter);
+        match representation.changed() {
+            true => Ok(OutgoingTransform::CustomRepresentation {
+                custom: Box::new(custom),
+                representation: Box::new(representation),
+            }),
+            false => Ok(custom),
+        }
+    }
+
+    fn builtin(&mut self, _: BuiltinType) -> Self::Expr {
+        Ok(OutgoingTransform::Identity)
+    }
+
+    fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
+        let inner = inner?;
+        match inner.changed() {
+            true => Ok(OutgoingTransform::Optional(Box::new(inner))),
+            false => Ok(OutgoingTransform::Identity),
+        }
+    }
+
+    fn sequence(&mut self, _: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {
+        let element = element?;
+        match element.changed() {
+            true => Ok(OutgoingTransform::Sequence(Box::new(element))),
+            false => Ok(OutgoingTransform::Identity),
+        }
+    }
+
+    fn tuple(&mut self, elements: Vec<Self::Expr>) -> Self::Expr {
+        let elements = elements.into_iter().collect::<Result<Vec<_>, _>>()?;
+        match elements.iter().any(OutgoingTransform::changed) {
+            true => Ok(OutgoingTransform::Tuple(elements)),
+            false => Ok(OutgoingTransform::Identity),
+        }
+    }
+
+    fn result(&mut self, ok: Self::Expr, err: Self::Expr) -> Self::Expr {
+        let ok = ok?;
+        let err = err?;
+        match ok.changed() || err.changed() {
+            true => Ok(OutgoingTransform::Result {
+                ok: Box::new(ok),
+                err: Box::new(err),
+            }),
+            false => Ok(OutgoingTransform::Identity),
+        }
+    }
+
+    fn map(&mut self, _: MapKind, key: Self::Expr, value: Self::Expr) -> Self::Expr {
+        let key = key?;
+        let value = value?;
+        match key.changed() || value.changed() {
+            true => Ok(OutgoingTransform::Map {
+                key: Box::new(key),
+                value: Box::new(value),
+            }),
+            false => Ok(OutgoingTransform::Identity),
+        }
     }
 }
 
@@ -293,81 +717,15 @@ impl<'expansion, 'lowered, S: RenderSurface> Outgoing<'expansion, 'lowered, S> {
         Self { codec, expansion }
     }
 
-    pub fn has_custom_conversion(&self) -> Result<bool, Error> {
-        contains_custom(self.codec, self.expansion)
+    pub fn has_custom_conversion(&self) -> bool {
+        self.codec.contains_custom()
     }
 
     pub fn convert(&self, value: TokenStream) -> Result<TokenStream, Error> {
-        self.convert_node(self.codec, value)
-    }
-
-    fn convert_node(&self, codec: &CodecNode, value: TokenStream) -> Result<TokenStream, Error> {
-        match codec {
-            CodecNode::Custom { id, .. } => {
-                let custom = self.expansion.custom_type(*id)?;
-                let converter = ConverterRenderer::new(custom.converters().into_ffi()).render()?;
-                Ok(quote! { (#converter)(&#value) })
-            }
-            CodecNode::Optional(inner) => {
-                let inner = self.convert_node(inner, quote! { value })?;
-                Ok(quote! { #value.map(|value| #inner) })
-            }
-            CodecNode::Sequence { element, .. } => {
-                let element = self.convert_node(element, quote! { value })?;
-                Ok(quote! {
-                    #value
-                        .into_iter()
-                        .map(|value| #element)
-                        .collect::<Vec<_>>()
-                })
-            }
-            CodecNode::Result { ok, err } => {
-                let ok = self.convert_node(ok, quote! { value })?;
-                let err = self.convert_node(err, quote! { error })?;
-                Ok(quote! {
-                    match #value {
-                        Ok(value) => Ok(#ok),
-                        Err(error) => Err(#err),
-                    }
-                })
-            }
-            CodecNode::EncodedRecord(_) => Ok(value),
-            CodecNode::Tuple(elements) => self.convert_tuple(elements, value),
-            CodecNode::Map { key, value: item } => self.convert_map(key, item, value),
-            _ => Ok(value),
-        }
-    }
-
-    fn convert_tuple(
-        &self,
-        elements: &[CodecNode],
-        value: TokenStream,
-    ) -> Result<TokenStream, Error> {
-        let values = elements
-            .iter()
-            .enumerate()
-            .map(|(index, element)| {
-                let index = Index::from(index);
-                self.convert_node(element, quote! { (#value).#index })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(quote! { (#(#values,)*) })
-    }
-
-    fn convert_map(
-        &self,
-        key: &CodecNode,
-        item: &CodecNode,
-        value: TokenStream,
-    ) -> Result<TokenStream, Error> {
-        let key = self.convert_node(key, quote! { key })?;
-        let item = self.convert_node(item, quote! { value })?;
-        Ok(quote! {
-            #value
-                .into_iter()
-                .map(|(key, value)| (#key, #item))
-                .collect::<Vec<_>>()
-        })
+        let transform = self
+            .codec
+            .render_read_with(&mut OutgoingConverter::<S, OwnedValue>::new(self.expansion))?;
+        Ok(transform.apply::<OwnedValue>(value))
     }
 }
 
@@ -379,81 +737,17 @@ impl<'expansion, 'lowered, S: RenderSurface> BorrowedOutgoing<'expansion, 'lower
         Self { codec, expansion }
     }
 
-    pub fn has_custom_conversion(&self) -> Result<bool, Error> {
-        contains_custom(self.codec, self.expansion)
+    pub fn has_custom_conversion(&self) -> bool {
+        self.codec.contains_custom()
     }
 
     pub fn convert(&self, value: TokenStream) -> Result<TokenStream, Error> {
-        self.convert_node(self.codec, value)
-    }
-
-    fn convert_node(&self, codec: &CodecNode, value: TokenStream) -> Result<TokenStream, Error> {
-        match codec {
-            CodecNode::Custom { id, .. } => {
-                let custom = self.expansion.custom_type(*id)?;
-                let converter = ConverterRenderer::new(custom.converters().into_ffi()).render()?;
-                Ok(quote! { (#converter)(#value) })
-            }
-            CodecNode::Optional(inner) => {
-                let inner = self.convert_node(inner, quote! { value })?;
-                Ok(quote! { #value.as_ref().map(|value| #inner) })
-            }
-            CodecNode::Sequence { element, .. } => {
-                let element = self.convert_node(element, quote! { value })?;
-                Ok(quote! {
-                    #value
-                        .iter()
-                        .map(|value| #element)
-                        .collect::<Vec<_>>()
-                })
-            }
-            CodecNode::Result { ok, err } => {
-                let ok = self.convert_node(ok, quote! { value })?;
-                let err = self.convert_node(err, quote! { error })?;
-                Ok(quote! {
-                    match #value {
-                        Ok(value) => Ok(#ok),
-                        Err(error) => Err(#err),
-                    }
-                })
-            }
-            CodecNode::EncodedRecord(_) => Ok(value),
-            CodecNode::Tuple(elements) => self.convert_tuple(elements, value),
-            CodecNode::Map { key, value: item } => self.convert_map(key, item, value),
-            _ => Ok(value),
-        }
-    }
-
-    fn convert_tuple(
-        &self,
-        elements: &[CodecNode],
-        value: TokenStream,
-    ) -> Result<TokenStream, Error> {
-        let values = elements
-            .iter()
-            .enumerate()
-            .map(|(index, element)| {
-                let index = Index::from(index);
-                self.convert_node(element, quote! { &(#value).#index })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(quote! { (#(#values,)*) })
-    }
-
-    fn convert_map(
-        &self,
-        key: &CodecNode,
-        item: &CodecNode,
-        value: TokenStream,
-    ) -> Result<TokenStream, Error> {
-        let key = self.convert_node(key, quote! { key })?;
-        let item = self.convert_node(item, quote! { value })?;
-        Ok(quote! {
-            #value
-                .iter()
-                .map(|(key, value)| (#key, #item))
-                .collect::<Vec<_>>()
-        })
+        let transform =
+            self.codec
+                .render_read_with(&mut OutgoingConverter::<S, BorrowedValue>::new(
+                    self.expansion,
+                ))?;
+        Ok(transform.apply::<BorrowedValue>(value))
     }
 }
 
@@ -534,142 +828,90 @@ impl<'lowered> PathRenderer<'lowered> {
     }
 }
 
-fn representation_type<S: RenderSurface>(
-    codec: &CodecNode,
-    source: &TypeExpr,
-    expansion: &Expansion<'_, S>,
-) -> Result<TokenStream, Error> {
-    match codec {
-        CodecNode::Primitive(primitive) => {
-            let ty = boltffi_binding::TypeRef::Primitive(*primitive);
-            <wrapper::type_ref::Renderer as Render<S, &boltffi_binding::TypeRef>>::render(
-                wrapper::type_ref::Renderer,
-                &ty,
-            )
-        }
-        CodecNode::String => Ok(quote! { String }),
-        CodecNode::Bytes => Ok(quote! { Vec<u8> }),
-        CodecNode::Builtin(kind) => {
-            let ty = boltffi_binding::TypeRef::Builtin(*kind);
-            <wrapper::type_ref::Renderer as Render<S, &boltffi_binding::TypeRef>>::render(
-                wrapper::type_ref::Renderer,
-                &ty,
-            )
-        }
-        CodecNode::Custom { id, .. } => {
-            let custom = expansion.custom_type(*id)?;
-            <wrapper::type_ref::Renderer as Render<S, &boltffi_binding::TypeRef>>::render(
-                wrapper::type_ref::Renderer,
-                custom.representation(),
-            )
-        }
-        CodecNode::Optional(inner) => {
-            let TypeExpr::Option(source) = source else {
-                return Err(Error::SourceSyntaxMismatch(
-                    "optional codec does not match source type",
-                ));
-            };
-            let inner = representation_type(inner, source, expansion)?;
-            Ok(quote! { Option<#inner> })
-        }
-        CodecNode::Sequence { element, .. } => {
-            let source = match source {
-                TypeExpr::Vec(element) | TypeExpr::Slice(element) => element.as_ref(),
-                _ => {
-                    return Err(Error::SourceSyntaxMismatch(
-                        "sequence codec does not match source type",
-                    ));
-                }
-            };
-            let element = representation_type(element, source, expansion)?;
-            Ok(quote! { Vec<#element> })
-        }
-        CodecNode::Result { ok, err } => {
-            let TypeExpr::Result {
-                ok: source_ok,
-                err: source_err,
-            } = source
-            else {
-                return Err(Error::SourceSyntaxMismatch(
-                    "result codec does not match source type",
-                ));
-            };
-            let ok = representation_type(ok, source_ok, expansion)?;
-            let err = representation_type(err, source_err, expansion)?;
-            Ok(quote! { Result<#ok, #err> })
-        }
-        CodecNode::Tuple(elements) => {
-            let TypeExpr::Tuple(source_elements) = source else {
-                return Err(Error::SourceSyntaxMismatch(
-                    "tuple codec does not match source type",
-                ));
-            };
-            if elements.len() != source_elements.len() {
-                return Err(Error::SourceSyntaxMismatch(
-                    "tuple codec arity does not match source type",
-                ));
-            }
-            let elements = elements
-                .iter()
-                .zip(source_elements)
-                .map(|(element, source)| representation_type(element, source, expansion))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(quote! { (#(#elements,)*) })
-        }
-        CodecNode::Map { key, value } => {
-            if contains_custom(key, expansion)? {
-                return Err(Error::UnsupportedExpansion("custom encoded map key"));
-            }
-            let TypeExpr::Map {
-                kind,
-                key: source_key,
-                value: source_value,
-            } = source
-            else {
-                return Err(Error::SourceSyntaxMismatch(
-                    "map codec does not match source type",
-                ));
-            };
-            let key = representation_type(key, source_key, expansion)?;
-            let value = representation_type(value, source_value, expansion)?;
-            match kind {
-                MapKind::Hash => Ok(quote! { ::std::collections::HashMap<#key, #value> }),
-                MapKind::BTree => Ok(quote! { ::std::collections::BTreeMap<#key, #value> }),
-            }
-        }
-        CodecNode::EncodedRecord(_) => Err(Error::UnsupportedExpansion(
+impl CodecRead for RepresentationType {
+    type Expr = Result<TokenStream, Error>;
+
+    fn primitive(&mut self, primitive: Primitive) -> Self::Expr {
+        wrapper::type_ref::Renderer.primitive(primitive)
+    }
+
+    fn string(&mut self) -> Self::Expr {
+        Ok(quote! { String })
+    }
+
+    fn bytes(&mut self) -> Self::Expr {
+        Ok(quote! { Vec<u8> })
+    }
+
+    fn direct_record(&mut self, _: RecordId) -> Self::Expr {
+        Err(Error::UnsupportedExpansion(
+            "direct record representation type",
+        ))
+    }
+
+    fn encoded_record(&mut self, _: RecordId) -> Self::Expr {
+        Err(Error::UnsupportedExpansion(
             "encoded record representation type",
-        )),
-        _ => Err(Error::UnsupportedExpansion("codec representation type")),
+        ))
     }
-}
 
-fn contains_custom<S: RenderSurface>(
-    codec: &CodecNode,
-    expansion: &Expansion<'_, S>,
-) -> Result<bool, Error> {
-    match codec {
-        CodecNode::Custom { .. } => Ok(true),
-        CodecNode::EncodedRecord(_) => Ok(false),
-        CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
-            contains_custom(inner, expansion)
-        }
-        CodecNode::Result { ok, err } => {
-            Ok(contains_custom(ok, expansion)? || contains_custom(err, expansion)?)
-        }
-        CodecNode::Tuple(elements) => contains_any(elements.iter(), expansion),
-        CodecNode::Map { key, value } => {
-            Ok(contains_custom(key, expansion)? || contains_custom(value, expansion)?)
-        }
-        _ => Ok(false),
+    fn c_style_enum(&mut self, _: EnumId) -> Self::Expr {
+        Err(Error::UnsupportedExpansion(
+            "c-style enum representation type",
+        ))
     }
-}
 
-fn contains_any<'lowered, S: RenderSurface>(
-    mut codecs: impl Iterator<Item = &'lowered CodecNode>,
-    expansion: &Expansion<'_, S>,
-) -> Result<bool, Error> {
-    codecs.try_fold(false, |found, codec| {
-        Ok(found || contains_custom(codec, expansion)?)
-    })
+    fn data_enum(&mut self, _: EnumId) -> Self::Expr {
+        Err(Error::UnsupportedExpansion("data enum representation type"))
+    }
+
+    fn class_handle(&mut self, _: ClassId) -> Self::Expr {
+        Err(Error::UnsupportedExpansion(
+            "class handle representation type",
+        ))
+    }
+
+    fn callback_handle(&mut self, _: CallbackId) -> Self::Expr {
+        Err(Error::UnsupportedExpansion(
+            "callback handle representation type",
+        ))
+    }
+
+    fn custom(&mut self, _: CustomTypeId, representation: Self::Expr) -> Self::Expr {
+        representation
+    }
+
+    fn builtin(&mut self, kind: BuiltinType) -> Self::Expr {
+        wrapper::type_ref::Renderer.builtin(kind)
+    }
+
+    fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
+        let inner = inner?;
+        Ok(quote! { Option<#inner> })
+    }
+
+    fn sequence(&mut self, _: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {
+        let element = element?;
+        Ok(quote! { Vec<#element> })
+    }
+
+    fn tuple(&mut self, elements: Vec<Self::Expr>) -> Self::Expr {
+        let elements = elements.into_iter().collect::<Result<Vec<_>, _>>()?;
+        Ok(quote! { (#(#elements,)*) })
+    }
+
+    fn result(&mut self, ok: Self::Expr, err: Self::Expr) -> Self::Expr {
+        let ok = ok?;
+        let err = err?;
+        Ok(quote! { Result<#ok, #err> })
+    }
+
+    fn map(&mut self, kind: MapKind, key: Self::Expr, value: Self::Expr) -> Self::Expr {
+        let key = key?;
+        let value = value?;
+        match kind {
+            MapKind::Hash => Ok(quote! { ::std::collections::HashMap<#key, #value> }),
+            MapKind::BTree => Ok(quote! { ::std::collections::BTreeMap<#key, #value> }),
+        }
+    }
 }

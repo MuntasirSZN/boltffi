@@ -367,14 +367,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         rust_api::IncomingEncodedType::new(&self.source.type_expr).require_supported()?;
         let wire_size = self.wire_size(&field, &wire, codec)?;
         let encode_to = self.encode_to(&field, &wire, codec)?;
-        let decode_from = self.decode_from(
-            &field,
-            &decoded,
-            &used,
-            &rust_type,
-            &self.source.type_expr,
-            codec,
-        )?;
+        let decode_from = self.decode_from(&field, &decoded, &used, &rust_type, codec)?;
         Ok(EncodedFieldTokens {
             wire_size,
             encode_to,
@@ -400,7 +393,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let conversion = encoded::BorrowedOutgoing::new(codec, self.expansion);
-        if !conversion.has_custom_conversion()? {
+        if !conversion.has_custom_conversion() {
             return Ok(quote! {
                 ::boltffi::__private::wire::WireEncode::wire_size(&self.#field)
             });
@@ -421,7 +414,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let conversion = encoded::BorrowedOutgoing::new(codec, self.expansion);
-        let value = match conversion.has_custom_conversion()? {
+        let value = match conversion.has_custom_conversion() {
             true => {
                 let converted = conversion.convert(quote! { &self.#field })?;
                 quote! {
@@ -455,12 +448,11 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         decoded: &Ident,
         used: &Ident,
         rust_type: &Type,
-        source: &TypeExpr,
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let incoming = encoded::Incoming::new(codec, self.expansion);
         let decoded_type = incoming
-            .decoded_type(source)?
+            .decoded_type()?
             .unwrap_or_else(|| quote! { #rust_type });
         let converted = incoming.convert(quote! { #decoded })?;
         let value = match converted.changed() {

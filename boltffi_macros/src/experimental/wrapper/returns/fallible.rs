@@ -1,4 +1,4 @@
-use boltffi_binding::{ErrorDecl, OutOfRust, ReadPlan, ReturnDecl, ReturnPlan, TypeRef};
+use boltffi_binding::{DirectValueType, ErrorDecl, OutOfRust, ReadPlan, ReturnDecl, ReturnPlan};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Ident;
@@ -242,14 +242,10 @@ where
                 body: TokenStream::new(),
             }),
             ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
                 let out = locals.return_out();
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(SuccessTokens {
                     items: Vec::new(),
                     ffi_parameters: vec![quote! { #out: *mut #ty }],

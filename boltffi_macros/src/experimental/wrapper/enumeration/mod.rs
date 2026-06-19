@@ -1,7 +1,7 @@
 use boltffi_ast::{EnumDef, FieldDef, TypeExpr, VariantDef, VariantPayload};
 use boltffi_binding::{
     CStyleEnumDecl, CanonicalName, CodecNode, DataEnumDecl, DataVariantDecl, DataVariantPayload,
-    EncodedFieldDecl, EnumDecl, FieldKey, IntegerRepr, Surface, TypeRef,
+    DirectValueType, EncodedFieldDecl, EnumDecl, FieldKey, IntegerRepr, Surface,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -129,7 +129,7 @@ where
             self.source,
             enumeration.clone(),
             exports::Receiver::Direct {
-                ty: TypeRef::Enum(self.binding.id()),
+                ty: DirectValueType::enumeration(self.binding.id()),
             },
             self.binding.initializers(),
             self.binding.methods(),
@@ -497,14 +497,7 @@ impl<'expansion, 'lowered, S: RenderSurface> DataField<'expansion, 'lowered, S> 
             binding: binding.clone(),
             wire_size: self.wire_size(&binding, &wire, codec)?,
             encode_to: self.encode_to(&binding, &wire, codec)?,
-            decode_from: self.decode_from(
-                &binding,
-                &decoded,
-                &used,
-                &rust_type,
-                source_type,
-                codec,
-            )?,
+            decode_from: self.decode_from(&binding, &decoded, &used, &rust_type, codec)?,
         })
     }
 
@@ -515,7 +508,7 @@ impl<'expansion, 'lowered, S: RenderSurface> DataField<'expansion, 'lowered, S> 
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let conversion = wrapper::encoded::BorrowedOutgoing::new(codec, self.expansion);
-        if !conversion.has_custom_conversion()? {
+        if !conversion.has_custom_conversion() {
             return Ok(quote! {
                 ::boltffi::__private::wire::WireEncode::wire_size(#binding)
             });
@@ -536,7 +529,7 @@ impl<'expansion, 'lowered, S: RenderSurface> DataField<'expansion, 'lowered, S> 
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let conversion = wrapper::encoded::BorrowedOutgoing::new(codec, self.expansion);
-        let value = match conversion.has_custom_conversion()? {
+        let value = match conversion.has_custom_conversion() {
             true => {
                 let converted = conversion.convert(quote! { #binding })?;
                 quote! {
@@ -570,12 +563,11 @@ impl<'expansion, 'lowered, S: RenderSurface> DataField<'expansion, 'lowered, S> 
         decoded: &Ident,
         used: &Ident,
         rust_type: &Type,
-        source: &TypeExpr,
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let incoming = wrapper::encoded::Incoming::new(codec, self.expansion);
         let decoded_type = incoming
-            .decoded_type(source)?
+            .decoded_type()?
             .unwrap_or_else(|| quote! { #rust_type });
         let converted = incoming.convert(quote! { #decoded })?;
         let value = match converted.changed() {

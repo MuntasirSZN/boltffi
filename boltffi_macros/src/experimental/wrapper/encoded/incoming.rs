@@ -58,7 +58,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Value<'expansion, 'lowered, S> {
         let converted = incoming.convert(quote! { __boltffi_decoded })?;
         let rust_type = bytes.rust_type;
         let decode_type = incoming
-            .decoded_type(bytes.source)?
+            .decoded_type()?
             .unwrap_or_else(|| quote! { #rust_type });
         let bytes_expr = bytes.bytes;
         let failure = bytes.failure;
@@ -236,12 +236,9 @@ impl<'decode> Input<'decode> {
             let converted_value = converted.tokens();
             quote! { #converted_value }
         };
-        let decode_type =
-            incoming
-                .decoded_type(self.target.source())?
-                .ok_or(Error::UnsupportedExpansion(
-                    "custom codec representation type",
-                ))?;
+        let decode_type = incoming.decoded_type()?.ok_or(Error::UnsupportedExpansion(
+            "custom codec representation type",
+        ))?;
         let type_annotation = (!converted.changed()).then(|| quote! { : #rust_type });
         Ok(quote! {
             let #mutability #binding #type_annotation = {

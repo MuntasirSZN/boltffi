@@ -4,10 +4,11 @@ use boltffi_ast::{
 };
 use boltffi_binding::{
     CallbackDecl, CallbackLocalFunction, CallbackLocalMethodDecl, CallbackLocalProtocol,
-    CanonicalName, ClosureForm, ClosureParameter, ClosureReturn, CodecNode, Direction, ErrorDecl,
-    ExecutionDecl, ExportedCallable, HandlePresence, HandleTarget, ImportedCallable,
-    ImportedMethodDecl, IntoRust, Native, OutOfRust, OutgoingParam, ParamDecl, ParamDirection,
-    ParamPlan, Primitive, ReturnPlan, TypeRef, VTableSlot, Wasm32, native, wasm32,
+    CanonicalName, ClosureForm, ClosureParameter, ClosureReturn, CodecNode, DirectValueType,
+    DirectVectorElementType, Direction, ErrorDecl, ExecutionDecl, ExportedCallable, HandlePresence,
+    HandleTarget, ImportedCallable, ImportedMethodDecl, IntoRust, Native, OutOfRust, OutgoingParam,
+    ParamDecl, ParamDirection, ParamPlan, Primitive, ReturnPlan, TypeRef, VTableSlot, Wasm32,
+    native, wasm32,
 };
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
@@ -1300,34 +1301,31 @@ impl<'expansion, 'lowered, S: CallbackMethodSurface> MethodParameter<'expansion,
         )
     }
 
-    fn foreign_direct_tokens(&self, ty: &TypeRef) -> Result<ForeignMethodParameterTokens, Error> {
+    fn foreign_direct_tokens(
+        &self,
+        ty: &DirectValueType,
+    ) -> Result<ForeignMethodParameterTokens, Error> {
         let ident = RustIdent::new(self.source.name.spelling())?;
         match (self.source.passing, ty) {
-            (ParameterPassing::Value, TypeRef::Primitive(_)) => {
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    ty,
-                )?;
+            (ParameterPassing::Value, DirectValueType::Primitive(primitive)) => {
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(ForeignMethodParameterTokens::new(
                     ffi_type,
                     Vec::new(),
                     quote! { #ident },
                 ))
             }
-            (ParameterPassing::Ref, TypeRef::Primitive(_)) => {
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    ty,
-                )?;
+            (ParameterPassing::Ref, DirectValueType::Primitive(primitive)) => {
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(ForeignMethodParameterTokens::new(
                     ffi_type,
                     Vec::new(),
                     quote! { *#ident },
                 ))
             }
-            (ParameterPassing::RefMut, TypeRef::Primitive(_)) => Err(Error::UnsupportedExpansion(
-                "mutable borrowed callback method parameter",
-            )),
+            (ParameterPassing::RefMut, DirectValueType::Primitive(_)) => Err(
+                Error::UnsupportedExpansion("mutable borrowed callback method parameter"),
+            ),
             (ParameterPassing::Value, _) => {
                 let rust_type = rust_api::TypeTokens::new(&self.source.type_expr)?.into_type();
                 let ffi_type = quote! { <#rust_type as ::boltffi::__private::Passable>::Out };
@@ -1391,18 +1389,15 @@ impl<'expansion, 'lowered, S: CallbackMethodSurface> MethodParameter<'expansion,
 
     fn foreign_direct_vec_tokens(
         &self,
-        element: &TypeRef,
+        element: &DirectVectorElementType,
     ) -> Result<ForeignMethodParameterTokens, Error> {
         let ident = RustIdent::new(self.source.name.spelling())?;
         let parameter_names = wrapper::names::Parameter::new(ident.as_ident());
         let pointer = parameter_names.pointer();
         let length = parameter_names.length();
         match element {
-            TypeRef::Primitive(_) => {
-                let element_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    element,
-                )?;
+            DirectVectorElementType::Primitive(primitive) => {
+                let element_type = wrapper::type_ref::Renderer.primitive(primitive.primitive())?;
                 Ok(ForeignMethodParameterTokens::new(
                     quote! { *const #element_type },
                     vec![quote! {
@@ -1413,7 +1408,7 @@ impl<'expansion, 'lowered, S: CallbackMethodSurface> MethodParameter<'expansion,
                 )
                 .with_extra_ffi_parameter(quote! { usize }, quote! { #length }))
             }
-            TypeRef::Record(_) | TypeRef::Enum(_) => {
+            DirectVectorElementType::Record(_) => {
                 let rust_element =
                     rust_api::Parameter::new(self.source).direct_vec_element_type()?;
                 let buffer = parameter_names.buffer();
@@ -1872,7 +1867,7 @@ where
 {
     Void,
     Direct {
-        ty: &'lowered TypeRef,
+        ty: &'lowered DirectValueType,
     },
     Encoded {
         codec: &'lowered D::Codec,
@@ -1899,7 +1894,7 @@ where
 {
     Void,
     Direct {
-        ty: &'lowered TypeRef,
+        ty: &'lowered DirectValueType,
     },
     Encoded {
         codec: &'lowered D::Codec,
@@ -2138,13 +2133,9 @@ where
                 Ok(quote! { ::boltffi::__private::AsyncCallback<::boltffi::__private::FfiBuf> })
             }
             InfallibleMethodReturn::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(quote! { ::boltffi::__private::AsyncCallback<#ffi_type> })
             }
             InfallibleMethodReturn::Direct { .. } => {
@@ -2179,13 +2170,9 @@ where
                 Ok(self.native_async_bytes_body(call, value))
             }
             InfallibleMethodReturn::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(self.native_async_value_body(ffi_type, call, quote! { __boltffi_result }))
             }
             InfallibleMethodReturn::Direct { .. } => {
@@ -2261,13 +2248,9 @@ where
                 Ok(self.wasm_async_value_body(call, value))
             }
             InfallibleMethodReturn::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 let value = Self::wasm_completion_value(ffi_type);
                 Ok(self.wasm_async_value_body(call, value))
             }
@@ -2420,13 +2403,9 @@ where
         match FallibleMethodSuccess::new(self.plan)? {
             FallibleMethodSuccess::Void => Ok(quote! { () }),
             FallibleMethodSuccess::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(Self::async_wire_value(
                     ffi_type,
                     bytes,
@@ -2991,13 +2970,9 @@ where
         let success_pointer = match FallibleMethodSuccess::new(plan)? {
             FallibleMethodSuccess::Void => None,
             FallibleMethodSuccess::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Some(quote! { *mut #ty })
             }
             FallibleMethodSuccess::Direct { .. } => {
@@ -3054,7 +3029,7 @@ where
                 }
             }),
             InfallibleMethodReturn::Direct {
-                ty: TypeRef::Primitive(_),
+                ty: DirectValueType::Primitive(_),
             } => Ok(quote! { unsafe { #call } }),
             InfallibleMethodReturn::Direct { .. } => {
                 let rust_type = self.direct_source_type()?;
@@ -3121,7 +3096,7 @@ where
                 #call;
             }),
             InfallibleMethodReturn::Direct {
-                ty: TypeRef::Primitive(_),
+                ty: DirectValueType::Primitive(_),
             } => Ok(quote! { #call }),
             InfallibleMethodReturn::Direct { .. } => {
                 let rust_type = self.direct_source_type()?;
@@ -3250,7 +3225,7 @@ where
         match InfallibleMethodReturn::new(local_return.plan, local_return.error)? {
             InfallibleMethodReturn::Void => Ok(LocalMethodBody::new(quote! { #call })),
             InfallibleMethodReturn::Direct {
-                ty: TypeRef::Primitive(_),
+                ty: DirectValueType::Primitive(_),
             } => Ok(LocalMethodBody::new(quote! { #call })),
             InfallibleMethodReturn::Direct { .. } => Ok(LocalMethodBody::new(quote! {
                 ::boltffi::__private::Passable::pack(#call)
@@ -3364,13 +3339,9 @@ where
         match FallibleMethodSuccess::new(self.plan)? {
             FallibleMethodSuccess::Void => Ok(TokenStream::new()),
             FallibleMethodSuccess::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(quote! {
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
@@ -3407,7 +3378,7 @@ where
         match FallibleMethodSuccess::new(self.plan)? {
             FallibleMethodSuccess::Void => Ok(quote! { () }),
             FallibleMethodSuccess::Direct {
-                ty: TypeRef::Primitive(_),
+                ty: DirectValueType::Primitive(_),
             } => Ok(quote! { unsafe { __boltffi_success_out.assume_init() } }),
             FallibleMethodSuccess::Direct { .. } => {
                 let ok = self.source.fallible()?.ok_written_type()?;
@@ -3454,13 +3425,9 @@ where
         match FallibleMethodSuccess::new(local_return.plan)? {
             FallibleMethodSuccess::Void => Ok(TokenStream::new()),
             FallibleMethodSuccess::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(quote! {
                     let mut __boltffi_success_out = ::core::mem::MaybeUninit::<#ty>::uninit();
                 })
@@ -3501,7 +3468,7 @@ where
         match FallibleMethodSuccess::new(local_return.plan)? {
             FallibleMethodSuccess::Void => Ok(quote! { () }),
             FallibleMethodSuccess::Direct {
-                ty: TypeRef::Primitive(_),
+                ty: DirectValueType::Primitive(_),
             } => Ok(quote! { unsafe { __boltffi_success_out.assume_init() } }),
             FallibleMethodSuccess::Direct { .. } => {
                 let ok = self.source.fallible()?.ok_written_type()?;
@@ -3551,7 +3518,7 @@ where
         match FallibleMethodSuccess::new(local_return.plan)? {
             FallibleMethodSuccess::Void => Ok(LocalMethodBody::empty()),
             FallibleMethodSuccess::Direct {
-                ty: TypeRef::Primitive(_),
+                ty: DirectValueType::Primitive(_),
             } => Ok(LocalMethodBody::new(quote! {
                 if !__boltffi_success_out.is_null() {
                     unsafe {
@@ -3724,15 +3691,12 @@ where
     }
 
     fn direct_return_type(
-        ty: &TypeRef,
+        ty: &DirectValueType,
         source: rust_api::Return<'lowered>,
     ) -> Result<TokenStream, Error> {
         match ty {
-            TypeRef::Primitive(_) => {
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    ty,
-                )?;
+            DirectValueType::Primitive(primitive) => {
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(quote! { -> #ffi_type })
             }
             _ => {

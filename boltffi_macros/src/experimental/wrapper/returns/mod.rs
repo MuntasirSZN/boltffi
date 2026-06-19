@@ -1,4 +1,4 @@
-use boltffi_binding::{CodecNode, ErrorDecl, OutOfRust, ReturnDecl, ReturnPlan, TypeRef};
+use boltffi_binding::{CodecNode, DirectValueType, ErrorDecl, OutOfRust, ReturnDecl, ReturnPlan};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Type;
@@ -198,13 +198,9 @@ where
                 },
             }),
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 let body = if writebacks.is_empty() {
                     quote! {
                         #(#conversions)*
@@ -266,7 +262,7 @@ where
                     <encoded::Renderer as Render<S, _>>::render(encoded::Renderer, encoded_input)?;
                 let type_annotation =
                     match wrapper::encoded::Outgoing::new(codec.root(), input.expansion)
-                        .has_custom_conversion()?
+                        .has_custom_conversion()
                     {
                         true => TokenStream::new(),
                         false => quote! { : #rust_type },
@@ -404,7 +400,7 @@ where
                 return ::boltffi::__private::FfiStatus::INVALID_ARG;
             }),
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(_),
+                ty: DirectValueType::Primitive(_),
             } => Ok(quote! {
                 return ::core::default::Default::default();
             }),

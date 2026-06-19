@@ -1,6 +1,6 @@
 use boltffi_ast::{ClassDef, StreamDef, TypeExpr};
 use boltffi_binding::{
-    ClassDecl, CodecNode, NativeSymbol, Op, StreamDecl, StreamItemPlan, TypeRef, ValueRef,
+    ClassDecl, CodecNode, DirectValueType, NativeSymbol, Op, StreamDecl, StreamItemPlan, ValueRef,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -295,7 +295,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Renderer<'expansion, 'lowered, S> {
         match self.stream.binding().item() {
             StreamItemPlan::Direct { ty, .. } => {
                 let body = match ty {
-                    TypeRef::Primitive(_) | TypeRef::Record(_) => quote! {
+                    DirectValueType::Primitive(_) | DirectValueType::Record(_) => quote! {
                         fn __boltffi_pop_direct_stream_batch<StreamItem>(
                             subscription: &::boltffi::__private::EventSubscription<StreamItem>,
                             output_ptr: *mut <StreamItem as ::boltffi::__private::Passable>::Out,

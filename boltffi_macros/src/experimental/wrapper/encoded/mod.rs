@@ -50,7 +50,7 @@ impl<'codec> RuntimeWireCodec<'codec> {
                 .iter()
                 .try_for_each(|element| self.require_supported_codec(element)),
             CodecNode::Tuple(_) => Err(Error::UnsupportedExpansion("encoded tuple arity")),
-            CodecNode::Map { key, value } => {
+            CodecNode::Map { key, value, .. } => {
                 self.require_supported_map_key(key)?;
                 self.require_supported_codec(value)
             }

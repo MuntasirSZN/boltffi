@@ -1,4 +1,4 @@
-use boltffi_binding::{Primitive, TypeRef};
+use boltffi_binding::{DirectVectorElementType, Primitive};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Ident, Type};
@@ -14,7 +14,7 @@ use super::Tokens;
 pub struct Renderer;
 
 pub struct Input<'lowered> {
-    element: &'lowered TypeRef,
+    element: &'lowered DirectVectorElementType,
     rust_element: Type,
     ident: Ident,
     failure: TokenStream,
@@ -22,7 +22,7 @@ pub struct Input<'lowered> {
 
 impl<'lowered> Input<'lowered> {
     pub fn new(
-        element: &'lowered TypeRef,
+        element: &'lowered DirectVectorElementType,
         rust_element: Type,
         ident: Ident,
         failure: TokenStream,
@@ -39,16 +39,15 @@ impl<'lowered> Input<'lowered> {
 impl<'lowered, S> Render<S, Input<'lowered>> for Renderer
 where
     S: RenderSurface,
-    for<'ty> wrapper::type_ref::Renderer: Render<S, &'ty TypeRef, Output = TokenStream>,
 {
     type Output = Tokens;
 
     fn render(self, input: Input<'lowered>) -> Result<Self::Output, Error> {
         match input.element {
-            TypeRef::Primitive(primitive) => {
-                PrimitiveVec::new(*primitive, input.ident).tokens::<S>()
+            DirectVectorElementType::Primitive(primitive) => {
+                PrimitiveVec::new(primitive.primitive(), input.ident).tokens()
             }
-            TypeRef::Record(_) | TypeRef::Enum(_) => {
+            DirectVectorElementType::Record(_) => {
                 let rust_element = input.rust_element;
                 PassableVec::new(rust_element, input.ident, input.failure).tokens()
             }
@@ -67,20 +66,12 @@ impl PrimitiveVec {
         Self { primitive, ident }
     }
 
-    fn tokens<S>(self) -> Result<Tokens, Error>
-    where
-        S: RenderSurface,
-        for<'ty> wrapper::type_ref::Renderer: Render<S, &'ty TypeRef, Output = TokenStream>,
-    {
+    fn tokens(self) -> Result<Tokens, Error> {
         let ident = &self.ident;
         let locals = names::Parameter::new(ident);
         let pointer = locals.pointer();
         let length = locals.length();
-        let element = TypeRef::Primitive(self.primitive);
-        let element_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-            wrapper::type_ref::Renderer,
-            &element,
-        )?;
+        let element_type = wrapper::type_ref::Renderer.primitive(self.primitive)?;
         Ok(Tokens {
             items: Vec::new(),
             ffi_parameters: vec![

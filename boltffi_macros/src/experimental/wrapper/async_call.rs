@@ -1,7 +1,7 @@
 use boltffi_binding::{
-    ErrorDecl, ExecutionDecl, ExportedCallable, FunctionDecl, HandleTarget, IncomingParam,
-    IntoRust, Native, NativeSymbol, ParamDecl, ParamPlan, Receive, ReturnPlan, TypeRef, Wasm32,
-    native, wasm32,
+    DirectValueType, ErrorDecl, ExecutionDecl, ExportedCallable, FunctionDecl, HandleTarget,
+    IncomingParam, IntoRust, Native, NativeSymbol, ParamDecl, ParamPlan, Receive, ReturnPlan,
+    Wasm32, native, wasm32,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -640,16 +640,10 @@ impl PlainComplete {
                 err_body: TokenStream::new(),
             }),
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
                 let result = syn::Ident::new("result", proc_macro2::Span::call_site());
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <crate::experimental::wrapper::type_ref::Renderer as Render<
-                    S,
-                    &TypeRef,
-                >>::render(
-                    crate::experimental::wrapper::type_ref::Renderer, &ty
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(Self {
                     items: Vec::new(),
                     ffi_parameters: Vec::new(),

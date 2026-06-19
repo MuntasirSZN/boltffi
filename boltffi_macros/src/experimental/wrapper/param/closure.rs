@@ -1,8 +1,8 @@
 use boltffi_ast::{FnSig, ReturnDef, TypeExpr};
 use boltffi_binding::{
-    ClosureForm, ClosureParameter, ClosureReturn, ErrorDecl, HandlePresence, ImportedCallable,
-    IntoRust, Native, OutgoingParam, ParamPlan, ReturnPlan, TypeRef, Wasm32, WritePlan, native,
-    wasm32,
+    ClosureForm, ClosureParameter, ClosureReturn, DirectValueType, ErrorDecl, HandlePresence,
+    ImportedCallable, IntoRust, Native, OutgoingParam, ParamPlan, ReturnPlan, Wasm32, WritePlan,
+    native, wasm32,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -411,14 +411,10 @@ impl<'expansion, 'lowered, 'rust, S: RenderSurface>
         let rust_type = self.rust_type;
         match self.payload {
             OutgoingParam::Value(ParamPlan::Direct {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
                 ..
             }) => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(InvokeParameterTokens {
                     rust_parameter: quote! { #argument: #rust_type },
                     ffi_parameter_types: vec![ffi_type],
@@ -543,18 +539,14 @@ impl<'expansion, 'lowered, 'rust, S: RenderSurface>
                 Ok(Some(ForeignClosureReturnTokens::Void))
             }
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
                 if !matches!(self.source, ReturnDef::Value(_)) {
                     return Err(Error::SourceSyntaxMismatch(
                         "source closure invoke return does not match binding return plan",
                     ));
                 }
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(Some(ForeignClosureReturnTokens::DirectPrimitive {
                     ffi_type,
                 }))
@@ -639,7 +631,7 @@ impl<'expansion, 'lowered, 'rust>
         match (input.plan, input.error) {
             (
                 ReturnPlan::DirectViaOutPointer {
-                    ty: TypeRef::Primitive(primitive),
+                    ty: DirectValueType::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
                     codec,
@@ -647,11 +639,7 @@ impl<'expansion, 'lowered, 'rust>
                     ..
                 },
             ) => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<Native, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 let result = input.rust_fallible_return()?;
                 let error = input.encoded_expression(
                     codec,
@@ -778,7 +766,7 @@ impl<'expansion, 'lowered, 'rust>
         match (input.plan, input.error) {
             (
                 ReturnPlan::DirectViaOutPointer {
-                    ty: TypeRef::Primitive(primitive),
+                    ty: DirectValueType::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
                     codec,
@@ -786,11 +774,7 @@ impl<'expansion, 'lowered, 'rust>
                     ..
                 },
             ) => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<Wasm32, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 let result = input.rust_fallible_return()?;
                 let error = input.packed_expression(
                     codec,

@@ -1,7 +1,7 @@
 use boltffi_ast::{FnSig, ReturnDef, TypeExpr};
 use boltffi_binding::{
-    ErrorDecl, ExportedCallable, IncomingParam, Native, OutOfRust, ParamPlan, ReadPlan, Receive,
-    ReturnPlan, TypeRef, Wasm32, WritePlan, native, wasm32,
+    DirectValueType, ErrorDecl, ExportedCallable, IncomingParam, Native, OutOfRust, ParamPlan,
+    ReadPlan, Receive, ReturnPlan, TypeRef, Wasm32, WritePlan, native, wasm32,
 };
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -426,18 +426,14 @@ impl<'expansion, 'lowered, S: RenderSurface> Return<'expansion, 'lowered, S> {
                 Ok(Some(InvokeReturn::void()))
             }
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
                 if !matches!(self.source, ReturnDef::Value(_)) {
                     return Err(Error::SourceSyntaxMismatch(
                         "source closure invoke return does not match binding return plan",
                     ));
                 }
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<T, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(Some(InvokeReturn::direct_primitive(ffi_type)))
             }
             ReturnPlan::DirectViaReturnSlot { .. } => {
@@ -533,7 +529,7 @@ impl<'expansion, 'lowered> Render<Native, Return<'expansion, 'lowered, Native>> 
             )),
             (
                 ReturnPlan::DirectViaOutPointer {
-                    ty: TypeRef::Primitive(primitive),
+                    ty: DirectValueType::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
                     codec,
@@ -541,10 +537,7 @@ impl<'expansion, 'lowered> Render<Native, Return<'expansion, 'lowered, Native>> 
                     ..
                 },
             ) => {
-                let ffi_type = <wrapper::type_ref::Renderer as Render<Native, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &TypeRef::Primitive(*primitive),
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(InvokeReturn::fallible(
                     input.encoded_error(codec, native::BufferShape::Buffer)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },
@@ -637,7 +630,7 @@ impl<'expansion, 'lowered> Render<Wasm32, Return<'expansion, 'lowered, Wasm32>> 
             )),
             (
                 ReturnPlan::DirectViaOutPointer {
-                    ty: TypeRef::Primitive(primitive),
+                    ty: DirectValueType::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
                     codec,
@@ -645,10 +638,7 @@ impl<'expansion, 'lowered> Render<Wasm32, Return<'expansion, 'lowered, Wasm32>> 
                     ..
                 },
             ) => {
-                let ffi_type = <wrapper::type_ref::Renderer as Render<Wasm32, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &TypeRef::Primitive(*primitive),
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(InvokeReturn::fallible(
                     input.encoded_error(codec, wasm32::BufferShape::Packed)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },

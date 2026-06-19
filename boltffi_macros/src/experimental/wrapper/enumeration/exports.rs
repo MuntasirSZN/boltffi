@@ -1,6 +1,6 @@
 use boltffi_ast::{EnumDef, MethodDef, Path as SourcePath, TypeExpr};
 use boltffi_binding::{
-    ExportedMethodDecl, InitializerDecl, NativeSymbol, Receive, TypeRef, WritePlan,
+    DirectValueType, ExportedMethodDecl, InitializerDecl, NativeSymbol, Receive, WritePlan,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -31,7 +31,7 @@ struct EnumOwner<'lowered> {
 
 #[derive(Clone)]
 pub enum Receiver<'lowered> {
-    Direct { ty: TypeRef },
+    Direct { ty: DirectValueType },
     Encoded { codec: &'lowered WritePlan },
 }
 
@@ -167,7 +167,7 @@ impl<'lowered> Receiver<'lowered> {
 
     fn render_direct<S>(
         source: &EnumDef,
-        ty: &TypeRef,
+        ty: &DirectValueType,
         receive: Receive,
         method: Ident,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error>
