@@ -13,28 +13,24 @@ use boltffi_ast::{CallableForm, FunctionDef as SourceFunction};
 use crate::{CanonicalName, FunctionDecl};
 
 use super::{
-    LowerError, callable,
-    error::LowerErrorKind,
-    ids::DeclarationIds,
-    index::Index,
-    metadata,
-    surface::SurfaceLower,
-    symbol::{SymbolAllocator, function_symbol_name},
+    LowerError, callable, error::LowerErrorKind, ids::DeclarationIds, index::Index, metadata,
+    surface::SurfaceLower, symbol::SymbolAllocator,
 };
 
-pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+pub fn lower<S: SurfaceLower>(
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<FunctionDecl<S>>, LowerError> {
-    idx.functions()
+    index
+        .functions()
         .iter()
-        .map(|function| lower_one::<S>(idx, ids, allocator, function))
+        .map(|function| lower_one::<S>(index, ids, allocator, function))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     function: &SourceFunction,
@@ -44,9 +40,9 @@ fn lower_one<S: SurfaceLower>(
     }
 
     let function_id = ids.function(&function.id)?;
-    let symbol = allocator.mint(function_symbol_name(function.id.as_str()))?;
+    let symbol = allocator.mint_function(function.id.as_str())?;
     let callable_decl =
-        callable::lower_function::<S>(idx, ids, allocator, function, symbol.name().as_str())?;
+        callable::lower_function::<S>(index, ids, allocator, function, symbol.name().as_str())?;
     Ok(FunctionDecl::new(
         function_id,
         CanonicalName::from(&function.name),
@@ -68,9 +64,10 @@ mod tests {
 
     use crate::lower::{LowerError, LowerErrorKind, UnsupportedType, lower};
     use crate::{
-        Bindings, CodecNode, Decl, ErrorDecl, ExecutionDecl, FunctionDecl, IntoRust, Native,
-        OutOfRust, ParamPlan, Primitive as BindingPrimitive, Receive, RecordDecl, RecordId,
-        ReturnPlan, SurfaceLower, TypeRef, ValueRef, Wasm32, native, wasm32,
+        Bindings, CodecNode, Decl, DirectValueType, DirectVectorElementType, ErrorDecl,
+        ExecutionDecl, FunctionDecl, IntoRust, Native, OutOfRust, ParamPlan,
+        Primitive as BindingPrimitive, Receive, RecordDecl, RecordId, ReturnPlan, SurfaceLower,
+        TypeRef, ValueRef, Wasm32, native, wasm32,
     };
 
     struct TestContract {
@@ -236,14 +233,14 @@ mod tests {
         assert_eq!(
             callable.params()[0].as_value().unwrap(),
             &ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
                 receive: Receive::ByValue,
             }
         );
         assert_eq!(
             callable.returns().plan(),
             &ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
             }
         );
     }
@@ -324,7 +321,7 @@ mod tests {
         assert_eq!(
             callable.returns().plan(),
             &ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
             }
         );
         assert_native_string_error(callable.error());
@@ -636,7 +633,7 @@ mod tests {
         assert_eq!(
             function.callable().params()[0].as_value().unwrap(),
             &ParamPlan::Direct {
-                ty: TypeRef::Record(RecordId::from_raw(0)),
+                ty: DirectValueType::Record(RecordId::from_raw(0)),
                 receive: Receive::ByValue,
             }
         );
@@ -755,7 +752,8 @@ mod tests {
         assert_eq!(
             first_function(&bindings).callable().returns().plan(),
             &ReturnPlan::DirectVecViaReturnSlot {
-                element: TypeRef::Primitive(BindingPrimitive::U32),
+                element: DirectVectorElementType::primitive(BindingPrimitive::U32)
+                    .expect("u32 is a direct-vector primitive"),
             }
         );
     }
@@ -773,7 +771,8 @@ mod tests {
         assert_eq!(
             first_function(&bindings).callable().returns().plan(),
             &ReturnPlan::DirectVecViaReturnSlot {
-                element: TypeRef::Primitive(BindingPrimitive::U32),
+                element: DirectVectorElementType::primitive(BindingPrimitive::U32)
+                    .expect("u32 is a direct-vector primitive"),
             }
         );
     }
@@ -791,7 +790,7 @@ mod tests {
 
         match first_function(&bindings).callable().returns().plan() {
             ReturnPlan::DirectVecViaReturnSlot {
-                element: TypeRef::Record(_),
+                element: DirectVectorElementType::Record(_),
             } => {}
             other => panic!("expected DirectVec of direct record, got {other:?}"),
         }
@@ -940,7 +939,8 @@ mod tests {
         assert_eq!(
             first_param_lower(&bindings),
             &ParamPlan::DirectVec {
-                element: TypeRef::Primitive(BindingPrimitive::U32),
+                element: DirectVectorElementType::primitive(BindingPrimitive::U32)
+                    .expect("u32 is a direct-vector primitive"),
             }
         );
     }
@@ -959,7 +959,8 @@ mod tests {
         assert_eq!(
             first_param_lower(&bindings),
             &ParamPlan::DirectVec {
-                element: TypeRef::Primitive(BindingPrimitive::U32),
+                element: DirectVectorElementType::primitive(BindingPrimitive::U32)
+                    .expect("u32 is a direct-vector primitive"),
             }
         );
     }
@@ -978,7 +979,7 @@ mod tests {
 
         match first_param_lower(&bindings) {
             ParamPlan::DirectVec {
-                element: TypeRef::Record(_),
+                element: DirectVectorElementType::Record(_),
             } => {}
             other => panic!("expected DirectVec of direct record, got {other:?}"),
         }

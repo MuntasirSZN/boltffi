@@ -1,8 +1,9 @@
 use boltffi_binding::{Bindings, Decl, DeclarationRef, Surface};
 
 use crate::core::{
-    BridgeContract, CapabilityRequirements, GeneratedOutput, RenderContext, RenderedDeclaration,
-    Result, bridge, contract::sealed, host,
+    BindingCapability, BridgeContract, CapabilityRequirements, CoverageMode, CoverageReport,
+    DeclarationLabel, Error, GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration,
+    Result, UnsupportedDeclaration, bridge, contract::sealed, host,
 };
 
 /// A bridge layer stacked above another bridge stack.
@@ -112,27 +113,124 @@ where
 
     /// Renders a binding contract through the paired bridge and host.
     pub fn render(&self, bindings: &Bindings<S::Surface>) -> Result<GeneratedOutput> {
+        self.render_with_coverage(bindings, CoverageMode::Complete)
+    }
+
+    /// Renders supported declarations and reports unsupported declarations.
+    pub fn render_partial(&self, bindings: &Bindings<S::Surface>) -> Result<GeneratedOutput> {
+        self.render_with_coverage(bindings, CoverageMode::Partial)
+    }
+
+    /// Renders a binding contract with the requested coverage policy.
+    pub fn render_with_coverage(
+        &self,
+        bindings: &Bindings<S::Surface>,
+        mode: CoverageMode,
+    ) -> Result<GeneratedOutput> {
         let bridge = self.stack.build(bindings)?;
         let (contract, mut output) = bridge.into_parts();
-        let binding_requirements = CapabilityRequirements::from_bindings(bindings);
-        self.host
-            .binding_capabilities()
-            .require_binding(self.host.name(), &binding_requirements)?;
+        let host_capabilities = self.host.binding_capabilities();
+        if matches!(mode, CoverageMode::Complete) {
+            let binding_requirements = CapabilityRequirements::from_bindings(bindings);
+            host_capabilities.require_binding(self.host.name(), &binding_requirements)?;
+        }
         contract
             .capabilities()
             .require_bridge(self.host.name(), &self.host.bridge_capabilities())?;
         let context = RenderContext::new(bindings, self.host.name());
-        let host_emitted = bindings
-            .decls()
-            .iter()
-            .map(|decl| self.render_declaration(decl, &contract, &context))
-            .collect::<Result<Vec<_>>>()
-            .and_then(|declarations| {
-                self.host
-                    .assemble(bindings, &contract, &context, declarations)
-            })?;
+        let (declarations, coverage) = bindings.decls().iter().try_fold(
+            (Vec::new(), CoverageReport::new()),
+            |accumulator, decl| {
+                self.render_declaration_with_coverage(
+                    decl,
+                    &contract,
+                    &context,
+                    &host_capabilities,
+                    mode,
+                    accumulator,
+                )
+            },
+        )?;
+        if matches!(mode, CoverageMode::Complete) && !coverage.is_complete() {
+            return Err(Self::coverage_error(self.host.name(), &coverage));
+        }
+        let host_emitted = self
+            .host
+            .assemble(bindings, &contract, &context, declarations)?
+            .with_coverage(coverage);
         output.append(host_emitted);
         Ok(output)
+    }
+
+    fn render_declaration_with_coverage<'decl>(
+        &self,
+        decl: &'decl Decl<S::Surface>,
+        bridge: &S::Contract,
+        context: &RenderContext<S::Surface>,
+        host_capabilities: &HostCapabilities,
+        mode: CoverageMode,
+        mut accumulator: (Vec<RenderedDeclaration<'decl, S::Surface>>, CoverageReport),
+    ) -> Result<(Vec<RenderedDeclaration<'decl, S::Surface>>, CoverageReport)> {
+        let declaration = DeclarationRef::from(decl);
+        let label = DeclarationLabel::from_ref(declaration);
+        let capability = BindingCapability::from_decl(decl);
+        let status = host_capabilities.status(capability);
+        if !status.is_stable() {
+            if matches!(mode, CoverageMode::Partial) {
+                accumulator
+                    .1
+                    .push(UnsupportedDeclaration::new(label, status.reason()));
+                return Ok(accumulator);
+            }
+            return Err(Error::BindingCapability {
+                target: self.host.name(),
+                capability,
+                status,
+            });
+        }
+
+        match self.render_declaration(decl, bridge, context) {
+            Ok(rendered) => {
+                rendered
+                    .emitted()
+                    .diagnostics()
+                    .iter()
+                    .for_each(|diagnostic| {
+                        accumulator.1.push(UnsupportedDeclaration::new(
+                            label.clone(),
+                            diagnostic.message(),
+                        ));
+                    });
+                accumulator.0.push(rendered);
+                Ok(accumulator)
+            }
+            Err(error) if matches!(mode, CoverageMode::Partial) => match error {
+                Error::UnsupportedTarget { shape, .. } | Error::UnsupportedCAbi { shape } => {
+                    accumulator
+                        .1
+                        .push(UnsupportedDeclaration::new(label, shape));
+                    Ok(accumulator)
+                }
+                other => Err(other),
+            },
+            Err(error) => Err(error),
+        }
+    }
+
+    fn coverage_error(target: &'static str, coverage: &CoverageReport) -> Error {
+        let reason = coverage
+            .unsupported()
+            .first()
+            .map(|unsupported| {
+                format!(
+                    "{} {}: {}",
+                    unsupported.declaration().kind(),
+                    unsupported.declaration().name(),
+                    unsupported.reason()
+                )
+            })
+            .unwrap_or_else(|| "unknown unsupported declaration".to_owned());
+        Error::IncompleteCoverage { target, reason }
     }
 
     fn render_declaration<'decl>(
@@ -162,13 +260,61 @@ where
 
 #[cfg(test)]
 mod tests {
-    use boltffi_binding::{Bindings, Native};
+    use std::fmt;
+
+    use boltffi_ast::PackageInfo;
+    use boltffi_binding::{Bindings, Native, lower};
 
     use crate::core::{
-        BridgeCapabilities, BridgeCapability, BridgeContract, CapabilityRequirements, Emitted,
-        GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result, bridge,
-        contract::sealed, host,
+        BindingCapability, BridgeCapabilities, BridgeCapability, BridgeContract,
+        CapabilityRequirements, Emitted, Error, GeneratedOutput, HostCapabilities, LanguageSyntax,
+        RenderContext, RenderedDeclaration, Result, bridge, contract::sealed, host,
+        syntax::sealed as syntax_sealed,
     };
+
+    #[derive(Clone)]
+    struct TestFragment;
+
+    impl fmt::Display for TestFragment {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("test")
+        }
+    }
+
+    impl syntax_sealed::SyntaxFragment for TestFragment {}
+
+    #[derive(Clone, Copy)]
+    struct TestSyntax;
+
+    impl LanguageSyntax for TestSyntax {
+        const KEYWORDS: &'static [&'static str] = &[];
+
+        type Identifier = TestFragment;
+        type Type = TestFragment;
+        type Expr = TestFragment;
+        type Stmt = TestFragment;
+        type Literal = TestFragment;
+        type Arguments = TestFragment;
+    }
+
+    impl syntax_sealed::LanguageSyntax for TestSyntax {}
+
+    fn function_bindings() -> Bindings<Native> {
+        let source = boltffi_scan::scan_file(
+            syn::parse_str(
+                r#"
+                #[export]
+                pub fn add(left: i32, right: i32) -> i32 {
+                    left + right
+                }
+                "#,
+            )
+            .expect("valid source"),
+            PackageInfo::new("demo", None),
+        )
+        .expect("source scans");
+        lower::<Native>(&source).expect("source lowers")
+    }
 
     #[derive(Clone)]
     struct NativeContract {
@@ -192,6 +338,7 @@ mod tests {
         type Surface = Native;
         type Input = Bindings<Native>;
         type Contract = NativeContract;
+        type Syntax = TestSyntax;
 
         fn build_contract(&self, _input: &Self::Input) -> Result<Self::Contract> {
             Ok(NativeContract {
@@ -222,6 +369,7 @@ mod tests {
     impl host::HostBackend for SwiftHost {
         type Surface = Native;
         type Bridge = NativeContract;
+        type Syntax = TestSyntax;
 
         fn name(&self) -> &'static str {
             "swift"
@@ -307,12 +455,12 @@ mod tests {
             Ok(Emitted::placeholder())
         }
 
-        fn assemble(
+        fn assemble<'decl>(
             &self,
             _bindings: &Bindings<Self::Surface>,
             _bridge: &Self::Bridge,
             _context: &RenderContext<Self::Surface>,
-            _declarations: Vec<RenderedDeclaration<'_, Self::Surface>>,
+            _declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
         ) -> Result<GeneratedOutput> {
             Ok(GeneratedOutput::empty())
         }
@@ -323,5 +471,36 @@ mod tests {
     #[test]
     fn target_accepts_host_with_matching_bridge_contract() {
         let _target = super::Target::new(SwiftHost, NativeBridge);
+    }
+
+    #[test]
+    fn complete_render_rejects_missing_binding_capability() {
+        let target = super::Target::new(SwiftHost, NativeBridge);
+        let error = target
+            .render(&function_bindings())
+            .expect_err("complete render should reject unsupported function capability");
+
+        assert!(matches!(
+            error,
+            Error::BindingCapability {
+                target: "swift",
+                capability: BindingCapability::Functions,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn partial_render_reports_unsupported_declarations() {
+        let target = super::Target::new(SwiftHost, NativeBridge);
+        let output = target
+            .render_partial(&function_bindings())
+            .expect("partial render should report unsupported functions");
+        let unsupported = output.coverage().unsupported();
+
+        assert_eq!(unsupported.len(), 1);
+        assert_eq!(unsupported[0].declaration().kind(), "function");
+        assert_eq!(unsupported[0].declaration().name(), "add");
+        assert_eq!(unsupported[0].reason(), "capability was not advertised");
     }
 }

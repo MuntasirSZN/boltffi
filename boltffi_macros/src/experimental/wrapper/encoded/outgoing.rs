@@ -20,7 +20,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Value<'expansion, 'lowered, S> {
     pub fn buffer(&self, value: TokenStream) -> Result<TokenStream, Error> {
         super::require_runtime_wire(self.codec)?;
         let conversion = super::custom::Outgoing::new(self.codec, self.expansion);
-        if !conversion.has_custom_conversion()? {
+        if !conversion.has_custom_conversion() {
             return Ok(quote! { ::boltffi::__private::FfiBuf::wire_encode(&#value) });
         }
         let value = conversion.convert(value)?;
@@ -35,7 +35,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Value<'expansion, 'lowered, S> {
     pub fn borrowed_buffer(&self, value: TokenStream) -> Result<TokenStream, Error> {
         super::require_runtime_wire(self.codec)?;
         let conversion = super::custom::BorrowedOutgoing::new(self.codec, self.expansion);
-        if !conversion.has_custom_conversion()? {
+        if !conversion.has_custom_conversion() {
             return Ok(quote! { ::boltffi::__private::FfiBuf::wire_encode(&#value) });
         }
         let value = conversion.convert(value)?;

@@ -1,12 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use boltffi_backend::bridge::c::CBridge;
-use boltffi_backend::bridge::python_cext::PythonCExtBridge;
-use boltffi_backend::core::{BridgeLayer, bridge, host};
+use boltffi_backend::core::{CoverageMode, bridge, host};
 use boltffi_backend::target::python::PythonCExtHost;
 use boltffi_backend::{GeneratedOutput, Target as BackendTarget};
-use boltffi_binding::{BindingMetadataSurface, Bindings, Surface};
+use boltffi_binding::{BindingMetadataSurface, Bindings, Native, Surface};
 use thiserror::Error;
 
 use crate::metadata::{BindingMetadataBuild, BindingMetadataBuildError};
@@ -24,7 +22,12 @@ use crate::target::Target;
 pub struct Generation {
     manifest_path: PathBuf,
     triple: Option<String>,
-    python_module_name: Option<String>,
+    coverage: CoverageMode,
+    cargo_args: Vec<String>,
+    python_package_module: Option<String>,
+    python_distribution_name: Option<String>,
+    python_package_version: Option<String>,
+    python_native_library: Option<String>,
 }
 
 impl Generation {
@@ -33,7 +36,12 @@ impl Generation {
         Self {
             manifest_path: manifest_path.into(),
             triple: None,
-            python_module_name: None,
+            coverage: CoverageMode::Complete,
+            cargo_args: Vec::new(),
+            python_package_module: None,
+            python_distribution_name: None,
+            python_package_version: None,
+            python_native_library: None,
         }
     }
 
@@ -43,28 +51,46 @@ impl Generation {
         self
     }
 
-    /// Sets the CPython extension module name used by Python generation.
+    /// Passes Cargo build arguments to metadata generation.
+    pub fn cargo_args(mut self, cargo_args: impl IntoIterator<Item = String>) -> Self {
+        self.cargo_args = cargo_args.into_iter().collect();
+        self
+    }
+
+    /// Sets how unsupported backend declarations are handled.
+    pub fn coverage_mode(mut self, coverage: CoverageMode) -> Self {
+        self.coverage = coverage;
+        self
+    }
+
+    /// Sets the generated Python package module name.
     pub fn python_module_name(mut self, module_name: impl Into<String>) -> Self {
-        self.python_module_name = Some(module_name.into());
+        self.python_package_module = Some(module_name.into());
+        self
+    }
+
+    /// Sets the generated Python distribution name.
+    pub fn python_distribution_name(mut self, distribution_name: impl Into<String>) -> Self {
+        self.python_distribution_name = Some(distribution_name.into());
+        self
+    }
+
+    /// Sets the generated Python package version.
+    pub fn python_package_version(mut self, package_version: Option<String>) -> Self {
+        self.python_package_version = package_version;
+        self
+    }
+
+    /// Sets the native library artifact name loaded by the Python package.
+    pub fn python_native_library(mut self, native_library: impl Into<String>) -> Self {
+        self.python_native_library = Some(native_library.into());
         self
     }
 
     /// Reads the embedded metadata, selects the target surface contract, and renders it.
     pub fn render(&self, target: Target) -> Result<GeneratedOutput, GenerationError> {
         match target {
-            Target::Python => {
-                let module_name = self.python_module_name.as_deref().unwrap_or("_native");
-                let source_path = format!("{module_name}.c");
-                let target = BackendTarget::new(
-                    PythonCExtHost::new(),
-                    BridgeLayer::new(
-                        CBridge::default_header().map_err(GenerationError::Render)?,
-                        PythonCExtBridge::new(module_name, source_path)
-                            .map_err(GenerationError::Render)?,
-                    ),
-                );
-                self.render_backend(&target)
-            }
+            Target::Python => self.render_python(),
             Target::Swift
             | Target::Kotlin
             | Target::KotlinMultiplatform
@@ -83,23 +109,53 @@ impl Generation {
         output_dir: &Path,
     ) -> Result<Vec<PathBuf>, GenerationError> {
         let output = self.render(target)?;
-        self.write_output(output, output_dir)
+        Self::write_output(output, output_dir)
+    }
+
+    fn render_python(&self) -> Result<GeneratedOutput, GenerationError> {
+        let bindings = self.bindings::<Native>()?;
+        let target = self
+            .python_host()?
+            .into_target(&bindings)
+            .map_err(GenerationError::Render)?;
+        self.render_backend(&target, &bindings)
     }
 
     fn render_backend<H, S>(
         &self,
         target: &BackendTarget<H, S>,
+        bindings: &Bindings<S::Surface>,
     ) -> Result<GeneratedOutput, GenerationError>
     where
         H: host::HostBackend<Bridge = S::Contract, Surface = S::Surface>,
         S: bridge::BridgeStack,
     {
-        let bindings = self.bindings::<S::Surface>()?;
-        target.render(&bindings).map_err(GenerationError::Render)
+        target
+            .render_with_coverage(bindings, self.coverage)
+            .map_err(GenerationError::Render)
     }
 
-    fn write_output(
-        &self,
+    fn python_host(&self) -> Result<PythonCExtHost, GenerationError> {
+        let host = self
+            .python_package_module
+            .as_deref()
+            .map(|module| PythonCExtHost::new().module_name(module))
+            .transpose()
+            .map_err(GenerationError::Render)
+            .map(Option::unwrap_or_default)?;
+        let host = self
+            .python_distribution_name
+            .iter()
+            .fold(host, |host, name| host.distribution_name(name.clone()));
+        let host = self
+            .python_native_library
+            .iter()
+            .fold(host, |host, library| host.native_library(library.clone()));
+        Ok(host.version(self.python_package_version.clone()))
+    }
+
+    /// Writes generated output to a directory.
+    pub fn write_output(
         output: GeneratedOutput,
         output_dir: &Path,
     ) -> Result<Vec<PathBuf>, GenerationError> {
@@ -117,6 +173,9 @@ impl Generation {
     fn bindings<S: Surface>(&self) -> Result<Bindings<S>, GenerationError> {
         let surface = BindingMetadataSurface::from_target_triple(self.triple.as_deref());
         let mut build = BindingMetadataBuild::new(&self.manifest_path);
+        if !self.cargo_args.is_empty() {
+            build = build.cargo_args(self.cargo_args.clone());
+        }
         if let Some(triple) = &self.triple {
             build = build.target(triple);
         }

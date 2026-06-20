@@ -68,14 +68,15 @@ impl Request {
         let scan = boltffi_scan::scan_package(
             &ScanInput::new(&self.source, self.package).with_manifest_dir(&self.root),
         )?;
+        let source = scan.root_with_support();
         match requested_surface()? {
             BindingMetadataSurface::Native => {
-                let native = lower_with_declarations::<Native>(scan.complete())?;
+                let native = lower_with_declarations::<Native>(&source)?;
                 metadata::render(SerializedBindings::native(native.into_bindings()))
                     .map_err(Into::into)
             }
             BindingMetadataSurface::Wasm32 => {
-                let wasm32 = lower_with_declarations::<Wasm32>(scan.complete())?;
+                let wasm32 = lower_with_declarations::<Wasm32>(&source)?;
                 metadata::render(SerializedBindings::wasm32(wasm32.into_bindings()))
                     .map_err(Into::into)
             }

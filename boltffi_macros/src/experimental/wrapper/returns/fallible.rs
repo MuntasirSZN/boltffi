@@ -1,4 +1,4 @@
-use boltffi_binding::{ErrorDecl, OutOfRust, ReadPlan, ReturnDecl, ReturnPlan, TypeRef};
+use boltffi_binding::{DirectValueType, ErrorDecl, OutOfRust, ReadPlan, ReturnDecl, ReturnPlan};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Ident;
@@ -147,7 +147,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedError<'expansion, 'lowered, 
                 Output = handle::ValueTokens,
             >,
     {
-        let locals = names::Wrapper::new(self.invocation.span);
+        let locals = names::Locals::new(self.invocation.span);
         let error_ident = locals.error();
         let error = <encoded::Renderer as Render<S, _>>::render(
             encoded::Renderer,
@@ -183,7 +183,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedError<'expansion, 'lowered, 
             writebacks,
             ..
         } = self.invocation;
-        let result = names::Wrapper::new(span).result();
+        let result = names::Locals::new(span).result();
         let result_value = if writebacks.is_empty() {
             quote! { #call }
         } else {
@@ -232,7 +232,7 @@ where
     type Output = SuccessTokens;
 
     fn render(self, input: SuccessInput<'expansion, 'lowered, S>) -> Result<Self::Output, Error> {
-        let locals = names::Wrapper::new(input.span);
+        let locals = names::Locals::new(input.span);
         let success_ident = locals.success();
         match input.returns.plan() {
             ReturnPlan::Void => Ok(SuccessTokens {
@@ -242,14 +242,10 @@ where
                 body: TokenStream::new(),
             }),
             ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
                 let out = locals.return_out();
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(SuccessTokens {
                     items: Vec::new(),
                     ffi_parameters: vec![quote! { #out: *mut #ty }],
@@ -275,7 +271,7 @@ where
                     body: quote! {
                         if !#out.is_null() {
                             unsafe {
-                                *#out = ::boltffi::__private::Passable::pack(#success_ident);
+                                *#out = <#ok as ::boltffi::__private::Passable>::pack(#success_ident);
                             }
                         }
                     },

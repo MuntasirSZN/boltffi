@@ -42,29 +42,30 @@ use super::{
     index::Index,
     metadata,
     surface::SurfaceLower,
-    symbol::{SymbolAllocator, constant_accessor_symbol_name},
+    symbol::{SymbolAllocator, to_snake_case},
     types,
 };
 
-pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+pub fn lower<S: SurfaceLower>(
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<ConstantDecl<S>>, LowerError> {
-    idx.constants()
+    index
+        .constants()
         .iter()
-        .map(|constant| lower_one::<S>(idx, ids, allocator, constant))
+        .map(|constant| lower_one::<S>(index, ids, allocator, constant))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     constant: &SourceConstant,
 ) -> Result<ConstantDecl<S>, LowerError> {
     let constant_id = ids.constant(&constant.id)?;
-    let value = lower_value_decl::<S>(idx, ids, allocator, constant)?;
+    let value = lower_value_decl::<S>(index, ids, allocator, constant)?;
     Ok(ConstantDecl::new(
         constant_id,
         CanonicalName::from(&constant.name),
@@ -74,7 +75,7 @@ fn lower_one<S: SurfaceLower>(
 }
 
 fn lower_value_decl<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     constant: &SourceConstant,
@@ -86,28 +87,28 @@ fn lower_value_decl<S: SurfaceLower>(
     // delivered through a Rust-side getter the foreign side calls once:
     // byte-string, array, tuple, and raw (unevaluated) expressions, plus
     // any constant whose declared type is not an inline scalar type.
-    match inline_default::<S>(idx, constant)? {
+    match inline_default::<S>(index, constant)? {
         Some(value) => {
             let ty = types::lower(ids, &constant.type_expr)?;
             Ok(ConstantValueDecl::inline(ty, value))
         }
         None => {
-            let symbol = allocator.mint(constant_accessor_symbol_name(constant.id.as_str()))?;
+            let symbol = allocator.mint_constant_accessor(constant.id.as_str())?;
             let callable =
-                callable::lower_constant_accessor::<S>(idx, ids, allocator, &constant.type_expr)?;
+                callable::lower_constant_accessor::<S>(index, ids, allocator, &constant.type_expr)?;
             Ok(ConstantValueDecl::accessor(symbol, Box::new(callable)))
         }
     }
 }
 
 fn inline_default<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     constant: &SourceConstant,
 ) -> Result<Option<DefaultValue>, LowerError> {
     // Returns the inline literal for a constant, `None` when the value
     // must be delivered through an accessor, or an error when the value
     // cannot inhabit its declared type.
-    let Some(expected) = InlineConstantType::from_type_expr::<S>(idx, &constant.type_expr) else {
+    let Some(expected) = InlineConstantType::from_type_expr::<S>(index, &constant.type_expr) else {
         return Ok(None);
     };
     expected.lower_value(constant)
@@ -123,7 +124,7 @@ enum InlineConstantType<'src> {
 }
 
 impl<'src> InlineConstantType<'src> {
-    fn from_type_expr<S: SurfaceLower>(idx: &Index<'src>, type_expr: &TypeExpr) -> Option<Self> {
+    fn from_type_expr<S: SurfaceLower>(index: &Index<'src>, type_expr: &TypeExpr) -> Option<Self> {
         match type_expr {
             TypeExpr::Primitive(SourcePrimitive::Bool) => Some(Self::Bool),
             TypeExpr::Primitive(SourcePrimitive::F32 | SourcePrimitive::F64) => Some(Self::Float),
@@ -131,7 +132,7 @@ impl<'src> InlineConstantType<'src> {
                 IntegerBounds::for_primitive::<S>(*primitive).map(Self::Integer)
             }
             TypeExpr::String | TypeExpr::Str => Some(Self::String),
-            TypeExpr::Enum { id, .. } => idx.enumeration(id).map(Self::Enum),
+            TypeExpr::Enum { id, .. } => index.enumeration(id).map(Self::Enum),
             _ => None,
         }
     }
@@ -233,41 +234,11 @@ fn canonical_name_matches_segment(name: &SourceName, segment: &str) -> bool {
 }
 
 fn source_name_parts(segment: &str) -> Vec<String> {
-    snake_case(segment.strip_prefix("r#").unwrap_or(segment))
+    to_snake_case(segment.strip_prefix("r#").unwrap_or(segment))
         .split('_')
         .filter(|part| !part.is_empty())
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn snake_case(name: &str) -> String {
-    let characters = name.chars().collect::<Vec<_>>();
-    characters.iter().enumerate().fold(
-        String::with_capacity(name.len()),
-        |mut normalized, (index, character)| {
-            if *character == '_' {
-                if !normalized.is_empty() && !normalized.ends_with('_') {
-                    normalized.push('_');
-                }
-                return normalized;
-            }
-
-            if character.is_uppercase() && index > 0 {
-                let previous = characters[index - 1];
-                let next = characters.get(index + 1).copied();
-                let previous_is_word = previous.is_lowercase() || previous.is_ascii_digit();
-                let acronym_boundary =
-                    previous.is_uppercase() && next.is_some_and(char::is_lowercase);
-
-                if (previous_is_word || acronym_boundary) && !normalized.ends_with('_') {
-                    normalized.push('_');
-                }
-            }
-
-            normalized.extend(character.to_lowercase());
-            normalized
-        },
-    )
 }
 
 #[derive(Clone, Copy)]

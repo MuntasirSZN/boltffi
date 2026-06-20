@@ -22,14 +22,15 @@ use super::{
 /// [`SymbolId`]: crate::SymbolId
 /// [`NativeSymbol`]: crate::NativeSymbol
 /// [`Bindings<S>`]: crate::Bindings
-pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+pub fn lower<S: SurfaceLower>(
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<EnumDecl<S>>, LowerError> {
-    idx.enums()
+    index
+        .enums()
         .iter()
-        .map(|enumeration| lower_one(idx, ids, allocator, enumeration))
+        .map(|enumeration| lower_one(index, ids, allocator, enumeration))
         .collect()
 }
 
@@ -38,7 +39,7 @@ pub(super) fn lower<S: SurfaceLower>(
 ///
 /// Exposed to the codec lane so a nested `TypeExpr::Enum(id)` agrees
 /// with the enum's own declaration on `CStyleEnum` vs `DataEnum`.
-pub(super) fn is_c_style(enumeration: &SourceEnum) -> bool {
+pub fn is_c_style(enumeration: &SourceEnum) -> bool {
     enumeration
         .variants
         .iter()
@@ -46,24 +47,24 @@ pub(super) fn is_c_style(enumeration: &SourceEnum) -> bool {
         && effective_integer_repr(enumeration).is_some()
 }
 
-pub(super) fn c_style_repr(enumeration: &SourceEnum) -> Option<IntegerRepr> {
+pub fn c_style_repr(enumeration: &SourceEnum) -> Option<IntegerRepr> {
     is_c_style(enumeration)
         .then(|| effective_integer_repr(enumeration))
         .flatten()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     enumeration: &SourceEnum,
 ) -> Result<EnumDecl<S>, LowerError> {
-    let initializers = methods::lower_enum_initializers::<S>(idx, ids, allocator, enumeration)?;
-    let enum_methods = methods::lower_enum_methods::<S>(idx, ids, allocator, enumeration)?;
+    let initializers = methods::lower_enum_initializers::<S>(index, ids, allocator, enumeration)?;
+    let enum_methods = methods::lower_enum_methods::<S>(index, ids, allocator, enumeration)?;
     if is_c_style(enumeration) {
         lower_c_style(ids, enumeration, initializers, enum_methods).map(EnumDecl::CStyle)
     } else {
-        lower_data(idx, ids, enumeration, initializers, enum_methods)
+        lower_data(index, ids, enumeration, initializers, enum_methods)
             .map(|enumeration| EnumDecl::Data(Box::new(enumeration)))
     }
 }
@@ -96,7 +97,7 @@ fn lower_c_style<S: SurfaceLower>(
 }
 
 fn lower_data<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     enumeration: &SourceEnum,
     initializers: Vec<InitializerDecl<S>>,
@@ -110,12 +111,12 @@ fn lower_data<S: SurfaceLower>(
             .variants
             .iter()
             .enumerate()
-            .map(|(index, variant)| lower_variant(idx, ids, index, variant))
+            .map(|(variant_index, variant)| lower_variant(index, ids, variant_index, variant))
             .collect::<Result<Vec<_>, LowerError>>()?,
         initializers,
         enum_methods,
         codecs::plan(
-            idx,
+            index,
             ids,
             &TypeExpr::enumeration(
                 enumeration.id.clone(),
@@ -127,21 +128,21 @@ fn lower_data<S: SurfaceLower>(
 }
 
 fn lower_variant(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
-    index: usize,
+    variant_index: usize,
     variant: &SourceVariant,
 ) -> Result<DataVariantDecl, LowerError> {
     Ok(DataVariantDecl::new(
         CanonicalName::from(&variant.name),
-        VariantTag::from_index(index).ok_or_else(LowerError::variant_tag_overflow)?,
-        lower_payload(idx, ids, &variant.payload)?,
+        VariantTag::from_index(variant_index).ok_or_else(LowerError::variant_tag_overflow)?,
+        lower_payload(index, ids, &variant.payload)?,
         metadata::element_meta(variant.doc.as_ref(), None, None)?,
     ))
 }
 
 fn lower_payload(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     payload: &SourcePayload,
 ) -> Result<DataVariantPayload, LowerError> {
@@ -150,12 +151,12 @@ fn lower_payload(
         SourcePayload::Tuple(types) => types
             .iter()
             .enumerate()
-            .map(|(index, type_expr)| {
-                let key =
-                    FieldKey::position(index).ok_or_else(LowerError::field_position_overflow)?;
+            .map(|(field_index, type_expr)| {
+                let key = FieldKey::position(field_index)
+                    .ok_or_else(LowerError::field_position_overflow)?;
                 let value = ValueRef::self_value().field(key.clone());
                 let ty = super::types::lower(ids, type_expr)?;
-                let codec = codecs::plan(idx, ids, type_expr, value)?;
+                let codec = codecs::plan(index, ids, type_expr, value)?;
                 Ok(EncodedFieldDecl::new(key, ty, codec, Default::default()))
             })
             .collect::<Result<Vec<_>, LowerError>>()
@@ -166,7 +167,7 @@ fn lower_payload(
                 let key = FieldKey::from(field);
                 let value = ValueRef::self_value().field(key.clone());
                 let ty = super::types::lower(ids, &field.type_expr)?;
-                let codec = codecs::plan(idx, ids, &field.type_expr, value)?;
+                let codec = codecs::plan(index, ids, &field.type_expr, value)?;
                 Ok(EncodedFieldDecl::new(
                     key,
                     ty,
@@ -218,11 +219,11 @@ mod tests {
     use crate::lower::lower;
     use crate::{
         BindingErrorKind, Bindings, CStyleEnumDecl, CanonicalName, CodecNode, DataEnumDecl,
-        DataVariantPayload, Decl, DefaultValue, EncodedFieldDecl, EnumDecl, EnumId, ErrorDecl,
-        ExecutionDecl, ExportedMethodDecl, FieldKey, InitializerDecl, IntegerRepr, IntegerValue,
-        LowerError, LowerErrorKind, Native, NativeSymbol, OutOfRust, ParamPlan,
-        Primitive as BindingPrimitive, ReadPlan, Receive, RecordId, ReturnPlan, SurfaceLower,
-        TypeRef, ValueRef, Wasm32, native, wasm32,
+        DataVariantPayload, Decl, DefaultValue, DirectValueType, EncodedFieldDecl, EnumDecl,
+        EnumId, ErrorDecl, ExecutionDecl, ExportedMethodDecl, FieldKey, InitializerDecl,
+        IntegerRepr, IntegerValue, LowerError, LowerErrorKind, Native, NativeSymbol, OutOfRust,
+        ParamPlan, Primitive as BindingPrimitive, ReadPlan, Receive, RecordId, ReturnPlan,
+        SurfaceLower, TypeRef, ValueRef, Wasm32, native, wasm32,
     };
 
     fn package() -> SourceContract {
@@ -719,7 +720,7 @@ mod tests {
         assert_eq!(
             method.callable().returns().plan(),
             &ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Enum(EnumId::from_raw(0)),
+                ty: DirectValueType::Enum(EnumId::from_raw(0)),
             }
         );
     }
@@ -769,7 +770,7 @@ mod tests {
         assert_eq!(
             initializer.callable().returns().plan(),
             &ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Enum(EnumId::from_raw(0)),
+                ty: DirectValueType::Enum(EnumId::from_raw(0)),
             }
         );
     }
@@ -794,7 +795,7 @@ mod tests {
         assert_eq!(
             initializer.callable().returns().plan(),
             &ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Enum(EnumId::from_raw(0)),
+                ty: DirectValueType::Enum(EnumId::from_raw(0)),
             }
         );
         assert_encoded_string_error(initializer.callable().error());
@@ -844,7 +845,7 @@ mod tests {
         assert_eq!(
             method.callable().params()[0].as_value().unwrap(),
             &ParamPlan::Direct {
-                ty: TypeRef::Enum(EnumId::from_raw(0)),
+                ty: DirectValueType::Enum(EnumId::from_raw(0)),
                 receive: Receive::ByValue,
             }
         );
@@ -1042,7 +1043,7 @@ mod tests {
         assert_eq!(
             method.callable().returns().plan(),
             &ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
             }
         );
         assert_encoded_string_error(method.callable().error());
@@ -1092,7 +1093,7 @@ mod tests {
         assert_eq!(
             method.callable().params()[0].as_value().unwrap(),
             &ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
                 receive: Receive::ByRef,
             }
         );
@@ -1123,7 +1124,7 @@ mod tests {
         assert!(matches!(
             params[0].as_value().unwrap(),
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
                 ..
             }
         ));
@@ -1206,7 +1207,7 @@ mod tests {
         assert!(matches!(
             params[0].as_value().unwrap(),
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
                 ..
             }
         ));
@@ -1284,7 +1285,7 @@ mod tests {
         assert_eq!(
             method.callable().returns().plan(),
             &ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Record(RecordId::from_raw(0)),
+                ty: DirectValueType::Record(RecordId::from_raw(0)),
             }
         );
     }
@@ -1307,7 +1308,7 @@ mod tests {
         assert_eq!(
             method.callable().returns().plan(),
             &ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Enum(EnumId::from_raw(0)),
+                ty: DirectValueType::Enum(EnumId::from_raw(0)),
             }
         );
     }

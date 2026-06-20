@@ -1,4 +1,4 @@
-use boltffi_binding::{CodecNode, ErrorDecl, OutOfRust, ReturnDecl, ReturnPlan, TypeRef};
+use boltffi_binding::{CodecNode, DirectValueType, ErrorDecl, OutOfRust, ReturnDecl, ReturnPlan};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Type;
@@ -96,6 +96,7 @@ pub struct Tokens {
 pub struct FailureInput<'expansion, 'lowered, S: RenderSurface> {
     returns: &'lowered ReturnDecl<S, OutOfRust>,
     error: &'lowered ErrorDecl<S, OutOfRust>,
+    source: rust_api::Return<'lowered>,
     expansion: &'expansion Expansion<'lowered, S>,
 }
 
@@ -103,11 +104,13 @@ impl<'expansion, 'lowered, S: RenderSurface> FailureInput<'expansion, 'lowered, 
     pub fn new(
         returns: &'lowered ReturnDecl<S, OutOfRust>,
         error: &'lowered ErrorDecl<S, OutOfRust>,
+        source: rust_api::Return<'lowered>,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
         Self {
             returns,
             error,
+            source,
             expansion,
         }
     }
@@ -181,7 +184,7 @@ where
             writebacks,
             ..
         } = input.invocation;
-        let locals = names::Wrapper::new(span);
+        let locals = names::Locals::new(span);
         match input.returns.plan() {
             ReturnPlan::Void => Ok(Tokens {
                 items: Vec::new(),
@@ -195,13 +198,9 @@ where
                 },
             }),
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
-                let ty = TypeRef::Primitive(*primitive);
-                let ty = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 let body = if writebacks.is_empty() {
                     quote! {
                         #(#conversions)*
@@ -230,7 +229,7 @@ where
                 let body = if writebacks.is_empty() {
                     quote! {
                         #(#conversions)*
-                        ::boltffi::__private::Passable::pack(#call)
+                        <#rust_type as ::boltffi::__private::Passable>::pack(#call)
                     }
                 } else {
                     let result = locals.result();
@@ -238,7 +237,7 @@ where
                         #(#conversions)*
                         let #result = #call;
                         #(#writebacks)*
-                        ::boltffi::__private::Passable::pack(#result)
+                        <#rust_type as ::boltffi::__private::Passable>::pack(#result)
                     }
                 };
                 Ok(Tokens {
@@ -261,6 +260,13 @@ where
                 };
                 let encoded =
                     <encoded::Renderer as Render<S, _>>::render(encoded::Renderer, encoded_input)?;
+                let type_annotation =
+                    match wrapper::encoded::Outgoing::new(codec.root(), input.expansion)
+                        .has_custom_conversion()
+                    {
+                        true => TokenStream::new(),
+                        false => quote! { : #rust_type },
+                    };
                 let return_type = encoded.return_type().clone();
                 let value = encoded.value();
                 Ok(Tokens {
@@ -269,7 +275,7 @@ where
                     return_type,
                     body: quote! {
                         #(#conversions)*
-                        let #result: #rust_type = #call;
+                        let #result #type_annotation = #call;
                         #(#writebacks)*
                         #value
                     },
@@ -335,11 +341,11 @@ where
                 })
             }
             ReturnPlan::DirectVecViaReturnSlot { .. } => {
-                input.source.direct_vec()?;
+                let element = input.source.direct_vec_element_type()?;
                 let result = locals.result();
                 let sequence = <direct_vec::Renderer as Render<S, _>>::render(
                     direct_vec::Renderer,
-                    direct_vec::Input::new(result.clone()),
+                    direct_vec::Input::new(result.clone(), element),
                 )?;
                 let return_type = sequence.return_type;
                 let body = sequence.body;
@@ -386,7 +392,7 @@ where
 
     fn render(self, input: FailureInput<'expansion, 'lowered, S>) -> Result<Self::Output, Error> {
         if !matches!(input.error, ErrorDecl::None(_)) {
-            return ErrorFailure::new(input.error, input.expansion).tokens();
+            return ErrorFailure::new(input.error, input.source, input.expansion).tokens();
         }
 
         match input.returns.plan() {
@@ -394,15 +400,26 @@ where
                 return ::boltffi::__private::FfiStatus::INVALID_ARG;
             }),
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(_),
-            } => Ok(quote! {
-                return ::core::default::Default::default();
-            }),
-            ReturnPlan::DirectViaReturnSlot { .. } => Ok(quote! {
-                return unsafe {
-                    ::core::mem::MaybeUninit::zeroed().assume_init()
-                };
-            }),
+                ty: DirectValueType::Primitive(primitive),
+            } => {
+                let ty = wrapper::type_ref::Renderer.primitive(*primitive)?;
+                Ok(quote! {
+                    return <#ty as ::core::default::Default>::default();
+                })
+            }
+            ReturnPlan::DirectViaReturnSlot { .. } => {
+                let rust_type = input
+                    .source
+                    .written_type()?
+                    .ok_or(Error::SourceSyntaxMismatch("direct return type is missing"))?;
+                Ok(quote! {
+                    return unsafe {
+                        ::core::mem::MaybeUninit::<
+                            <#rust_type as ::boltffi::__private::Passable>::Out
+                        >::zeroed().assume_init()
+                    };
+                })
+            }
             ReturnPlan::EncodedViaReturnSlot { shape, .. } => {
                 let empty = <encoded::Renderer as Render<S, _>>::render(
                     encoded::Renderer,
@@ -441,19 +458,26 @@ where
 
 struct ErrorFailure<'expansion, 'lowered, S: RenderSurface> {
     error: &'lowered ErrorDecl<S, OutOfRust>,
+    source: rust_api::Return<'lowered>,
     expansion: &'expansion Expansion<'lowered, S>,
 }
 
 impl<'expansion, 'lowered, S: RenderSurface> ErrorFailure<'expansion, 'lowered, S> {
     fn new(
         error: &'lowered ErrorDecl<S, OutOfRust>,
+        source: rust_api::Return<'lowered>,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
-        Self { error, expansion }
+        Self {
+            error,
+            source,
+            expansion,
+        }
     }
 
     fn tokens(self) -> Result<TokenStream, Error>
     where
+        encoded::Renderer: Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
         encoded::Renderer:
             Render<S, encoded::Input<'expansion, 'lowered, 'lowered, S>, Output = encoded::Tokens>,
     {
@@ -461,7 +485,7 @@ impl<'expansion, 'lowered, S: RenderSurface> ErrorFailure<'expansion, 'lowered, 
             ErrorDecl::EncodedViaReturnSlot { codec, shape, .. }
                 if matches!(codec.root(), CodecNode::String) =>
             {
-                let error = names::Wrapper::new(proc_macro2::Span::call_site()).error();
+                let error = names::Locals::new(proc_macro2::Span::call_site()).error();
                 let encoded = <encoded::Renderer as Render<S, _>>::render(
                     encoded::Renderer,
                     encoded::Input::string(codec, *shape, error.clone(), self.expansion),
@@ -472,13 +496,26 @@ impl<'expansion, 'lowered, S: RenderSurface> ErrorFailure<'expansion, 'lowered, 
                     return #value;
                 })
             }
-            ErrorDecl::EncodedViaReturnSlot { .. } => Err(Error::UnsupportedExpansion(
-                "non-string encoded error failure",
-            )),
+            ErrorDecl::EncodedViaReturnSlot { shape, .. } => self.typed_encoded_error(*shape),
             ErrorDecl::StatusViaReturnSlot { .. } => {
                 Err(Error::UnsupportedExpansion("status error failure"))
             }
             _ => Err(Error::UnsupportedExpansion("error failure")),
         }
+    }
+
+    fn typed_encoded_error(self, shape: S::BufferShape) -> Result<TokenStream, Error>
+    where
+        encoded::Renderer: Render<S, encoded::Empty<S>, Output = encoded::Tokens>,
+    {
+        self.source.fallible()?;
+        let empty = <encoded::Renderer as Render<S, _>>::render(
+            encoded::Renderer,
+            encoded::Empty::new(shape),
+        )?;
+        let value = empty.value();
+        Ok(quote! {
+            return #value;
+        })
     }
 }

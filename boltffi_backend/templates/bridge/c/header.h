@@ -55,7 +55,7 @@ typedef struct {
 {{ function.declaration }};
 {%- endfor %}
 
-{%- for record in records %}
+{%- for record in direct_records %}
 typedef struct {
 {%- if record.fields.is_empty() %}
     uint8_t _unused;

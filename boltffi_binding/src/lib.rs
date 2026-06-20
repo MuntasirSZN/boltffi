@@ -61,6 +61,7 @@ pub mod ir;
 mod lower;
 
 pub use ir::*;
+pub use ir::{ErrorChannel, ErrorPlacement};
 pub use lower::{
     DeclarationFamily, DeclarationMap, LowerError, LowerErrorKind, LoweredBindings, SurfaceLower,
     UnsupportedType, lower, lower_with_declarations,

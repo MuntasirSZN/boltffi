@@ -1,13 +1,13 @@
 use boltffi_binding::{ExecutionDecl, ExportedCallable, NativeSymbol, Receive};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 use crate::experimental::{
     error::Error,
     expansion::Expansion,
     rust_api,
     surface::RenderSurface,
-    wrapper::{self, Render},
+    wrapper::{self, Render, names},
 };
 
 pub struct Renderer<'expansion, 'lowered, S: RenderSurface> {
@@ -35,6 +35,7 @@ pub struct ReceiverTokens {
 enum RustCallTarget {
     Constant(syn::Ident),
     Function(syn::Ident),
+    FunctionPath(TokenStream),
     Associated {
         owner: TokenStream,
         method: syn::Ident,
@@ -135,7 +136,7 @@ where
                 self.expansion,
             ),
         )?;
-        let export_ident = format_ident!("{}", self.symbol.name().as_str());
+        let export_ident = names::Symbol::new(self.symbol).ident();
         let ffi_parameters = self
             .receiver
             .ffi_parameters
@@ -174,6 +175,7 @@ where
                 wrapper::returns::FailureInput::new(
                     self.callable.returns(),
                     self.callable.error(),
+                    self.source.returns(),
                     self.expansion,
                 ),
             ),
@@ -194,6 +196,13 @@ impl RustCall {
         Self {
             owner: function.clone(),
             target: RustCallTarget::Function(function),
+        }
+    }
+
+    pub fn function_path(owner: syn::Ident, path: TokenStream) -> Self {
+        Self {
+            owner,
+            target: RustCallTarget::FunctionPath(path),
         }
     }
 
@@ -241,6 +250,7 @@ impl RustCall {
                 quote! { #constant }
             }
             RustCallTarget::Function(function) => quote! { #function(#(#arguments),*) },
+            RustCallTarget::FunctionPath(path) => quote! { #path(#(#arguments),*) },
             RustCallTarget::Associated { owner, method } => {
                 quote! { #owner::#method(#(#arguments),*) }
             }
@@ -255,6 +265,24 @@ impl RustCall {
                 method,
             } => {
                 Self::class_method_expression(*receive, class, handle, receiver, method, arguments)
+            }
+        }
+    }
+
+    pub fn awaited_expression(&self, arguments: &[TokenStream]) -> TokenStream {
+        match &self.target {
+            RustCallTarget::ClassMethod {
+                class,
+                handle,
+                receiver,
+                receive,
+                method,
+            } => Self::class_method_awaited_expression(
+                *receive, class, handle, receiver, method, arguments,
+            ),
+            _ => {
+                let expression = self.expression(arguments);
+                quote! { #expression.await }
             }
         }
     }
@@ -276,6 +304,23 @@ impl RustCall {
             {
                 #receiver
                 #handle.#method(#(#arguments),*)
+            }
+        }
+    }
+
+    fn class_method_awaited_expression(
+        receive: Receive,
+        class: &syn::Ident,
+        handle: &syn::Ident,
+        receiver: &ClassReceiverBinding,
+        method: &syn::Ident,
+        arguments: &[TokenStream],
+    ) -> TokenStream {
+        let receiver = receiver.access(receive, class, handle);
+        quote! {
+            {
+                #receiver
+                #handle.#method(#(#arguments),*).await
             }
         }
     }

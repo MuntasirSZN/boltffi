@@ -1,4 +1,4 @@
-use boltffi_binding::{IncomingParam, IntoRust, ParamDecl, ParamPlan};
+use boltffi_binding::{DirectValueType, IncomingParam, IntoRust, ParamDecl, ParamPlan};
 use proc_macro2::TokenStream;
 
 use crate::experimental::{
@@ -22,7 +22,7 @@ pub fn requires_failure_return<S: RenderSurface>(param: &ParamDecl<S, IntoRust>)
     match param.payload() {
         IncomingParam::Value(ParamPlan::Direct { ty, .. }) => {
             matches!(S::DIRECT_RECORD_PARAMS, DirectRecordCrossing::Pointer)
-                && matches!(ty, boltffi_binding::TypeRef::Record(_))
+                && matches!(ty, DirectValueType::Record(_))
         }
         IncomingParam::Value(ParamPlan::Encoded { .. })
         | IncomingParam::Value(ParamPlan::Handle { .. })
@@ -94,8 +94,8 @@ impl Tokens {
 impl<'expansion, 'lowered, S> Render<S, Input<'expansion, 'lowered, S>> for Renderer
 where
     S: RenderSurface,
-    direct::Renderer: Render<S, direct::Input<'lowered>, Output = Tokens>,
-    direct_vec::Renderer: Render<S, direct_vec::Input<'lowered>, Output = Tokens>,
+    direct::Renderer: Render<S, direct::Input, Output = Tokens>,
+    direct_vec::Renderer: Render<S, direct_vec::Input, Output = Tokens>,
     closure::Renderer: Render<S, closure::Input<'expansion, 'lowered, S>, Output = Tokens>,
     encoded::Renderer: Render<S, encoded::Input<'expansion, 'lowered, S>, Output = Tokens>,
     handle::Renderer: Render<S, handle::Input<'lowered, S::HandleCarrier>, Output = Tokens>,

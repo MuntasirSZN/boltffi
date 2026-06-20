@@ -3,7 +3,7 @@ mod pair;
 
 use boltffi_ast::{ClassDef, ConstantDef, EnumDef, FunctionDef, RecordDef, StreamDef, TraitDef};
 use boltffi_binding::{
-    CallbackDecl, CallbackId, ClassDecl, ConstantDecl, CustomTypeDecl, CustomTypeId,
+    Bindings, CallbackDecl, CallbackId, ClassDecl, ConstantDecl, CustomTypeDecl, CustomTypeId,
     EncodedRecordDecl, EnumDecl, FunctionDecl, LoweredBindings, RecordDecl, RecordId, StreamDecl,
     Surface,
 };
@@ -33,7 +33,7 @@ impl<'lowered, S: Surface> Expansion<'lowered, S> {
     }
 
     /// Returns the lowered binding declarations.
-    pub fn bindings(&self) -> &'lowered boltffi_binding::Bindings<S> {
+    pub fn bindings(&self) -> &'lowered Bindings<S> {
         self.lowered.bindings()
     }
 
@@ -429,8 +429,8 @@ mod tests {
                 wrapper::async_call::Input<'expansion, 'lowered, S>,
                 Output = TokenStream,
             >,
-        for<'ty> wrapper::param::direct::Renderer:
-            wrapper::Render<S, wrapper::param::direct::Input<'ty>, Output = wrapper::param::Tokens>,
+        wrapper::param::direct::Renderer:
+            wrapper::Render<S, wrapper::param::direct::Input, Output = wrapper::param::Tokens>,
         for<'expansion> wrapper::param::encoded::Renderer: wrapper::Render<
                 S,
                 wrapper::param::encoded::Input<'expansion, 'lowered, S>,
@@ -2263,7 +2263,7 @@ mod tests {
 
         assert_generated_crate_checks("native_custom_slice_constant", generated);
         let rendered = tokens.to_string();
-        assert!(rendered.contains("let __boltffi_result : & [Timestamp] = TIMES"));
+        assert!(rendered.contains("let __boltffi_result = TIMES"));
         assert!(rendered.contains("(timestamp_into_ffi) (value)"));
         assert!(!rendered.contains("(timestamp_into_ffi) (& value)"));
     }
@@ -2416,14 +2416,14 @@ mod tests {
                     __boltffi_when_ptr: *const u8,
                     __boltffi_when_len: usize
                 ) -> u32 {
-                    let when: Timestamp = {
+                    let when = {
                         if __boltffi_when_ptr.is_null() && __boltffi_when_len > 0 {
                             ::boltffi::__private::set_last_error(format!(
                                 "{}: null pointer with non-zero length (buf_len={})",
                                 stringify!(when),
                                 __boltffi_when_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_when_len == 0 {
                             &[]
@@ -2444,10 +2444,12 @@ mod tests {
                                     error,
                                     __boltffi_when_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         };
-                        match (timestamp_try_from_ffi)(__boltffi_decoded) {
+                        match (|__boltffi_value: i64| (timestamp_try_from_ffi)(__boltffi_value))(
+                            __boltffi_decoded
+                        ) {
                             Ok(value) => value,
                             Err(error) => {
                                 ::boltffi::__private::set_last_error(format!(
@@ -2456,7 +2458,7 @@ mod tests {
                                     error,
                                     __boltffi_when_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -2734,7 +2736,9 @@ mod tests {
                 "< i64 as :: boltffi :: __private :: wire :: WireDecode > :: decode_from"
             )
         );
-        assert!(rendered.contains("match (timestamp_try_from_ffi) (__boltffi_when_decoded)"));
+        assert!(rendered.contains(
+            "match (| __boltffi_value : i64 | (timestamp_try_from_ffi) (__boltffi_value)) (__boltffi_when_decoded)"
+        ));
         assert!(
             !rendered.contains("< Timestamp as :: boltffi :: __private :: wire :: WireDecode >")
         );
@@ -3008,7 +3012,7 @@ mod tests {
     }
 
     #[test]
-    fn native_direct_record_expansion_rejects_mutable_receiver_without_writeback() {
+    fn native_direct_record_expansion_writes_mutable_receiver_back() {
         let method = record_method(
             "shift",
             Receiver::Mutable,
@@ -3020,11 +3024,20 @@ mod tests {
         let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
         let expansion = Expansion::new(&lowered);
 
-        let error = expand_record(&expansion, &source.records[0]).expect_err("record rejects");
+        let tokens = expand_record(&expansion, &source.records[0]).expect("expanded record");
 
-        assert!(matches!(
-            error,
-            Error::UnsupportedExpansion("mutable direct record receiver without writeback")
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("fn boltffi_method_record_demo_point_shift"));
+        assert!(rendered.contains(
+            "__boltffi_receiver : < Point as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(rendered.contains(
+            "__boltffi_receiver_out : * mut < Point as :: boltffi :: __private :: Passable > :: In"
+        ));
+        assert!(rendered.contains("receiver writeback pointer is null"));
+        assert!(rendered.contains("__boltffi_receiver . shift ()"));
+        assert!(rendered.contains(
+            ":: core :: ptr :: write_unaligned (__boltffi_receiver_out , < Point as :: boltffi :: __private :: Passable > :: pack (__boltffi_receiver))"
         ));
     }
 
@@ -3093,8 +3106,8 @@ mod tests {
         assert!(rendered.contains("fn boltffi_method_record_demo_profile_display_name"));
         assert!(rendered.contains("__boltffi_receiver_ptr : * const u8"));
         assert!(rendered.contains("__boltffi_receiver_len : usize"));
-        assert!(rendered.contains("let __boltffi_receiver : Profile ="));
-        assert!(!rendered.contains("__boltffi_receiver_storage"));
+        assert!(rendered.contains("let __boltffi_receiver_storage : Profile ="));
+        assert!(rendered.contains("let __boltffi_receiver = & __boltffi_receiver_storage ;"));
         assert!(rendered.contains("__boltffi_receiver . display_name ()"));
     }
 
@@ -3703,7 +3716,7 @@ mod tests {
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_stamp() -> ::boltffi::__private::FfiBuf {
-                    let __boltffi_result: Timestamp = stamp();
+                    let __boltffi_result = stamp();
                     {
                         let __boltffi_wire = (timestamp_into_ffi)(&__boltffi_result);
                         ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_wire)
@@ -3757,10 +3770,7 @@ mod tests {
             expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
         let rendered = tokens.to_string();
 
-        assert!(
-            rendered
-                .contains("let __boltffi_result : Vec < Option < Timestamp > > = timeline () ;")
-        );
+        assert!(rendered.contains("let __boltffi_result = timeline () ;"));
         assert!(rendered.contains(". into_iter () . map (| value | value . map (| value | (timestamp_into_ffi) (& value))) . collect :: < Vec < _ >> ()"));
         assert!(
             rendered
@@ -3946,7 +3956,7 @@ mod tests {
                                     *out_status = status;
                                 }
                             }
-                            Default::default()
+                            <u32 as ::core::default::Default>::default()
                         }
                     }
                 }
@@ -4384,7 +4394,7 @@ mod tests {
                                     *out_status = status;
                                 }
                             }
-                            Default::default()
+                            <u32 as ::core::default::Default>::default()
                         }
                     }
                 }
@@ -4533,7 +4543,7 @@ mod tests {
                             "{}: null direct record pointer",
                             stringify!(point)
                         ));
-                        return ::core::default::Default::default();
+                        return <f64 as ::core::default::Default>::default();
                     }
                     let point: Point = unsafe {
                         let __boltffi_value =
@@ -4619,7 +4629,7 @@ mod tests {
                             "{}: null direct record pointer",
                             stringify!(point)
                         ));
-                        return ::core::default::Default::default();
+                        return <f64 as ::core::default::Default>::default();
                     }
                     let mut point: Point = unsafe {
                         let __boltffi_value =
@@ -4632,7 +4642,7 @@ mod tests {
                     unsafe {
                         ::core::ptr::write_unaligned(
                             __boltffi_point_out as *mut <Point as ::boltffi::__private::Passable>::In,
-                            ::boltffi::__private::Passable::pack(point)
+                            <Point as ::boltffi::__private::Passable>::pack(point)
                         );
                     }
                     __boltffi_result
@@ -4709,7 +4719,7 @@ mod tests {
                                 stringify!(name),
                                 __boltffi_name_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_name_len == 0 {
                             &[]
@@ -4730,7 +4740,7 @@ mod tests {
                                     error,
                                     __boltffi_name_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -4774,7 +4784,7 @@ mod tests {
                                 stringify!(__boltffi_name_storage),
                                 __boltffi_name_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_name_len == 0 {
                             &[]
@@ -4795,7 +4805,7 @@ mod tests {
                                     error,
                                     __boltffi_name_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -4840,7 +4850,7 @@ mod tests {
                                 stringify!(__boltffi_name_storage),
                                 __boltffi_name_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_name_len == 0 {
                             &[]
@@ -4861,7 +4871,7 @@ mod tests {
                                     error,
                                     __boltffi_name_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -4906,7 +4916,7 @@ mod tests {
                                 stringify!(bytes),
                                 __boltffi_bytes_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_bytes_len == 0 {
                             &[]
@@ -4927,7 +4937,7 @@ mod tests {
                                     error,
                                     __boltffi_bytes_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -4971,7 +4981,7 @@ mod tests {
                                 stringify!(__boltffi_bytes_storage),
                                 __boltffi_bytes_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_bytes_len == 0 {
                             &[]
@@ -4992,7 +5002,7 @@ mod tests {
                                     error,
                                     __boltffi_bytes_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -5029,7 +5039,7 @@ mod tests {
                     let count: Option<i32> = if __boltffi_count_ptr.is_null() {
                         None
                     } else {
-                        match ::boltffi::__private::wire::decode(unsafe {
+                        match ::boltffi::__private::wire::decode::<Option<i32> >(unsafe {
                             ::core::slice::from_raw_parts(
                                 __boltffi_count_ptr,
                                 __boltffi_count_len
@@ -5088,7 +5098,7 @@ mod tests {
                                 stringify!(profile),
                                 __boltffi_profile_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_profile_len == 0 {
                             &[]
@@ -5109,7 +5119,7 @@ mod tests {
                                     error,
                                     __boltffi_profile_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -5153,7 +5163,7 @@ mod tests {
                                 stringify!(__boltffi_profile_storage),
                                 __boltffi_profile_len
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                         let __boltffi_bytes: &[u8] = if __boltffi_profile_len == 0 {
                             &[]
@@ -5174,7 +5184,7 @@ mod tests {
                                     error,
                                     __boltffi_profile_len
                                 ));
-                                return ::core::default::Default::default();
+                                return <u32 as ::core::default::Default>::default();
                             }
                         }
                     };
@@ -6134,7 +6144,7 @@ mod tests {
         assert!(
             rendered.contains("pub unsafe extern \"C\" fn boltffi_register_callback_demo_listener")
         );
-        assert!(rendered.contains("crate :: __boltffi_local_demo_listener_handle"));
+        assert!(rendered.contains("__boltffi_local_demo_listener_handle"));
         assert!(rendered.contains("__boltffi_receiver . replace (listener)"));
         assert_generated_crate_checks(
             "native_class_method_with_callback_param_and_return",
@@ -6674,7 +6684,9 @@ mod tests {
         ));
         assert!(rendered.contains("wire :: decode :: < Option < i32 > >"));
         assert!(rendered.contains(":: boltffi :: __private :: FfiBuf :: wire_encode"));
-        assert!(rendered.contains("< _ as :: boltffi :: __private :: VecTransport > :: pack_vec"));
+        assert!(
+            rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: pack_vec")
+        );
         assert!(
             rendered.contains("< i32 as :: boltffi :: __private :: VecTransport > :: unpack_vec")
         );
@@ -6885,15 +6897,9 @@ mod tests {
             rendered.contains("async fn try_numbers (& self) -> Result < Vec < u8 > , String >")
         );
         assert!(rendered.contains("if state . status . is_err ()"));
-        assert!(rendered.contains(
-            ":: boltffi :: __private :: wire :: decode :: < u32 > (unsafe { __boltffi_result . as_byte_slice () })"
-        ));
-        assert!(rendered.contains(
-            ":: boltffi :: __private :: wire :: decode :: < Vec < u8 > > (unsafe { __boltffi_result . as_byte_slice () })"
-        ));
-        assert!(rendered.contains(
-            ":: boltffi :: __private :: wire :: decode :: < String > (unsafe { __boltffi_result . as_byte_slice () })"
-        ));
+        assert!(rendered.contains(":: boltffi :: __private :: wire :: decode :: < u32 >"));
+        assert!(rendered.contains(":: boltffi :: __private :: wire :: decode :: < Vec < u8 > >"));
+        assert!(rendered.contains(":: boltffi :: __private :: wire :: decode :: < String >"));
     }
 
     #[test]
@@ -7085,7 +7091,7 @@ mod tests {
             "box_from_callback_handle (unsafe { __boltffi_success_out . assume_init () })"
         ));
         assert!(rendered.contains(
-            "* __boltffi_success_out = crate :: __boltffi_local_demo_listener_handle (:: std :: sync :: Arc :: from (__boltffi_success))"
+            "* __boltffi_success_out = __boltffi_local_demo_listener_handle (:: std :: sync :: Arc :: from (__boltffi_success))"
         ));
         assert!(!rendered.contains("boltffi_create_callback_demo_listener (__boltffi_success)"));
     }
@@ -7160,7 +7166,7 @@ mod tests {
                     -> ::boltffi::__private::CallbackHandle
                 {
                     let __boltffi_result: Box<dyn Listener> = make_listener();
-                    crate::__boltffi_local_demo_listener_handle(::std::sync::Arc::from(__boltffi_result))
+                    __boltffi_local_demo_listener_handle(::std::sync::Arc::from(__boltffi_result))
                 }
             }
             .to_string()
@@ -7193,7 +7199,7 @@ mod tests {
                     -> ::boltffi::__private::CallbackHandle
                 {
                     let __boltffi_result: ::std::sync::Arc<dyn Listener> = shared_listener();
-                    crate::__boltffi_local_demo_listener_handle(__boltffi_result)
+                    __boltffi_local_demo_listener_handle(__boltffi_result)
                 }
             }
             .to_string()
@@ -7227,7 +7233,7 @@ mod tests {
                         maybe_listener();
                     __boltffi_result
                         .map(|__boltffi_callback|
-                            crate::__boltffi_local_demo_listener_handle(__boltffi_callback).handle() as u32
+                            __boltffi_local_demo_listener_handle(__boltffi_callback).handle() as u32
                         )
                         .unwrap_or(0)
                 }
@@ -7262,7 +7268,7 @@ mod tests {
                     let __boltffi_result: Option<Box<dyn Listener> > = maybe_boxed_listener();
                     __boltffi_result
                         .map(|__boltffi_callback| {
-                            crate::__boltffi_local_demo_listener_handle(
+                            __boltffi_local_demo_listener_handle(
                                 ::std::sync::Arc::from(__boltffi_callback)
                             ).handle() as u32
                         })
@@ -7303,7 +7309,7 @@ mod tests {
                             if !__boltffi_return_out.is_null() {
                                 unsafe {
                                     *__boltffi_return_out =
-                                        crate::__boltffi_local_demo_listener_handle(
+                                        __boltffi_local_demo_listener_handle(
                                             ::std::sync::Arc::from(__boltffi_success)
                                         );
                                 }
@@ -7402,7 +7408,7 @@ mod tests {
                             "{}: null closure handle",
                             stringify!(callback)
                         ));
-                        return ::core::default::Default::default();
+                        return <u32 as ::core::default::Default>::default();
                     }
                     let __boltffi_callback_owner =
                         ::boltffi::__private::WasmCallbackOwner::new(
@@ -7470,7 +7476,8 @@ mod tests {
         assert!(rendered.contains(
             ":: boltffi :: __private :: wire :: decode :: < i64 > (__boltffi_result_bytes)"
         ));
-        assert!(rendered.contains("(timestamp_try_from_ffi) (__boltffi_decoded)"));
+        assert!(rendered.contains("(timestamp_try_from_ffi) (__boltffi_value)"));
+        assert!(rendered.contains("(__boltffi_decoded)"));
         assert!(!rendered.contains("wire :: decode :: < Timestamp >"));
     }
 
@@ -8141,7 +8148,7 @@ mod tests {
                             "{}: null class handle",
                             stringify!(engine)
                         ));
-                        return ::core::default::Default::default();
+                        return <u32 as ::core::default::Default>::default();
                     }
                     let engine: &Engine = unsafe {
                         __BoltffiEngineHandle::shared(engine as usize as *mut __BoltffiEngineHandle)
@@ -8321,7 +8328,7 @@ mod tests {
                                 ::core::any::type_name::<Point>(),
                                 element_size
                             ));
-                            return ::core::default::Default::default();
+                            return <u32 as ::core::default::Default>::default();
                         }
                     };
                     count_points(points)
@@ -8354,7 +8361,7 @@ mod tests {
                 #[cfg(not(target_arch = "wasm32"))]
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_origin() -> <Point as ::boltffi::__private::Passable>::Out {
-                    ::boltffi::__private::Passable::pack(origin())
+                    <Point as ::boltffi::__private::Passable>::pack(origin())
                 }
             }
             .to_string()
@@ -8578,7 +8585,7 @@ mod tests {
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_numbers() -> ::boltffi::__private::FfiBuf {
                     let __boltffi_result = numbers();
-                    <_ as ::boltffi::__private::VecTransport>::pack_vec(__boltffi_result)
+                    <i32 as ::boltffi::__private::VecTransport>::pack_vec(__boltffi_result)
                 }
             }
             .to_string()
@@ -8610,7 +8617,7 @@ mod tests {
                 pub extern "C" fn boltffi_function_demo_numbers() {
                     let __boltffi_result = numbers();
                     let __boltffi_buf =
-                        <_ as ::boltffi::__private::VecTransport>::pack_vec(__boltffi_result);
+                        <i32 as ::boltffi::__private::VecTransport>::pack_vec(__boltffi_result);
                     ::boltffi::__private::write_return_slot(
                         __boltffi_buf.as_ptr() as u32,
                         __boltffi_buf.len() as u32,

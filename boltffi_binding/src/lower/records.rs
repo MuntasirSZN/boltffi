@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::{
-    LowerError, codecs, ids::DeclarationIds, index::Index, layout, metadata, methods, primitive,
-    surface::SurfaceLower, symbol::SymbolAllocator, types,
+    LowerError, codecs, error::UnsupportedType, ids::DeclarationIds, index::Index, layout,
+    metadata, methods, primitive, surface::SurfaceLower, symbol::SymbolAllocator, types,
 };
 
 /// Lowers every record in the source contract.
@@ -19,14 +19,15 @@ use super::{
 /// [`SymbolId`]: crate::SymbolId
 /// [`NativeSymbol`]: crate::NativeSymbol
 /// [`Bindings<S>`]: crate::Bindings
-pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+pub fn lower<S: SurfaceLower>(
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<RecordDecl<S>>, LowerError> {
-    idx.records()
+    index
+        .records()
         .iter()
-        .map(|record| lower_one(idx, ids, allocator, record))
+        .map(|record| lower_one(index, ids, allocator, record))
         .collect()
 }
 
@@ -35,27 +36,27 @@ pub(super) fn lower<S: SurfaceLower>(
 /// Exposed to the codec lane so a nested `TypeExpr::Record(id)` can
 /// pick `DirectRecord` vs `EncodedRecord` from the same predicate the
 /// record's own declaration uses.
-pub(super) fn is_direct(record: &SourceRecord) -> bool {
+pub fn is_direct(record: &SourceRecord) -> bool {
     primitive::has_repr_c(&record.repr)
         && !record.fields.is_empty()
         && record
             .fields
             .iter()
-            .all(|field| primitive::fixed_primitive(&field.type_expr).is_some())
+            .all(|field| primitive::direct_field_type(&field.type_expr).is_some())
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     record: &SourceRecord,
 ) -> Result<RecordDecl<S>, LowerError> {
-    let initializers = methods::lower_record_initializers::<S>(idx, ids, allocator, record)?;
-    let record_methods = methods::lower_record_methods::<S>(idx, ids, allocator, record)?;
+    let initializers = methods::lower_record_initializers::<S>(index, ids, allocator, record)?;
+    let record_methods = methods::lower_record_methods::<S>(index, ids, allocator, record)?;
     if is_direct(record) {
         lower_direct(ids, record, initializers, record_methods).map(RecordDecl::Direct)
     } else {
-        lower_encoded(idx, ids, record, initializers, record_methods).map(RecordDecl::Encoded)
+        lower_encoded(index, ids, record, initializers, record_methods).map(RecordDecl::Encoded)
     }
 }
 
@@ -71,7 +72,8 @@ fn lower_direct<S: SurfaceLower>(
         .map(|field| {
             Ok(DirectFieldDecl::new(
                 FieldKey::from(field),
-                types::lower(ids, &field.type_expr)?,
+                primitive::direct_field_type(&field.type_expr)
+                    .ok_or_else(|| LowerError::unsupported_type(UnsupportedType::RecordField))?,
                 metadata::element_meta(field.doc.as_ref(), None, field.default.as_ref())?,
             ))
         })
@@ -89,7 +91,7 @@ fn lower_direct<S: SurfaceLower>(
 }
 
 fn lower_encoded<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     record: &SourceRecord,
     initializers: Vec<InitializerDecl<S>>,
@@ -102,7 +104,7 @@ fn lower_encoded<S: SurfaceLower>(
             let key = FieldKey::from(field);
             let value = ValueRef::self_value().field(key.clone());
             let ty = types::lower(ids, &field.type_expr)?;
-            let codec = codecs::plan(idx, ids, &field.type_expr, value)?;
+            let codec = codecs::plan(index, ids, &field.type_expr, value)?;
             Ok(EncodedFieldDecl::new(
                 key,
                 ty,
@@ -120,7 +122,7 @@ fn lower_encoded<S: SurfaceLower>(
         initializers,
         record_methods,
         codecs::plan(
-            idx,
+            index,
             ids,
             &TypeExpr::record(
                 record.id.clone(),
@@ -136,7 +138,7 @@ mod tests {
     use boltffi_ast::{
         CanonicalName as SourceName, DefaultValue as SourceDefaultValue,
         DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, EnumDef,
-        ExecutionKind, FieldDef, FnSig, FnTrait, FnTraitKind, IntegerLiteral, MethodDef,
+        ExecutionKind, FieldDef, FnSig, FnTrait, FnTraitKind, IntegerLiteral, MapKind, MethodDef,
         MethodId as SourceMethodId, PackageInfo as SourcePackage, ParameterDef, ParameterPassing,
         Path as SourcePath, Primitive, Receiver, RecordDef, ReprAttr, ReprItem, ReturnDef, Source,
         SourceContract, TypeExpr, VariantDef, VariantPayload,
@@ -145,11 +147,12 @@ mod tests {
     use crate::lower::lower;
     use crate::{
         BindingErrorKind, Bindings, ByteSize, CanonicalName, CodecNode, Decl, DefaultValue,
-        DirectRecordDecl, EncodedRecordDecl, EnumId, ErrorDecl, ExecutionDecl, ExportedMethodDecl,
-        FieldKey, HandlePresence, InitializerDecl, IntegerValue, IntrinsicOp, LowerError,
-        LowerErrorKind, Native, NativeSymbol, OpNode, OutOfRust, ParamPlan,
-        Primitive as BindingPrimitive, ReadPlan, Receive, RecordDecl, RecordId, ReturnPlan,
-        SurfaceLower, TypeRef, UnsupportedType, ValueRef, Wasm32, native, wasm32,
+        DirectRecordDecl, DirectValueType, DirectVectorElementType, EncodedRecordDecl, EnumId,
+        ErrorDecl, ExecutionDecl, ExportedMethodDecl, FieldKey, HandlePresence, InitializerDecl,
+        IntegerValue, IntrinsicOp, LowerError, LowerErrorKind, Native, NativeSymbol, OpNode,
+        OutOfRust, ParamPlan, Primitive as BindingPrimitive, ReadPlan, Receive, RecordDecl,
+        RecordId, ReturnPlan, SurfaceLower, TypeRef, UnsupportedType, ValueRef, Wasm32, native,
+        wasm32,
     };
 
     fn package() -> SourceContract {
@@ -452,14 +455,14 @@ mod tests {
         assert!(matches!(
             callable.params()[0].as_value().unwrap(),
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
                 receive: Receive::ByValue,
             }
         ));
         assert!(matches!(
             callable.params()[1].as_value().unwrap(),
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
                 receive: Receive::ByValue,
             }
         ));
@@ -530,7 +533,7 @@ mod tests {
         assert_eq!(
             initializers[0].callable().returns().plan(),
             &ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Record(RecordId::from_raw(0)),
+                ty: DirectValueType::Record(RecordId::from_raw(0)),
             }
         );
         assert_encoded_string_error(initializers[0].callable().error());
@@ -578,7 +581,7 @@ mod tests {
 
         match returns {
             ReturnPlan::DirectViaReturnSlot { ty } => {
-                assert_eq!(ty, &TypeRef::Record(RecordId::from_raw(0)))
+                assert_eq!(ty, &DirectValueType::Record(RecordId::from_raw(0)))
             }
             other => panic!("expected direct record return, got {other:?}"),
         }
@@ -784,7 +787,7 @@ mod tests {
         assert_eq!(
             methods[0].callable().returns().plan(),
             &ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
             }
         );
         assert_encoded_string_error(methods[0].callable().error());
@@ -1133,6 +1136,7 @@ mod tests {
                 assert_eq!(
                     codec.root(),
                     &CodecNode::Map {
+                        kind: MapKind::Hash,
                         key: Box::new(CodecNode::String),
                         value: Box::new(CodecNode::Primitive(BindingPrimitive::I32)),
                     }
@@ -1163,7 +1167,7 @@ mod tests {
             ParamPlan::Direct {
                 ty,
                 receive: Receive::ByValue,
-            } => assert_eq!(ty, &TypeRef::Record(RecordId::from_raw(0))),
+            } => assert_eq!(ty, &DirectValueType::Record(RecordId::from_raw(0))),
             other => panic!("expected direct record param, got {other:?}"),
         }
     }
@@ -1231,7 +1235,7 @@ mod tests {
             ParamPlan::Direct {
                 ty,
                 receive: Receive::ByValue,
-            } => assert_eq!(ty, &TypeRef::Enum(EnumId::from_raw(0))),
+            } => assert_eq!(ty, &DirectValueType::Enum(EnumId::from_raw(0))),
             other => panic!("expected direct enum param, got {other:?}"),
         }
     }
@@ -1304,7 +1308,7 @@ mod tests {
         assert!(matches!(
             params[0].as_value().unwrap(),
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
                 ..
             }
         ));
@@ -1419,14 +1423,14 @@ mod tests {
         assert_eq!(invoke.params().len(), 1);
         match invoke.params()[0].as_value().unwrap() {
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
                 receive: Receive::ByValue,
             } => {}
             other => panic!("expected f64 direct invoke param, got {other:?}"),
         }
         match invoke.returns().plan() {
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
             } => {}
             other => panic!("expected f64 direct invoke return, got {other:?}"),
         }
@@ -1497,14 +1501,14 @@ mod tests {
         assert_eq!(invoke.params().len(), 1);
         match invoke.params()[0].as_value().unwrap() {
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
                 receive: Receive::ByValue,
             } => {}
             other => panic!("expected f64 direct invoke param, got {other:?}"),
         }
         match invoke.returns().plan() {
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
             } => {}
             other => panic!("expected f64 direct invoke return, got {other:?}"),
         }
@@ -1607,7 +1611,7 @@ mod tests {
         assert!(matches!(
             callable.returns().plan(),
             ReturnPlan::DirectViaOutPointer {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
             }
         ));
         match callable.error() {
@@ -1781,7 +1785,11 @@ mod tests {
 
         match methods[0].callable().returns().plan() {
             ReturnPlan::DirectVecViaReturnSlot { element } => {
-                assert_eq!(element, &TypeRef::Primitive(BindingPrimitive::F64));
+                assert_eq!(
+                    element,
+                    &DirectVectorElementType::primitive(BindingPrimitive::F64)
+                        .expect("f64 is a direct-vector primitive")
+                );
             }
             other => panic!("expected DirectVec lift, got {other:?}"),
         }
@@ -1799,7 +1807,10 @@ mod tests {
 
         match methods[0].callable().returns().plan() {
             ReturnPlan::DirectVecViaReturnSlot { element } => {
-                assert_eq!(element, &TypeRef::Record(RecordId::from_raw(0)));
+                assert_eq!(
+                    element,
+                    &DirectVectorElementType::record(RecordId::from_raw(0))
+                );
             }
             other => panic!("expected DirectVec lift, got {other:?}"),
         }
@@ -1889,14 +1900,14 @@ mod tests {
         assert!(matches!(
             params[0].as_value().unwrap(),
             ParamPlan::Direct {
-                ty: TypeRef::Record(_),
+                ty: DirectValueType::Record(_),
                 ..
             }
         ));
         assert!(matches!(
             callable.returns().plan(),
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Record(_),
+                ty: DirectValueType::Record(_),
             }
         ));
     }
@@ -1915,7 +1926,7 @@ mod tests {
             ParamPlan::Direct {
                 ty,
                 receive: Receive::ByValue,
-            } => assert_eq!(ty, &TypeRef::Record(RecordId::from_raw(0))),
+            } => assert_eq!(ty, &DirectValueType::Record(RecordId::from_raw(0))),
             other => panic!("expected direct self param, got {other:?}"),
         }
     }
@@ -1992,7 +2003,7 @@ mod tests {
         assert!(matches!(
             params[0].as_value().unwrap(),
             ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::F64),
+                ty: DirectValueType::Primitive(BindingPrimitive::F64),
                 ..
             }
         ));
@@ -2146,7 +2157,7 @@ mod tests {
 
         match path_methods[0].callable().returns().plan() {
             ReturnPlan::DirectViaReturnSlot { ty } => {
-                assert_eq!(ty, &TypeRef::Record(RecordId::from_raw(0)));
+                assert_eq!(ty, &DirectValueType::Record(RecordId::from_raw(0)));
             }
             other => panic!("expected direct record return, got {other:?}"),
         }
@@ -2173,7 +2184,7 @@ mod tests {
 
         match methods[0].callable().returns().plan() {
             ReturnPlan::DirectViaReturnSlot { ty } => {
-                assert_eq!(ty, &TypeRef::Enum(EnumId::from_raw(0)));
+                assert_eq!(ty, &DirectValueType::Enum(EnumId::from_raw(0)));
             }
             other => panic!("expected direct enum return, got {other:?}"),
         }

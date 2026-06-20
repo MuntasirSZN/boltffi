@@ -1,9 +1,25 @@
 mod argument;
-mod function;
+mod callback;
+pub mod class;
+mod closure;
+mod constant;
+mod direct;
+pub mod direct_vector;
+pub mod enumeration;
+mod fallible;
+pub mod function;
 mod method;
 mod module;
-mod primitive;
+pub mod primitive;
+pub mod record;
 mod result;
+pub mod stream;
 
-pub use function::Wrapper;
+pub use callback::Callback;
+pub use class::Class;
+pub use constant::Constant;
+pub use enumeration::Enumeration;
+pub use function::Function;
 pub use module::NativeModule;
+pub use record::Record;
+pub use stream::Stream;

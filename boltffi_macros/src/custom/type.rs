@@ -4,7 +4,6 @@ use quote::{format_ident, quote};
 use syn::parse::Parse;
 
 struct CustomTypeSpec {
-    visibility: syn::Visibility,
     name: syn::Ident,
     remote: syn::Type,
     repr: syn::Type,
@@ -19,7 +18,7 @@ struct CustomTypeExpansion {
 
 impl Parse for CustomTypeSpec {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let visibility: syn::Visibility = input.parse()?;
+        let _: syn::Visibility = input.parse()?;
         let name: syn::Ident = input.parse()?;
         input.parse::<syn::Token![,]>()?;
 
@@ -68,7 +67,6 @@ impl Parse for CustomTypeSpec {
             .ok_or_else(|| input.error("custom_type!: missing `try_from_ffi = ...`"))?;
 
         Ok(Self {
-            visibility,
             name,
             remote,
             repr,
@@ -91,7 +89,6 @@ impl CustomTypeExpansion {
 
     fn render(self) -> proc_macro2::TokenStream {
         let CustomTypeSpec {
-            visibility,
             name,
             remote,
             repr,
@@ -106,12 +103,12 @@ impl CustomTypeExpansion {
 
         quote! {
             #[doc(hidden)]
-            #visibility fn #into_fn_name(value: &#remote) -> #repr {
+            pub(crate) fn #into_fn_name(value: &#remote) -> #repr {
                 (#into_ffi)(value)
             }
 
             #[doc(hidden)]
-            #visibility fn #try_from_fn_name(value: #repr) -> ::core::result::Result<#remote, #error> {
+            pub(crate) fn #try_from_fn_name(value: #repr) -> ::core::result::Result<#remote, #error> {
                 (#try_from_ffi)(value)
             }
         }

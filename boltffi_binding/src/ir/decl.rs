@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BufferShapeRules, ByteSize, CallableScope, CallbackId, CallbackProtocolIntrospect,
     CanonicalName, ClassId, CodecPlan, ConstantId, CustomTypeConverters, CustomTypeId, DeclMeta,
-    DeclarationId, DefaultValue, ElementMeta, EnumId, ExportedCallable, FunctionId,
-    ImportedCallable, InitializerId, IntegerRepr, IntegerValue, MethodId, NamePart, NativeSymbol,
-    ReadPlan, Receive, RecordId, RecordLayout, ReturnTypeRef, RustBody, StreamId, Surface, TypeRef,
-    WritePlan,
+    DeclarationId, DefaultValue, DirectFieldType, DirectValueType, ElementMeta, EnumId,
+    ExportedCallable, FunctionId, ImportedCallable, InitializerId, IntegerRepr, IntegerValue,
+    MethodId, NamePart, NativeSymbol, ReadPlan, Receive, RecordId, RecordLayout, ReturnTypeRef,
+    RustBody, StreamId, Surface, TypeRef, WritePlan,
 };
 
 /// One classified declaration in a binding contract.
@@ -81,6 +81,72 @@ impl<'a, S: Surface> From<&'a Decl<S>> for DeclarationRef<'a, S> {
             Decl::Stream(stream) => Self::Stream(stream.as_ref()),
             Decl::Constant(constant) => Self::Constant(constant.as_ref()),
             Decl::CustomType(custom) => Self::CustomType(custom.as_ref()),
+        }
+    }
+}
+
+impl<'a, S: Surface> DeclarationRef<'a, S> {
+    /// Returns the record declaration when this view is a record.
+    pub const fn record(self) -> Option<&'a RecordDecl<S>> {
+        match self {
+            Self::Record(record) => Some(record),
+            _ => None,
+        }
+    }
+
+    /// Returns the enum declaration when this view is an enum.
+    pub const fn enumeration(self) -> Option<&'a EnumDecl<S>> {
+        match self {
+            Self::Enum(enumeration) => Some(enumeration),
+            _ => None,
+        }
+    }
+
+    /// Returns the function declaration when this view is a function.
+    pub const fn function(self) -> Option<&'a FunctionDecl<S>> {
+        match self {
+            Self::Function(function) => Some(function),
+            _ => None,
+        }
+    }
+
+    /// Returns the class declaration when this view is a class.
+    pub const fn class(self) -> Option<&'a ClassDecl<S>> {
+        match self {
+            Self::Class(class) => Some(class),
+            _ => None,
+        }
+    }
+
+    /// Returns the callback declaration when this view is a callback.
+    pub const fn callback(self) -> Option<&'a CallbackDecl<S>> {
+        match self {
+            Self::Callback(callback) => Some(callback),
+            _ => None,
+        }
+    }
+
+    /// Returns the stream declaration when this view is a stream.
+    pub const fn stream(self) -> Option<&'a StreamDecl<S>> {
+        match self {
+            Self::Stream(stream) => Some(stream),
+            _ => None,
+        }
+    }
+
+    /// Returns the constant declaration when this view is a constant.
+    pub const fn constant(self) -> Option<&'a ConstantDecl<S>> {
+        match self {
+            Self::Constant(constant) => Some(constant),
+            _ => None,
+        }
+    }
+
+    /// Returns the custom type declaration when this view is a custom type.
+    pub const fn custom_type(self) -> Option<&'a CustomTypeDecl> {
+        match self {
+            Self::CustomType(custom_type) => Some(custom_type),
+            _ => None,
         }
     }
 }
@@ -505,12 +571,12 @@ impl FieldKey {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct DirectFieldDecl {
     key: FieldKey,
-    ty: TypeRef,
+    ty: DirectFieldType,
     meta: ElementMeta,
 }
 
 impl DirectFieldDecl {
-    pub(crate) fn new(key: FieldKey, ty: TypeRef, meta: ElementMeta) -> Self {
+    pub(crate) fn new(key: FieldKey, ty: DirectFieldType, meta: ElementMeta) -> Self {
         Self { key, ty, meta }
     }
 
@@ -520,8 +586,8 @@ impl DirectFieldDecl {
     }
 
     /// Returns the field type.
-    pub fn ty(&self) -> &TypeRef {
-        &self.ty
+    pub fn ty(&self) -> DirectFieldType {
+        self.ty
     }
 
     /// Returns the element metadata.
@@ -1423,7 +1489,7 @@ pub enum StreamItemPlan<S: Surface> {
     /// Items are copied directly into the batch output buffer.
     Direct {
         /// Item type.
-        ty: TypeRef,
+        ty: DirectValueType,
         /// Size of one item in bytes.
         size: ByteSize,
     },
@@ -1439,6 +1505,17 @@ pub enum StreamItemPlan<S: Surface> {
 }
 
 impl<S: Surface> StreamItemPlan<S> {
+    /// Renders this stream item plan through the shared stream-item walker.
+    pub fn render_with<'plan, R>(&'plan self, renderer: &mut R) -> R::Output
+    where
+        R: StreamItemPlanRender<'plan, S>,
+    {
+        match self {
+            Self::Direct { ty, size } => renderer.direct(ty, *size),
+            Self::Encoded { ty, read, shape } => renderer.encoded(ty, read, *shape),
+        }
+    }
+
     pub(crate) fn buffer_shape(&self) -> Option<S::BufferShape> {
         match self {
             Self::Encoded { shape, .. } => Some(*shape),
@@ -1454,6 +1531,27 @@ impl<S: Surface> StreamItemPlan<S> {
             _ => Ok(()),
         }
     }
+}
+
+/// Target-language rendering for stream item plans.
+///
+/// The shared walker owns the `StreamItemPlan` variant traversal.
+/// Backends implement direct and encoded item leaves without reopening
+/// the stream item enum in each target.
+pub trait StreamItemPlanRender<'plan, S: Surface> {
+    /// Value produced by the renderer.
+    type Output;
+
+    /// Renders a directly copied stream item.
+    fn direct(&mut self, ty: &'plan DirectValueType, size: ByteSize) -> Self::Output;
+
+    /// Renders an encoded stream item.
+    fn encoded(
+        &mut self,
+        ty: &'plan TypeRef,
+        read: &'plan ReadPlan,
+        shape: S::BufferShape,
+    ) -> Self::Output;
 }
 
 /// The set of native symbols foreign code uses to consume a stream.

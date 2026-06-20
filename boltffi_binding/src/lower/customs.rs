@@ -33,11 +33,9 @@ use super::{
     LowerError, error::UnsupportedType, ids::DeclarationIds, index::Index, metadata, types,
 };
 
-pub(super) fn lower(
-    idx: &Index<'_>,
-    ids: &DeclarationIds,
-) -> Result<Vec<CustomTypeDecl>, LowerError> {
-    idx.customs()
+pub fn lower(index: &Index, ids: &DeclarationIds) -> Result<Vec<CustomTypeDecl>, LowerError> {
+    index
+        .customs()
         .iter()
         .map(|custom| lower_one(ids, custom))
         .collect()
@@ -65,6 +63,10 @@ fn lower_converters(converters: &SourceConverters) -> Result<CustomTypeConverter
 fn lower_converter(converter: &SourceConverter) -> Result<CustomTypeConverter, LowerError> {
     match converter {
         SourceConverter::Path(path) => lower_path(path).map(CustomTypeConverter::path),
+        SourceConverter::TraitMethod(converter) => Ok(CustomTypeConverter::trait_method(
+            lower_path(&converter.receiver)?,
+            NamePart::new(converter.method.as_str()),
+        )),
         SourceConverter::Expr(expression) => Ok(CustomTypeConverter::expression(
             CustomConverterExpression::new(expression.source.clone()),
         )),
@@ -103,7 +105,7 @@ mod tests {
 
     use crate::lower::{LowerError, LowerErrorKind, lower};
     use crate::{
-        Bindings, CanonicalName, CustomTypeDecl, CustomTypeId, Decl, Native, ParamPlan,
+        Bindings, CanonicalName, CodecNode, CustomTypeDecl, CustomTypeId, Decl, Native, ParamPlan,
         Primitive as BindingPrimitive, Receive, RecordId, ReturnPlan, SurfaceLower, TypeRef,
         Wasm32,
     };
@@ -326,13 +328,30 @@ mod tests {
             ParamPlan::Encoded {
                 ty,
                 receive: Receive::ByValue,
+                codec,
                 ..
-            } => assert_eq!(ty, &TypeRef::Custom(CustomTypeId::from_raw(0))),
+            } => {
+                assert_eq!(ty, &TypeRef::Custom(CustomTypeId::from_raw(0)));
+                assert_eq!(
+                    codec.root(),
+                    &CodecNode::Custom {
+                        id: CustomTypeId::from_raw(0),
+                        representation: Box::new(CodecNode::Primitive(BindingPrimitive::U64)),
+                    }
+                );
+            }
             other => panic!("expected encoded custom param, got {other:?}"),
         }
         match function.callable().returns().plan() {
-            ReturnPlan::EncodedViaReturnSlot { ty, .. } => {
+            ReturnPlan::EncodedViaReturnSlot { ty, codec, .. } => {
                 assert_eq!(ty, &TypeRef::Custom(CustomTypeId::from_raw(0)));
+                assert_eq!(
+                    codec.root(),
+                    &CodecNode::Custom {
+                        id: CustomTypeId::from_raw(0),
+                        representation: Box::new(CodecNode::Primitive(BindingPrimitive::U64)),
+                    }
+                );
             }
             other => panic!("expected encoded custom return, got {other:?}"),
         }

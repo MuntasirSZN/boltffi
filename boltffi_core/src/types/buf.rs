@@ -104,6 +104,15 @@ pub extern "C" fn boltffi_free_buf(buf: FfiBuf) {
     drop(buf);
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn boltffi_buf_from_bytes(ptr: *const u8, len: usize) -> FfiBuf {
+    if ptr.is_null() || len == 0 {
+        return FfiBuf::empty();
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    FfiBuf::from_vec(bytes.to_vec())
+}
+
 #[cfg(target_arch = "wasm32")]
 impl FfiBuf {
     pub fn into_packed(self) -> u64 {

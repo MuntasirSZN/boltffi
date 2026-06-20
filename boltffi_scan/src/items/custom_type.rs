@@ -10,7 +10,7 @@ use syn::parse::Parse;
 use crate::attributes::Attributes;
 use crate::declared_types::DeclaredTypes;
 use crate::marked::{MarkedCustom, MarkedCustomItem};
-use crate::path::{ImportLookup, ModuleScope};
+use crate::path::{ImportLookup, ModulePath, ModuleScope};
 use crate::type_expr::Scanner;
 use crate::{ScanError, attributes, name};
 
@@ -21,6 +21,7 @@ pub fn scan(
     let spec = Spec::parse(marked)?;
     let custom_name = name::source(spec.name());
     let custom_id = CustomTypeId::new(marked.module().qualified(&spec.name().to_string()));
+    let converters = spec.converters(marked.module());
     let scanner = Scanner::new(declared_types, marked.scope());
     let attrs = Attributes::new(marked.attrs(), &scanner);
     let mut custom = CustomTypeDef::new(
@@ -29,7 +30,7 @@ pub fn scan(
         spec.remote_type().clone(),
         scanner.scan(spec.repr())?,
         spec.error().cloned(),
-        spec.converters().clone(),
+        converters,
     );
     custom.source = spec.source(marked);
     custom.source_span = custom.source.span.clone();
@@ -45,7 +46,12 @@ pub struct Spec {
     remote_type: CustomRemoteType,
     repr: syn::Type,
     error: Option<CustomRemoteType>,
-    converters: CustomTypeConverters,
+    converters: ConverterSource,
+}
+
+enum ConverterSource {
+    Macro,
+    Trait { receiver: Path },
 }
 
 impl Spec {
@@ -74,6 +80,7 @@ impl Spec {
         }
         let self_type = item.self_ty.as_ref();
         let name = impl_target_name(self_type)?;
+        let receiver = impl_target_path(self_type)?;
         let remote_type = RemoteType::scan(self_type)?;
         let repr = associated_type(item, "FfiRepr")?;
         let error = Some(RemoteType::scan(&associated_type(item, "Error")?)?);
@@ -83,10 +90,7 @@ impl Spec {
             remote_type,
             repr,
             error,
-            converters: CustomTypeConverters::new(
-                trait_converter(self_type, "into_ffi"),
-                trait_converter(self_type, "try_from_ffi"),
-            ),
+            converters: ConverterSource::Trait { receiver },
         })
     }
 
@@ -98,10 +102,7 @@ impl Spec {
             remote_type,
             repr: parsed.repr,
             error: parsed.error.map(|ty| RemoteType::scan(&ty)).transpose()?,
-            converters: CustomTypeConverters::new(
-                Converter::scan(parsed.into_ffi)?,
-                Converter::scan(parsed.try_from_ffi)?,
-            ),
+            converters: ConverterSource::Macro,
         })
     }
 
@@ -117,8 +118,17 @@ impl Spec {
         &self.repr
     }
 
-    fn converters(&self) -> &CustomTypeConverters {
-        &self.converters
+    fn converters(&self, module: &ModulePath) -> CustomTypeConverters {
+        match &self.converters {
+            ConverterSource::Macro => CustomTypeConverters::new(
+                CustomTypeConverter::path(self.macro_helper(module, "into_ffi")),
+                CustomTypeConverter::path(self.macro_helper(module, "try_from_ffi")),
+            ),
+            ConverterSource::Trait { receiver } => CustomTypeConverters::new(
+                trait_converter(receiver.clone(), "into_ffi"),
+                trait_converter(receiver.clone(), "try_from_ffi"),
+            ),
+        }
     }
 
     fn error(&self) -> Option<&CustomRemoteType> {
@@ -130,6 +140,22 @@ impl Spec {
             Some(visibility) => attributes::source(visibility, marked.scope(), marked.span()),
             None => attributes::public_source(marked.scope(), marked.span()),
         }
+    }
+
+    fn macro_helper(&self, module: &ModulePath, role: &str) -> Path {
+        let helper = format!(
+            "__boltffi_custom_type_{}_{}",
+            name::symbol_segment(&self.name.to_string()),
+            role
+        );
+        let segments = module
+            .segments()
+            .iter()
+            .skip(1)
+            .map(|segment| PathSegment::new(segment.as_str()))
+            .chain(std::iter::once(PathSegment::new(helper)))
+            .collect();
+        Path::new(PathRoot::Crate, segments)
     }
 }
 
@@ -159,6 +185,33 @@ fn impl_target_name(ty: &syn::Type) -> Result<syn::Ident, ScanError> {
         .ok_or_else(|| invalid_custom_type_message("custom_ffi target path is empty".to_owned()))
 }
 
+fn impl_target_path(ty: &syn::Type) -> Result<Path, ScanError> {
+    let syn::Type::Path(path) = ty else {
+        return Err(invalid_custom_type_message(format!(
+            "custom_ffi target is not a path `{}`",
+            crate::spelling::ty(ty)
+        )));
+    };
+    if path.qself.is_some() {
+        return Err(invalid_custom_type_message(format!(
+            "custom_ffi target cannot use qualified self type `{}`",
+            crate::spelling::ty(ty)
+        )));
+    }
+    let (root, segments) = PathParts::split_root(&path.path)?;
+    segments
+        .into_iter()
+        .map(|segment| match segment.arguments {
+            syn::PathArguments::None => Ok(PathSegment::new(segment.ident.to_string())),
+            _ => Err(invalid_custom_type_message(format!(
+                "custom_ffi target cannot use generic arguments `{}`",
+                crate::spelling::ty(ty)
+            ))),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|segments| Path::new(root, segments))
+}
+
 fn associated_type(item: &syn::ItemImpl, name: &str) -> Result<syn::Type, ScanError> {
     item.items
         .iter()
@@ -173,14 +226,8 @@ fn associated_type(item: &syn::ItemImpl, name: &str) -> Result<syn::Type, ScanEr
         })
 }
 
-fn trait_converter(self_type: &syn::Type, method: &str) -> CustomTypeConverter {
-    let method = syn::Ident::new(method, proc_macro2::Span::call_site());
-    CustomTypeConverter::expr(
-        quote::quote! {
-            <#self_type as ::boltffi::CustomFfiConvertible>::#method
-        }
-        .to_string(),
-    )
+fn trait_converter(receiver: Path, method: &str) -> CustomTypeConverter {
+    CustomTypeConverter::trait_method(receiver, NamePart::new(method))
 }
 
 impl Parse for ParsedSpec {
@@ -210,8 +257,6 @@ struct ParsedSpec {
     remote: syn::Type,
     repr: syn::Type,
     error: Option<syn::Type>,
-    into_ffi: syn::Expr,
-    try_from_ffi: syn::Expr,
 }
 
 #[derive(Default)]
@@ -246,6 +291,10 @@ impl ParsedFields {
 
     fn finish(self, visibility: syn::Visibility, name: syn::Ident) -> syn::Result<ParsedSpec> {
         let span = name.span();
+        self.into_ffi
+            .ok_or_else(|| syn::Error::new(span, "missing `into_ffi = ...`"))?;
+        self.try_from_ffi
+            .ok_or_else(|| syn::Error::new(span, "missing `try_from_ffi = ...`"))?;
         Ok(ParsedSpec {
             visibility,
             name,
@@ -256,12 +305,6 @@ impl ParsedFields {
                 .repr
                 .ok_or_else(|| syn::Error::new(span, "missing `repr = ...`"))?,
             error: self.error,
-            into_ffi: self
-                .into_ffi
-                .ok_or_else(|| syn::Error::new(span, "missing `into_ffi = ...`"))?,
-            try_from_ffi: self
-                .try_from_ffi
-                .ok_or_else(|| syn::Error::new(span, "missing `try_from_ffi = ...`"))?,
         })
     }
 
@@ -927,49 +970,6 @@ impl ExactRemote {
     }
 }
 
-struct Converter;
-
-impl Converter {
-    fn scan(expr: syn::Expr) -> Result<CustomTypeConverter, ScanError> {
-        if let syn::Expr::Path(path) = &expr
-            && path.qself.is_none()
-            && path
-                .path
-                .segments
-                .iter()
-                .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
-        {
-            return Self::path(&path.path).map(CustomTypeConverter::path);
-        }
-        Ok(CustomTypeConverter::expr(quote::quote!(#expr).to_string()))
-    }
-
-    fn path(path: &syn::Path) -> Result<Path, ScanError> {
-        let (root, segments) = PathParts::split_root(path)?;
-        if segments.is_empty() {
-            return Err(invalid_custom_type_message(format!(
-                "empty custom path `{}`",
-                quote::quote!(#path).to_string().replace(' ', "")
-            )));
-        }
-        segments
-            .into_iter()
-            .map(Self::segment)
-            .collect::<Result<Vec<_>, _>>()
-            .map(|segments| Path::new(root, segments))
-    }
-
-    fn segment(segment: &syn::PathSegment) -> Result<PathSegment, ScanError> {
-        match &segment.arguments {
-            syn::PathArguments::None => Ok(PathSegment::new(segment.ident.to_string())),
-            arguments => Err(invalid_custom_type_message(format!(
-                "custom converter path cannot have generic arguments `{}`",
-                quote::quote!(#arguments).to_string().replace(' ', "")
-            ))),
-        }
-    }
-}
-
 struct RemotePath;
 
 impl RemotePath {
@@ -1076,9 +1076,7 @@ fn invalid_custom_type_message(message: impl Into<String>) -> ScanError {
 mod tests {
     use super::*;
     use crate::ModuleScope;
-    use boltffi_ast::{
-        CanonicalName, CustomConverterExpr, Primitive, Source, TypeExpr, Visibility,
-    };
+    use boltffi_ast::{CanonicalName, Primitive, Source, TypeExpr, Visibility};
 
     fn item(source: &str) -> syn::ItemMacro {
         syn::parse_str(source).expect("custom type macro")
@@ -1112,6 +1110,15 @@ mod tests {
         ))
     }
 
+    fn converter(role: &str) -> CustomTypeConverter {
+        CustomTypeConverter::path(Path::new(
+            PathRoot::Crate,
+            vec![PathSegment::new(format!(
+                "__boltffi_custom_type_utc_date_time_{role}"
+            ))],
+        ))
+    }
+
     #[test]
     fn scans_complete_custom_type_macro() {
         let custom = scan(
@@ -1127,14 +1134,8 @@ mod tests {
         assert_eq!(custom.remote, date_time_utc());
         assert_eq!(custom.repr, TypeExpr::Primitive(Primitive::I64));
         assert_eq!(custom.error, None);
-        assert_eq!(
-            custom.converters.into_ffi,
-            CustomTypeConverter::path(Path::single("to_millis"))
-        );
-        assert_eq!(
-            custom.converters.try_from_ffi,
-            CustomTypeConverter::path(Path::single("from_millis"))
-        );
+        assert_eq!(custom.converters.into_ffi, converter("into_ffi"));
+        assert_eq!(custom.converters.try_from_ffi, converter("try_from_ffi"));
         assert_eq!(custom.source, Source::new(Visibility::Public, None));
     }
 
@@ -1173,45 +1174,25 @@ mod tests {
     }
 
     #[test]
-    fn scans_inline_converter_expressions() {
+    fn custom_type_macro_uses_generated_converter_helpers() {
         let custom = scan(
             "custom_type!(UtcDateTime, remote = DateTime<Utc>, repr = i64, into_ffi = |dt: &DateTime<Utc>| dt.timestamp_millis(), try_from_ffi = |millis: i64| { DateTime::from_timestamp_millis(millis).ok_or(ConvertError) });",
         )
         .expect("scan");
 
-        assert!(matches!(
-            &custom.converters.into_ffi,
-            CustomTypeConverter::Expr(CustomConverterExpr { source })
-                if source.replace(' ', "") == "|dt:&DateTime<Utc>|dt.timestamp_millis()"
-        ));
-        assert!(matches!(
-            &custom.converters.try_from_ffi,
-            CustomTypeConverter::Expr(CustomConverterExpr { source })
-                if source.replace(' ', "") == "|millis:i64|{DateTime::from_timestamp_millis(millis).ok_or(ConvertError)}"
-        ));
+        assert_eq!(custom.converters.into_ffi, converter("into_ffi"));
+        assert_eq!(custom.converters.try_from_ffi, converter("try_from_ffi"));
     }
 
     #[test]
-    fn converter_paths_preserve_source_qualifiers() {
+    fn custom_type_macro_converter_helpers_ignore_source_qualifiers() {
         let custom = scan(
             "custom_type!(UtcDateTime, remote = DateTime<Utc>, repr = i64, into_ffi = crate::time::to_millis, try_from_ffi = super::from_millis);",
         )
         .expect("scan");
 
-        assert_eq!(
-            custom.converters.into_ffi,
-            CustomTypeConverter::path(Path::new(
-                PathRoot::Crate,
-                vec![PathSegment::new("time"), PathSegment::new("to_millis")]
-            ))
-        );
-        assert_eq!(
-            custom.converters.try_from_ffi,
-            CustomTypeConverter::path(Path::new(
-                PathRoot::Super(NonZeroUsize::new(1).expect("non-zero super level")),
-                vec![PathSegment::new("from_millis")]
-            ))
-        );
+        assert_eq!(custom.converters.into_ffi, converter("into_ffi"));
+        assert_eq!(custom.converters.try_from_ffi, converter("try_from_ffi"));
     }
 
     #[test]

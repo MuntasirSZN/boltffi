@@ -22,6 +22,10 @@ pub(super) fn canonical_segment(segment: &str) -> CanonicalName {
     )
 }
 
+pub(super) fn symbol_segment(segment: &str) -> String {
+    snake_case(segment)
+}
+
 fn ident_source(ident: &syn::Ident) -> String {
     ident
         .to_string()

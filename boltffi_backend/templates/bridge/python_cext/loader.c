@@ -4,7 +4,7 @@
 #include <limits.h>
 #include <string.h>
 
-#include "{{ c_header }}"
+#include {{ c_header }}
 
 #ifdef _WIN32
 #include <windows.h>
@@ -22,6 +22,9 @@ static HMODULE boltffi_python_library_handle = NULL;
 #else
 static void *boltffi_python_library_handle = NULL;
 #endif
+
+static void boltffi_python_release_host_state(void);
+static int boltffi_python_bind_host_state(void);
 
 static void boltffi_python_clear_symbols(void) {
 {%- for function in functions %}
@@ -87,13 +90,13 @@ static int boltffi_python_load_library(PyObject *library_path) {
 static int boltffi_python_bind_symbols(void) {
 {%- for function in functions %}
 #ifdef _WIN32
-    {{ function.storage_name }} = ({{ function.typedef_name }})GetProcAddress(boltffi_python_library_handle, "{{ function.symbol }}");
+    {{ function.storage_name }} = ({{ function.typedef_name }})GetProcAddress(boltffi_python_library_handle, {{ function.symbol }});
 #else
-    {{ function.storage_name }} = ({{ function.typedef_name }})dlsym(boltffi_python_library_handle, "{{ function.symbol }}");
+    {{ function.storage_name }} = ({{ function.typedef_name }})dlsym(boltffi_python_library_handle, {{ function.symbol }});
 #endif
     if ({{ function.storage_name }} == NULL) {
         boltffi_python_unload_library();
-        PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol {{ function.symbol }}");
+        PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol " {{ function.symbol }});
         return 0;
     }
 {%- endfor %}
@@ -111,10 +114,14 @@ static PyObject *{{ loader_function }}(PyObject *self, PyObject *library_path) {
     if (!boltffi_python_bind_symbols()) {
         return NULL;
     }
+    if (!boltffi_python_bind_host_state()) {
+        return NULL;
+    }
     Py_RETURN_NONE;
 }
 
 static void {{ free_function }}(void *module) {
     (void)module;
+    boltffi_python_release_host_state();
     boltffi_python_unload_library();
 }

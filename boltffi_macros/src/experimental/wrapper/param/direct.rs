@@ -1,4 +1,4 @@
-use boltffi_binding::{Native, Primitive, Receive, TypeRef, Wasm32};
+use boltffi_binding::{DirectValueType, Native, Primitive, Receive, Wasm32};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Ident, Type};
@@ -14,24 +14,24 @@ use super::Tokens;
 pub struct Renderer;
 pub struct Record;
 
-pub struct Input<'lowered> {
-    ty: &'lowered TypeRef,
+pub struct Input {
+    ty: DirectValueType,
     receive: Receive,
     rust_type: Type,
     ident: Ident,
     failure: TokenStream,
 }
 
-impl<'lowered> Input<'lowered> {
+impl Input {
     pub fn new(
-        ty: &'lowered TypeRef,
+        ty: &DirectValueType,
         receive: Receive,
         rust_type: Type,
         ident: Ident,
         failure: TokenStream,
     ) -> Self {
         Self {
-            ty,
+            ty: ty.clone(),
             receive,
             rust_type,
             ident,
@@ -58,24 +58,26 @@ impl RecordInput {
     }
 }
 
-impl<'lowered, S> Render<S, Input<'lowered>> for Renderer
+impl<S> Render<S, Input> for Renderer
 where
     S: RenderSurface,
-    for<'ty> wrapper::type_ref::Renderer: Render<S, &'ty TypeRef, Output = TokenStream>,
     Record: Render<S, RecordInput, Output = Tokens>,
 {
     type Output = Tokens;
 
-    fn render(self, input: Input<'lowered>) -> Result<Self::Output, Error> {
-        match input.ty {
-            TypeRef::Primitive(primitive) => {
+    fn render(self, input: Input) -> Result<Self::Output, Error> {
+        match &input.ty {
+            DirectValueType::Primitive(primitive) => {
                 PrimitiveParam::new(*primitive, input.receive, input.ident).tokens::<S>()
             }
-            TypeRef::Record(_) => <Record as Render<S, _>>::render(
+            DirectValueType::Record(_) => <Record as Render<S, _>>::render(
                 Record,
                 RecordInput::new(input.receive, input.rust_type, input.ident, input.failure),
             ),
-            _ => PassableParam::new(input.receive, input.ident, input.rust_type).tokens(),
+            DirectValueType::Enum(_) => {
+                PassableParam::new(input.receive, input.ident, input.rust_type).tokens()
+            }
+            _ => Err(Error::UnsupportedExpansion("direct parameter")),
         }
     }
 }
@@ -127,14 +129,9 @@ impl PrimitiveParam {
     fn tokens<S>(self) -> Result<Tokens, Error>
     where
         S: RenderSurface,
-        for<'ty> wrapper::type_ref::Renderer: Render<S, &'ty TypeRef, Output = TokenStream>,
     {
-        let ty = TypeRef::Primitive(self.primitive);
         let ident = &self.ident;
-        let ffi_type = <wrapper::type_ref::Renderer as Render<S, &TypeRef>>::render(
-            wrapper::type_ref::Renderer,
-            &ty,
-        )?;
+        let ffi_type = wrapper::type_ref::Renderer.primitive(self.primitive)?;
         Ok(Tokens {
             items: Vec::new(),
             ffi_parameters: vec![quote! { #ident: #ffi_type }],
@@ -290,7 +287,7 @@ impl WasmRecordParam {
                 unsafe {
                     ::core::ptr::write_unaligned(
                         #out as *mut <#rust_type as ::boltffi::__private::Passable>::In,
-                        ::boltffi::__private::Passable::pack(#ident)
+                        <#rust_type as ::boltffi::__private::Passable>::pack(#ident)
                     );
                 }
             }]),

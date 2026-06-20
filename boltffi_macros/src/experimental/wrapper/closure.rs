@@ -1,7 +1,7 @@
 use boltffi_ast::{FnSig, ReturnDef, TypeExpr};
 use boltffi_binding::{
-    ErrorDecl, ExportedCallable, IncomingParam, Native, OutOfRust, ParamPlan, ReadPlan, Receive,
-    ReturnPlan, TypeRef, Wasm32, WritePlan, native, wasm32,
+    DirectValueType, ErrorDecl, ExportedCallable, IncomingParam, Native, OutOfRust, ParamPlan,
+    ReadPlan, Receive, ReturnPlan, TypeRef, Wasm32, WritePlan, native, wasm32,
 };
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -156,8 +156,8 @@ struct Parameter<'expansion, 'lowered, S: RenderSurface> {
 impl<'expansion, 'lowered, S: RenderSurface> Parameter<'expansion, 'lowered, S> {
     fn direct_tokens(&self) -> Result<Option<ParameterTokens>, Error>
     where
-        for<'direct> wrapper::param::direct::Renderer:
-            Render<S, wrapper::param::direct::Input<'direct>, Output = wrapper::param::Tokens>,
+        wrapper::param::direct::Renderer:
+            Render<S, wrapper::param::direct::Input, Output = wrapper::param::Tokens>,
         wrapper::param::closure::Renderer: Render<
                 S,
                 wrapper::param::closure::Input<'expansion, 'lowered, S>,
@@ -426,18 +426,14 @@ impl<'expansion, 'lowered, S: RenderSurface> Return<'expansion, 'lowered, S> {
                 Ok(Some(InvokeReturn::void()))
             }
             ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(primitive),
+                ty: DirectValueType::Primitive(primitive),
             } => {
                 if !matches!(self.source, ReturnDef::Value(_)) {
                     return Err(Error::SourceSyntaxMismatch(
                         "source closure invoke return does not match binding return plan",
                     ));
                 }
-                let ty = TypeRef::Primitive(*primitive);
-                let ffi_type = <wrapper::type_ref::Renderer as Render<T, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &ty,
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(Some(InvokeReturn::direct_primitive(ffi_type)))
             }
             ReturnPlan::DirectViaReturnSlot { .. } => {
@@ -481,7 +477,7 @@ impl<'expansion, 'lowered, S: RenderSurface> Return<'expansion, 'lowered, S> {
                 Output = returns::encoded::Tokens,
             > + Render<S, returns::encoded::Empty<S>, Output = returns::encoded::Tokens>,
     {
-        let error_ident = names::Wrapper::new(Span::call_site()).error();
+        let error_ident = names::Locals::new(Span::call_site()).error();
         let error = <returns::encoded::Renderer as Render<S, _>>::render(
             returns::encoded::Renderer,
             returns::encoded::Input::new(error_codec, error_shape, error_ident, self.expansion),
@@ -533,7 +529,7 @@ impl<'expansion, 'lowered> Render<Native, Return<'expansion, 'lowered, Native>> 
             )),
             (
                 ReturnPlan::DirectViaOutPointer {
-                    ty: TypeRef::Primitive(primitive),
+                    ty: DirectValueType::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
                     codec,
@@ -541,10 +537,7 @@ impl<'expansion, 'lowered> Render<Native, Return<'expansion, 'lowered, Native>> 
                     ..
                 },
             ) => {
-                let ffi_type = <wrapper::type_ref::Renderer as Render<Native, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &TypeRef::Primitive(*primitive),
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(InvokeReturn::fallible(
                     input.encoded_error(codec, native::BufferShape::Buffer)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },
@@ -575,7 +568,7 @@ impl<'expansion, 'lowered> Render<Native, Return<'expansion, 'lowered, Native>> 
                     ..
                 },
             ) => {
-                let success_ident = names::Wrapper::new(Span::call_site()).success();
+                let success_ident = names::Locals::new(Span::call_site()).success();
                 let success = <returns::encoded::Renderer as Render<Native, _>>::render(
                     returns::encoded::Renderer,
                     returns::encoded::Input::new(
@@ -637,7 +630,7 @@ impl<'expansion, 'lowered> Render<Wasm32, Return<'expansion, 'lowered, Wasm32>> 
             )),
             (
                 ReturnPlan::DirectViaOutPointer {
-                    ty: TypeRef::Primitive(primitive),
+                    ty: DirectValueType::Primitive(primitive),
                 },
                 ErrorDecl::EncodedViaReturnSlot {
                     codec,
@@ -645,10 +638,7 @@ impl<'expansion, 'lowered> Render<Wasm32, Return<'expansion, 'lowered, Wasm32>> 
                     ..
                 },
             ) => {
-                let ffi_type = <wrapper::type_ref::Renderer as Render<Wasm32, &TypeRef>>::render(
-                    wrapper::type_ref::Renderer,
-                    &TypeRef::Primitive(*primitive),
-                )?;
+                let ffi_type = wrapper::type_ref::Renderer.primitive(*primitive)?;
                 Ok(InvokeReturn::fallible(
                     input.encoded_error(codec, wasm32::BufferShape::Packed)?,
                     FallibleSuccess::DirectPrimitive { ffi_type },
@@ -679,7 +669,7 @@ impl<'expansion, 'lowered> Render<Wasm32, Return<'expansion, 'lowered, Wasm32>> 
                     ..
                 },
             ) => {
-                let success_ident = names::Wrapper::new(Span::call_site()).success();
+                let success_ident = names::Locals::new(Span::call_site()).success();
                 let success = <returns::encoded::Renderer as Render<Wasm32, _>>::render(
                     returns::encoded::Renderer,
                     returns::encoded::Input::new(
@@ -790,8 +780,8 @@ impl InvokeReturn {
                 #call;
             },
             InvokeReturnKind::DirectPrimitive { .. } => quote! { #call },
-            InvokeReturnKind::DirectPassable { .. } => quote! {
-                ::boltffi::__private::Passable::pack(#call)
+            InvokeReturnKind::DirectPassable { rust_type } => quote! {
+                <#rust_type as ::boltffi::__private::Passable>::pack(#call)
             },
             InvokeReturnKind::NativeEncoded { value } => quote! {
                 {
@@ -812,11 +802,15 @@ impl InvokeReturn {
     pub fn failure(&self) -> TokenStream {
         match &self.kind {
             InvokeReturnKind::Void => quote! { return; },
-            InvokeReturnKind::DirectPrimitive { .. } => quote! {
-                return ::core::default::Default::default();
+            InvokeReturnKind::DirectPrimitive { ffi_type } => quote! {
+                return <#ffi_type as ::core::default::Default>::default();
             },
-            InvokeReturnKind::DirectPassable { .. } => quote! {
-                return unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
+            InvokeReturnKind::DirectPassable { rust_type } => quote! {
+                return unsafe {
+                    ::core::mem::MaybeUninit::<
+                        <#rust_type as ::boltffi::__private::Passable>::Out
+                    >::zeroed().assume_init()
+                };
             },
             InvokeReturnKind::NativeEncoded { .. } => quote! {
                 return ::boltffi::__private::FfiBuf::default();
@@ -869,7 +863,7 @@ enum FallibleSuccess {
 
 impl FallibleSuccess {
     fn ffi_parameters(&self) -> Vec<TokenStream> {
-        let out = names::Wrapper::new(Span::call_site()).success_out();
+        let out = names::Locals::new(Span::call_site()).success_out();
         self.ffi_parameter_types()
             .into_iter()
             .map(|ty| quote! { #out: #ty })
@@ -888,7 +882,7 @@ impl FallibleSuccess {
     }
 
     fn body(&self, error: &EncodedError, call: TokenStream) -> TokenStream {
-        let locals = names::Wrapper::new(Span::call_site());
+        let locals = names::Locals::new(Span::call_site());
         let success_out = locals.success_out();
         let success_ident = locals.success();
         let empty_error = &error.empty_value;
@@ -925,10 +919,10 @@ impl FallibleSuccess {
                     }
                 }
             },
-            Self::DirectPassable { .. } => quote! {
+            Self::DirectPassable { rust_type } => quote! {
                 if !#out.is_null() {
                     unsafe {
-                        *#out = ::boltffi::__private::Passable::pack(#success);
+                        *#out = <#rust_type as ::boltffi::__private::Passable>::pack(#success);
                     }
                 }
             },

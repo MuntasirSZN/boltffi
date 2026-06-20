@@ -8,9 +8,9 @@ use boltffi_ast::FnTraitKind;
 
 use crate::{
     AsyncProtocolIntrospect, BindingError, BindingErrorKind, BufferShapeRules, CallableScope,
-    CanonicalName, ClosureRegistrationIntrospect, Direction, ElementMeta, ForeignBody,
-    HandlePresence, HandleTarget, IntegerRepr, IntoRust, NativeSymbol, OutOfRust, Primitive,
-    RustBody, Surface, TypeRef,
+    CanonicalName, ClosureRegistrationIntrospect, DirectValueType, DirectVectorElementType,
+    Direction, ElementMeta, ForeignBody, HandlePresence, HandleTarget, IntegerRepr, IntoRust,
+    NativeSymbol, OutOfRust, Primitive, RustBody, Surface, TypeRef,
 };
 
 /// One call shape ready to be turned into target code.
@@ -616,7 +616,7 @@ pub enum ParamPlan<S: Surface, D: Direction> {
     /// Value occupies a native call slot directly.
     Direct {
         /// Foreign-side spelling.
-        ty: TypeRef,
+        ty: DirectValueType,
         /// Rust-side receive mode.
         receive: D::Receive,
     },
@@ -658,17 +658,79 @@ pub enum ParamPlan<S: Surface, D: Direction> {
     /// a `(ptr, len, cap, align)` quadruple.
     DirectVec {
         /// Element type.
-        element: TypeRef,
+        element: DirectVectorElementType,
     },
 }
 
 impl<S: Surface, D: Direction> ParamPlan<S, D> {
+    /// Renders this parameter plan through the shared parameter-plan walker.
+    pub fn render_with<'plan, R>(&'plan self, renderer: &mut R) -> R::Output
+    where
+        R: ParamPlanRender<'plan, S, D>,
+    {
+        match self {
+            Self::Direct { ty, receive } => renderer.direct(ty, *receive),
+            Self::Encoded {
+                ty,
+                codec,
+                shape,
+                receive,
+            } => renderer.encoded(ty, codec, *shape, *receive),
+            Self::Handle {
+                target,
+                carrier,
+                presence,
+                receive,
+            } => renderer.handle(target, *carrier, *presence, *receive),
+            Self::ScalarOption { primitive } => renderer.scalar_option(*primitive),
+            Self::DirectVec { element } => renderer.direct_vector(element),
+        }
+    }
+
     pub(crate) fn buffer_shape(&self) -> Option<S::BufferShape> {
         match self {
             Self::Encoded { shape, .. } => Some(*shape),
             _ => None,
         }
     }
+}
+
+/// Target-language rendering for parameter plans.
+///
+/// The shared walker owns the `ParamPlan` variant traversal. Backends
+/// implement the rendering leaves, so direct, encoded, handle, scalar
+/// option, and direct-vector cases do not drift into separate local
+/// enum walks.
+pub trait ParamPlanRender<'plan, S: Surface, D: Direction> {
+    /// Value produced by the renderer.
+    type Output;
+
+    /// Renders a directly-carried parameter.
+    fn direct(&mut self, ty: &'plan DirectValueType, receive: D::Receive) -> Self::Output;
+
+    /// Renders an encoded parameter.
+    fn encoded(
+        &mut self,
+        ty: &'plan TypeRef,
+        codec: &'plan D::Codec,
+        shape: S::BufferShape,
+        receive: D::Receive,
+    ) -> Self::Output;
+
+    /// Renders a handle parameter.
+    fn handle(
+        &mut self,
+        target: &'plan HandleTarget,
+        carrier: S::HandleCarrier,
+        presence: HandlePresence,
+        receive: D::Receive,
+    ) -> Self::Output;
+
+    /// Renders a scalar-option parameter.
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output;
+
+    /// Renders a direct-vector parameter.
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output;
 }
 
 /// A callable's return slot.
@@ -734,7 +796,7 @@ where
     /// Direct value in the return slot.
     DirectViaReturnSlot {
         /// Foreign-side spelling.
-        ty: TypeRef,
+        ty: DirectValueType,
     },
     /// Encoded value in the return slot.
     EncodedViaReturnSlot {
@@ -762,13 +824,13 @@ where
     /// Direct-vector in the return slot.
     DirectVecViaReturnSlot {
         /// Element type.
-        element: TypeRef,
+        element: DirectVectorElementType,
     },
     /// Direct value through an out-pointer (return slot carries the
     /// error status).
     DirectViaOutPointer {
         /// Foreign-side spelling.
-        ty: TypeRef,
+        ty: DirectValueType,
     },
     /// Encoded value through an out-pointer.
     EncodedViaOutPointer {
@@ -805,10 +867,97 @@ where
     ClosureViaOutPointer(ClosureReturn<S, D>),
 }
 
+/// Where a returned value is delivered in the native ABI.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ReturnValueSlot {
+    /// The value is the native function's return value.
+    ReturnSlot,
+    /// The value is written through a caller-provided out pointer.
+    OutPointer,
+}
+
+/// Target-language rendering for return plans.
+///
+/// The shared walker owns the `ReturnPlan` variant traversal. Backends
+/// implement the rendering leaves, so return-slot and out-pointer cases
+/// cannot drift into parallel local enum walks.
+pub trait ReturnPlanRender<'plan, S: Surface, D: Direction>
+where
+    D::Opposite: ParamDirection<S>,
+{
+    /// Value produced by the renderer.
+    type Output;
+
+    /// Renders a void return.
+    fn void(&mut self) -> Self::Output;
+
+    /// Renders a directly-carried value.
+    fn direct(&mut self, slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output;
+
+    /// Renders an encoded value.
+    fn encoded(
+        &mut self,
+        slot: ReturnValueSlot,
+        ty: &'plan TypeRef,
+        codec: &'plan D::Codec,
+        shape: S::BufferShape,
+    ) -> Self::Output;
+
+    /// Renders a handle value.
+    fn handle(
+        &mut self,
+        slot: ReturnValueSlot,
+        target: &'plan HandleTarget,
+        carrier: S::HandleCarrier,
+        presence: HandlePresence,
+    ) -> Self::Output;
+
+    /// Renders a scalar-option return.
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output;
+
+    /// Renders a direct-vector return.
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output;
+
+    /// Renders a closure return.
+    fn closure(&mut self, closure: &'plan ClosureReturn<S, D>) -> Self::Output;
+}
+
 impl<S: Surface, D: Direction> ReturnPlan<S, D>
 where
     D::Opposite: ParamDirection<S>,
 {
+    /// Renders this return plan through the shared return-plan walker.
+    pub fn render_with<'plan, R>(&'plan self, renderer: &mut R) -> R::Output
+    where
+        R: ReturnPlanRender<'plan, S, D>,
+    {
+        match self {
+            Self::Void => renderer.void(),
+            Self::DirectViaReturnSlot { ty } => renderer.direct(ReturnValueSlot::ReturnSlot, ty),
+            Self::EncodedViaReturnSlot { ty, codec, shape } => {
+                renderer.encoded(ReturnValueSlot::ReturnSlot, ty, codec, *shape)
+            }
+            Self::HandleViaReturnSlot {
+                target,
+                carrier,
+                presence,
+            } => renderer.handle(ReturnValueSlot::ReturnSlot, target, *carrier, *presence),
+            Self::ScalarOptionViaReturnSlot { primitive } => renderer.scalar_option(*primitive),
+            Self::DirectVecViaReturnSlot { element } => renderer.direct_vector(element),
+            Self::DirectViaOutPointer { ty } => renderer.direct(ReturnValueSlot::OutPointer, ty),
+            Self::EncodedViaOutPointer { ty, codec, shape } => {
+                renderer.encoded(ReturnValueSlot::OutPointer, ty, codec, *shape)
+            }
+            Self::HandleViaOutPointer {
+                target,
+                carrier,
+                presence,
+            } => renderer.handle(ReturnValueSlot::OutPointer, target, *carrier, *presence),
+            Self::ClosureViaOutPointer(closure) => renderer.closure(closure),
+        }
+    }
+
     pub(crate) fn native_symbols(&self) -> Box<dyn Iterator<Item = &NativeSymbol> + '_> {
         match self {
             Self::ClosureViaOutPointer(closure) => closure.native_symbols(),
@@ -919,10 +1068,63 @@ pub enum ErrorDecl<S: Surface, D: Direction> {
     },
 }
 
+/// The error transport selected for one callable.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorChannel<'error, S: Surface, D: Direction> {
+    /// The callable has no error transport.
+    None,
+    /// The callable reports errors through a status value.
+    Status,
+    /// The callable reports errors through an encoded payload.
+    Encoded {
+        /// The slot used by the encoded payload.
+        placement: ErrorPlacement,
+        /// The source error type.
+        ty: &'error TypeRef,
+        /// The codec selected for the encoded payload.
+        codec: &'error D::Codec,
+        /// The buffer shape used by the payload.
+        shape: S::BufferShape,
+    },
+}
+
+/// Where an error value is transported in the C-facing call shape.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorPlacement {
+    /// The error uses the return slot.
+    ReturnSlot,
+    /// The error uses an out-pointer parameter.
+    OutPointer,
+}
+
 impl<S: Surface, D: Direction> ErrorDecl<S, D> {
     /// Builds the `None` variant.
     pub fn none() -> Self {
         Self::None(PhantomData)
+    }
+
+    /// Returns the selected error transport.
+    pub fn channel<'error>(&'error self) -> ErrorChannel<'error, S, D> {
+        match self {
+            Self::None(_) => ErrorChannel::None,
+            Self::StatusViaReturnSlot { .. } | Self::StatusViaOutPointer { .. } => {
+                ErrorChannel::Status
+            }
+            Self::EncodedViaReturnSlot { ty, codec, shape } => ErrorChannel::Encoded {
+                placement: ErrorPlacement::ReturnSlot,
+                ty,
+                codec,
+                shape: *shape,
+            },
+            Self::EncodedViaOutPointer { ty, codec, shape } => ErrorChannel::Encoded {
+                placement: ErrorPlacement::OutPointer,
+                ty,
+                codec,
+                shape: *shape,
+            },
+        }
     }
 
     pub(crate) const fn uses_return_slot(&self) -> bool {

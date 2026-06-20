@@ -146,7 +146,7 @@ impl<'expansion, 'lowered> NativeReturn<'expansion, 'lowered> {
         if !matches!(self.input.target, HandleTarget::Class(_)) {
             return Err(Error::UnsupportedExpansion("non-class handle return"));
         }
-        let handle = wrapper::names::Class::from_local_type(class)?.handle();
+        let handle = wrapper::names::Class::from_type_path(class)?.handle();
         let value = &self.input.value;
         match self.input.presence {
             HandlePresence::Required => Ok(quote! {
@@ -254,7 +254,7 @@ impl<'expansion, 'lowered> WasmReturn<'expansion, 'lowered> {
         if !matches!(self.input.target, HandleTarget::Class(_)) {
             return Err(Error::UnsupportedExpansion("non-class handle return"));
         }
-        let handle = wrapper::names::Class::from_local_type(class)?.handle();
+        let handle = wrapper::names::Class::from_type_path(class)?.handle();
         let value = &self.input.value;
         match self.input.presence {
             HandlePresence::Required => Ok(quote! {
@@ -339,7 +339,7 @@ impl<C> HandleFailure<C> {
     fn tokens<S>(self) -> Result<TokenStream, Error>
     where
         C: Copy,
-        S: crate::experimental::surface::RenderSurface<HandleCarrier = C>,
+        S: RenderSurface<HandleCarrier = C>,
         wrapper::handle::Carrier:
             Render<S, wrapper::handle::CarrierInput<C>, Output = wrapper::handle::CarrierTokens>,
     {

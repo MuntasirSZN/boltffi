@@ -32,6 +32,14 @@ pub enum BackendError {
         /// Support status advertised by the bridge contract.
         status: CapabilityStatus,
     },
+    /// Complete rendering was requested but some declarations were skipped.
+    #[error("backend `{target}` did not render every declaration: {reason}")]
+    IncompleteCoverage {
+        /// Backend target name.
+        target: &'static str,
+        /// First unsupported declaration summary.
+        reason: String,
+    },
     /// A generated file path was empty.
     #[error("generated file path cannot be empty")]
     EmptyFilePath,
@@ -49,6 +57,22 @@ pub enum BackendError {
     UnsupportedCAbi {
         /// Binding shape that has no C ABI rendering.
         shape: &'static str,
+    },
+    /// A backend saw a binding shape that should not reach that rendering path.
+    #[error("{layer} received unexpected binding shape `{shape}`")]
+    UnexpectedBindingShape {
+        /// Backend layer that received the unexpected shape.
+        layer: &'static str,
+        /// Unexpected binding shape.
+        shape: &'static str,
+    },
+    /// A bridge contract index was missing data that construction should have recorded.
+    #[error("{bridge} bridge contract invariant failed: {invariant}")]
+    BrokenBridgeContract {
+        /// Bridge contract name.
+        bridge: &'static str,
+        /// Missing or inconsistent contract invariant.
+        invariant: &'static str,
     },
     /// A host target cannot render the supplied binding shape.
     #[error("{target} target cannot render {shape}")]
@@ -75,6 +99,30 @@ pub enum BackendError {
     InvalidPythonMethodName {
         /// Invalid method name text.
         name: String,
+    },
+    /// A generated Python identifier was invalid.
+    #[error("invalid Python identifier `{identifier}`")]
+    InvalidPythonIdentifier {
+        /// Invalid identifier text.
+        identifier: String,
+    },
+    /// A generated Python package module name was invalid.
+    #[error("invalid Python package module name `{name}`")]
+    InvalidPythonPackageModule {
+        /// Invalid module name text.
+        name: String,
+    },
+    /// Two generated Python declarations require the same name in one scope.
+    #[error("python name collision in {scope}: `{name}` is used by {existing} and {colliding}")]
+    PythonNameCollision {
+        /// Python scope where the collision was found.
+        scope: String,
+        /// Generated Python name used more than once.
+        name: String,
+        /// Declaration that claimed the generated name first.
+        existing: String,
+        /// Declaration that collided with the existing name.
+        colliding: String,
     },
     /// A backend template failed to render.
     #[error("template rendering failed: {message}")]

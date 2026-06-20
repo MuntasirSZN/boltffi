@@ -13,7 +13,7 @@ use boltffi_binding::{
 
 use crate::core::{
     BridgeCapability, BridgeContract, CapabilityRequirements, Emitted, GeneratedOutput,
-    HostCapabilities, RenderContext, RenderedDeclaration, Result, contract::sealed,
+    HostCapabilities, LanguageSyntax, RenderContext, RenderedDeclaration, Result, contract::sealed,
 };
 
 /// Host renderer for one target language.
@@ -23,6 +23,8 @@ pub trait HostBackend: sealed::HostBackend {
     type Surface: Surface;
     /// Bridge contract this host accepts.
     type Bridge: BridgeContract<Surface = Self::Surface>;
+    /// Language syntax fragments this host emits.
+    type Syntax: LanguageSyntax;
 
     /// Returns the target name used in diagnostics.
     fn name(&self) -> &'static str;
@@ -98,11 +100,11 @@ pub trait HostBackend: sealed::HostBackend {
     ) -> Result<Emitted>;
 
     /// Assembles collected declaration fragments into generated host files.
-    fn assemble(
+    fn assemble<'decl>(
         &self,
         bindings: &Bindings<Self::Surface>,
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
-        declarations: Vec<RenderedDeclaration<'_, Self::Surface>>,
+        declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput>;
 }

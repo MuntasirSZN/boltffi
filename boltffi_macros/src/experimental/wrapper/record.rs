@@ -1,11 +1,11 @@
 use boltffi_ast::{FieldDef, MethodDef, Path as SourcePath, RecordDef, TypeExpr};
 use boltffi_binding::{
-    CanonicalName, CodecNode, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, FieldKey,
-    Receive, RecordDecl, SurfaceLower, WritePlan,
+    CanonicalName, CodecNode, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, ExecutionDecl,
+    FieldKey, Receive, RecordDecl, SurfaceLower, WritePlan,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Ident, Type, parse_str};
+use syn::{Ident, Type};
 
 use crate::experimental::{
     error::Error,
@@ -143,9 +143,14 @@ where
         Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
 {
     fn render(self) -> Result<TokenStream, Error> {
-        let record = record_ident(self.source)?;
-        let size = layout_size(self.binding.layout().size().get())?;
-        let alignment = layout_size(self.binding.layout().alignment().get())?;
+        let record = names::SourceSpelling::new(&self.source.name)
+            .ident("source record name is not a Rust identifier")?;
+        let layout = LayoutCheck::new(
+            self.binding.layout().size().get(),
+            self.binding.layout().alignment().get(),
+        )?;
+        let size = layout.size();
+        let alignment = layout.alignment();
         let exports = associated_fn::Renderer::new(
             RecordOwner {
                 source: self.source,
@@ -256,7 +261,8 @@ where
         Render<S, wrapper::returns::FailureInput<'expansion, 'lowered, S>, Output = TokenStream>,
 {
     fn render(self) -> Result<TokenStream, Error> {
-        let record = record_ident(self.source)?;
+        let record = names::SourceSpelling::new(&self.source.name)
+            .ident("source record name is not a Rust identifier")?;
         let fields = self.fields()?;
         let wire_sizes = fields
             .iter()
@@ -322,7 +328,7 @@ where
                     } else {
                         unsafe { ::core::slice::from_raw_parts(pointer, byte_len) }
                     };
-                    ::boltffi::__private::wire::decode(bytes)
+                    ::boltffi::__private::wire::decode::<Vec<#record>>(bytes)
                         .expect("wire decode failed in VecTransport::unpack_vec")
                 }
             }
@@ -356,7 +362,8 @@ where
 impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, S> {
     fn tokens(self) -> Result<EncodedFieldTokens, Error> {
         self.validate_key()?;
-        let field = field_ident(self.source)?;
+        let field = names::SourceSpelling::new(&self.source.name)
+            .ident("source field name is not a Rust identifier")?;
         let generated = names::RecordField::new(&field);
         let decoded = generated.decoded();
         let used = generated.used();
@@ -367,14 +374,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         rust_api::IncomingEncodedType::new(&self.source.type_expr).require_supported()?;
         let wire_size = self.wire_size(&field, &wire, codec)?;
         let encode_to = self.encode_to(&field, &wire, codec)?;
-        let decode_from = self.decode_from(
-            &field,
-            &decoded,
-            &used,
-            &rust_type,
-            &self.source.type_expr,
-            codec,
-        )?;
+        let decode_from = self.decode_from(&field, &decoded, &used, &rust_type, codec)?;
         Ok(EncodedFieldTokens {
             wire_size,
             encode_to,
@@ -400,7 +400,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let conversion = encoded::BorrowedOutgoing::new(codec, self.expansion);
-        if !conversion.has_custom_conversion()? {
+        if !conversion.has_custom_conversion() {
             return Ok(quote! {
                 ::boltffi::__private::wire::WireEncode::wire_size(&self.#field)
             });
@@ -421,7 +421,7 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let conversion = encoded::BorrowedOutgoing::new(codec, self.expansion);
-        let value = match conversion.has_custom_conversion()? {
+        let value = match conversion.has_custom_conversion() {
             true => {
                 let converted = conversion.convert(quote! { &self.#field })?;
                 quote! {
@@ -455,12 +455,11 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
         decoded: &Ident,
         used: &Ident,
         rust_type: &Type,
-        source: &TypeExpr,
         codec: &CodecNode,
     ) -> Result<TokenStream, Error> {
         let incoming = encoded::Incoming::new(codec, self.expansion);
         let decoded_type = incoming
-            .decoded_type(source)?
+            .decoded_type()?
             .unwrap_or_else(|| quote! { #rust_type });
         let converted = incoming.convert(quote! { #decoded })?;
         let value = match converted.changed() {
@@ -483,13 +482,14 @@ impl<'expansion, 'lowered, S: RenderSurface> EncodedField<'expansion, 'lowered, 
             }
             false => quote! { #decoded },
         };
+        let type_annotation = (!converted.changed()).then(|| quote! { : #rust_type });
         Ok(quote! {
             let (#decoded, #used) =
                 <#decoded_type as ::boltffi::__private::wire::WireDecode>::decode_from(
                     &buffer[__boltffi_offset..]
                 )?;
             __boltffi_offset += #used;
-            let #field: #rust_type = #value;
+            let #field #type_annotation = #value;
         })
     }
 }
@@ -521,14 +521,7 @@ where
         &self,
         export: associated_fn::ReceiverExport<'expansion, 'lowered, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error> {
-        self.receiver.render(
-            self.source,
-            &self.record,
-            export.callable().receiver(),
-            export.method().clone(),
-            export.failure(),
-            export.expansion(),
-        )
+        self.receiver.render(self.source, &self.record, export)
     }
 }
 
@@ -537,10 +530,7 @@ impl<'receiver> ReceiverKind<'receiver> {
         self,
         source: &'receiver RecordDef,
         record: &Ident,
-        receive: Option<Receive>,
-        method: Ident,
-        failure: associated_fn::ReceiverFailure<'expansion, 'receiver, S>,
-        expansion: &'expansion Expansion<'receiver, S>,
+        export: associated_fn::ReceiverExport<'expansion, 'receiver, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error>
     where
         S: RenderSurface,
@@ -557,20 +547,19 @@ impl<'receiver> ReceiverKind<'receiver> {
                 Output = TokenStream,
             >,
     {
+        let receive = export.callable().receiver();
+        let execution = export.callable().execution();
+        let method = export.method().clone();
+        let failure = export.failure();
+        let expansion = export.expansion();
         match (self, receive) {
             (Self::Direct, Some(receive)) => {
-                if receive == Receive::ByMutRef
-                    && matches!(S::DIRECT_RECORD_PARAMS, DirectRecordCrossing::Value)
-                {
-                    return Err(Error::UnsupportedExpansion(
-                        "mutable direct record receiver without writeback",
-                    ));
-                }
-                let rust_type = record_type(source)?;
-                let receiver = names::Wrapper::new(method.span()).receiver();
+                let rust_type = names::SourceSpelling::new(&source.name)
+                    .ty("source record name is not a Rust type")?;
+                let receiver = names::Locals::new(method.span()).receiver();
                 let requires_failure_return =
                     matches!(S::DIRECT_RECORD_PARAMS, DirectRecordCrossing::Pointer);
-                let failure = if requires_failure_return {
+                let failure_token = if requires_failure_return {
                     failure.render()?
                 } else {
                     TokenStream::new()
@@ -579,17 +568,42 @@ impl<'receiver> ReceiverKind<'receiver> {
                     wrapper::param::direct::Record,
                     wrapper::param::direct::RecordInput::new(
                         receive,
-                        rust_type,
+                        rust_type.clone(),
                         receiver.clone(),
-                        failure,
+                        failure_token,
                     ),
                 )?;
+                let direct_writeback = self.direct_writeback(
+                    receive,
+                    &receiver,
+                    &rust_type,
+                    tokens.writebacks().is_empty(),
+                    failure,
+                )?;
+                let ffi_parameters = tokens
+                    .ffi_parameters()
+                    .iter()
+                    .cloned()
+                    .chain(direct_writeback.ffi_parameters)
+                    .collect();
+                let conversions = tokens
+                    .conversions()
+                    .iter()
+                    .cloned()
+                    .chain(direct_writeback.conversions)
+                    .collect();
+                let writebacks = tokens
+                    .writebacks()
+                    .iter()
+                    .cloned()
+                    .chain(direct_writeback.writebacks)
+                    .collect();
                 Ok((
                     export::ReceiverTokens::new(
-                        tokens.ffi_parameters().to_vec(),
-                        tokens.conversions().to_vec(),
-                        tokens.writebacks().to_vec(),
-                        requires_failure_return,
+                        ffi_parameters,
+                        conversions,
+                        writebacks,
+                        requires_failure_return || direct_writeback.requires_failure_return,
                     ),
                     export::RustCall::method(receiver, method),
                 ))
@@ -599,34 +613,50 @@ impl<'receiver> ReceiverKind<'receiver> {
                 export::RustCall::associated(quote! { #record }, method),
             )),
             (Self::Encoded { codec }, Some(receive)) => {
-                if receive == Receive::ByMutRef {
-                    return Err(Error::UnsupportedExpansion(
-                        "mutable encoded record receiver without writeback",
-                    ));
-                }
                 let source_type = TypeExpr::record(
                     source.id.clone(),
                     SourcePath::single(source.name.spelling()),
                 );
-                let receiver = names::Wrapper::new(method.span()).receiver();
+                let receiver = names::Locals::new(method.span()).receiver();
+                let async_shared_receiver = receive == Receive::ByRef
+                    && matches!(execution, ExecutionDecl::Asynchronous(_));
+                let decode_target = match async_shared_receiver {
+                    true => rust_api::DecodeTarget::by_value(&source_type)?,
+                    false => rust_api::DecodeTarget::received(receive, &source_type)?,
+                };
                 let tokens = <wrapper::param::encoded::Renderer as Render<S, _>>::render(
                     wrapper::param::encoded::Renderer,
                     wrapper::param::encoded::Input::new(
                         codec,
                         <S as SurfaceLower>::encoded_param_shape(),
-                        rust_api::DecodeTarget::by_value(&source_type)?,
+                        decode_target,
                         receiver.clone(),
                         failure.render()?,
                         expansion,
                     ),
                 )?;
+                let encoded_writeback =
+                    self.encoded_writeback(receive, codec, &receiver, failure, expansion)?;
+                let ffi_parameters = tokens
+                    .ffi_parameters()
+                    .iter()
+                    .cloned()
+                    .chain(encoded_writeback.ffi_parameters)
+                    .collect();
+                let conversions = tokens
+                    .conversions()
+                    .iter()
+                    .cloned()
+                    .chain(encoded_writeback.conversions)
+                    .collect();
+                let writebacks = tokens
+                    .writebacks()
+                    .iter()
+                    .cloned()
+                    .chain(encoded_writeback.writebacks)
+                    .collect();
                 Ok((
-                    export::ReceiverTokens::new(
-                        tokens.ffi_parameters().to_vec(),
-                        tokens.conversions().to_vec(),
-                        tokens.writebacks().to_vec(),
-                        true,
-                    ),
+                    export::ReceiverTokens::new(ffi_parameters, conversions, writebacks, true),
                     export::RustCall::method(receiver, method),
                 ))
             }
@@ -636,23 +666,133 @@ impl<'receiver> ReceiverKind<'receiver> {
             )),
         }
     }
+
+    fn direct_writeback<'expansion, S>(
+        self,
+        receive: Receive,
+        receiver: &Ident,
+        rust_type: &Type,
+        needs_writeback: bool,
+        failure: associated_fn::ReceiverFailure<'expansion, 'receiver, S>,
+    ) -> Result<ReceiverWriteback, Error>
+    where
+        S: RenderSurface,
+        wrapper::returns::Failure: Render<
+                S,
+                wrapper::returns::FailureInput<'expansion, 'receiver, S>,
+                Output = TokenStream,
+            >,
+    {
+        if receive != Receive::ByMutRef || !needs_writeback {
+            return Ok(ReceiverWriteback::none());
+        }
+        let out = names::Parameter::new(receiver).writeback();
+        let failure = failure.render()?;
+        Ok(ReceiverWriteback {
+            ffi_parameters: vec![quote! {
+                #out: *mut <#rust_type as ::boltffi::__private::Passable>::In
+            }],
+            conversions: vec![quote! {
+                if #out.is_null() {
+                    ::boltffi::__private::set_last_error("receiver writeback pointer is null".to_string());
+                    #failure
+                }
+            }],
+            writebacks: vec![quote! {
+                unsafe {
+                    ::core::ptr::write_unaligned(
+                        #out,
+                        <#rust_type as ::boltffi::__private::Passable>::pack(#receiver)
+                    );
+                }
+            }],
+            requires_failure_return: true,
+        })
+    }
+
+    fn encoded_writeback<'expansion, S>(
+        self,
+        receive: Receive,
+        codec: &'receiver WritePlan,
+        receiver: &Ident,
+        failure: associated_fn::ReceiverFailure<'expansion, 'receiver, S>,
+        expansion: &'expansion Expansion<'receiver, S>,
+    ) -> Result<ReceiverWriteback, Error>
+    where
+        S: RenderSurface,
+        wrapper::returns::Failure: Render<
+                S,
+                wrapper::returns::FailureInput<'expansion, 'receiver, S>,
+                Output = TokenStream,
+            >,
+    {
+        if receive != Receive::ByMutRef {
+            return Ok(ReceiverWriteback::none());
+        }
+        let out = names::Parameter::new(receiver).writeback();
+        let storage = names::Parameter::new(receiver).storage();
+        let failure = failure.render()?;
+        let buffer =
+            encoded::outgoing::Value::new(codec.root(), expansion).buffer(quote! { #storage })?;
+        Ok(ReceiverWriteback {
+            ffi_parameters: vec![quote! { #out: *mut ::boltffi::__private::FfiBuf }],
+            conversions: vec![quote! {
+                if #out.is_null() {
+                    ::boltffi::__private::set_last_error("receiver writeback pointer is null".to_string());
+                    #failure
+                }
+            }],
+            writebacks: vec![quote! {
+                unsafe {
+                    ::core::ptr::write(#out, #buffer);
+                }
+            }],
+            requires_failure_return: true,
+        })
+    }
 }
 
-fn record_ident(source: &RecordDef) -> Result<Ident, Error> {
-    parse_str(source.name.spelling())
-        .map_err(|_| Error::SourceSyntaxMismatch("source record name is not a Rust identifier"))
+struct ReceiverWriteback {
+    ffi_parameters: Vec<TokenStream>,
+    conversions: Vec<TokenStream>,
+    writebacks: Vec<TokenStream>,
+    requires_failure_return: bool,
 }
 
-fn record_type(source: &RecordDef) -> Result<Type, Error> {
-    parse_str(source.name.spelling())
-        .map_err(|_| Error::SourceSyntaxMismatch("source record name is not a Rust type"))
+struct LayoutCheck {
+    size: usize,
+    alignment: usize,
 }
 
-fn field_ident(source: &FieldDef) -> Result<Ident, Error> {
-    parse_str(source.name.spelling())
-        .map_err(|_| Error::SourceSyntaxMismatch("source field name is not a Rust identifier"))
+impl LayoutCheck {
+    fn new(size: u64, alignment: u64) -> Result<Self, Error> {
+        Ok(Self {
+            size: Self::bytes(size)?,
+            alignment: Self::bytes(alignment)?,
+        })
+    }
+
+    const fn size(&self) -> usize {
+        self.size
+    }
+
+    const fn alignment(&self) -> usize {
+        self.alignment
+    }
+
+    fn bytes(bytes: u64) -> Result<usize, Error> {
+        usize::try_from(bytes)
+            .map_err(|_| Error::SourceSyntaxMismatch("record layout is too large"))
+    }
 }
 
-fn layout_size(bytes: u64) -> Result<usize, Error> {
-    usize::try_from(bytes).map_err(|_| Error::SourceSyntaxMismatch("record layout is too large"))
+impl ReceiverWriteback {
+    fn none() -> Self {
+        Self {
+            ffi_parameters: Vec::new(),
+            conversions: Vec::new(),
+            writebacks: Vec::new(),
+            requires_failure_return: false,
+        }
+    }
 }

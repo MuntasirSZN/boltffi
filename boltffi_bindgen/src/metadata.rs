@@ -24,6 +24,7 @@ use crate::artifact::{BindingMetadataReadError, BindingMetadataReader};
 pub struct BindingMetadataBuild {
     manifest_path: PathBuf,
     target: Option<String>,
+    cargo_args: MetadataCargoArgs,
 }
 
 impl BindingMetadataBuild {
@@ -32,12 +33,19 @@ impl BindingMetadataBuild {
         Self {
             manifest_path: manifest_path.into(),
             target: None,
+            cargo_args: MetadataCargoArgs::default(),
         }
     }
 
     /// Builds for a Cargo target triple.
     pub fn target(mut self, target: impl Into<String>) -> Self {
         self.target = Some(target.into());
+        self
+    }
+
+    /// Passes Cargo build arguments to the metadata build.
+    pub fn cargo_args(mut self, cargo_args: impl IntoIterator<Item = String>) -> Self {
+        self.cargo_args = MetadataCargoArgs::new(cargo_args);
         self
     }
 
@@ -282,6 +290,7 @@ impl<'build> CargoBuild<'build> {
         if let Some(target) = &self.build.target {
             command.arg("--target").arg(target);
         }
+        command.args(self.build.cargo_args.iter());
         command.env(BINDING_METADATA_BUILD_ENV, "1");
         command.env(BINDING_METADATA_SOURCE_ENV, self.source_root.path());
         command.env(BINDING_METADATA_SURFACE_ENV, surface.as_str());
@@ -310,6 +319,44 @@ impl CargoProgram {
 
     fn into_os_string(self) -> OsString {
         self.program
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct MetadataCargoArgs {
+    arguments: Vec<String>,
+}
+
+impl MetadataCargoArgs {
+    fn new(arguments: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            arguments: Self::without_owned_selectors(arguments.into_iter().collect()),
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &String> {
+        self.arguments.iter()
+    }
+
+    fn without_owned_selectors(arguments: Vec<String>) -> Vec<String> {
+        let mut skip_value = false;
+        arguments
+            .into_iter()
+            .filter_map(move |argument| {
+                if skip_value {
+                    skip_value = false;
+                    return None;
+                }
+
+                if matches!(argument.as_str(), "--manifest-path" | "--target") {
+                    skip_value = true;
+                    return None;
+                }
+
+                (!argument.starts_with("--manifest-path=") && !argument.starts_with("--target="))
+                    .then_some(argument)
+            })
+            .collect()
     }
 }
 
@@ -496,7 +543,7 @@ mod tests {
         lower_with_declarations,
     };
 
-    use super::{BindingMetadataBuild, BindingMetadataBuildError};
+    use super::{BindingMetadataBuild, BindingMetadataBuildError, MetadataCargoArgs};
     use crate::artifact::BindingMetadataReadError;
 
     #[test]
@@ -586,6 +633,36 @@ mod tests {
             error,
             BindingMetadataBuildError::Metadata(BindingMetadataReadError::NoMetadata { .. })
         ));
+    }
+
+    #[test]
+    fn metadata_cargo_args_keep_build_flags_without_owned_selectors() {
+        let args = MetadataCargoArgs::new(
+            [
+                "--features",
+                "demo",
+                "--manifest-path",
+                "ignored/Cargo.toml",
+                "--target=aarch64-apple-darwin",
+                "--release",
+                "--package=demo",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            vec![
+                "--features".to_owned(),
+                "demo".to_owned(),
+                "--release".to_owned(),
+                "--package=demo".to_owned(),
+            ]
+        );
     }
 
     struct FixtureCrate {

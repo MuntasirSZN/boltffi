@@ -14,8 +14,8 @@
 use boltffi_ast::{StreamDef as SourceStream, TypeExpr};
 
 use crate::{
-    ByteSize, CanonicalName, Primitive as BindingPrimitive, ReadPlan, StreamDecl, StreamDeclParts,
-    StreamItemPlan, StreamMode, StreamProtocol, ValueRef,
+    ByteSize, CanonicalName, DirectValueType, Primitive as BindingPrimitive, ReadPlan, StreamDecl,
+    StreamDeclParts, StreamItemPlan, StreamMode, StreamProtocol, ValueRef,
 };
 
 use super::{
@@ -25,23 +25,24 @@ use super::{
     index::Index,
     layout, metadata, records,
     surface::SurfaceLower,
-    symbol::{self, StreamLifecycle, SymbolAllocator},
+    symbol::{StreamLifecycle, SymbolAllocator},
     types,
 };
 
-pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+pub fn lower<S: SurfaceLower>(
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<StreamDecl<S>>, LowerError> {
-    idx.streams()
+    index
+        .streams()
         .iter()
-        .map(|stream| lower_one::<S>(idx, ids, allocator, stream))
+        .map(|stream| lower_one::<S>(index, ids, allocator, stream))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     stream: &SourceStream,
@@ -52,7 +53,7 @@ fn lower_one<S: SurfaceLower>(
         .as_ref()
         .map(|owner| ids.class(owner))
         .transpose()?;
-    let item = lower_item::<S>(idx, ids, &stream.item_type)?;
+    let item = lower_item::<S>(index, ids, &stream.item_type)?;
     let protocol = build_protocol(allocator, stream.id.as_str())?;
     Ok(StreamDecl::new(StreamDeclParts {
         id: stream_id,
@@ -67,7 +68,7 @@ fn lower_one<S: SurfaceLower>(
 }
 
 fn lower_item<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<StreamItemPlan<S>, LowerError> {
@@ -77,21 +78,21 @@ fn lower_item<S: SurfaceLower>(
             let size = BindingPrimitive::from(*primitive).byte_size::<S>();
             direct_item(ids, type_expr, size)
         }
-        TypeExpr::Enum { id, .. } => match idx.enumeration(id) {
+        TypeExpr::Enum { id, .. } => match index.enumeration(id) {
             Some(enumeration) if enums::is_c_style(enumeration) => {
                 let repr = enums::c_style_repr(enumeration)
                     .ok_or_else(|| LowerError::unsupported_type(UnsupportedType::EnumRepr))?;
                 direct_item(ids, type_expr, repr.primitive().byte_size::<S>())
             }
-            _ => encoded_item::<S>(idx, ids, type_expr),
+            _ => encoded_item::<S>(index, ids, type_expr),
         },
-        TypeExpr::Record { id, .. } => match idx.record(id) {
+        TypeExpr::Record { id, .. } => match index.record(id) {
             Some(record) if records::is_direct(record) => {
                 direct_item(ids, type_expr, layout::compute(record)?.size())
             }
-            _ => encoded_item::<S>(idx, ids, type_expr),
+            _ => encoded_item::<S>(index, ids, type_expr),
         },
-        _ => encoded_item::<S>(idx, ids, type_expr),
+        _ => encoded_item::<S>(index, ids, type_expr),
     }
 }
 
@@ -101,18 +102,32 @@ fn direct_item<S: SurfaceLower>(
     size: ByteSize,
 ) -> Result<StreamItemPlan<S>, LowerError> {
     Ok(StreamItemPlan::Direct {
-        ty: types::lower(ids, type_expr)?,
+        ty: direct_value_type(ids, type_expr)?,
         size,
     })
 }
 
+fn direct_value_type(
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+) -> Result<DirectValueType, LowerError> {
+    match type_expr {
+        TypeExpr::Primitive(primitive) => Ok(DirectValueType::primitive(BindingPrimitive::from(
+            *primitive,
+        ))),
+        TypeExpr::Record { id, .. } => Ok(DirectValueType::record(ids.record(id)?)),
+        TypeExpr::Enum { id, .. } => Ok(DirectValueType::enumeration(ids.enumeration(id)?)),
+        _ => Err(LowerError::unsupported_type(UnsupportedType::StreamItem)),
+    }
+}
+
 fn encoded_item<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<StreamItemPlan<S>, LowerError> {
     let ty = types::lower(ids, type_expr)?;
-    let root = codecs::node(idx, ids, type_expr, ValueRef::self_value())?;
+    let root = codecs::node(index, ids, type_expr, ValueRef::self_value())?;
     Ok(StreamItemPlan::Encoded {
         ty,
         read: ReadPlan::new(root),
@@ -165,21 +180,12 @@ fn build_protocol(
     allocator: &mut SymbolAllocator,
     source_id: &str,
 ) -> Result<StreamProtocol, LowerError> {
-    let subscribe = allocator.mint(symbol::stream_symbol_name(
-        source_id,
-        StreamLifecycle::Subscribe,
-    ))?;
-    let pop_batch = allocator.mint(symbol::stream_symbol_name(
-        source_id,
-        StreamLifecycle::PopBatch,
-    ))?;
-    let wait = allocator.mint(symbol::stream_symbol_name(source_id, StreamLifecycle::Wait))?;
-    let poll = allocator.mint(symbol::stream_symbol_name(source_id, StreamLifecycle::Poll))?;
-    let unsubscribe = allocator.mint(symbol::stream_symbol_name(
-        source_id,
-        StreamLifecycle::Unsubscribe,
-    ))?;
-    let free = allocator.mint(symbol::stream_symbol_name(source_id, StreamLifecycle::Free))?;
+    let subscribe = allocator.mint_stream(source_id, StreamLifecycle::Subscribe)?;
+    let pop_batch = allocator.mint_stream(source_id, StreamLifecycle::PopBatch)?;
+    let wait = allocator.mint_stream(source_id, StreamLifecycle::Wait)?;
+    let poll = allocator.mint_stream(source_id, StreamLifecycle::Poll)?;
+    let unsubscribe = allocator.mint_stream(source_id, StreamLifecycle::Unsubscribe)?;
+    let free = allocator.mint_stream(source_id, StreamLifecycle::Free)?;
     Ok(StreamProtocol::new(
         subscribe,
         pop_batch,
@@ -202,9 +208,9 @@ mod tests {
 
     use crate::lower::{LowerError, LowerErrorKind, UnsupportedType, lower};
     use crate::{
-        Bindings, ByteSize, CanonicalName, CodecNode, Decl, Native, Primitive as BindingPrimitive,
-        ReadPlan, StreamDecl, StreamId, StreamItemPlan, StreamMode as BindingStreamMode,
-        SurfaceLower, TypeRef, Wasm32, native, wasm32,
+        Bindings, ByteSize, CanonicalName, CodecNode, Decl, DirectValueType, Native,
+        Primitive as BindingPrimitive, ReadPlan, StreamDecl, StreamId, StreamItemPlan,
+        StreamMode as BindingStreamMode, SurfaceLower, TypeRef, Wasm32, native, wasm32,
     };
 
     fn package() -> SourceContract {
@@ -294,7 +300,7 @@ mod tests {
         assert_eq!(
             decl.item(),
             &StreamItemPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::U32),
+                ty: DirectValueType::Primitive(BindingPrimitive::U32),
                 size: ByteSize::new(4),
             }
         );
@@ -445,7 +451,7 @@ mod tests {
         assert_eq!(
             only_stream(&bindings).item(),
             &StreamItemPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::USize),
+                ty: DirectValueType::Primitive(BindingPrimitive::USize),
                 size: ByteSize::new(8),
             }
         );
@@ -462,7 +468,7 @@ mod tests {
         assert_eq!(
             only_stream(&bindings).item(),
             &StreamItemPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::USize),
+                ty: DirectValueType::Primitive(BindingPrimitive::USize),
                 size: ByteSize::new(4),
             }
         );
@@ -486,7 +492,7 @@ mod tests {
         assert_eq!(
             only_stream(&bindings).item(),
             &StreamItemPlan::Direct {
-                ty: TypeRef::Record(crate::RecordId::from_raw(0)),
+                ty: DirectValueType::Record(crate::RecordId::from_raw(0)),
                 size: ByteSize::new(16),
             }
         );

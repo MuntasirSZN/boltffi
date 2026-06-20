@@ -1,7 +1,7 @@
 use boltffi_binding::{CallbackLocalFunction, Native, Wasm32, native, wasm32};
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::parse_str;
+use syn::{Ident, parse_str};
 
 use crate::experimental::{error::Error, wrapper::Render};
 
@@ -101,27 +101,30 @@ impl Render<Wasm32, CarrierInput<wasm32::HandleCarrier>> for Carrier {
 }
 
 /// A generated Rust path to a local callback function.
-pub struct CallbackLocalPath<'function> {
-    function: &'function CallbackLocalFunction,
+pub struct CallbackLocalPath {
+    function: CallbackLocalFunction,
 }
 
-impl<'function> CallbackLocalPath<'function> {
+impl CallbackLocalPath {
     /// Creates a path renderer for a lowered local callback function.
-    pub const fn new(function: &'function CallbackLocalFunction) -> Self {
-        Self { function }
+    pub fn new(function: &CallbackLocalFunction) -> Self {
+        Self {
+            function: function.clone(),
+        }
     }
 
-    /// Returns the crate-rooted Rust path.
+    /// Returns the generated helper identifier.
     pub fn tokens(self) -> Result<TokenStream, Error> {
-        let suffix = self
+        let ident = self
             .function
             .segments()
-            .iter()
-            .map(|segment| segment.as_str())
-            .collect::<Vec<_>>()
-            .join("::");
-        let path = parse_str::<syn::Path>(&format!("crate::{suffix}"))
-            .map_err(|_| Error::SourceSyntaxMismatch("callback local handle path is not Rust"))?;
-        Ok(quote! { #path })
+            .last()
+            .map(|segment| parse_str::<Ident>(segment.as_str()))
+            .transpose()
+            .map_err(|_| Error::SourceSyntaxMismatch("callback local handle path is not Rust"))?
+            .ok_or(Error::SourceSyntaxMismatch(
+                "callback local handle path is empty",
+            ))?;
+        Ok(quote! { #ident })
     }
 }

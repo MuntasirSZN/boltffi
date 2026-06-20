@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-use boltffi_binding::{Native, NativeSymbol};
+use boltffi_binding::{CallbackId, EnumId, Native, NativeSymbol, RecordId};
 
 use crate::{
-    bridge::c::{self, CBridgeContract, Function},
+    bridge::c::{self, CBridgeContract, Function, Identifier},
     core::{
         BridgeCapabilities, BridgeCapability, BridgeContract, Error, FilePath, Result,
         contract::sealed,
@@ -20,6 +22,9 @@ pub struct PythonCExtBridgeContract {
     source_path: FilePath,
     c_header: CHeaderInclude,
     symbols: ModuleSymbols,
+    source_direct_records: BTreeMap<RecordId, c::Record>,
+    source_c_style_enums: BTreeMap<EnumId, c::Enum>,
+    source_callbacks: BTreeMap<CallbackId, c::Callback>,
     functions: Vec<LoadedFunction>,
     loader: ExtensionMethod,
 }
@@ -43,27 +48,34 @@ pub struct PythonExtensionName {
 #[non_exhaustive]
 pub struct LoadedFunction {
     function: Function,
-    typedef_name: String,
-    storage_name: String,
+    typedef_name: Identifier,
+    storage_name: Identifier,
 }
 
 /// C identifiers reserved by the CPython extension module.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ModuleSymbols {
-    init_function: String,
-    method_table: String,
-    module_definition: String,
-    free_function: String,
+    init_function: Identifier,
+    method_table: Identifier,
+    module_definition: Identifier,
+    free_function: Identifier,
 }
 
 /// CPython method table entry contributed by the bridge layer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ExtensionMethod {
-    python_name: String,
-    c_function: String,
+    python_name: MethodName,
+    c_function: Identifier,
     flags: MethodFlags,
+}
+
+/// Python-visible name stored in a CPython method table.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
+pub struct MethodName {
+    name: String,
 }
 
 /// CPython call convention flags for one method table entry.
@@ -107,6 +119,13 @@ impl PythonCExtBridgeContract {
             functions,
             loader: ExtensionMethod::loader()?,
             c_header: CHeaderInclude::from_files(&source_path, c_bridge.header_path())?,
+            source_direct_records: c_bridge.source_direct_records().clone(),
+            source_c_style_enums: c_bridge.source_c_style_enums().clone(),
+            source_callbacks: c_bridge
+                .callbacks()
+                .iter()
+                .map(|callback| (callback.id(), callback.clone()))
+                .collect(),
             module,
             source_path,
         })
@@ -139,6 +158,37 @@ impl PythonCExtBridgeContract {
             .find(|function| function.function().name() == symbol.name().as_str())
     }
 
+    /// Returns the loaded support function that releases a BoltFFI buffer.
+    pub fn buffer_free(&self) -> Result<&LoadedFunction> {
+        self.support_function(
+            "boltffi_free_buf",
+            "missing CPython free buffer support symbol",
+        )
+    }
+
+    /// Returns the loaded support function that copies bytes into a BoltFFI buffer.
+    pub fn buffer_from_bytes(&self) -> Result<&LoadedFunction> {
+        self.support_function(
+            "boltffi_buf_from_bytes",
+            "missing CPython buffer copy support symbol",
+        )
+    }
+
+    /// Returns the C typedef selected for a direct source record.
+    pub fn source_direct_record(&self, record: RecordId) -> Option<&c::Record> {
+        self.source_direct_records.get(&record)
+    }
+
+    /// Returns the C typedef selected for a source C-style enum.
+    pub fn source_c_style_enum(&self, enumeration: EnumId) -> Option<&c::Enum> {
+        self.source_c_style_enums.get(&enumeration)
+    }
+
+    /// Returns the C vtable selected for a source callback trait.
+    pub fn source_callback(&self, callback: CallbackId) -> Option<&c::Callback> {
+        self.source_callbacks.get(&callback)
+    }
+
     /// Returns C identifiers reserved by the extension module.
     pub fn symbols(&self) -> &ModuleSymbols {
         &self.symbols
@@ -152,6 +202,16 @@ impl PythonCExtBridgeContract {
     /// Returns the bridge-owned loader method.
     pub fn loader_method(&self) -> &ExtensionMethod {
         &self.loader
+    }
+
+    fn support_function(&self, name: &'static str, shape: &'static str) -> Result<&LoadedFunction> {
+        self.functions
+            .iter()
+            .find(|function| function.function().name() == name)
+            .ok_or(Error::UnsupportedTarget {
+                target: "python",
+                shape,
+            })
     }
 }
 
@@ -235,7 +295,7 @@ impl PythonExtensionName {
     /// Creates a CPython extension module name.
     pub fn parse(name: impl Into<String>) -> Result<Self> {
         let name = name.into();
-        c::identifier::Identifier::parse(&name)?;
+        Identifier::parse(name.clone())?;
         Ok(Self { name })
     }
 
@@ -248,11 +308,11 @@ impl PythonExtensionName {
 impl LoadedFunction {
     /// Creates a loaded function from a C bridge function.
     pub fn new(function: &Function) -> Result<Self> {
-        let symbol = c::identifier::Identifier::parse(function.name())?;
+        let symbol = Identifier::parse(function.name())?;
         Ok(Self {
             function: function.clone(),
-            typedef_name: format!("boltffi_python_{}_fn", symbol.as_str()),
-            storage_name: format!("boltffi_python_{}", symbol.as_str()),
+            typedef_name: Identifier::parse(format!("boltffi_python_{}_fn", symbol.as_str()))?,
+            storage_name: Identifier::parse(format!("boltffi_python_{}", symbol.as_str()))?,
         })
     }
 
@@ -262,12 +322,12 @@ impl LoadedFunction {
     }
 
     /// Returns the C function-pointer typedef name.
-    pub fn typedef_name(&self) -> &str {
+    pub fn typedef_name(&self) -> &Identifier {
         &self.typedef_name
     }
 
     /// Returns the static function-pointer storage name.
-    pub fn storage_name(&self) -> &str {
+    pub fn storage_name(&self) -> &Identifier {
         &self.storage_name
     }
 }
@@ -275,43 +335,31 @@ impl LoadedFunction {
 impl ModuleSymbols {
     /// Creates CPython extension module symbols.
     pub fn new(module: &PythonExtensionName) -> Result<Self> {
-        let init_function = format!("PyInit_{}", module.as_str());
-        let method_table = "boltffi_python_methods".to_owned();
-        let module_definition = "boltffi_python_module".to_owned();
-        let free_function = "boltffi_python_free_module".to_owned();
-        [
-            init_function.as_str(),
-            method_table.as_str(),
-            module_definition.as_str(),
-            free_function.as_str(),
-        ]
-        .into_iter()
-        .try_for_each(|symbol| c::identifier::Identifier::parse(symbol).map(|_| ()))?;
         Ok(Self {
-            init_function,
-            method_table,
-            module_definition,
-            free_function,
+            init_function: Identifier::parse(format!("PyInit_{}", module.as_str()))?,
+            method_table: Identifier::parse("boltffi_python_methods")?,
+            module_definition: Identifier::parse("boltffi_python_module")?,
+            free_function: Identifier::parse("boltffi_python_free_module")?,
         })
     }
 
     /// Returns the `PyInit_*` function name.
-    pub fn init_function(&self) -> &str {
+    pub fn init_function(&self) -> &Identifier {
         &self.init_function
     }
 
     /// Returns the CPython method table identifier.
-    pub fn method_table(&self) -> &str {
+    pub fn method_table(&self) -> &Identifier {
         &self.method_table
     }
 
     /// Returns the CPython module definition identifier.
-    pub fn module_definition(&self) -> &str {
+    pub fn module_definition(&self) -> &Identifier {
         &self.module_definition
     }
 
     /// Returns the module cleanup function identifier.
-    pub fn free_function(&self) -> &str {
+    pub fn free_function(&self) -> &Identifier {
         &self.free_function
     }
 }
@@ -319,16 +367,10 @@ impl ModuleSymbols {
 impl ExtensionMethod {
     /// Creates a CPython method table entry.
     pub fn new(
-        python_name: impl Into<String>,
-        c_function: impl Into<String>,
+        python_name: MethodName,
+        c_function: Identifier,
         flags: MethodFlags,
     ) -> Result<Self> {
-        let python_name = python_name.into();
-        if python_name.is_empty() || python_name.bytes().any(|byte| byte == 0) {
-            return Err(Error::InvalidPythonMethodName { name: python_name });
-        }
-        let c_function = c_function.into();
-        c::identifier::Identifier::parse(&c_function)?;
         Ok(Self {
             python_name,
             c_function,
@@ -337,12 +379,12 @@ impl ExtensionMethod {
     }
 
     /// Returns the Python-visible method name.
-    pub fn python_name(&self) -> &str {
+    pub fn python_name(&self) -> &MethodName {
         &self.python_name
     }
 
     /// Returns the C function used by the method table entry.
-    pub fn c_function(&self) -> &str {
+    pub fn c_function(&self) -> &Identifier {
         &self.c_function
     }
 
@@ -353,10 +395,32 @@ impl ExtensionMethod {
 
     fn loader() -> Result<Self> {
         Self::new(
-            "_initialize_loader",
-            "boltffi_python_initialize_loader",
+            MethodName::parse("_initialize_loader")?,
+            Identifier::parse("boltffi_python_initialize_loader")?,
             MethodFlags::OneObject,
         )
+    }
+}
+
+impl MethodName {
+    /// Creates a CPython method table name.
+    pub fn parse(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        if name.is_empty() || name.bytes().any(|byte| byte == 0) {
+            return Err(Error::InvalidPythonMethodName { name });
+        }
+        Ok(Self { name })
+    }
+
+    /// Returns the method name text.
+    pub fn as_str(&self) -> &str {
+        &self.name
+    }
+}
+
+impl fmt::Display for MethodName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 

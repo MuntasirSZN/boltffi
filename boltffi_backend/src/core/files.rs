@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use boltffi_binding::{CanonicalName, DeclarationRef, Surface};
 
-use crate::core::{Error, Result};
+use crate::core::{CoverageReport, DeclarationLabel, Error, Result};
 
 /// Path of one generated backend output file.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -258,7 +258,7 @@ impl<'decl, S: Surface> RenderedDeclaration<'decl, S> {
 /// Declaration grouping rule for a generated file.
 pub trait FileGroup {
     /// Returns whether a declaration belongs in the file.
-    fn matches<S: Surface>(&self, declaration: DeclarationRef<'_, S>) -> bool;
+    fn matches<'decl, S: Surface>(&self, declaration: DeclarationRef<'decl, S>) -> bool;
 }
 
 /// File group that accepts every declaration.
@@ -267,7 +267,7 @@ pub trait FileGroup {
 pub struct AllDeclarations;
 
 impl FileGroup for AllDeclarations {
-    fn matches<S: Surface>(&self, _declaration: DeclarationRef<'_, S>) -> bool {
+    fn matches<'decl, S: Surface>(&self, _declaration: DeclarationRef<'decl, S>) -> bool {
         true
     }
 }
@@ -430,12 +430,17 @@ impl FileLayout<AllDeclarations> {
 pub struct GeneratedOutput {
     files: Vec<GeneratedFile>,
     diagnostics: Vec<Diagnostic>,
+    coverage: CoverageReport,
 }
 
 impl GeneratedOutput {
     /// Creates generated backend output.
     pub fn new(files: Vec<GeneratedFile>, diagnostics: Vec<Diagnostic>) -> Self {
-        Self { files, diagnostics }
+        Self {
+            files,
+            diagnostics,
+            coverage: CoverageReport::new(),
+        }
     }
 
     /// Creates empty generated backend output.
@@ -453,13 +458,23 @@ impl GeneratedOutput {
         &self.diagnostics
     }
 
+    /// Returns unsupported declarations found during rendering.
+    pub const fn coverage(&self) -> &CoverageReport {
+        &self.coverage
+    }
+
+    /// Attaches a coverage report to this output.
+    pub fn with_coverage(mut self, coverage: CoverageReport) -> Self {
+        self.coverage.append(coverage);
+        self
+    }
+
     /// Appends another generated output value.
     pub fn append(&mut self, other: Self) {
-        other
-            .files
-            .into_iter()
-            .for_each(|file| self.insert_file(file));
-        self.diagnostics.extend(other.diagnostics);
+        let (files, diagnostics, coverage) = other.into_parts();
+        files.into_iter().for_each(|file| self.insert_file(file));
+        self.diagnostics.extend(diagnostics);
+        self.coverage.append(coverage);
     }
 
     /// Combines multiple generated output values.
@@ -472,9 +487,9 @@ impl GeneratedOutput {
             })
     }
 
-    /// Splits this output into generated files and diagnostics.
-    pub fn into_parts(self) -> (Vec<GeneratedFile>, Vec<Diagnostic>) {
-        (self.files, self.diagnostics)
+    /// Splits this output into generated files, diagnostics, and coverage.
+    pub fn into_parts(self) -> (Vec<GeneratedFile>, Vec<Diagnostic>, CoverageReport) {
+        (self.files, self.diagnostics, self.coverage)
     }
 
     fn insert_file(&mut self, file: GeneratedFile) {
@@ -567,7 +582,7 @@ where
                     .or_else(|| fallback.path())
                     .cloned()
                     .ok_or_else(|| Error::UnmatchedFilePlan {
-                        declaration: declaration.error_label(),
+                        declaration: DeclarationLabel::from_ref(declaration).kind(),
                     })?;
                 assembly.push(path, emitted);
                 Ok::<_, Error>(diagnostics)
@@ -592,7 +607,10 @@ where
         }
     }
 
-    fn matching_path<S: Surface>(&self, declaration: DeclarationRef<'_, S>) -> Option<&FilePath> {
+    fn matching_path<'decl, S: Surface>(
+        &self,
+        declaration: DeclarationRef<'decl, S>,
+    ) -> Option<&FilePath> {
         self.files
             .iter()
             .find(|file| file.matches(declaration))
@@ -682,7 +700,7 @@ where
         &self.path
     }
 
-    fn matches<S: Surface>(&self, declaration: DeclarationRef<'_, S>) -> bool {
+    fn matches<'decl, S: Surface>(&self, declaration: DeclarationRef<'decl, S>) -> bool {
         self.group
             .as_ref()
             .is_some_and(|group| group.matches(declaration))
@@ -759,25 +777,6 @@ impl FallbackPath for FallbackPolicy {
     }
 }
 
-trait DeclarationErrorLabel {
-    fn error_label(self) -> &'static str;
-}
-
-impl<S: Surface> DeclarationErrorLabel for DeclarationRef<'_, S> {
-    fn error_label(self) -> &'static str {
-        match self {
-            Self::Record(_) => "record",
-            Self::Enum(_) => "enum",
-            Self::Function(_) => "function",
-            Self::Class(_) => "class",
-            Self::Callback(_) => "callback",
-            Self::Stream(_) => "stream",
-            Self::Constant(_) => "constant",
-            Self::CustomType(_) => "custom type",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -798,7 +797,7 @@ mod tests {
     }
 
     impl FileGroup for OutputFile {
-        fn matches<S: Surface>(&self, declaration: DeclarationRef<'_, S>) -> bool {
+        fn matches<'decl, S: Surface>(&self, declaration: DeclarationRef<'decl, S>) -> bool {
             matches!(
                 (self, declaration),
                 (Self::Records, DeclarationRef::Record(_))

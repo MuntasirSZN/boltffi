@@ -35,7 +35,7 @@ impl<S: RenderSurface> Render<S, &TypeRef> for Renderer {
 }
 
 impl Renderer {
-    fn primitive(self, primitive: Primitive) -> Result<TokenStream, Error> {
+    pub fn primitive(self, primitive: Primitive) -> Result<TokenStream, Error> {
         Ok(match primitive {
             Primitive::Bool => quote! { bool },
             Primitive::I8 => quote! { i8 },
@@ -54,7 +54,7 @@ impl Renderer {
         })
     }
 
-    fn builtin(self, kind: BuiltinType) -> Result<TokenStream, Error> {
+    pub fn builtin(self, kind: BuiltinType) -> Result<TokenStream, Error> {
         Ok(match kind {
             BuiltinType::Duration => quote! { ::std::time::Duration },
             BuiltinType::SystemTime => quote! { ::std::time::SystemTime },

@@ -190,6 +190,8 @@ impl CustomTypeConverters {
 pub enum CustomTypeConverter {
     /// A converter named by a Rust path.
     Path(Path),
+    /// A `CustomFfiConvertible` method on the remote Rust type.
+    TraitMethod(CustomTraitMethodConverter),
     /// A converter written as an inline Rust expression.
     Expr(CustomConverterExpr),
 }
@@ -200,9 +202,33 @@ impl CustomTypeConverter {
         Self::Path(path)
     }
 
+    /// Builds a `CustomFfiConvertible` method converter.
+    pub fn trait_method(receiver: Path, method: impl Into<NamePart>) -> Self {
+        Self::TraitMethod(CustomTraitMethodConverter::new(receiver, method))
+    }
+
     /// Builds an inline expression converter.
     pub fn expr(source: impl Into<String>) -> Self {
         Self::Expr(CustomConverterExpr::new(source))
+    }
+}
+
+/// A converter method selected from `CustomFfiConvertible`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub struct CustomTraitMethodConverter {
+    /// Remote Rust type implementing `CustomFfiConvertible`.
+    pub receiver: Path,
+    /// Converter method name.
+    pub method: NamePart,
+}
+
+impl CustomTraitMethodConverter {
+    /// Builds a trait-method converter.
+    pub fn new(receiver: Path, method: impl Into<NamePart>) -> Self {
+        Self {
+            receiver,
+            method: method.into(),
+        }
     }
 }
 

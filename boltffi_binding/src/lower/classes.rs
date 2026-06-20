@@ -3,13 +3,8 @@ use boltffi_ast::{ClassDef as SourceClass, ClassThreadSafety as SourceClassThrea
 use crate::{CanonicalName, ClassDecl, ClassDeclParts, ClassThreadSafety, InvalidClassDecl};
 
 use super::{
-    LowerError,
-    error::UnsupportedType,
-    ids::DeclarationIds,
-    index::Index,
-    metadata, methods,
-    surface::SurfaceLower,
-    symbol::{SymbolAllocator, class_release_symbol_name},
+    LowerError, error::UnsupportedType, ids::DeclarationIds, index::Index, metadata, methods,
+    surface::SurfaceLower, symbol::SymbolAllocator,
 };
 
 /// Lowers every class in the source contract.
@@ -20,28 +15,29 @@ use super::{
 ///
 /// [`SymbolId`]: crate::SymbolId
 /// [`Bindings<S>`]: crate::Bindings
-pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+pub fn lower<S: SurfaceLower>(
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<ClassDecl<S>>, LowerError> {
-    idx.classes()
+    index
+        .classes()
         .iter()
-        .map(|class| lower_one(idx, ids, allocator, class))
+        .map(|class| lower_one(index, ids, allocator, class))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     class: &SourceClass,
 ) -> Result<ClassDecl<S>, LowerError> {
     let class_id = ids.class(&class.id)?;
     let canonical = CanonicalName::from(&class.name);
-    let release = allocator.mint(class_release_symbol_name(class.id.as_str()))?;
-    let initializers = methods::lower_class_initializers::<S>(idx, ids, allocator, class)?;
-    let class_methods = methods::lower_class_methods::<S>(idx, ids, allocator, class)?;
+    let release = allocator.mint_class_release(class.id.as_str())?;
+    let initializers = methods::lower_class_initializers::<S>(index, ids, allocator, class)?;
+    let class_methods = methods::lower_class_methods::<S>(index, ids, allocator, class)?;
 
     ClassDecl::new(ClassDeclParts {
         id: class_id,
@@ -88,10 +84,10 @@ mod tests {
     use crate::lower::lower;
     use crate::{
         BindingErrorKind, Bindings, CanonicalName, ClassDecl, ClassId, ClassThreadSafety,
-        CodecNode, Decl, EnumId, ErrorDecl, ExecutionDecl, HandlePresence, HandleTarget,
-        InitializerId, LowerError, LowerErrorKind, MethodId, Native, NativeSymbol, ParamPlan,
-        Primitive as BindingPrimitive, Receive, RecordId, ReturnPlan, ReturnTypeRef, Surface,
-        SurfaceLower, TypeRef, UnsupportedType, Wasm32, native, wasm32,
+        CodecNode, Decl, DirectValueType, EnumId, ErrorDecl, ExecutionDecl, HandlePresence,
+        HandleTarget, InitializerId, LowerError, LowerErrorKind, MethodId, Native, NativeSymbol,
+        ParamPlan, Primitive as BindingPrimitive, Receive, RecordId, ReturnPlan, ReturnTypeRef,
+        Surface, SurfaceLower, TypeRef, UnsupportedType, Wasm32, native, wasm32,
     };
     use serde_json::{Value, json};
 
@@ -247,7 +243,7 @@ mod tests {
                 .first()
                 .map(|param| param.as_value().unwrap()),
             Some(&ParamPlan::Direct {
-                ty: TypeRef::Primitive(BindingPrimitive::U64),
+                ty: DirectValueType::Primitive(BindingPrimitive::U64),
                 receive: Receive::ByValue,
             })
         );
@@ -357,7 +353,7 @@ mod tests {
         assert_eq!(
             class_method.callable().returns().plan(),
             &ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Primitive(BindingPrimitive::I32),
+                ty: DirectValueType::Primitive(BindingPrimitive::I32),
             }
         );
     }
@@ -683,7 +679,7 @@ mod tests {
                 .first()
                 .map(|method| method.callable().returns().plan()),
             Some(&ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Record(RecordId::from_raw(0)),
+                ty: DirectValueType::Record(RecordId::from_raw(0)),
             })
         );
         assert_eq!(
@@ -692,7 +688,7 @@ mod tests {
                 .get(1)
                 .map(|method| method.callable().returns().plan()),
             Some(&ReturnPlan::DirectViaReturnSlot {
-                ty: TypeRef::Enum(EnumId::from_raw(0)),
+                ty: DirectValueType::Enum(EnumId::from_raw(0)),
             })
         );
     }
