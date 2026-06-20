@@ -85,6 +85,72 @@ impl<'a, S: Surface> From<&'a Decl<S>> for DeclarationRef<'a, S> {
     }
 }
 
+impl<'a, S: Surface> DeclarationRef<'a, S> {
+    /// Returns the record declaration when this view is a record.
+    pub const fn record(self) -> Option<&'a RecordDecl<S>> {
+        match self {
+            Self::Record(record) => Some(record),
+            _ => None,
+        }
+    }
+
+    /// Returns the enum declaration when this view is an enum.
+    pub const fn enumeration(self) -> Option<&'a EnumDecl<S>> {
+        match self {
+            Self::Enum(enumeration) => Some(enumeration),
+            _ => None,
+        }
+    }
+
+    /// Returns the function declaration when this view is a function.
+    pub const fn function(self) -> Option<&'a FunctionDecl<S>> {
+        match self {
+            Self::Function(function) => Some(function),
+            _ => None,
+        }
+    }
+
+    /// Returns the class declaration when this view is a class.
+    pub const fn class(self) -> Option<&'a ClassDecl<S>> {
+        match self {
+            Self::Class(class) => Some(class),
+            _ => None,
+        }
+    }
+
+    /// Returns the callback declaration when this view is a callback.
+    pub const fn callback(self) -> Option<&'a CallbackDecl<S>> {
+        match self {
+            Self::Callback(callback) => Some(callback),
+            _ => None,
+        }
+    }
+
+    /// Returns the stream declaration when this view is a stream.
+    pub const fn stream(self) -> Option<&'a StreamDecl<S>> {
+        match self {
+            Self::Stream(stream) => Some(stream),
+            _ => None,
+        }
+    }
+
+    /// Returns the constant declaration when this view is a constant.
+    pub const fn constant(self) -> Option<&'a ConstantDecl<S>> {
+        match self {
+            Self::Constant(constant) => Some(constant),
+            _ => None,
+        }
+    }
+
+    /// Returns the custom type declaration when this view is a custom type.
+    pub const fn custom_type(self) -> Option<&'a CustomTypeDecl> {
+        match self {
+            Self::CustomType(custom_type) => Some(custom_type),
+            _ => None,
+        }
+    }
+}
+
 impl<S: Surface> Decl<S> {
     /// Returns the typed identity of this declaration.
     pub fn id(&self) -> DeclarationId {

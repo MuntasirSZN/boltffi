@@ -1,5 +1,4 @@
-use std::collections::HashSet;
-use std::fmt;
+use std::{collections::HashSet, error, fmt};
 
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +54,17 @@ impl ContractVersion {
     /// minor is no greater than [`Self::CURRENT`].
     pub const fn readable(self) -> bool {
         self.major == Self::CURRENT.major && self.minor <= Self::CURRENT.minor
+    }
+
+    fn validate(self) -> Result<(), BindingError> {
+        if self.readable() {
+            Ok(())
+        } else {
+            Err(BindingError::new(BindingErrorKind::UnsupportedVersion {
+                actual: self,
+                current: Self::current(),
+            }))
+        }
     }
 }
 
@@ -187,7 +197,7 @@ impl<S: Surface> Bindings<S> {
     ///
     /// Returns the first failed invariant otherwise.
     pub fn validate(&self) -> Result<(), BindingError> {
-        validate_contract_version(self.version)?;
+        self.version.validate()?;
         self.symbols.validate()?;
         self.validate_unique_decl_ids()?;
         self.validate_streams()?;
@@ -329,6 +339,10 @@ impl SerializedBindings {
             Self::Native(bindings) => bindings.package(),
             Self::Wasm32(bindings) => bindings.package(),
         }
+    }
+
+    fn payload_bytes(&self) -> Result<Vec<u8>, BindingMetadataError> {
+        serde_json::to_vec(self).map_err(BindingMetadataError::encode)
     }
 }
 
@@ -572,7 +586,7 @@ pub struct BindingMetadataEnvelope {
 impl BindingMetadataEnvelope {
     /// Builds an envelope around serialized bindings.
     pub fn new(bindings: SerializedBindings) -> Result<Self, BindingMetadataError> {
-        let contract_hash = BindingMetadataHash::new(&payload_bytes(&bindings)?);
+        let contract_hash = BindingMetadataHash::new(&bindings.payload_bytes()?);
         Ok(Self {
             magic: BINDING_METADATA_MAGIC.to_owned(),
             format: BindingMetadataFormat::current(),
@@ -668,7 +682,7 @@ impl BindingMetadataEnvelope {
                 payload: self.bindings.package().clone(),
             });
         }
-        let actual = BindingMetadataHash::new(&payload_bytes(&self.bindings)?);
+        let actual = BindingMetadataHash::new(&self.bindings.payload_bytes()?);
         if self.contract_hash != actual {
             return Err(BindingMetadataError::HashMismatch {
                 expected: self.contract_hash,
@@ -910,22 +924,7 @@ impl fmt::Display for BindingMetadataError {
     }
 }
 
-impl std::error::Error for BindingMetadataError {}
-
-fn payload_bytes(bindings: &SerializedBindings) -> Result<Vec<u8>, BindingMetadataError> {
-    serde_json::to_vec(bindings).map_err(BindingMetadataError::encode)
-}
-
-fn validate_contract_version(version: ContractVersion) -> Result<(), BindingError> {
-    if version.readable() {
-        Ok(())
-    } else {
-        Err(BindingError::new(BindingErrorKind::UnsupportedVersion {
-            actual: version,
-            current: ContractVersion::current(),
-        }))
-    }
-}
+impl error::Error for BindingMetadataError {}
 
 #[cfg(test)]
 mod tests {

@@ -23,18 +23,18 @@ use super::{
 };
 
 pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<FunctionDecl<S>>, LowerError> {
-    idx.functions()
+    index.functions()
         .iter()
-        .map(|function| lower_one::<S>(idx, ids, allocator, function))
+        .map(|function| lower_one::<S>(index, ids, allocator, function))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     function: &SourceFunction,
@@ -46,7 +46,7 @@ fn lower_one<S: SurfaceLower>(
     let function_id = ids.function(&function.id)?;
     let symbol = allocator.mint(function_symbol_name(function.id.as_str()))?;
     let callable_decl =
-        callable::lower_function::<S>(idx, ids, allocator, function, symbol.name().as_str())?;
+        callable::lower_function::<S>(index, ids, allocator, function, symbol.name().as_str())?;
     Ok(FunctionDecl::new(
         function_id,
         CanonicalName::from(&function.name),

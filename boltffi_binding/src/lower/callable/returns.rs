@@ -36,10 +36,10 @@ pub(super) type Lowered<S, D> = (ReturnDecl<S, D>, ErrorDecl<S, D>);
 /// structurally whether the invoke contract is foreign- or
 /// Rust-implemented.
 pub(super) fn lower<S: SurfaceLower, D: Direction + LowerClosure<S>>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     return_def: &ReturnDef,
 ) -> Result<Lowered<S, D>, LowerError>
 where
@@ -55,8 +55,8 @@ where
                 let ok_type_expr = substitute_self_type(owner, ok)?;
                 let err_type_expr = substitute_self_type(owner, err)?;
                 let success =
-                    lower_return_plan::<S, D>(idx, ids, allocator, &ok_type_expr)?.into_out();
-                let error = lower_error::<S, D>(idx, ids, &err_type_expr)?;
+                    lower_return_plan::<S, D>(index, ids, allocator, &ok_type_expr)?.into_out();
+                let error = lower_error::<S, D>(index, ids, &err_type_expr)?;
                 return Ok((
                     ReturnDecl::new(ElementMeta::new(None, None, None), success),
                     error,
@@ -68,7 +68,7 @@ where
                 ));
             }
             let type_expr = substitute_self_type(owner, type_expr)?;
-            let plan = lower_plain_return::<S, D>(idx, ids, allocator, &type_expr)?;
+            let plan = lower_plain_return::<S, D>(index, ids, allocator, &type_expr)?;
             Ok((
                 ReturnDecl::new(ElementMeta::new(None, None, None), plan),
                 ErrorDecl::none(),
@@ -78,7 +78,7 @@ where
 }
 
 fn lower_plain_return<S: SurfaceLower, D: Direction + LowerClosure<S>>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     type_expr: &TypeExpr,
@@ -86,14 +86,14 @@ fn lower_plain_return<S: SurfaceLower, D: Direction + LowerClosure<S>>(
 where
     D::Opposite: ParamDirection<S>,
 {
-    match specialize_return::<S, D>(idx, ids, type_expr)? {
+    match specialize_return::<S, D>(index, ids, type_expr)? {
         Some(plan) => Ok(plan),
-        None => lower_return_plan::<S, D>(idx, ids, allocator, type_expr),
+        None => lower_return_plan::<S, D>(index, ids, allocator, type_expr),
     }
 }
 
 fn specialize_return<S: SurfaceLower, D: Direction>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<Option<ReturnPlan<S, D>>, LowerError>
@@ -104,7 +104,7 @@ where
         TypeExpr::Option(inner) => {
             primitive(inner).map(|primitive| ReturnPlan::ScalarOptionViaReturnSlot { primitive })
         }
-        TypeExpr::Vec(inner) => direct_vec_element(idx, ids, inner)?
+        TypeExpr::Vec(inner) => direct_vec_element(index, ids, inner)?
             .map(|element| ReturnPlan::DirectVecViaReturnSlot { element }),
         _ => None,
     })
@@ -119,7 +119,7 @@ fn primitive(type_expr: &TypeExpr) -> Option<Primitive> {
 }
 
 fn direct_vec_element(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<Option<DirectVectorElementType>, LowerError> {
@@ -127,7 +127,7 @@ fn direct_vec_element(
         TypeExpr::Primitive(primitive) => Ok(DirectVectorElementType::primitive(Primitive::from(
             *primitive,
         ))),
-        TypeExpr::Record { id, .. } if idx.record(id).is_some_and(records::is_direct) => {
+        TypeExpr::Record { id, .. } if index.record(id).is_some_and(records::is_direct) => {
             Ok(Some(DirectVectorElementType::record(ids.record(id)?)))
         }
         _ => Ok(None),
@@ -135,7 +135,7 @@ fn direct_vec_element(
 }
 
 fn lower_error<S: SurfaceLower, D: Direction>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<ErrorDecl<S, D>, LowerError>
@@ -143,7 +143,7 @@ where
     D::Opposite: ParamDirection<S>,
 {
     let ty = types::lower(ids, type_expr)?;
-    let codec_node = codecs::node(idx, ids, type_expr, ValueRef::self_value())?;
+    let codec_node = codecs::node(index, ids, type_expr, ValueRef::self_value())?;
     Ok(ErrorDecl::EncodedViaReturnSlot {
         ty,
         codec: D::make_codec(ValueRef::self_value(), codec_node),
@@ -152,7 +152,7 @@ where
 }
 
 fn lower_return_plan<S: SurfaceLower, D: Direction + LowerClosure<S>>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     type_expr: &TypeExpr,
@@ -175,7 +175,7 @@ where
         });
     }
     if let Some(closure) = ClosureSource::from_type_expr(type_expr) {
-        let closure_return = D::lower_closure_return(idx, ids, allocator, closure)?;
+        let closure_return = D::lower_closure_return(index, ids, allocator, closure)?;
         return Ok(ReturnPlan::ClosureViaOutPointer(closure_return));
     }
     match type_expr {
@@ -183,12 +183,12 @@ where
         TypeExpr::Primitive(primitive) => Ok(ReturnPlan::DirectViaReturnSlot {
             ty: DirectValueType::primitive(Primitive::from(*primitive)),
         }),
-        TypeExpr::Record { id, .. } if idx.record(id).is_some_and(records::is_direct) => {
+        TypeExpr::Record { id, .. } if index.record(id).is_some_and(records::is_direct) => {
             Ok(ReturnPlan::DirectViaReturnSlot {
                 ty: DirectValueType::record(ids.record(id)?),
             })
         }
-        TypeExpr::Enum { id, .. } if idx.enumeration(id).is_some_and(enums::is_c_style) => {
+        TypeExpr::Enum { id, .. } if index.enumeration(id).is_some_and(enums::is_c_style) => {
             Ok(ReturnPlan::DirectViaReturnSlot {
                 ty: DirectValueType::enumeration(ids.enumeration(id)?),
             })
@@ -206,7 +206,7 @@ where
         | TypeExpr::Map { .. }
         | TypeExpr::Custom { .. } => {
             let ty = types::lower(ids, type_expr)?;
-            let codec_node = codecs::node(idx, ids, type_expr, ValueRef::self_value())?;
+            let codec_node = codecs::node(index, ids, type_expr, ValueRef::self_value())?;
             Ok(ReturnPlan::EncodedViaReturnSlot {
                 ty,
                 codec: D::make_codec(ValueRef::self_value(), codec_node),

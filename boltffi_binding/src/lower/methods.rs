@@ -34,7 +34,7 @@ use super::{
 /// Initializer ids are assigned after non-initializer methods are removed,
 /// so the initializer table is dense in the exact order renderers observe.
 pub(super) fn lower_record_initializers<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     record: &RecordDef,
@@ -42,7 +42,7 @@ pub(super) fn lower_record_initializers<S: SurfaceLower>(
     let owner = callable::CallableOwner::Record(record);
     let record_id = ids.record(&record.id)?;
     lower_initializers(
-        idx,
+        index,
         ids,
         allocator,
         owner,
@@ -56,7 +56,7 @@ pub(super) fn lower_record_initializers<S: SurfaceLower>(
 /// Method ids are assigned after initializer-shaped methods are removed,
 /// so the method table is dense in the exact order renderers observe.
 pub(super) fn lower_record_methods<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     record: &RecordDef,
@@ -67,14 +67,14 @@ pub(super) fn lower_record_methods<S: SurfaceLower>(
         .iter()
         .filter(|method| !is_initializer(owner, method))
         .enumerate()
-        .map(|(index, method)| {
+        .map(|(method_index, method)| {
             lower_method::<S>(
-                idx,
+                index,
                 ids,
                 allocator,
                 owner,
                 method,
-                MethodId::from_raw(index as u32),
+                MethodId::from_raw(method_index as u32),
             )
         })
         .collect()
@@ -82,7 +82,7 @@ pub(super) fn lower_record_methods<S: SurfaceLower>(
 
 /// Lowers every initializer-shaped method on `enumeration`.
 pub(super) fn lower_enum_initializers<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     enumeration: &EnumDef,
@@ -90,7 +90,7 @@ pub(super) fn lower_enum_initializers<S: SurfaceLower>(
     let owner = callable::CallableOwner::Enum(enumeration);
     let enum_id = ids.enumeration(&enumeration.id)?;
     lower_initializers(
-        idx,
+        index,
         ids,
         allocator,
         owner,
@@ -101,7 +101,7 @@ pub(super) fn lower_enum_initializers<S: SurfaceLower>(
 
 /// Lowers every non-initializer method on `enumeration`.
 pub(super) fn lower_enum_methods<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     enumeration: &EnumDef,
@@ -112,14 +112,14 @@ pub(super) fn lower_enum_methods<S: SurfaceLower>(
         .iter()
         .filter(|method| !is_initializer(owner, method))
         .enumerate()
-        .map(|(index, method)| {
+        .map(|(method_index, method)| {
             lower_method::<S>(
-                idx,
+                index,
                 ids,
                 allocator,
                 owner,
                 method,
-                MethodId::from_raw(index as u32),
+                MethodId::from_raw(method_index as u32),
             )
         })
         .collect()
@@ -131,7 +131,7 @@ pub(super) fn lower_enum_methods<S: SurfaceLower>(
 /// value-shaped record. The callable still carries the native crossing
 /// selected for the `Self` return.
 pub(super) fn lower_class_initializers<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     class: &ClassDef,
@@ -139,7 +139,7 @@ pub(super) fn lower_class_initializers<S: SurfaceLower>(
     let owner = callable::CallableOwner::Class(class);
     let class_id = ids.class(&class.id)?;
     lower_initializers(
-        idx,
+        index,
         ids,
         allocator,
         owner,
@@ -153,7 +153,7 @@ pub(super) fn lower_class_initializers<S: SurfaceLower>(
 /// Owned class receivers are rejected until the handle ownership-transfer
 /// protocol is represented in the binding IR.
 pub(super) fn lower_class_methods<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     class: &ClassDef,
@@ -164,21 +164,21 @@ pub(super) fn lower_class_methods<S: SurfaceLower>(
         .iter()
         .filter(|method| !is_initializer(owner, method))
         .enumerate()
-        .map(|(index, method)| {
+        .map(|(method_index, method)| {
             reject_owned_class_receiver(method)?;
             lower_method::<S>(
-                idx,
+                index,
                 ids,
                 allocator,
                 owner,
                 method,
-                MethodId::from_raw(index as u32),
+                MethodId::from_raw(method_index as u32),
             )
         })
         .collect()
 }
 
-fn is_initializer(owner: callable::CallableOwner<'_>, method: &MethodDef) -> bool {
+fn is_initializer(owner: callable::CallableOwner, method: &MethodDef) -> bool {
     matches!(method.receiver, Receiver::None)
         && match &method.returns {
             ReturnDef::Value(type_expr) => returns_owner(owner, type_expr),
@@ -186,7 +186,7 @@ fn is_initializer(owner: callable::CallableOwner<'_>, method: &MethodDef) -> boo
         }
 }
 
-fn returns_owner(owner: callable::CallableOwner<'_>, type_expr: &TypeExpr) -> bool {
+fn returns_owner(owner: callable::CallableOwner, type_expr: &TypeExpr) -> bool {
     match type_expr {
         TypeExpr::Result { ok, .. } => owner.owns_type_expr(ok),
         other => owner.owns_type_expr(other),
@@ -194,10 +194,10 @@ fn returns_owner(owner: callable::CallableOwner<'_>, type_expr: &TypeExpr) -> bo
 }
 
 fn lower_initializers<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: callable::CallableOwner<'_>,
+    owner: callable::CallableOwner,
     methods: &[MethodDef],
     returns: TypeRef,
 ) -> Result<Vec<InitializerDecl<S>>, LowerError> {
@@ -205,14 +205,14 @@ fn lower_initializers<S: SurfaceLower>(
         .iter()
         .filter(|method| is_initializer(owner, method))
         .enumerate()
-        .map(|(index, method)| {
+        .map(|(initializer_index, method)| {
             lower_initializer(
-                idx,
+                index,
                 ids,
                 allocator,
                 owner,
                 method,
-                InitializerId::from_raw(index as u32),
+                InitializerId::from_raw(initializer_index as u32),
                 returns.clone(),
             )
         })
@@ -220,17 +220,17 @@ fn lower_initializers<S: SurfaceLower>(
 }
 
 fn lower_initializer<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: callable::CallableOwner<'_>,
+    owner: callable::CallableOwner,
     method: &MethodDef,
     id: InitializerId,
     returns: TypeRef,
 ) -> Result<InitializerDecl<S>, LowerError> {
     let symbol = mint_initializer_symbol(allocator, owner, method)?;
     let callable_decl = callable::lower_exported_method::<S>(
-        idx,
+        index,
         ids,
         allocator,
         owner,
@@ -248,16 +248,16 @@ fn lower_initializer<S: SurfaceLower>(
 }
 
 fn lower_method<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: callable::CallableOwner<'_>,
+    owner: callable::CallableOwner,
     method: &MethodDef,
     id: MethodId,
 ) -> Result<ExportedMethodDecl<S, NativeSymbol>, LowerError> {
     let symbol = mint_method_symbol(allocator, owner, method)?;
     let callable_decl = callable::lower_exported_method::<S>(
-        idx,
+        index,
         ids,
         allocator,
         owner,
@@ -275,7 +275,7 @@ fn lower_method<S: SurfaceLower>(
 
 fn mint_method_symbol(
     allocator: &mut SymbolAllocator,
-    owner: callable::CallableOwner<'_>,
+    owner: callable::CallableOwner,
     method: &MethodDef,
 ) -> Result<NativeSymbol, LowerError> {
     let symbol_name = member_symbol_name(symbol_owner(owner), &source_member_name(&method.name));
@@ -284,7 +284,7 @@ fn mint_method_symbol(
 
 fn mint_initializer_symbol(
     allocator: &mut SymbolAllocator,
-    owner: callable::CallableOwner<'_>,
+    owner: callable::CallableOwner,
     method: &MethodDef,
 ) -> Result<NativeSymbol, LowerError> {
     let symbol_name =
@@ -308,7 +308,7 @@ fn mint_initializer_symbol(
 /// per-surface name constructors cannot bypass normalization because
 /// they cannot construct a [`CallbackSlot`] from arbitrary text.
 pub(super) fn lower_callback_methods<S: SurfaceLower, T, F>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     source_trait: &TraitDef,
@@ -326,12 +326,12 @@ where
         .methods
         .iter()
         .enumerate()
-        .map(|(index, method)| {
+        .map(|(method_index, method)| {
             require_callback_receiver(method.receiver)?;
             let slot = CallbackSlot::from_source_name(&method.name);
             let surface = surface_for(allocator, method, &slot)?;
             let callable_decl = callable::lower_imported_method::<S>(
-                idx,
+                index,
                 ids,
                 allocator,
                 owner,
@@ -339,7 +339,7 @@ where
                 surface.execution,
             )?;
             Ok(ImportedMethodDecl::new(
-                MethodId::from_raw(index as u32),
+                MethodId::from_raw(method_index as u32),
                 CanonicalName::from(&method.name),
                 metadata::decl_meta(method.doc.as_ref(), method.deprecated.as_ref()),
                 surface.target,
@@ -369,7 +369,7 @@ fn require_callback_receiver(receiver: Receiver) -> Result<(), LowerError> {
     }
 }
 
-fn symbol_owner(owner: callable::CallableOwner<'_>) -> SymbolOwner<'_> {
+fn symbol_owner(owner: callable::CallableOwner) -> SymbolOwner {
     match owner {
         callable::CallableOwner::Record(record) => SymbolOwner::record(record.id.as_str()),
         callable::CallableOwner::Enum(enumeration) => {

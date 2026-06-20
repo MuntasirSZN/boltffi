@@ -23,7 +23,7 @@ impl SymbolName {
     pub(crate) fn parse(name: impl Into<String>) -> Result<Self, BindingError> {
         let name = name.into();
 
-        if is_valid_symbol_name(&name) {
+        if IdentifierText::new(&name).is_valid() {
             Ok(Self(name))
         } else {
             Err(BindingError::new(BindingErrorKind::InvalidSymbolName(name)))
@@ -125,62 +125,72 @@ impl NativeSymbolTable {
     /// Returns `Ok` when every name is callable, every id is unique, and
     /// every name is unique. Returns the first failed invariant otherwise.
     pub fn validate(&self) -> Result<(), BindingError> {
-        validate_symbol_names(&self.symbols)?;
-        validate_unique_symbol_ids(&self.symbols)?;
-        validate_unique_symbol_names(&self.symbols)
+        self.validate_names()?;
+        self.validate_unique_ids()?;
+        self.validate_unique_names()
+    }
+
+    fn validate_names(&self) -> Result<(), BindingError> {
+        self.symbols
+            .iter()
+            .map(NativeSymbol::name)
+            .find(|name| !IdentifierText::new(name.as_str()).is_valid())
+            .map_or(Ok(()), |name| {
+                Err(BindingError::new(BindingErrorKind::InvalidSymbolName(
+                    name.as_str().to_owned(),
+                )))
+            })
+    }
+
+    fn validate_unique_ids(&self) -> Result<(), BindingError> {
+        self.symbols
+            .iter()
+            .map(NativeSymbol::id)
+            .try_fold(HashSet::new(), |mut seen, symbol_id| {
+                if seen.insert(symbol_id) {
+                    Ok(seen)
+                } else {
+                    Err(BindingError::new(BindingErrorKind::DuplicateSymbolId(
+                        symbol_id,
+                    )))
+                }
+            })
+            .map(|_| ())
+    }
+
+    fn validate_unique_names(&self) -> Result<(), BindingError> {
+        self.symbols
+            .iter()
+            .map(|symbol| symbol.name().as_str().to_owned())
+            .try_fold(HashSet::new(), |mut seen, symbol_name| {
+                if seen.insert(symbol_name.clone()) {
+                    Ok(seen)
+                } else {
+                    Err(BindingError::new(BindingErrorKind::DuplicateSymbolName(
+                        symbol_name,
+                    )))
+                }
+            })
+            .map(|_| ())
     }
 }
 
-fn validate_symbol_names(symbols: &[NativeSymbol]) -> Result<(), BindingError> {
-    symbols
-        .iter()
-        .map(NativeSymbol::name)
-        .find(|name| !is_valid_symbol_name(name.as_str()))
-        .map_or(Ok(()), |name| {
-            Err(BindingError::new(BindingErrorKind::InvalidSymbolName(
-                name.as_str().to_owned(),
-            )))
-        })
+struct IdentifierText<'text> {
+    text: &'text str,
 }
 
-fn validate_unique_symbol_ids(symbols: &[NativeSymbol]) -> Result<(), BindingError> {
-    symbols
-        .iter()
-        .map(NativeSymbol::id)
-        .try_fold(HashSet::new(), |mut seen, symbol_id| {
-            if seen.insert(symbol_id) {
-                Ok(seen)
-            } else {
-                Err(BindingError::new(BindingErrorKind::DuplicateSymbolId(
-                    symbol_id,
-                )))
-            }
-        })
-        .map(|_| ())
-}
+impl<'text> IdentifierText<'text> {
+    const fn new(text: &'text str) -> Self {
+        Self { text }
+    }
 
-fn validate_unique_symbol_names(symbols: &[NativeSymbol]) -> Result<(), BindingError> {
-    symbols
-        .iter()
-        .map(|symbol| symbol.name().as_str().to_owned())
-        .try_fold(HashSet::new(), |mut seen, symbol_name| {
-            if seen.insert(symbol_name.clone()) {
-                Ok(seen)
-            } else {
-                Err(BindingError::new(BindingErrorKind::DuplicateSymbolName(
-                    symbol_name,
-                )))
-            }
-        })
-        .map(|_| ())
-}
-
-fn is_valid_symbol_name(name: &str) -> bool {
-    let mut characters = name.chars();
-    characters
-        .next()
-        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+    fn is_valid(&self) -> bool {
+        let mut characters = self.text.chars();
+        characters
+            .next()
+            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+            && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+    }
 }
 
 /// The name of a function-pointer field in a generated vtable struct.
@@ -203,7 +213,7 @@ impl VTableSlot {
     pub(crate) fn parse(name: impl Into<String>) -> Result<Self, BindingError> {
         let name = name.into();
 
-        if is_valid_vtable_slot(&name) {
+        if IdentifierText::new(&name).is_valid() {
             Ok(Self(name))
         } else {
             Err(BindingError::new(BindingErrorKind::InvalidVTableSlot(name)))
@@ -214,14 +224,6 @@ impl VTableSlot {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-}
-
-fn is_valid_vtable_slot(name: &str) -> bool {
-    let mut characters = name.chars();
-    characters
-        .next()
-        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
 /// The module name in a wasm module's import section.

@@ -21,18 +21,18 @@ use super::{
 /// [`SymbolId`]: crate::SymbolId
 /// [`Bindings<S>`]: crate::Bindings
 pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<ClassDecl<S>>, LowerError> {
-    idx.classes()
+    index.classes()
         .iter()
-        .map(|class| lower_one(idx, ids, allocator, class))
+        .map(|class| lower_one(index, ids, allocator, class))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     class: &SourceClass,
@@ -40,8 +40,8 @@ fn lower_one<S: SurfaceLower>(
     let class_id = ids.class(&class.id)?;
     let canonical = CanonicalName::from(&class.name);
     let release = allocator.mint(class_release_symbol_name(class.id.as_str()))?;
-    let initializers = methods::lower_class_initializers::<S>(idx, ids, allocator, class)?;
-    let class_methods = methods::lower_class_methods::<S>(idx, ids, allocator, class)?;
+    let initializers = methods::lower_class_initializers::<S>(index, ids, allocator, class)?;
+    let class_methods = methods::lower_class_methods::<S>(index, ids, allocator, class)?;
 
     ClassDecl::new(ClassDeclParts {
         id: class_id,

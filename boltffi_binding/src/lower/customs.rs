@@ -34,10 +34,10 @@ use super::{
 };
 
 pub(super) fn lower(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
 ) -> Result<Vec<CustomTypeDecl>, LowerError> {
-    idx.customs()
+    index.customs()
         .iter()
         .map(|custom| lower_one(ids, custom))
         .collect()

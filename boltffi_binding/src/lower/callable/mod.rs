@@ -147,16 +147,16 @@ impl<'src> CallableOwner<'src> {
 /// The owner context resolves `Self` inside parameter and return type
 /// expressions. The receiver follows the source.
 pub(super) fn lower_exported_method<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     method: &MethodDef,
     start_symbol_name: &str,
 ) -> Result<ExportedCallable<S>, LowerError> {
     let receiver = lower_receiver(method.receiver);
-    let parameters = params::lower::<S, IntoRust>(idx, ids, allocator, owner, &method.parameters)?;
-    let (returns, error) = returns::lower::<S, _>(idx, ids, allocator, owner, &method.returns)?;
+    let parameters = params::lower::<S, IntoRust>(index, ids, allocator, owner, &method.parameters)?;
+    let (returns, error) = returns::lower::<S, _>(index, ids, allocator, owner, &method.returns)?;
     let execution = lower_execution::<S>(allocator, method.execution, start_symbol_name)?;
 
     Ok(ExportedCallable::<S>::new(
@@ -172,17 +172,17 @@ pub(super) fn lower_exported_method<S: SurfaceLower>(
 /// Their dispatch target is not a [`NativeSymbol`](crate::NativeSymbol)
 /// but a per-surface slot ([`crate::VTableSlot`] on native, an
 pub(super) fn lower_imported_method<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     method: &MethodDef,
     execution: ExecutionDecl<S>,
 ) -> Result<ImportedCallable<S>, LowerError> {
     let receiver = lower_receiver(method.receiver);
-    let parameters = params::lower::<S, OutOfRust>(idx, ids, allocator, owner, &method.parameters)?;
+    let parameters = params::lower::<S, OutOfRust>(index, ids, allocator, owner, &method.parameters)?;
     let (returns, error) =
-        returns::lower::<S, IntoRust>(idx, ids, allocator, owner, &method.returns)?;
+        returns::lower::<S, IntoRust>(index, ids, allocator, owner, &method.returns)?;
 
     Ok(ImportedCallable::<S>::new(
         receiver, parameters, returns, error, execution,
@@ -190,15 +190,15 @@ pub(super) fn lower_imported_method<S: SurfaceLower>(
 }
 
 pub(super) fn lower_local_callback_method<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     method: &MethodDef,
 ) -> Result<ExportedCallable<S>, LowerError> {
-    let parameters = params::lower::<S, IntoRust>(idx, ids, allocator, owner, &method.parameters)?;
+    let parameters = params::lower::<S, IntoRust>(index, ids, allocator, owner, &method.parameters)?;
     let (returns, error) =
-        returns::lower::<S, OutOfRust>(idx, ids, allocator, owner, &method.returns)?;
+        returns::lower::<S, OutOfRust>(index, ids, allocator, owner, &method.returns)?;
 
     Ok(ExportedCallable::<S>::new(
         None,
@@ -224,12 +224,12 @@ pub(super) fn lower_local_callback_method<S: SurfaceLower>(
 /// the AST, so the invoke is always synchronous. `Self` references
 /// reach the function-scoped substitution path and are rejected there.
 fn lower_closure_param_into_rust<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    closure: ClosureSource<'_>,
+    closure: ClosureSource,
 ) -> Result<ClosureParameter<S, IntoRust>, LowerError> {
-    let parts = lower_closure_into_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_into_rust_parts(index, ids, allocator, closure)?;
     Ok(ClosureParameter::new(
         parts.form,
         parts.presence,
@@ -239,12 +239,12 @@ fn lower_closure_param_into_rust<S: SurfaceLower>(
 }
 
 fn lower_closure_return_into_rust<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    closure: ClosureSource<'_>,
+    closure: ClosureSource,
 ) -> Result<ClosureReturn<S, IntoRust>, LowerError> {
-    let parts = lower_closure_into_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_into_rust_parts(index, ids, allocator, closure)?;
     Ok(ClosureReturn::new(
         parts.form,
         parts.presence,
@@ -261,13 +261,13 @@ struct ClosureIntoRustParts<S: crate::Surface> {
 }
 
 fn lower_closure_into_rust_parts<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    closure: ClosureSource<'_>,
+    closure: ClosureSource,
 ) -> Result<ClosureIntoRustParts<S>, LowerError> {
     let (parameters, returns, error) =
-        lower_closure_invoke_parts::<S, ForeignBody>(idx, ids, allocator, closure.signature)?;
+        lower_closure_invoke_parts::<S, ForeignBody>(index, ids, allocator, closure.signature)?;
     let invoke = ImportedCallable::<S>::new(
         None,
         parameters,
@@ -298,12 +298,12 @@ fn lower_closure_into_rust_parts<S: SurfaceLower>(
 /// registration carries the surface's closure-registration shape with a
 /// `()` receive slot.
 fn lower_closure_param_out_of_rust<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    closure: ClosureSource<'_>,
+    closure: ClosureSource,
 ) -> Result<ClosureParameter<S, OutOfRust>, LowerError> {
-    let parts = lower_closure_out_of_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_out_of_rust_parts(index, ids, allocator, closure)?;
     Ok(ClosureParameter::new(
         parts.form,
         parts.presence,
@@ -313,12 +313,12 @@ fn lower_closure_param_out_of_rust<S: SurfaceLower>(
 }
 
 fn lower_closure_return_out_of_rust<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    closure: ClosureSource<'_>,
+    closure: ClosureSource,
 ) -> Result<ClosureReturn<S, OutOfRust>, LowerError> {
-    let parts = lower_closure_out_of_rust_parts(idx, ids, allocator, closure)?;
+    let parts = lower_closure_out_of_rust_parts(index, ids, allocator, closure)?;
     Ok(ClosureReturn::new(
         parts.form,
         parts.presence,
@@ -335,13 +335,13 @@ struct ClosureOutOfRustParts<S: crate::Surface> {
 }
 
 fn lower_closure_out_of_rust_parts<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    closure: ClosureSource<'_>,
+    closure: ClosureSource,
 ) -> Result<ClosureOutOfRustParts<S>, LowerError> {
     let (parameters, returns, error) =
-        lower_closure_invoke_parts::<S, RustBody>(idx, ids, allocator, closure.signature)?;
+        lower_closure_invoke_parts::<S, RustBody>(index, ids, allocator, closure.signature)?;
     let invoke = ExportedCallable::<S>::new(
         None,
         parameters,
@@ -368,7 +368,7 @@ type ClosureInvokeParts<S, K> = (
 );
 
 fn lower_closure_invoke_parts<S: SurfaceLower, K: crate::CallableScope>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     closure: &FnSig,
@@ -382,14 +382,17 @@ where
         .parameters
         .iter()
         .enumerate()
-        .map(|(index, type_expr)| {
-            ParameterDef::value(SourceName::single(format!("arg{index}")), type_expr.clone())
+        .map(|(parameter_index, type_expr)| {
+            ParameterDef::value(
+                SourceName::single(format!("arg{parameter_index}")),
+                type_expr.clone(),
+            )
         })
         .collect::<Vec<_>>();
     let lowered_params =
-        params::lower::<S, K::ParamDirection>(idx, ids, allocator, owner, &parameters)?;
+        params::lower::<S, K::ParamDirection>(index, ids, allocator, owner, &parameters)?;
     let (returns, error) =
-        returns::lower::<S, K::ReturnDirection>(idx, ids, allocator, owner, &closure.returns)?;
+        returns::lower::<S, K::ReturnDirection>(index, ids, allocator, owner, &closure.returns)?;
     Ok((lowered_params, returns, error))
 }
 
@@ -403,7 +406,7 @@ where
 /// links to invoke the operation, and the lifecycle symbols are minted
 /// with that name as prefix.
 pub(super) fn lower_function<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     function: &FunctionDef,
@@ -411,8 +414,8 @@ pub(super) fn lower_function<S: SurfaceLower>(
 ) -> Result<ExportedCallable<S>, LowerError> {
     let owner = CallableOwner::Function;
     let parameters =
-        params::lower::<S, IntoRust>(idx, ids, allocator, owner, &function.parameters)?;
-    let (returns, error) = returns::lower::<S, _>(idx, ids, allocator, owner, &function.returns)?;
+        params::lower::<S, IntoRust>(index, ids, allocator, owner, &function.parameters)?;
+    let (returns, error) = returns::lower::<S, _>(index, ids, allocator, owner, &function.returns)?;
     let execution = lower_execution::<S>(allocator, function.execution, start_symbol_name)?;
 
     Ok(ExportedCallable::<S>::new(
@@ -430,14 +433,14 @@ pub(super) fn lower_function<S: SurfaceLower>(
 /// [`CallableOwner::Function`], so any `Self` in the constant type is
 /// rejected; top-level constants do not carry `Self`.
 pub(super) fn lower_constant_accessor<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     type_expr: &boltffi_ast::TypeExpr,
 ) -> Result<ExportedCallable<S>, LowerError> {
     let owner = CallableOwner::Function;
     let return_def = boltffi_ast::ReturnDef::value(type_expr.clone());
-    let (returns, error) = returns::lower::<S, _>(idx, ids, allocator, owner, &return_def)?;
+    let (returns, error) = returns::lower::<S, _>(index, ids, allocator, owner, &return_def)?;
 
     Ok(ExportedCallable::<S>::new(
         None,
@@ -617,7 +620,7 @@ impl<'a> CallbackHandleSource<'a> {
 /// recurse so a method like `fn neighbours(&self) -> Vec<Self>`
 /// resolves correctly.
 pub(super) fn substitute_self_type(
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     type_expr: &boltffi_ast::TypeExpr,
 ) -> Result<boltffi_ast::TypeExpr, LowerError> {
     use boltffi_ast::TypeExpr;
@@ -664,7 +667,7 @@ pub(super) fn substitute_self_type(
 }
 
 fn substitute_self_signature(
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     signature: &FnSig,
 ) -> Result<FnSig, LowerError> {
     Ok(FnSig::new(
@@ -681,7 +684,7 @@ fn substitute_self_signature(
 }
 
 fn substitute_self_trait_bound(
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     bounds: &TraitBounds,
 ) -> Result<TraitBounds, LowerError> {
     let base = match &bounds.base {

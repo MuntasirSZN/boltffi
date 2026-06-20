@@ -94,7 +94,7 @@ impl SymbolAllocator {
 }
 
 /// Builds the symbol used for a named method owned by `owner`.
-pub fn member_symbol_name(owner: SymbolOwner<'_>, member_name: &str) -> String {
+pub fn member_symbol_name(owner: SymbolOwner, member_name: &str) -> String {
     format!(
         "{}_method_{}_{}_{}",
         FFI_PREFIX,
@@ -112,7 +112,7 @@ pub fn source_member_name(name: &SourceName) -> String {
 }
 
 /// Builds the symbol used for an initializer owned by `owner`.
-pub fn initializer_symbol_name(owner: SymbolOwner<'_>, initializer_name: &str) -> String {
+pub fn initializer_symbol_name(owner: SymbolOwner, initializer_name: &str) -> String {
     format!(
         "{}_init_{}_{}_{}",
         FFI_PREFIX,

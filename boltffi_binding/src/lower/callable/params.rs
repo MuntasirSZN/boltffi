@@ -33,10 +33,10 @@ use super::{
 /// [`ImportedCallable<S>`]: crate::ImportedCallable
 /// [`ExportedCallable<S>`]: crate::ExportedCallable
 pub(super) fn lower<S: SurfaceLower, D: Direction + LowerClosure<S>>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     parameters: &[ParameterDef],
 ) -> Result<Vec<ParamDecl<S, D>>, LowerError>
 where
@@ -44,15 +44,15 @@ where
 {
     parameters
         .iter()
-        .map(|parameter| lower_one::<S, D>(idx, ids, allocator, owner, parameter))
+        .map(|parameter| lower_one::<S, D>(index, ids, allocator, owner, parameter))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower, D: Direction + LowerClosure<S>>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    owner: CallableOwner<'_>,
+    owner: CallableOwner,
     parameter: &ParameterDef,
 ) -> Result<ParamDecl<S, D>, LowerError>
 where
@@ -68,28 +68,28 @@ where
                 UnsupportedType::BorrowedCallbackParameter,
             ));
         }
-        return D::lower_closure_param(idx, ids, allocator, canonical_name, meta, closure);
+        return D::lower_closure_param(index, ids, allocator, canonical_name, meta, closure);
     }
     let value = ValueRef::named(canonical_name.clone());
-    let plan = lower_plain_plan::<S, D>(idx, ids, &type_expr, value, receive)?;
+    let plan = lower_plain_plan::<S, D>(index, ids, &type_expr, value, receive)?;
     Ok(ParamDecl::value(canonical_name, meta, plan))
 }
 
 fn lower_plain_plan<S: SurfaceLower, D: Direction>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
     value: ValueRef,
     receive: Receive,
 ) -> Result<ParamPlan<S, D>, LowerError> {
-    match specialize_param::<S, D>(idx, ids, type_expr, receive)? {
+    match specialize_param::<S, D>(index, ids, type_expr, receive)? {
         Some(plan) => Ok(plan),
-        None => lower_plan::<S, D>(idx, ids, type_expr, value, receive),
+        None => lower_plan::<S, D>(index, ids, type_expr, value, receive),
     }
 }
 
 fn specialize_param<S: SurfaceLower, D: Direction>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
     receive: Receive,
@@ -102,7 +102,7 @@ fn specialize_param<S: SurfaceLower, D: Direction>(
             primitive(inner).map(|primitive| ParamPlan::ScalarOption { primitive })
         }
         TypeExpr::Vec(inner) => {
-            direct_vec_element(idx, ids, inner)?.map(|element| ParamPlan::DirectVec { element })
+            direct_vec_element(index, ids, inner)?.map(|element| ParamPlan::DirectVec { element })
         }
         _ => None,
     })
@@ -117,7 +117,7 @@ fn primitive(type_expr: &TypeExpr) -> Option<Primitive> {
 }
 
 fn direct_vec_element(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<Option<DirectVectorElementType>, LowerError> {
@@ -125,7 +125,7 @@ fn direct_vec_element(
         TypeExpr::Primitive(primitive) => Ok(DirectVectorElementType::primitive(Primitive::from(
             *primitive,
         ))),
-        TypeExpr::Record { id, .. } if idx.record(id).is_some_and(records::is_direct) => {
+        TypeExpr::Record { id, .. } if index.record(id).is_some_and(records::is_direct) => {
             Ok(Some(DirectVectorElementType::record(ids.record(id)?)))
         }
         _ => Ok(None),
@@ -141,7 +141,7 @@ fn receive_for_passing(passing: ParameterPassing) -> Receive {
 }
 
 fn lower_plan<S: SurfaceLower, D: Direction>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
     value: ValueRef,
@@ -178,13 +178,13 @@ fn lower_plan<S: SurfaceLower, D: Direction>(
             ty: DirectValueType::primitive(Primitive::from(*primitive)),
             receive: D::receive_from(receive),
         }),
-        TypeExpr::Record { id, .. } if idx.record(id).is_some_and(records::is_direct) => {
+        TypeExpr::Record { id, .. } if index.record(id).is_some_and(records::is_direct) => {
             Ok(ParamPlan::Direct {
                 ty: DirectValueType::record(ids.record(id)?),
                 receive: D::receive_from(receive),
             })
         }
-        TypeExpr::Enum { id, .. } if idx.enumeration(id).is_some_and(enums::is_c_style) => {
+        TypeExpr::Enum { id, .. } if index.enumeration(id).is_some_and(enums::is_c_style) => {
             Ok(ParamPlan::Direct {
                 ty: DirectValueType::enumeration(ids.enumeration(id)?),
                 receive: D::receive_from(receive),
@@ -203,7 +203,7 @@ fn lower_plan<S: SurfaceLower, D: Direction>(
         | TypeExpr::Map { .. }
         | TypeExpr::Custom { .. } => {
             let ty = types::lower(ids, type_expr)?;
-            let codec_node = codecs::node(idx, ids, type_expr, value.clone())?;
+            let codec_node = codecs::node(index, ids, type_expr, value.clone())?;
             Ok(ParamPlan::Encoded {
                 ty,
                 codec: D::make_codec(value, codec_node),
@@ -250,89 +250,89 @@ where
     Self::Opposite: ParamDirection<S>,
 {
     fn lower_closure_parameter(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ClosureParameter<S, Self>, LowerError>;
 
     fn lower_closure_return(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ClosureReturn<S, Self>, LowerError>;
 
     fn lower_closure_param(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         name: CanonicalName,
         meta: ElementMeta,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ParamDecl<S, Self>, LowerError>;
 }
 
 impl<S: SurfaceLower> LowerClosure<S> for IntoRust {
     fn lower_closure_parameter(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ClosureParameter<S, IntoRust>, LowerError> {
-        super::lower_closure_param_into_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_param_into_rust::<S>(index, ids, allocator, closure)
     }
 
     fn lower_closure_return(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ClosureReturn<S, IntoRust>, LowerError> {
-        super::lower_closure_return_into_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_return_into_rust::<S>(index, ids, allocator, closure)
     }
 
     fn lower_closure_param(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         name: CanonicalName,
         meta: ElementMeta,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ParamDecl<S, IntoRust>, LowerError> {
-        let param = Self::lower_closure_parameter(idx, ids, allocator, closure)?;
+        let param = Self::lower_closure_parameter(index, ids, allocator, closure)?;
         Ok(<ParamDecl<S, IntoRust>>::closure(name, meta, param))
     }
 }
 
 impl<S: SurfaceLower> LowerClosure<S> for OutOfRust {
     fn lower_closure_parameter(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ClosureParameter<S, OutOfRust>, LowerError> {
-        super::lower_closure_param_out_of_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_param_out_of_rust::<S>(index, ids, allocator, closure)
     }
 
     fn lower_closure_return(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ClosureReturn<S, OutOfRust>, LowerError> {
-        super::lower_closure_return_out_of_rust::<S>(idx, ids, allocator, closure)
+        super::lower_closure_return_out_of_rust::<S>(index, ids, allocator, closure)
     }
 
     fn lower_closure_param(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         name: CanonicalName,
         meta: ElementMeta,
-        closure: ClosureSource<'_>,
+        closure: ClosureSource,
     ) -> Result<ParamDecl<S, OutOfRust>, LowerError> {
-        let param = Self::lower_closure_parameter(idx, ids, allocator, closure)?;
+        let param = Self::lower_closure_parameter(index, ids, allocator, closure)?;
         Ok(<ParamDecl<S, OutOfRust>>::closure(name, meta, param))
     }
 }

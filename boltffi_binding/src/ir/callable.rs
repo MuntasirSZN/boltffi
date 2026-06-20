@@ -1106,7 +1106,7 @@ impl<S: Surface, D: Direction> ErrorDecl<S, D> {
     }
 
     /// Returns the selected error transport.
-    pub fn channel(&self) -> ErrorChannel<'_, S, D> {
+    pub fn channel<'error>(&'error self) -> ErrorChannel<'error, S, D> {
         match self {
             Self::None(_) => ErrorChannel::None,
             Self::StatusViaReturnSlot { .. } | Self::StatusViaOutPointer { .. } => {

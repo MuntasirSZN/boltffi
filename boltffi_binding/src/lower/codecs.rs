@@ -13,7 +13,7 @@ use super::{LowerError, enums, ids::DeclarationIds, index::Index, records, types
 /// element codec recurses with [`ValueRef::self_value`] for the
 /// per-element binding.
 pub(super) fn node(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
     value: ValueRef,
@@ -26,7 +26,7 @@ pub(super) fn node(
             CodecNode::Bytes
         }
         TypeExpr::Record { id, .. } => {
-            let record = idx
+            let record = index
                 .record(id)
                 .ok_or_else(|| LowerError::unknown_record(id))?;
             let id = ids.record(id)?;
@@ -37,7 +37,7 @@ pub(super) fn node(
             }
         }
         TypeExpr::Enum { id, .. } => {
-            let enumeration = idx
+            let enumeration = index
                 .enumeration(id)
                 .ok_or_else(|| LowerError::unknown_enum(id))?;
             let id = ids.enumeration(id)?;
@@ -83,36 +83,36 @@ pub(super) fn node(
             }));
         }
         TypeExpr::Custom { id, .. } => {
-            let custom = idx
+            let custom = index
                 .custom(id)
                 .ok_or_else(|| LowerError::unknown_custom(id))?;
             CodecNode::Custom {
                 id: ids.custom(id)?,
-                representation: Box::new(node(idx, ids, &custom.repr, value)?),
+                representation: Box::new(node(index, ids, &custom.repr, value)?),
             }
         }
         TypeExpr::Vec(element) | TypeExpr::Slice(element) => {
-            let element = node(idx, ids, element, ValueRef::self_value())?;
+            let element = node(index, ids, element, ValueRef::self_value())?;
             CodecNode::Sequence {
                 len: Op::sequence_len(value),
                 element: Box::new(element),
             }
         }
-        TypeExpr::Option(inner) => CodecNode::Optional(Box::new(node(idx, ids, inner, value)?)),
+        TypeExpr::Option(inner) => CodecNode::Optional(Box::new(node(index, ids, inner, value)?)),
         TypeExpr::Tuple(elements) => CodecNode::Tuple(
             elements
                 .iter()
                 .enumerate()
-                .map(|(index, element)| {
-                    let field = FieldKey::position(index)
+                .map(|(field_index, element)| {
+                    let field = FieldKey::position(field_index)
                         .ok_or_else(LowerError::field_position_overflow)?;
-                    node(idx, ids, element, value.clone().field(field))
+                    node(index, ids, element, value.clone().field(field))
                 })
                 .collect::<Result<Vec<_>, LowerError>>()?,
         ),
         TypeExpr::Result { ok, err } => CodecNode::Result {
-            ok: Box::new(node(idx, ids, ok, ValueRef::self_value())?),
-            err: Box::new(node(idx, ids, err, ValueRef::self_value())?),
+            ok: Box::new(node(index, ids, ok, ValueRef::self_value())?),
+            err: Box::new(node(index, ids, err, ValueRef::self_value())?),
         },
         TypeExpr::Map {
             kind,
@@ -120,8 +120,8 @@ pub(super) fn node(
             value: item,
         } => CodecNode::Map {
             kind: *kind,
-            key: Box::new(node(idx, ids, key, ValueRef::self_value())?),
-            value: Box::new(node(idx, ids, item, ValueRef::self_value())?),
+            key: Box::new(node(index, ids, key, ValueRef::self_value())?),
+            value: Box::new(node(index, ids, item, ValueRef::self_value())?),
         },
         TypeExpr::Unit => {
             return Err(LowerError::unsupported_type(
@@ -147,12 +147,12 @@ pub(super) fn node(
 /// whole-record codec carries. `value` is reused for the [`WritePlan`]
 /// so generated code does not have to re-derive the path expression.
 pub(super) fn plan(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
     value: ValueRef,
 ) -> Result<CodecPlan, LowerError> {
-    let root = node(idx, ids, type_expr, value.clone())?;
+    let root = node(index, ids, type_expr, value.clone())?;
     Ok(CodecPlan::new(
         ReadPlan::new(root.clone()),
         WritePlan::new(value, root),

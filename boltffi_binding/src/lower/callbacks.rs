@@ -44,18 +44,18 @@ use super::{
 /// sealed private supertrait set, so the `S: SurfaceLower` bound is the only
 /// constraint callers need to satisfy.
 pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<CallbackDecl<S>>, LowerError> {
-    idx.traits()
+    index.traits()
         .iter()
-        .map(|callback| lower_one::<S>(idx, ids, allocator, callback))
+        .map(|callback| lower_one::<S>(index, ids, allocator, callback))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     callback: &SourceTrait,
@@ -63,9 +63,9 @@ fn lower_one<S: SurfaceLower>(
     reject_slot_collisions(callback)?;
     let callback_id = ids.callback(&callback.id)?;
     let canonical = CanonicalName::from(&callback.name);
-    let protocol = S::build_callback_protocol(idx, ids, allocator, callback)?;
+    let protocol = S::build_callback_protocol(index, ids, allocator, callback)?;
     let local_protocol = LocalCallbackProtocolSource::new(callback)
-        .map(|callback| local_protocol::<S>(idx, ids, allocator, callback))
+        .map(|callback| local_protocol::<S>(index, ids, allocator, callback))
         .transpose()?;
     Ok(CallbackDecl::new(
         callback_id,
@@ -78,10 +78,10 @@ fn lower_one<S: SurfaceLower>(
 }
 
 fn local_protocol<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
-    callback: LocalCallbackProtocolSource<'_>,
+    callback: LocalCallbackProtocolSource,
 ) -> Result<CallbackLocalProtocol<S>, LowerError> {
     let callback = callback.source;
     let module_segments = local_module_segments(callback);
@@ -110,10 +110,10 @@ fn local_protocol<S: SurfaceLower>(
         .methods
         .iter()
         .enumerate()
-        .map(|(index, method)| {
+        .map(|(method_index, method)| {
             let slot = CallbackSlot::from_source_name(&method.name);
             Ok(CallbackLocalMethodDecl::new(
-                crate::MethodId::from_raw(index as u32),
+                crate::MethodId::from_raw(method_index as u32),
                 CanonicalName::from(&method.name),
                 metadata::decl_meta(method.doc.as_ref(), method.deprecated.as_ref()),
                 local_function(
@@ -121,7 +121,7 @@ fn local_protocol<S: SurfaceLower>(
                     symbol::callback_local_method_name(callback.id.as_str(), &slot),
                 ),
                 callable::lower_local_callback_method::<S>(
-                    idx,
+                    index,
                     ids,
                     allocator,
                     callable::CallableOwner::Trait(callback),
@@ -433,7 +433,7 @@ fn reject_slot_collisions(callback: &SourceTrait) -> Result<(), LowerError> {
 /// through the sealed bound.
 pub(super) trait CallbackProtocolBuilder: Surface {
     fn build_callback_protocol(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         callback: &SourceTrait,
@@ -442,7 +442,7 @@ pub(super) trait CallbackProtocolBuilder: Surface {
 
 impl CallbackProtocolBuilder for Native {
     fn build_callback_protocol(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         callback: &SourceTrait,
@@ -453,7 +453,7 @@ impl CallbackProtocolBuilder for Native {
             callback.id.as_str(),
         ))?;
         let methods = methods::lower_callback_methods::<Self, VTableSlot, _>(
-            idx,
+            index,
             ids,
             allocator,
             callback,
@@ -481,7 +481,7 @@ impl CallbackProtocolBuilder for Native {
 
 impl CallbackProtocolBuilder for Wasm32 {
     fn build_callback_protocol(
-        idx: &Index<'_>,
+        index: &Index,
         ids: &DeclarationIds,
         allocator: &mut SymbolAllocator,
         callback: &SourceTrait,
@@ -500,7 +500,7 @@ impl CallbackProtocolBuilder for Wasm32 {
         )?;
         let callback_id = callback.id.as_str();
         let methods = methods::lower_callback_methods::<Self, ImportSymbol, _>(
-            idx,
+            index,
             ids,
             allocator,
             callback,

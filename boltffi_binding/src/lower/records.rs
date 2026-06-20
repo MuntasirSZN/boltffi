@@ -20,13 +20,13 @@ use super::{
 /// [`NativeSymbol`]: crate::NativeSymbol
 /// [`Bindings<S>`]: crate::Bindings
 pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<RecordDecl<S>>, LowerError> {
-    idx.records()
+    index.records()
         .iter()
-        .map(|record| lower_one(idx, ids, allocator, record))
+        .map(|record| lower_one(index, ids, allocator, record))
         .collect()
 }
 
@@ -45,17 +45,17 @@ pub(super) fn is_direct(record: &SourceRecord) -> bool {
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     record: &SourceRecord,
 ) -> Result<RecordDecl<S>, LowerError> {
-    let initializers = methods::lower_record_initializers::<S>(idx, ids, allocator, record)?;
-    let record_methods = methods::lower_record_methods::<S>(idx, ids, allocator, record)?;
+    let initializers = methods::lower_record_initializers::<S>(index, ids, allocator, record)?;
+    let record_methods = methods::lower_record_methods::<S>(index, ids, allocator, record)?;
     if is_direct(record) {
         lower_direct(ids, record, initializers, record_methods).map(RecordDecl::Direct)
     } else {
-        lower_encoded(idx, ids, record, initializers, record_methods).map(RecordDecl::Encoded)
+        lower_encoded(index, ids, record, initializers, record_methods).map(RecordDecl::Encoded)
     }
 }
 
@@ -90,7 +90,7 @@ fn lower_direct<S: SurfaceLower>(
 }
 
 fn lower_encoded<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     record: &SourceRecord,
     initializers: Vec<InitializerDecl<S>>,
@@ -103,7 +103,7 @@ fn lower_encoded<S: SurfaceLower>(
             let key = FieldKey::from(field);
             let value = ValueRef::self_value().field(key.clone());
             let ty = types::lower(ids, &field.type_expr)?;
-            let codec = codecs::plan(idx, ids, &field.type_expr, value)?;
+            let codec = codecs::plan(index, ids, &field.type_expr, value)?;
             Ok(EncodedFieldDecl::new(
                 key,
                 ty,
@@ -121,7 +121,7 @@ fn lower_encoded<S: SurfaceLower>(
         initializers,
         record_methods,
         codecs::plan(
-            idx,
+            index,
             ids,
             &TypeExpr::record(
                 record.id.clone(),

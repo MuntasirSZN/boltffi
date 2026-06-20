@@ -30,18 +30,18 @@ use super::{
 };
 
 pub(super) fn lower<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
 ) -> Result<Vec<StreamDecl<S>>, LowerError> {
-    idx.streams()
+    index.streams()
         .iter()
-        .map(|stream| lower_one::<S>(idx, ids, allocator, stream))
+        .map(|stream| lower_one::<S>(index, ids, allocator, stream))
         .collect()
 }
 
 fn lower_one<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     allocator: &mut SymbolAllocator,
     stream: &SourceStream,
@@ -52,7 +52,7 @@ fn lower_one<S: SurfaceLower>(
         .as_ref()
         .map(|owner| ids.class(owner))
         .transpose()?;
-    let item = lower_item::<S>(idx, ids, &stream.item_type)?;
+    let item = lower_item::<S>(index, ids, &stream.item_type)?;
     let protocol = build_protocol(allocator, stream.id.as_str())?;
     Ok(StreamDecl::new(StreamDeclParts {
         id: stream_id,
@@ -67,7 +67,7 @@ fn lower_one<S: SurfaceLower>(
 }
 
 fn lower_item<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<StreamItemPlan<S>, LowerError> {
@@ -77,21 +77,21 @@ fn lower_item<S: SurfaceLower>(
             let size = BindingPrimitive::from(*primitive).byte_size::<S>();
             direct_item(ids, type_expr, size)
         }
-        TypeExpr::Enum { id, .. } => match idx.enumeration(id) {
+        TypeExpr::Enum { id, .. } => match index.enumeration(id) {
             Some(enumeration) if enums::is_c_style(enumeration) => {
                 let repr = enums::c_style_repr(enumeration)
                     .ok_or_else(|| LowerError::unsupported_type(UnsupportedType::EnumRepr))?;
                 direct_item(ids, type_expr, repr.primitive().byte_size::<S>())
             }
-            _ => encoded_item::<S>(idx, ids, type_expr),
+            _ => encoded_item::<S>(index, ids, type_expr),
         },
-        TypeExpr::Record { id, .. } => match idx.record(id) {
+        TypeExpr::Record { id, .. } => match index.record(id) {
             Some(record) if records::is_direct(record) => {
                 direct_item(ids, type_expr, layout::compute(record)?.size())
             }
-            _ => encoded_item::<S>(idx, ids, type_expr),
+            _ => encoded_item::<S>(index, ids, type_expr),
         },
-        _ => encoded_item::<S>(idx, ids, type_expr),
+        _ => encoded_item::<S>(index, ids, type_expr),
     }
 }
 
@@ -121,12 +121,12 @@ fn direct_value_type(
 }
 
 fn encoded_item<S: SurfaceLower>(
-    idx: &Index<'_>,
+    index: &Index,
     ids: &DeclarationIds,
     type_expr: &TypeExpr,
 ) -> Result<StreamItemPlan<S>, LowerError> {
     let ty = types::lower(ids, type_expr)?;
-    let root = codecs::node(idx, ids, type_expr, ValueRef::self_value())?;
+    let root = codecs::node(index, ids, type_expr, ValueRef::self_value())?;
     Ok(StreamItemPlan::Encoded {
         ty,
         read: ReadPlan::new(root),

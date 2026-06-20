@@ -68,7 +68,7 @@ impl<'a> ClosureSignature<'a> {
     }
 }
 
-impl fmt::Display for ClosureSignature<'_> {
+impl<'signature> fmt::Display for ClosureSignature<'signature> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (
             self.params.is_empty(),
@@ -105,7 +105,7 @@ fn write_return_signature(formatter: &mut fmt::Formatter<'_>, returns: &ReturnDe
 
 struct ClosureTypeSignature<'a>(&'a TypeExpr);
 
-impl fmt::Display for ClosureTypeSignature<'_> {
+impl<'signature> fmt::Display for ClosureTypeSignature<'signature> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             TypeExpr::Primitive(primitive) => formatter.write_str(&primitive_signature(*primitive)),
