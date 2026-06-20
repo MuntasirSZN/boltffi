@@ -521,15 +521,7 @@ where
         &self,
         export: associated_fn::ReceiverExport<'expansion, 'lowered, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error> {
-        self.receiver.render(
-            self.source,
-            &self.record,
-            export.callable().receiver(),
-            export.callable().execution(),
-            export.method().clone(),
-            export.failure(),
-            export.expansion(),
-        )
+        self.receiver.render(self.source, &self.record, export)
     }
 }
 
@@ -538,11 +530,7 @@ impl<'receiver> ReceiverKind<'receiver> {
         self,
         source: &'receiver RecordDef,
         record: &Ident,
-        receive: Option<Receive>,
-        execution: &ExecutionDecl<S>,
-        method: Ident,
-        failure: associated_fn::ReceiverFailure<'expansion, 'receiver, S>,
-        expansion: &'expansion Expansion<'receiver, S>,
+        export: associated_fn::ReceiverExport<'expansion, 'receiver, S>,
     ) -> Result<(export::ReceiverTokens, export::RustCall), Error>
     where
         S: RenderSurface,
@@ -559,6 +547,11 @@ impl<'receiver> ReceiverKind<'receiver> {
                 Output = TokenStream,
             >,
     {
+        let receive = export.callable().receiver();
+        let execution = export.callable().execution();
+        let method = export.method().clone();
+        let failure = export.failure();
+        let expansion = export.expansion();
         match (self, receive) {
             (Self::Direct, Some(receive)) => {
                 let rust_type = names::SourceSpelling::new(&source.name)
