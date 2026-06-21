@@ -1,12 +1,5 @@
 use boltffi_binding::Native;
 
-mod method;
-
-pub use method::{
-    BytesParameter, JniType, NativeMethod, NativeParameter, NativeParameterKind, NativeReturn,
-    ScalarParameter,
-};
-
 use crate::{
     bridge::{
         c::{self, HeaderInclude, Identifier},
@@ -16,6 +9,8 @@ use crate::{
         BridgeCapabilities, BridgeCapability, BridgeContract, FilePath, Result, contract::sealed,
     },
 };
+
+use super::NativeMethod;
 
 /// Contract produced by the JNI bridge layer.
 #[derive(Clone, Debug, Eq, PartialEq)]
