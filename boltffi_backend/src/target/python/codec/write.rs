@@ -227,12 +227,12 @@ impl<'package> CodecWrite for Writer<'package> {
         binder: BinderId,
         element: Vec<Self::Stmt>,
     ) -> Vec<Self::Stmt> {
-        vec![self.value(value).and_then(|value| {
-            let count = len.render_with(&mut Operation::new(self.self_position_access));
+        vec![self.value(value).and_then(|wire_value| {
+            let count = len.render_with(&mut Operation::new(value, self.self_position_access));
             Self::call(
                 Identifier::parse("_boltffi_wire_sequence")?,
                 [
-                    value,
+                    wire_value,
                     count?,
                     Expression::lambda(Self::binder(binder)?, Self::single(element)?),
                 ],

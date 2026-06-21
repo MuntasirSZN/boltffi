@@ -1,4 +1,4 @@
-use boltffi_binding::{DirectValueType, FieldKey, IntrinsicOp, OpRender, ValueRef};
+use boltffi_binding::{DirectValueType, FieldKey, IntrinsicOp, OpRender, ValueRef, ValueRoot};
 
 use crate::{
     core::{Error, Result},
@@ -10,13 +10,22 @@ use crate::{
 };
 
 pub struct Operation {
+    current_value: ValueRef,
     self_position_access: SelfPositionAccess,
 }
 
 impl Operation {
-    pub fn new(self_position_access: SelfPositionAccess) -> Self {
+    pub fn new(current_value: &ValueRef, self_position_access: SelfPositionAccess) -> Self {
         Self {
+            current_value: current_value.clone(),
             self_position_access,
+        }
+    }
+
+    fn value_ref(&self, value: &ValueRef) -> ValueRef {
+        match value.root() {
+            ValueRoot::SelfValue => self.current_value.clone(),
+            _ => value.clone(),
         }
     }
 
@@ -44,7 +53,11 @@ impl OpRender for Operation {
     type Expr = Result<Expression>;
 
     fn value(&mut self, value: &ValueRef) -> Self::Expr {
-        ValueExpression::with_self_position_access(value, self.self_position_access).render()
+        ValueExpression::with_self_position_access(
+            &self.value_ref(value),
+            self.self_position_access,
+        )
+        .render()
     }
 
     fn byte_count(&mut self, bytes: u64) -> Self::Expr {
