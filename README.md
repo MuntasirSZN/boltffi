@@ -69,58 +69,13 @@ pub fn distance(a: Point, b: Point) -> f64 {
 Run BoltFFI for the targets you need:
 
 ```bash
-boltffi pack apple
+boltffi pack all
 # Produces: ./dist/apple/YourCrate.xcframework + Package.swift
-
-boltffi pack android
 # Produces: ./dist/android/jniLibs/<abi>/libyour_crate.so + Kotlin bindings
-
-boltffi pack java
 # Produces: ./dist/java/native/<host-target>/libyour_crate_jni.* + Java bindings
-
-boltffi pack wasm
 # Produces: ./dist/wasm/pkg/*.wasm + TypeScript bindings + npm package
-
-boltffi pack csharp
 # Produces: ./dist/csharp/packages/*.nupkg with RID native assets
 ```
-
-Android ABI selection is configurable in `boltffi.toml`:
-
-```toml
-[targets.android]
-architectures = ["arm64"]
-```
-
-Apple slice selection is configurable too:
-
-```toml
-[targets.apple]
-ios_architectures = ["arm64"]
-simulator_architectures = ["arm64"]
-include_macos = true
-macos_architectures = ["arm64"]
-```
-
-Any Apple architecture list can be set to `[]` to exclude that slice family. For example, set
-`ios_architectures = []` when you want simulator-only Apple packaging from a config overlay. BoltFFI
-still requires at least one Apple slice overall.
-
-When `architectures` is omitted, BoltFFI keeps the existing default Android matrix:
-`arm64`, `armv7`, `x86_64`, and `x86`. `boltffi pack android --no-build` now validates that each
-configured ABI already has a built Rust static library and ignores stale artifacts for
-unconfigured ABIs.
-
-You can also apply per-invocation overlays without mutating the tracked base config.
-BoltFFI still requires a base `boltffi.toml`, then merges the overlay on top for that one command:
-
-```bash
-boltffi --overlay boltffi.ci.toml pack android
-boltffi --overlay boltffi.release.toml pack all --release
-```
-
-This is useful for CI, release builds, or machine-local overrides. `boltffi init` does not accept
-`--overlay`.
 
 Use it from Swift, Kotlin, Java, C#, or TypeScript:
 
@@ -205,10 +160,11 @@ Other tools that solve similar problems:
 - [cxx](https://github.com/dtolnay/cxx) - Safe C++/Rust interop
 
 ## Contributing
-Contributions are warmly welcomed 🙌
+If this tool sounds interesting to you, please help us develop it. You can:
 
-- [File an issue](https://github.com/boltffi/boltffi/issues)
-- [Submit a PR](https://github.com/boltffi/boltffi/pulls)
+- View the [contributor guide](./docs/contributors/contributing.md).
+- File or work on [issues](https://github.com/boltffi/boltffi/issues) here on GitHub.
+- Join discussions on [Discord](https://discord.gg/Q6A7zNNFk3).
 
 ## License
 BOLTFFI is released under the MIT license. See [LICENSE](./LICENSE) for more information.

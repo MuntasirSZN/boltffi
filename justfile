@@ -58,8 +58,13 @@ build-all-release:
 test:
     cargo test --workspace
 
-demo-verify:
-    ./examples/demo/verify-platform-demos.sh
+# Verify demo platforms
+demo-verify *args:
+    ./examples/demo/verify-platform-demos.sh {{args}}
+
+# Generate demo bindings through the IR path
+demo-generate target *args:
+    cd examples/demo && cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- generate {{target}} --experimental --ir {{args}}
 
 # Audit semantic demo test cases against platform test markers
 demo-test-audit:
