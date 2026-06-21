@@ -10,12 +10,20 @@ use crate::{
 
 pub struct ValueExpression {
     value: ValueRef,
+    position_fields: PositionFieldAccess,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PositionFieldAccess {
+    Attribute,
+    Subscript,
 }
 
 impl ValueExpression {
-    pub fn new(value: &ValueRef) -> Self {
+    pub fn with_position_fields(value: &ValueRef, position_fields: PositionFieldAccess) -> Self {
         Self {
             value: value.clone(),
+            position_fields,
         }
     }
 
@@ -39,22 +47,40 @@ impl ValueExpression {
 
     pub fn render(self) -> Result<Expression> {
         let root = Self::root(&self.value)?;
-        self.value.path().iter().try_fold(root, Self::field)
+        self.value
+            .path()
+            .iter()
+            .try_fold(root, |expression, field| {
+                Self::field_with_position_fields(expression, field, self.position_fields)
+            })
     }
 
-    pub fn field(expression: Expression, field: &FieldKey) -> Result<Expression> {
+    pub fn field_with_position_fields(
+        expression: Expression,
+        field: &FieldKey,
+        position_fields: PositionFieldAccess,
+    ) -> Result<Expression> {
         Ok(match field {
             FieldKey::Named(name) => Expression::attribute(expression, Name::new(name).function()?),
-            FieldKey::Position(position) => Expression::subscript(
-                expression,
-                Expression::literal(Literal::integer(i128::from(*position))),
-            ),
+            FieldKey::Position(position) => position_fields.expression(expression, *position)?,
             _ => {
                 return Err(Error::UnsupportedTarget {
                     target: "python",
                     shape: "unknown codec value field",
                 });
             }
+        })
+    }
+}
+
+impl PositionFieldAccess {
+    fn expression(self, expression: Expression, position: u32) -> Result<Expression> {
+        Ok(match self {
+            Self::Attribute => Expression::attribute(expression, Name::position_field(position)?),
+            Self::Subscript => Expression::subscript(
+                expression,
+                Expression::literal(Literal::integer(i128::from(position))),
+            ),
         })
     }
 }
