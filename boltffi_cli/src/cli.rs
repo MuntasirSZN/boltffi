@@ -99,7 +99,7 @@ pub enum Commands {
 
     #[command(
         about = "Generate bindings",
-        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate kmp --experimental\n  boltffi generate python --experimental\n"
+        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate kmp --experimental\n  boltffi generate python\n"
     )]
     Generate {
         #[arg(value_enum)]
@@ -133,7 +133,7 @@ pub enum Commands {
 
     #[command(
         about = "Package platform artifacts (xcframework/SPM/jniLibs/KMP/npm/NuGet)",
-        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack kmp --experimental\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n  boltffi pack csharp\n"
+        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack kmp --experimental\n  boltffi pack wasm --release\n  boltffi pack python\n  boltffi pack csharp\n"
     )]
     Pack {
         #[command(subcommand)]
@@ -172,7 +172,7 @@ pub(crate) enum GenerateTargetArg {
     Typescript,
     #[value(help = "Generate experimental Dart bindings")]
     Dart,
-    #[value(help = "Generate experimental Python bindings")]
+    #[value(help = "Generate Python bindings")]
     Python,
     #[value(help = "Generate C# bindings")]
     Csharp,
@@ -326,9 +326,6 @@ pub(crate) enum PackTargetArg {
 
         #[arg(long)]
         no_build: bool,
-
-        #[arg(long, help = "Enable experimental targets/features")]
-        experimental: bool,
 
         #[arg(
             long = "python",
@@ -614,7 +611,6 @@ pub(crate) fn execute_command(
                     release,
                     regenerate,
                     no_build,
-                    experimental,
                     python_interpreters,
                 } => PackCommand::Python(PackPythonOptions {
                     execution: pack_execution_options(
@@ -623,7 +619,6 @@ pub(crate) fn execute_command(
                         no_build,
                         cargo_args.clone(),
                     ),
-                    experimental,
                     python_interpreters,
                 }),
                 PackTargetArg::Dart {
@@ -948,7 +943,6 @@ fn release_pack_commands(
             if config.should_process(Target::Python, false) {
                 commands.push(PackCommand::Python(PackPythonOptions {
                     execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
-                    experimental: false,
                     python_interpreters: Vec::new(),
                 }));
             }
@@ -1284,13 +1278,11 @@ enabled = true
     }
 
     #[test]
-    fn release_all_includes_python_packaging_when_enabled_and_experimental() {
+    fn release_all_includes_python_packaging_when_enabled() {
         let config = parse_config(
             r#"
-experimental = ["python"]
-
-[package]
-name = "mylib"
+	[package]
+	name = "mylib"
 
 [targets.python]
 enabled = true
@@ -1305,7 +1297,6 @@ enabled = true
                 if options.execution.release
                     && !options.execution.regenerate
                     && !options.execution.no_build
-                    && !options.experimental
         )));
     }
 
@@ -1334,14 +1325,14 @@ enabled = true
 
     #[test]
     fn cli_parses_generate_python_target() {
-        let cli = Cli::try_parse_from(["boltffi", "generate", "python", "--experimental"])
+        let cli = Cli::try_parse_from(["boltffi", "generate", "python"])
             .expect("cli parse should succeed");
 
         assert!(matches!(
             cli.command,
             Commands::Generate {
                 target: Some(GenerateTargetArg::Python),
-                experimental: true,
+                experimental: false,
                 ..
             }
         ));
@@ -1379,16 +1370,13 @@ enabled = true
 
     #[test]
     fn cli_parses_pack_python_target() {
-        let cli = Cli::try_parse_from(["boltffi", "pack", "python", "--experimental"])
-            .expect("cli parse should succeed");
+        let cli =
+            Cli::try_parse_from(["boltffi", "pack", "python"]).expect("cli parse should succeed");
 
         assert!(matches!(
             cli.command,
             Commands::Pack {
-                target: PackTargetArg::Python {
-                    experimental: true,
-                    ..
-                }
+                target: PackTargetArg::Python { .. }
             }
         ));
     }
@@ -1444,7 +1432,6 @@ enabled = true
             "boltffi",
             "pack",
             "python",
-            "--experimental",
             "--python",
             "python3.12",
             "--python",
