@@ -42,9 +42,9 @@ impl CallbackArgument {
                 bridge: JNI_BRIDGE,
                 invariant: "callback method argument cannot be a closure return out-pointer",
             }),
-            c::ParameterGroup::Continuation(_) => Err(Error::UnsupportedBridge {
+            c::ParameterGroup::Continuation(_) => Err(Error::BrokenBridgeContract {
                 bridge: JNI_BRIDGE,
-                shape: "callback continuation parameter",
+                invariant: "callback method argument cannot be a poll continuation",
             }),
         }
     }
