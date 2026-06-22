@@ -139,6 +139,62 @@ fn jni_bridge_renders_direct_records_and_c_style_enums() {
 }
 
 #[test]
+fn jni_bridge_renders_encoded_functions_as_byte_arrays() {
+    let files = files(
+        r#"
+            #[data]
+            pub struct Person {
+                pub name: String,
+            }
+
+            #[data]
+            pub enum Shape {
+                Label(String),
+            }
+
+            #[export]
+            pub fn keep_person(person: Person) -> Person {
+                person
+            }
+
+            #[export]
+            pub fn keep_shape(shape: Shape) -> Shape {
+                shape
+            }
+            "#,
+    );
+    let header = files
+        .iter()
+        .find(|(path, _)| path == "jni/demo.h")
+        .map(|(_, contents)| contents)
+        .expect("C header file");
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "FfiBuf_u8 boltffi_function_demo_keep_person(const uint8_t *person_ptr, uintptr_t person_len);",
+        "FfiBuf_u8 boltffi_function_demo_keep_shape(const uint8_t *shape_ptr, uintptr_t shape_len);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(header.contains(expected), "{expected}\n{header}"));
+
+    [
+        "JNIEXPORT jbyteArray JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1keep_1person(JNIEnv *env, jclass cls, jbyteArray person)",
+        "jbyte *__boltffi_person_ptr = NULL;",
+        "jsize __boltffi_person_len = 0;",
+        "FfiBuf_u8 result = boltffi_function_demo_keep_person((const uint8_t *)__boltffi_person_ptr, (uintptr_t)__boltffi_person_len);",
+        "return boltffi_jni_buffer_to_byte_array(env, result);",
+        "JNIEXPORT jbyteArray JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1keep_1shape(JNIEnv *env, jclass cls, jbyteArray shape)",
+        "FfiBuf_u8 result = boltffi_function_demo_keep_shape((const uint8_t *)__boltffi_shape_ptr, (uintptr_t)__boltffi_shape_len);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
+}
+
+#[test]
 fn jni_bridge_renders_class_handles_and_methods() {
     let files = files(
         r#"
