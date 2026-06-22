@@ -4,15 +4,15 @@ mod c_bridge;
 mod direct_vector;
 mod handle;
 mod jvm;
+mod parameters;
 mod scalar;
+mod setup;
 
 pub use bytes::ClosureBytesArgument;
 pub use c_abi::ClosureCParameter;
 pub use direct_vector::ClosureDirectVectorArgument;
 pub use handle::ClosureHandleArgument;
 pub use scalar::ClosureScalarArgument;
-
-use crate::bridge::c::Expression;
 
 /// One inline-closure argument crossing the JNI bridge.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,96 +27,4 @@ enum ClosureArgumentKind {
     Bytes(ClosureBytesArgument),
     DirectVector(ClosureDirectVectorArgument),
     Closure(ClosureHandleArgument),
-}
-
-impl ClosureArgument {
-    /// Returns the C parameters accepted by the closure call trampoline.
-    pub fn c_parameters(&self) -> Vec<ClosureCParameter> {
-        match &self.kind {
-            ClosureArgumentKind::Scalar(argument) => argument.c_parameters(),
-            ClosureArgumentKind::Bytes(argument) => argument.c_parameters(),
-            ClosureArgumentKind::DirectVector(argument) => argument.c_parameters(),
-            ClosureArgumentKind::Closure(argument) => argument.c_parameters(),
-        }
-    }
-
-    /// Returns the C parameters accepted by the Rust-owned closure handle entrypoint.
-    pub fn handle_parameters(&self) -> Vec<ClosureCParameter> {
-        match &self.kind {
-            ClosureArgumentKind::Scalar(argument) => argument.handle_parameters(),
-            ClosureArgumentKind::Bytes(argument) => argument.handle_parameters(),
-            ClosureArgumentKind::DirectVector(argument) => argument.handle_parameters(),
-            ClosureArgumentKind::Closure(argument) => argument.handle_parameters(),
-        }
-    }
-
-    /// Returns the byte-array argument when the JVM receives encoded bytes.
-    pub fn call_bytes(&self) -> Option<&ClosureBytesArgument> {
-        match &self.kind {
-            ClosureArgumentKind::Scalar(_) => None,
-            ClosureArgumentKind::Bytes(argument) => Some(argument),
-            ClosureArgumentKind::DirectVector(_) => None,
-            ClosureArgumentKind::Closure(_) => None,
-        }
-    }
-
-    /// Returns the byte-array argument when the JVM sends encoded bytes.
-    pub fn handle_bytes(&self) -> Option<&ClosureBytesArgument> {
-        self.call_bytes()
-    }
-
-    /// Returns the direct-vector argument when the JVM receives an array.
-    pub fn call_direct_vector(&self) -> Option<&ClosureDirectVectorArgument> {
-        match &self.kind {
-            ClosureArgumentKind::DirectVector(argument) => Some(argument),
-            ClosureArgumentKind::Scalar(_)
-            | ClosureArgumentKind::Bytes(_)
-            | ClosureArgumentKind::Closure(_) => None,
-        }
-    }
-
-    /// Returns the closure-handle argument when the JVM receives a nested closure.
-    pub fn call_closure(&self) -> Option<&ClosureHandleArgument> {
-        match &self.kind {
-            ClosureArgumentKind::Closure(argument) => Some(argument),
-            ClosureArgumentKind::Scalar(_)
-            | ClosureArgumentKind::Bytes(_)
-            | ClosureArgumentKind::DirectVector(_) => None,
-        }
-    }
-
-    /// Returns the direct-vector argument when the JVM sends an array.
-    pub fn handle_direct_vector(&self) -> Option<&ClosureDirectVectorArgument> {
-        self.call_direct_vector()
-    }
-
-    /// Returns the expressions passed to the static JVM closure method.
-    pub fn jvm_arguments(&self) -> Vec<Expression> {
-        match &self.kind {
-            ClosureArgumentKind::Scalar(argument) => argument.jvm_arguments(),
-            ClosureArgumentKind::Bytes(argument) => argument.jvm_arguments(),
-            ClosureArgumentKind::DirectVector(argument) => argument.jvm_arguments(),
-            ClosureArgumentKind::Closure(argument) => argument.jvm_arguments(),
-        }
-    }
-
-    /// Returns the expressions passed into the Rust closure call function.
-    pub fn rust_arguments(&self) -> Vec<Expression> {
-        match &self.kind {
-            ClosureArgumentKind::Scalar(argument) => argument.rust_arguments(),
-            ClosureArgumentKind::Bytes(argument) => argument.rust_arguments(),
-            ClosureArgumentKind::DirectVector(argument) => argument.rust_arguments(),
-            ClosureArgumentKind::Closure(argument) => argument.rust_arguments(),
-        }
-    }
-
-    /// Returns the JNI method descriptor segment for this argument.
-    pub fn jni_signature(&self) -> &'static str {
-        match &self.kind {
-            ClosureArgumentKind::Scalar(argument) => argument.jni_signature(),
-            ClosureArgumentKind::Bytes(argument) => argument.jni_signature(),
-            ClosureArgumentKind::DirectVector(argument) => argument.jni_signature(),
-            ClosureArgumentKind::Closure(argument) => argument.jni_signature(),
-        }
-    }
 }
