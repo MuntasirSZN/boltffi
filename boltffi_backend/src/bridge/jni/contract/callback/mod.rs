@@ -1,14 +1,21 @@
 mod argument;
+mod bytes;
+mod c_parameter;
+mod completion;
+mod handle;
 mod method;
 mod parameter;
+mod record;
 mod registration;
 mod return_value;
 
-pub use argument::{
-    CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackCompletionArgument,
-    CallbackHandleArgument, CallbackRecordArgument,
-};
+pub use argument::CallbackArgument;
+pub use bytes::CallbackBytesArgument;
+pub use c_parameter::CallbackCParameter;
+pub use completion::CallbackCompletionArgument;
+pub use handle::CallbackHandleArgument;
 pub use method::CallbackMethod;
 pub use parameter::CallbackParameter;
+pub use record::CallbackRecordArgument;
 pub use registration::CallbackRegistration;
 pub use return_value::CallbackReturn;

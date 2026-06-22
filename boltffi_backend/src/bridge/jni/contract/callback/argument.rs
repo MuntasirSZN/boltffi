@@ -1,7 +1,10 @@
 use crate::{
     bridge::{
-        c::{self, ArgumentList, Expression, Identifier, Literal, Statement, TypeFragment},
-        jni::JniType,
+        c::{self, ArgumentList, Expression, Identifier, Literal, TypeFragment},
+        jni::{
+            CallbackBytesArgument, CallbackCParameter, CallbackCompletionArgument,
+            CallbackHandleArgument, CallbackRecordArgument, JniType,
+        },
     },
     core::{Error, Result},
 };
@@ -13,15 +16,6 @@ const JNI_BRIDGE: &str = "jni";
 #[non_exhaustive]
 pub struct CallbackArgument {
     kind: CallbackArgumentKind,
-}
-
-/// One C ABI parameter accepted by a generated callback vtable slot.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackCParameter {
-    name: Identifier,
-    ty: TypeFragment,
-    declaration: Statement,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,7 +78,7 @@ impl CallbackArgument {
                 jni_type,
             } => vec![Expression::cast(
                 jni_type.as_type_fragment(),
-                Expression::identifier(parameter.name.clone()),
+                Expression::identifier(parameter.name().clone()),
             )],
             CallbackArgumentKind::Bytes { name, .. } => {
                 vec![Expression::identifier(name.clone())]
@@ -100,8 +94,11 @@ impl CallbackArgument {
             } => {
                 let jlong = TypeFragment::new("jlong");
                 vec![
-                    Expression::cast(jlong.clone(), Expression::identifier(callback.name.clone())),
-                    Expression::cast(jlong, Expression::identifier(context.name.clone())),
+                    Expression::cast(
+                        jlong.clone(),
+                        Expression::identifier(callback.name().clone()),
+                    ),
+                    Expression::cast(jlong, Expression::identifier(context.name().clone())),
                 ]
             }
         }
@@ -115,11 +112,11 @@ impl CallbackArgument {
                 name,
                 pointer,
                 length,
-            } => Some(CallbackBytesArgument {
+            } => Some(CallbackBytesArgument::new(
                 name,
-                pointer: &pointer.name,
-                length: &length.name,
-            }),
+                pointer.name(),
+                length.name(),
+            )),
             CallbackArgumentKind::Record { .. } | CallbackArgumentKind::CallbackHandle { .. } => {
                 None
             }
@@ -133,10 +130,9 @@ impl CallbackArgument {
             CallbackArgumentKind::Value { .. } | CallbackArgumentKind::Bytes { .. } => None,
             CallbackArgumentKind::CallbackHandle { .. } => None,
             CallbackArgumentKind::Completion { .. } => None,
-            CallbackArgumentKind::Record { array, parameter } => Some(CallbackRecordArgument {
-                array,
-                parameter: &parameter.name,
-            }),
+            CallbackArgumentKind::Record { array, parameter } => {
+                Some(CallbackRecordArgument::new(array, parameter.name()))
+            }
         }
     }
 
@@ -148,10 +144,7 @@ impl CallbackArgument {
             | CallbackArgumentKind::Record { .. }
             | CallbackArgumentKind::Completion { .. } => None,
             CallbackArgumentKind::CallbackHandle { handle, parameter } => {
-                Some(CallbackHandleArgument {
-                    handle,
-                    parameter: &parameter.name,
-                })
+                Some(CallbackHandleArgument::new(handle, parameter.name()))
             }
         }
     }
@@ -167,11 +160,11 @@ impl CallbackArgument {
                 callback,
                 context,
                 payload,
-            } => Some(CallbackCompletionArgument {
-                callback: &callback.name,
-                failure_arguments: ArgumentList::from_iter(
+            } => Some(CallbackCompletionArgument::new(
+                callback.name(),
+                ArgumentList::from_iter(
                     [
-                        Expression::identifier(context.name.clone()),
+                        Expression::identifier(context.name().clone()),
                         Expression::cast(
                             TypeFragment::new("FfiStatus"),
                             Expression::literal(Literal::status_failure()),
@@ -185,7 +178,7 @@ impl CallbackArgument {
                         )
                     })),
                 ),
-            }),
+            )),
         }
     }
 
@@ -283,116 +276,5 @@ impl CallbackArgument {
                 payload,
             },
         })
-    }
-}
-
-impl CallbackCParameter {
-    /// Returns the C parameter name.
-    pub fn name(&self) -> &Identifier {
-        &self.name
-    }
-
-    /// Returns the C parameter type.
-    pub fn ty(&self) -> &TypeFragment {
-        &self.ty
-    }
-
-    /// Returns this parameter as a C declaration.
-    pub fn declaration(&self) -> &Statement {
-        &self.declaration
-    }
-
-    fn from_parameter(parameter: &c::Parameter) -> Result<Self> {
-        Ok(Self {
-            name: Identifier::parse(parameter.name())?,
-            ty: TypeFragment::anonymous(parameter.ty())?,
-            declaration: TypeFragment::declaration(parameter.ty(), parameter.name())?,
-        })
-    }
-}
-
-/// Borrowed byte-array argument passed from Rust into a JVM callback method.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackBytesArgument<'argument> {
-    name: &'argument Identifier,
-    pointer: &'argument Identifier,
-    length: &'argument Identifier,
-}
-
-impl CallbackBytesArgument<'_> {
-    /// Returns the local JNI byte-array variable.
-    pub fn name(&self) -> &Identifier {
-        self.name
-    }
-
-    /// Returns the C byte pointer parameter.
-    pub fn pointer(&self) -> &Identifier {
-        self.pointer
-    }
-
-    /// Returns the C byte length parameter.
-    pub fn length(&self) -> &Identifier {
-        self.length
-    }
-}
-
-/// Direct-record argument passed from Rust into a JVM callback method.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackRecordArgument<'argument> {
-    array: &'argument Identifier,
-    parameter: &'argument Identifier,
-}
-
-impl CallbackRecordArgument<'_> {
-    /// Returns the local JNI byte-array variable.
-    pub fn array(&self) -> &Identifier {
-        self.array
-    }
-
-    /// Returns the C record parameter.
-    pub fn parameter(&self) -> &Identifier {
-        self.parameter
-    }
-}
-
-/// Callback-handle argument passed from Rust into a JVM callback method.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackHandleArgument<'argument> {
-    handle: &'argument Identifier,
-    parameter: &'argument Identifier,
-}
-
-/// Completion callback invoked when async JVM callback dispatch fails.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackCompletionArgument<'argument> {
-    callback: &'argument Identifier,
-    failure_arguments: ArgumentList,
-}
-
-impl CallbackHandleArgument<'_> {
-    /// Returns the local JVM callback-handle token.
-    pub fn handle(&self) -> &Identifier {
-        self.handle
-    }
-
-    /// Returns the C callback-handle parameter.
-    pub fn parameter(&self) -> &Identifier {
-        self.parameter
-    }
-}
-
-impl CallbackCompletionArgument<'_> {
-    /// Returns the C completion callback parameter.
-    pub fn callback(&self) -> &Identifier {
-        self.callback
-    }
-
-    /// Returns arguments that complete the async callback with failure.
-    pub fn failure_arguments(&self) -> &ArgumentList {
-        &self.failure_arguments
     }
 }
