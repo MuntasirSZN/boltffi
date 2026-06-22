@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-use super::{CallbackRegistration, NativeMethod};
+use super::{CallbackRegistration, ClosureRegistration, NativeMethod};
 
 /// Contract produced by the JNI bridge layer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,6 +22,7 @@ pub struct JniBridgeContract {
     c_header: HeaderInclude,
     free_buffer: Identifier,
     callbacks: Vec<CallbackRegistration>,
+    closures: Vec<ClosureRegistration>,
     methods: Vec<NativeMethod>,
 }
 
@@ -32,6 +33,12 @@ impl JniBridgeContract {
         source_path: FilePath,
         c_bridge: &c::CBridgeContract,
     ) -> Result<Self> {
+        let callbacks = c_bridge
+            .callbacks()
+            .iter()
+            .map(|callback| CallbackRegistration::from_c_callback(&class, callback))
+            .collect::<Result<Vec<_>>>()?;
+        let closures = ClosureRegistration::from_functions(&class, c_bridge.functions())?;
         Ok(Self {
             capabilities: c_bridge
                 .capabilities()
@@ -39,16 +46,15 @@ impl JniBridgeContract {
                 .stable(BridgeCapability::Jni),
             c_header: HeaderInclude::from_files(&source_path, c_bridge.header_path())?,
             free_buffer: Identifier::parse(c_bridge.support().buffer_free()?.name())?,
-            callbacks: c_bridge
-                .callbacks()
-                .iter()
-                .map(|callback| CallbackRegistration::from_c_callback(&class, callback))
-                .collect::<Result<Vec<_>>>()?,
+            callbacks,
             methods: c_bridge
                 .functions()
                 .iter()
-                .map(|function| NativeMethod::new(&class, function, c_bridge.callbacks()))
+                .map(|function| {
+                    NativeMethod::new(&class, function, c_bridge.callbacks(), &closures)
+                })
                 .collect::<Result<Vec<_>>>()?,
+            closures,
             class,
             source_path,
         })
@@ -77,6 +83,11 @@ impl JniBridgeContract {
     /// Returns generated callback registrations.
     pub fn callbacks(&self) -> &[CallbackRegistration] {
         &self.callbacks
+    }
+
+    /// Returns generated closure trampoline registrations.
+    pub fn closures(&self) -> &[ClosureRegistration] {
+        &self.closures
     }
 
     /// Returns generated native methods.

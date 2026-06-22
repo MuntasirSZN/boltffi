@@ -3,7 +3,7 @@ use std::fmt;
 use boltffi_ast::{FnSig, Primitive as AstPrimitive, ReturnDef, TypeExpr};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[non_exhaustive]
 /// A stable signature name for an inline closure crossing the boundary.
 ///

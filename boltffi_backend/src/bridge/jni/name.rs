@@ -1,6 +1,6 @@
 use std::fmt;
 
-use boltffi_binding::CanonicalName;
+use boltffi_binding::{CanonicalName, ClosureSignature};
 
 use crate::core::{Error, Result};
 
@@ -70,6 +70,14 @@ impl JvmClassPath {
         Ok(Self {
             package: self.package.clone(),
             class: JvmNameSegment::callback_class(callback)?,
+        })
+    }
+
+    /// Creates the generated closure bridge class in the same JVM package.
+    pub fn closure_class(&self, signature: &ClosureSignature) -> Result<Self> {
+        Ok(Self {
+            package: self.package.clone(),
+            class: JvmNameSegment::closure_class(signature)?,
         })
     }
 
@@ -144,6 +152,10 @@ impl JvmNameSegment {
 
     fn callback_class(callback: &CanonicalName) -> Result<Self> {
         Self::class(format!("{}Callbacks", Self::canonical_class(callback)))
+    }
+
+    fn closure_class(signature: &ClosureSignature) -> Result<Self> {
+        Self::class(format!("Closure{}Callbacks", signature.as_str()))
     }
 
     fn canonical_class(name: &CanonicalName) -> String {

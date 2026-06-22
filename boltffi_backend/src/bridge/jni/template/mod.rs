@@ -1,8 +1,10 @@
 use askama::Template as AskamaTemplate;
 
 mod callback;
+mod closure;
 
 use self::callback::CallbackRegistrationView;
+use self::closure::ClosureRegistrationView;
 
 use crate::{
     bridge::{
@@ -31,6 +33,7 @@ struct SourceFileTemplate {
     callback_clone_symbol: Identifier,
     callback_release_symbol: Identifier,
     callbacks: Vec<CallbackRegistrationView>,
+    closures: Vec<ClosureRegistrationView>,
     methods: Vec<NativeMethodView>,
 }
 
@@ -49,6 +52,11 @@ impl SourceFile {
             .callbacks()
             .iter()
             .map(CallbackRegistrationView::from_registration)
+            .collect();
+        let closures: Vec<_> = contract
+            .closures()
+            .iter()
+            .map(ClosureRegistrationView::from_registration)
             .collect();
         Ok(SourceFileTemplate {
             c_header: Literal::string(contract.c_header().as_str()),
@@ -74,7 +82,8 @@ impl SourceFile {
             }),
             uses_continuations: methods.iter().any(|method| method.uses_continuations),
             uses_lifecycle: methods.iter().any(|method| method.uses_continuations)
-                || !callbacks.is_empty(),
+                || !callbacks.is_empty()
+                || !closures.is_empty(),
             uses_callback_handles: methods.iter().any(|method| method.returns_callback),
             callback_clone_symbol: JniSymbolName::native_method(
                 contract.class(),
@@ -89,6 +98,7 @@ impl SourceFile {
             .as_identifier()
             .clone(),
             callbacks,
+            closures,
             methods,
         }
         .render()?)

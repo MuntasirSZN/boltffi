@@ -25,6 +25,25 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
 {%- for cleanup in callbacks %}
         {{ cleanup.unload }}(env);
 {%- endfor %}
+{%- for cleanup in closures %}
+        {{ cleanup.unload }}(env);
+{%- endfor %}
+{%- if uses_continuations %}
+        boltffi_jni_continuation_unload(env);
+{%- endif %}
+        (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);
+        boltffi_jni_native_class = NULL;
+        return JNI_ERR;
+    }
+{%- endfor %}
+{%- for closure in closures %}
+    if (!{{ closure.load }}(env)) {
+{%- for cleanup in callbacks %}
+        {{ cleanup.unload }}(env);
+{%- endfor %}
+{%- for cleanup in closures %}
+        {{ cleanup.unload }}(env);
+{%- endfor %}
 {%- if uses_continuations %}
         boltffi_jni_continuation_unload(env);
 {%- endif %}
@@ -46,6 +65,9 @@ JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
 {%- endif %}
 {%- for callback in callbacks %}
         {{ callback.unload }}(env);
+{%- endfor %}
+{%- for closure in closures %}
+        {{ closure.unload }}(env);
 {%- endfor %}
         if (boltffi_jni_native_class != NULL) {
             (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);

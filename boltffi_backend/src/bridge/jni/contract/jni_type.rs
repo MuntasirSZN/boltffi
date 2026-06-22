@@ -25,6 +25,24 @@ pub enum JniType {
     Double,
 }
 
+/// JNI return type used when generated C calls a static JVM method.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum JniReturn {
+    /// A static JVM method with `void` return.
+    Void {
+        /// C return type of the generated trampoline.
+        c_type: TypeFragment,
+    },
+    /// A static JVM method with one scalar return value.
+    Value {
+        /// C return type of the generated trampoline.
+        c_type: TypeFragment,
+        /// JNI scalar type returned by `CallStatic*Method`.
+        jni_type: JniType,
+    },
+}
+
 impl JniType {
     /// Returns the JNI type as C syntax.
     pub fn as_type_fragment(self) -> TypeFragment {
@@ -112,6 +130,57 @@ impl JniType {
                 bridge: JNI_BRIDGE,
                 shape: "non-scalar C ABI function",
             }),
+        }
+    }
+}
+
+impl JniReturn {
+    /// Creates a JNI return type from one C ABI return type.
+    pub fn from_c_type(ty: &c::Type) -> Result<Self> {
+        match ty {
+            c::Type::Void => Ok(Self::Void {
+                c_type: TypeFragment::anonymous(ty)?,
+            }),
+            ty => Ok(Self::Value {
+                c_type: TypeFragment::anonymous(ty)?,
+                jni_type: JniType::from_c_type(ty)?,
+            }),
+        }
+    }
+
+    /// Returns the generated C return type.
+    pub fn c_type(&self) -> &TypeFragment {
+        match self {
+            Self::Void { c_type } | Self::Value { c_type, .. } => c_type,
+        }
+    }
+
+    /// Returns the JNI method descriptor return segment.
+    pub fn signature(&self) -> &'static str {
+        match self {
+            Self::Void { .. } => "V",
+            Self::Value { jni_type, .. } => jni_type.signature(),
+        }
+    }
+
+    /// Returns whether the static JVM method returns no value.
+    pub fn is_void(&self) -> bool {
+        matches!(self, Self::Void { .. })
+    }
+
+    /// Returns the `CallStatic*Method` suffix for non-void returns.
+    pub fn call_method_suffix(&self) -> Option<&'static str> {
+        match self {
+            Self::Void { .. } => None,
+            Self::Value { jni_type, .. } => Some(jni_type.call_method_suffix()),
+        }
+    }
+
+    /// Returns the C value returned when JVM dispatch fails.
+    pub fn failure_value(&self) -> Option<&'static str> {
+        match self {
+            Self::Void { .. } => None,
+            Self::Value { jni_type, .. } => Some(jni_type.failure_value()),
         }
     }
 }

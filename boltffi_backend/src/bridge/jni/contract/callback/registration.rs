@@ -1,7 +1,7 @@
 use crate::{
     bridge::{
         c::{self, Identifier, TypeFragment},
-        jni::{JniType, JvmClassPath},
+        jni::{JniReturn, JniType, JvmClassPath},
     },
     core::{Error, Result},
 };
@@ -34,19 +34,8 @@ pub struct CallbackMethod {
     method: Identifier,
     method_id: Identifier,
     signature: String,
-    returns: CallbackReturnKind,
+    returns: JniReturn,
     parameters: Vec<CallbackArgument>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum CallbackReturnKind {
-    Void {
-        c_type: TypeFragment,
-    },
-    Value {
-        c_type: TypeFragment,
-        jni_type: JniType,
-    },
 }
 
 /// One C argument forwarded to a JVM callback bridge method.
@@ -171,7 +160,7 @@ impl CallbackMethod {
 
     /// Returns whether the slot returns no value.
     pub fn returns_void(&self) -> bool {
-        matches!(self.returns, CallbackReturnKind::Void { .. })
+        self.returns.is_void()
     }
 
     /// Returns the `CallStatic*Method` suffix for non-void slots.
@@ -196,7 +185,7 @@ impl CallbackMethod {
                 invariant: "callback vtable slot does not start with a uint64 handle",
             });
         };
-        let returns = CallbackReturnKind::from_c_type(slot.returns())?;
+        let returns = JniReturn::from_c_type(slot.returns())?;
         let parameters = slot
             .params()
             .iter()
@@ -210,7 +199,7 @@ impl CallbackMethod {
                 .map(CallbackArgument::jni_signature)
                 .collect::<Vec<_>>()
                 .join(""),
-            returns.jni_signature()
+            returns.signature()
         );
         Ok(Self {
             function: Identifier::parse(format!("{stem}_{}", slot.name()))?,
@@ -220,47 +209,6 @@ impl CallbackMethod {
             returns,
             parameters,
         })
-    }
-}
-
-impl CallbackReturnKind {
-    fn from_c_type(ty: &c::Type) -> Result<Self> {
-        match ty {
-            c::Type::Void => Ok(Self::Void {
-                c_type: TypeFragment::anonymous(ty)?,
-            }),
-            ty => Ok(Self::Value {
-                c_type: TypeFragment::anonymous(ty)?,
-                jni_type: JniType::from_c_type(ty)?,
-            }),
-        }
-    }
-
-    fn c_type(&self) -> &TypeFragment {
-        match self {
-            Self::Void { c_type } | Self::Value { c_type, .. } => c_type,
-        }
-    }
-
-    fn jni_signature(&self) -> &'static str {
-        match self {
-            Self::Void { .. } => "V",
-            Self::Value { jni_type, .. } => jni_type.signature(),
-        }
-    }
-
-    fn call_method_suffix(&self) -> Option<&'static str> {
-        match self {
-            Self::Void { .. } => None,
-            Self::Value { jni_type, .. } => Some(jni_type.call_method_suffix()),
-        }
-    }
-
-    fn failure_value(&self) -> Option<&'static str> {
-        match self {
-            Self::Void { .. } => None,
-            Self::Value { jni_type, .. } => Some(jni_type.failure_value()),
-        }
     }
 }
 

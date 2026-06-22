@@ -1,7 +1,7 @@
 use crate::{
     bridge::{
         c,
-        jni::{JniSymbolName, JvmClassPath, NativeParameter, NativeReturn},
+        jni::{ClosureRegistration, JniSymbolName, JvmClassPath, NativeParameter, NativeReturn},
     },
     core::Result,
 };
@@ -22,11 +22,12 @@ impl NativeMethod {
         class: &JvmClassPath,
         function: &c::Function,
         callbacks: &[c::Callback],
+        closures: &[ClosureRegistration],
     ) -> Result<Self> {
         Ok(Self {
             symbol: JniSymbolName::native_method(class, function.name())?,
             returns: NativeReturn::from_c_type(function.returns())?,
-            parameters: NativeParameter::from_c_function(function, callbacks)?,
+            parameters: NativeParameter::from_c_function(function, callbacks, closures)?,
             c_function: function.clone(),
         })
     }

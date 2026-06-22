@@ -2,14 +2,12 @@ use crate::{
     bridge::{
         c::{self, Expression, Identifier, TypeFragment},
         jni::{
-            BytesParameter, CallbackParameter, ContinuationParameter, RecordParameter,
-            ScalarParameter,
+            BytesParameter, CallbackParameter, ClosureParameter, ClosureRegistration,
+            ContinuationParameter, RecordParameter, ScalarParameter,
         },
     },
-    core::{Error, Result},
+    core::Result,
 };
-
-const JNI_BRIDGE: &str = "jni";
 
 /// JNI parameter accepted by one native method.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +24,7 @@ impl NativeParameter {
             NativeParameterKind::Bytes(parameter) => parameter.name(),
             NativeParameterKind::Record(parameter) => parameter.name(),
             NativeParameterKind::Callback(parameter) => parameter.name(),
+            NativeParameterKind::Closure(parameter) => parameter.name(),
             NativeParameterKind::Continuation(parameter) => parameter.name(),
         }
     }
@@ -37,6 +36,7 @@ impl NativeParameter {
             NativeParameterKind::Bytes(_) => TypeFragment::new("jbyteArray"),
             NativeParameterKind::Record(_) => TypeFragment::new("jbyteArray"),
             NativeParameterKind::Callback(parameter) => parameter.ty(),
+            NativeParameterKind::Closure(parameter) => parameter.ty(),
             NativeParameterKind::Continuation(parameter) => parameter.ty(),
         }
     }
@@ -61,6 +61,7 @@ impl NativeParameter {
                 Ok(vec![Expression::identifier(parameter.local().clone())])
             }
             NativeParameterKind::Callback(parameter) => Ok(vec![parameter.c_argument()]),
+            NativeParameterKind::Closure(parameter) => Ok(parameter.c_arguments()),
             NativeParameterKind::Continuation(parameter) => parameter.c_arguments(),
         }
     }
@@ -71,6 +72,7 @@ impl NativeParameter {
             NativeParameterKind::Scalar(_)
             | NativeParameterKind::Record(_)
             | NativeParameterKind::Callback(_)
+            | NativeParameterKind::Closure(_)
             | NativeParameterKind::Continuation(_) => None,
             NativeParameterKind::Bytes(parameter) => Some(parameter),
         }
@@ -82,6 +84,7 @@ impl NativeParameter {
             NativeParameterKind::Scalar(_)
             | NativeParameterKind::Bytes(_)
             | NativeParameterKind::Callback(_)
+            | NativeParameterKind::Closure(_)
             | NativeParameterKind::Continuation(_) => None,
             NativeParameterKind::Record(parameter) => Some(parameter),
         }
@@ -93,11 +96,15 @@ impl NativeParameter {
     }
 
     /// Creates JNI parameters from C ABI parameter groups.
-    pub fn from_c_function(function: &c::Function, callbacks: &[c::Callback]) -> Result<Vec<Self>> {
+    pub fn from_c_function(
+        function: &c::Function,
+        callbacks: &[c::Callback],
+        closures: &[ClosureRegistration],
+    ) -> Result<Vec<Self>> {
         function
             .parameter_groups()
             .iter()
-            .map(|group| Self::from_c_group(function, group, callbacks))
+            .map(|group| Self::from_c_group(function, group, callbacks, closures))
             .collect()
     }
 
@@ -105,6 +112,7 @@ impl NativeParameter {
         function: &c::Function,
         group: &c::ParameterGroup,
         callbacks: &[c::Callback],
+        closures: &[ClosureRegistration],
     ) -> Result<Self> {
         match group {
             c::ParameterGroup::Value(index) => {
@@ -135,10 +143,11 @@ impl NativeParameter {
                     }
                 })
             }
-            c::ParameterGroup::Closure(_) => Err(Error::UnsupportedBridge {
-                bridge: JNI_BRIDGE,
-                shape: "closure parameter",
-            }),
+            c::ParameterGroup::Closure(closure) => {
+                ClosureParameter::from_c_group(closure, closures).map(|closure| Self {
+                    kind: NativeParameterKind::Closure(closure),
+                })
+            }
         }
     }
 }
@@ -155,6 +164,8 @@ pub enum NativeParameterKind {
     Record(RecordParameter),
     /// A `jlong` Java callback handle converted through a C callback constructor.
     Callback(CallbackParameter),
+    /// A `jlong` Java closure handle expanded to call, context, and release C ABI parameters.
+    Closure(ClosureParameter),
     /// A `jlong` callback data value paired with the generated JNI continuation callback.
     Continuation(ContinuationParameter),
 }

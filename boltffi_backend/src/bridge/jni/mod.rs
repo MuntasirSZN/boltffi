@@ -11,9 +11,9 @@ mod template;
 pub use bridge::JniBridge;
 pub use contract::{
     BytesParameter, CallbackArgument, CallbackMethod, CallbackParameter, CallbackRegistration,
-    CallbackReturn, ContinuationParameter, JniBridgeContract, JniType, NativeMethod,
-    NativeParameter, NativeParameterKind, NativeReturn, RecordParameter, RecordValue,
-    ScalarParameter, ScalarReturn,
+    CallbackReturn, ClosureArgument, ClosureParameter, ClosureRegistration, ContinuationParameter,
+    JniBridgeContract, JniReturn, JniType, NativeMethod, NativeParameter, NativeParameterKind,
+    NativeReturn, RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
 
@@ -25,7 +25,6 @@ mod tests {
     use boltffi_binding::{Native, lower};
 
     use crate::{
-        Error,
         bridge::{
             c::CBridge,
             jni::{JniBridge, JniBridgeContract},
@@ -281,28 +280,29 @@ mod tests {
     }
 
     #[test]
-    fn jni_bridge_rejects_closure_parameters_from_contract_group() {
-        let bindings = bindings(
+    fn jni_bridge_renders_closure_parameters_from_contract_group() {
+        let files = files(
             r#"
             #[export]
             pub fn install(callback: impl Fn(u32) -> u32) {}
             "#,
         );
-        let stack = BridgeLayer::new(
-            CBridge::new("jni/demo.h").expect("C header bridge"),
-            JniBridge::new("com.boltffi.demo", "Native", "jni/jni_glue.c").expect("JNI bridge"),
-        );
-        let error = stack
-            .build(&bindings)
-            .expect_err("JNI closure parameter should be unsupported");
+        let source = files
+            .iter()
+            .find(|(path, _)| path == "jni/jni_glue.c")
+            .map(|(_, contents)| contents)
+            .expect("JNI source file");
 
-        assert_eq!(
-            error,
-            Error::UnsupportedBridge {
-                bridge: "jni",
-                shape: "closure parameter",
-            }
-        );
+        assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1install(JNIEnv *env, jclass cls, jlong callback)"));
+        assert!(source.contains("static uint32_t boltffi_jni____closure__u32_to_u32_call(void *user_data, uint32_t arg0)"));
+        assert!(source.contains("FindClass(env, \"com/boltffi/demo/ClosureU32ToU32Callbacks\")"));
+        assert!(source.contains(
+            "GetStaticMethodID(env, g____closure__u32_to_u32_class, \"call\", \"(JI)I\")"
+        ));
+        assert!(source.contains(
+            "GetStaticMethodID(env, g____closure__u32_to_u32_class, \"free\", \"(J)V\")"
+        ));
+        assert!(source.contains("FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__u32_to_u32_call, (void *)callback, boltffi_jni____closure__u32_to_u32_release);"));
     }
 
     #[test]
