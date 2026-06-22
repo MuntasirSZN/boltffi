@@ -1,8 +1,13 @@
 //! Native method contracts.
 //!
-//! Each C bridge function that is callable from the JVM becomes one JNI native
-//! method. This contract ties the exported `Java_*` symbol, JNI parameters, JNI
-//! return shape, and underlying C bridge function together.
+//! A native method is the JVM-facing entry point for one callable in the lower C
+//! bridge. It has a `Java_*` symbol, a JNI signature, Java parameters, a
+//! Java-visible return shape, and a call into the C bridge function that actually
+//! talks to Rust.
+//!
+//! This module keeps those pieces together so method templates render from one
+//! contract instead of stitching names, parameters, and return handling from
+//! separate places.
 
 use crate::{
     bridge::{

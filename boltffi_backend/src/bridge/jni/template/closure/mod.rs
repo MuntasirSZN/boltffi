@@ -1,9 +1,13 @@
 //! Template data for inline closure trampolines.
 //!
-//! A foreign JVM closure is stored as a global Java object plus cached method
-//! ids. Rust calls it through a C function pointer, so the generated JNI source
-//! needs call, release, and optional callback-handle helpers for each closure
-//! signature.
+//! A JVM-owned closure is stored as a global Java object and called from Rust
+//! through a C function pointer. The generated source therefore needs a call
+//! trampoline, release trampoline, argument setup, return conversion, and
+//! optional callback-handle helpers for each registered closure signature.
+//!
+//! This module prepares those template views from the closure contract. It keeps
+//! closure rendering reusable across functions, callback methods, nested
+//! closures, and returned closures.
 
 mod argument;
 mod callback_handle;

@@ -1,9 +1,12 @@
 //! JNI contract for stream protocol functions.
 //!
-//! Streams are exposed through the C bridge as subscription, polling, batch,
-//! wait, unsubscribe, and free functions. The JNI bridge turns those functions
-//! into native methods and adds direct-batch helpers when stream items can be
-//! copied as primitive or record arrays.
+//! A stream is not one JNI method. The C bridge exposes a protocol: subscribe,
+//! poll, wait, fetch a batch, unsubscribe, and free. The JVM needs that protocol
+//! as a group of native methods with consistent names and handle ownership.
+//!
+//! This module owns the JNI view of that stream protocol. When stream items have
+//! a direct layout, it also adds the direct-batch helper that lets the JVM pull a
+//! byte array instead of decoding item by item.
 
 mod direct_batch;
 mod protocol;

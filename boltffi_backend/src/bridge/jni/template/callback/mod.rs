@@ -1,9 +1,12 @@
 //! Template data for callback vtable glue.
 //!
-//! Callback methods are called by Rust through C vtables, then forwarded into
-//! static JVM methods. These views collect the JNI arguments, setup arrays,
-//! callback handle conversions, async completion invokers, and returned closure
-//! storage needed by the callback templates.
+//! Callback contracts describe how Rust calls into the JVM. The templates need
+//! the concrete C declarations, local JNI setup, Java method call arguments,
+//! return conversion, cleanup, and async completion invokers for those calls.
+//!
+//! This module is the rendering adapter for callback glue. It keeps callback C
+//! syntax out of the contract layer while still making templates consume typed
+//! data instead of rebuilding callback behavior.
 
 mod argument;
 mod closure_return;

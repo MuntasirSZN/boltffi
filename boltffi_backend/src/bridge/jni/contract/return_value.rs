@@ -1,8 +1,12 @@
 //! Return values for JNI native methods.
 //!
-//! A native method can return void, a scalar, a byte array, a direct record byte
-//! array, a callback handle token, or report status only. This module models
-//! that JVM-facing return behavior from the C bridge return type.
+//! A native method returns the value Java sees, not necessarily the raw value
+//! produced by the C bridge. Encoded values and direct records become Java byte
+//! arrays, callback handles become tokens, fallible void calls report status, and
+//! async starts return handles that are completed later.
+//!
+//! This module owns that return contract for native methods. Templates ask it
+//! what JNI type to declare and how the C bridge result should leave the method.
 
 use crate::{
     bridge::{

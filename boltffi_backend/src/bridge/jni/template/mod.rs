@@ -1,11 +1,13 @@
 //! Askama-backed JNI source rendering.
 //!
-//! The contract modules decide what must be rendered. This module turns those
-//! typed contracts into template data and lets the templates own the generated C
-//! syntax.
+//! The contract modules decide what exists and what each piece means. This
+//! module prepares the Askama data used to print the generated C source file.
+//! Rust code should build typed template views; the C syntax itself belongs in
+//! templates.
 //!
-//! Keeping generated C in templates matters here because JNI glue is large and
-//! mostly language syntax, not Rust logic.
+//! That split keeps the bridge readable. Adding a callback shape or a stream
+//! helper should change the typed contract and a focused template view, not bury
+//! generated C inside Rust string concatenation.
 
 mod callback;
 mod closure;

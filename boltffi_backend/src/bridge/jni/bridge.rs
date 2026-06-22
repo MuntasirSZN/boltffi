@@ -1,12 +1,14 @@
-//! Public JNI bridge backend.
+//! Public construction point for the JNI bridge.
 //!
-//! This module is the construction point for the JNI bridge layer. It receives
-//! the C bridge contract, turns it into a JNI contract, and renders one C source
-//! file containing the `Java_*` entry points that JVM targets call.
+//! A backend stack asks this type to add a JVM-facing bridge on top of an
+//! existing C bridge. The caller supplies the Java package, owner class, output
+//! path, and C header include. Everything else comes from the lower bridge
+//! contract.
 //!
-//! The caller chooses the JVM package, owner class, and output file. The bridge
-//! owns everything below that: native-method symbols, lifecycle hooks, callback
-//! glue, closure trampolines, stream helpers, and the C header include.
+//! The output is a generated C source file. It contains the exported JNI methods
+//! and the support code those methods need: lifecycle hooks, callback dispatch,
+//! closure registration, stream protocol helpers, async continuations, and
+//! forwarding calls into the C ABI.
 
 use std::path::PathBuf;
 

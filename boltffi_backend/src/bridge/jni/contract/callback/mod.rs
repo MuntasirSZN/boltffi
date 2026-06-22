@@ -1,12 +1,13 @@
 //! JNI contract for Rust callback traits.
 //!
-//! A callback trait is represented in C as a vtable. The JNI bridge turns that
-//! vtable into JVM method dispatch: cached callback classes, vtable slot
-//! functions, argument conversion, async completion helpers, and returned handle
-//! construction.
+//! Rust calls callback traits through C vtables. On the JVM side, those calls
+//! need to become static Java method invocations with cached classes and method
+//! ids, converted arguments, return handling, and async completion helpers when a
+//! callback method is asynchronous.
 //!
-//! This module owns the callback-side contract only. Inline closures have their
-//! own module because they use function pointers and registration by signature.
+//! This module owns callback-trait dispatch. Inline closures live in the closure
+//! module because they are registered by function signature and travel as
+//! function pointer, context, and release triples rather than vtable slots.
 
 mod argument;
 mod bytes;
