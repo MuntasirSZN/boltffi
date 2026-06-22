@@ -36,6 +36,11 @@ fn jni_bridge_renders_encoded_functions_as_byte_arrays() {
 }
 
 #[test]
+fn jni_bridge_renders_string_functions_as_byte_arrays() {
+    insta::assert_snapshot!(rendered_fixture("exports/string_functions"));
+}
+
+#[test]
 fn jni_bridge_renders_custom_type_functions_as_byte_arrays() {
     insta::assert_snapshot!(rendered_fixture("exports/custom_type_functions"));
 }
