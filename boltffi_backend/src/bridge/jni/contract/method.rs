@@ -1,7 +1,7 @@
 use crate::{
     bridge::{
         c,
-        jni::{JniSymbolName, JniType, JvmClassPath, NativeParameter, NativeReturn},
+        jni::{JniSymbolName, JvmClassPath, NativeParameter, NativeReturn},
     },
     core::Result,
 };
@@ -54,7 +54,7 @@ impl NativeMethod {
 
     /// Returns whether this method needs an explicit `jboolean` cast.
     pub fn returns_boolean(&self) -> bool {
-        matches!(&self.returns, NativeReturn::Value(JniType::Boolean))
+        matches!(&self.returns, NativeReturn::Value(scalar) if scalar.jni_type().is_boolean())
     }
 
     /// Returns whether this method returns an owned byte buffer.

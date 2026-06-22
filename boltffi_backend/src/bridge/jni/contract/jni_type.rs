@@ -39,34 +39,40 @@ impl JniType {
         })
     }
 
+    /// Returns whether this type is `jboolean`.
+    pub fn is_boolean(self) -> bool {
+        matches!(self, Self::Boolean)
+    }
+
     /// Creates the JNI scalar type for a scalar C ABI type.
     pub fn from_c_type(ty: &c::Type) -> Result<Self> {
         match ty {
             c::Type::Bool => Ok(Self::Boolean),
             c::Type::CStyleEnum { repr, .. } => Self::from_c_type(repr),
-            c::Type::Int8 | c::Type::Uint8 => Ok(Self::Byte),
+            c::Type::Int8 | c::Type::Uint8 | c::Type::StreamPollResult => Ok(Self::Byte),
             c::Type::Int16 | c::Type::Uint16 => Ok(Self::Short),
-            c::Type::Int32 | c::Type::Uint32 => Ok(Self::Int),
+            c::Type::Int32 | c::Type::Uint32 | c::Type::WaitResult => Ok(Self::Int),
             c::Type::Int64
             | c::Type::Uint64
             | c::Type::SignedPointerWidth
             | c::Type::PointerWidth
             | c::Type::FutureHandle
-            | c::Type::CallbackHandle => Ok(Self::Long),
+            | c::Type::ConstPointer(_)
+            | c::Type::MutPointer(_)
+            | c::Type::FunctionPointer { .. } => Ok(Self::Long),
             c::Type::Float32 => Ok(Self::Float),
             c::Type::Float64 => Ok(Self::Double),
+            c::Type::CallbackHandle => Err(Error::UnsupportedBridge {
+                bridge: JNI_BRIDGE,
+                shape: "callback handle C ABI",
+            }),
             c::Type::Void
             | c::Type::Status
             | c::Type::Buffer
             | c::Type::String
             | c::Type::Span
-            | c::Type::StreamPollResult
-            | c::Type::WaitResult
             | c::Type::Named(_)
-            | c::Type::DirectRecord(_)
-            | c::Type::ConstPointer(_)
-            | c::Type::MutPointer(_)
-            | c::Type::FunctionPointer { .. } => Err(Error::UnsupportedBridge {
+            | c::Type::DirectRecord(_) => Err(Error::UnsupportedBridge {
                 bridge: JNI_BRIDGE,
                 shape: "non-scalar C ABI function",
             }),

@@ -11,7 +11,7 @@ mod template;
 pub use bridge::JniBridge;
 pub use contract::{
     BytesParameter, JniBridgeContract, JniType, NativeMethod, NativeParameter, NativeParameterKind,
-    NativeReturn, RecordParameter, RecordValue, ScalarParameter,
+    NativeReturn, RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
 
@@ -98,7 +98,8 @@ mod tests {
         assert!(header.contains("int32_t boltffi_function_demo_add(int32_t left, int32_t right);"));
         assert!(source.contains("#include \"demo.h\""));
         assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1add(JNIEnv *env, jclass cls, jint left, jint right)"));
-        assert!(source.contains("jint result = boltffi_function_demo_add(left, right);"));
+        assert!(source.contains("int32_t result = boltffi_function_demo_add(left, right);"));
+        assert!(source.contains("return (jint)result;"));
         assert!(source.contains("JNIEXPORT jboolean JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1enabled(JNIEnv *env, jclass cls, jboolean flag)"));
         assert!(source.contains("return (jboolean)result;"));
         assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1refresh(JNIEnv *env, jclass cls)"));
@@ -189,7 +190,10 @@ mod tests {
             "return boltffi_jni_record_to_byte_array(env, &result, (uintptr_t)sizeof(result));"
         ));
         assert!(source.contains("JNIEXPORT jbyte JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1echo_1mode(JNIEnv *env, jclass cls, jbyte mode)"));
-        assert!(source.contains("jbyte result = boltffi_function_demo_echo_mode(mode);"));
+        assert!(
+            source.contains("___Mode result = boltffi_function_demo_echo_mode((___Mode)mode);")
+        );
+        assert!(source.contains("return (jbyte)result;"));
     }
 
     #[test]
@@ -232,16 +236,43 @@ mod tests {
         assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1release_1class_1demo_1engine(JNIEnv *env, jclass cls, jlong handle)"));
         assert!(source.contains("boltffi_release_class_demo_engine(handle);"));
         assert!(source.contains("JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1init_1class_1demo_1engine_1new(JNIEnv *env, jclass cls, jlong seed)"));
-        assert!(source.contains("jlong result = boltffi_init_class_demo_engine_new(seed);"));
+        assert!(source.contains("uint64_t result = boltffi_init_class_demo_engine_new(seed);"));
+        assert!(source.contains("return (jlong)result;"));
         assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1version(JNIEnv *env, jclass cls)"));
         assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1score(JNIEnv *env, jclass cls, jlong receiver, jbyteArray point)"));
         assert!(source.contains(
-            "jint result = boltffi_method_class_demo_engine_score(receiver, __boltffi_point_value);"
+            "uint32_t result = boltffi_method_class_demo_engine_score(receiver, __boltffi_point_value);"
         ));
         assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1advance(JNIEnv *env, jclass cls, jlong receiver, jint delta)"));
         assert!(source.contains(
             "FfiStatus status = boltffi_method_class_demo_engine_advance(receiver, delta);"
         ));
+    }
+
+    #[test]
+    fn jni_bridge_casts_async_handles_and_callbacks_to_c_abi_types() {
+        let files = files(
+            r#"
+            #[export]
+            pub async fn fetch_count() -> u32 {
+                7
+            }
+            "#,
+        );
+        let source = files
+            .iter()
+            .find(|(path, _)| path == "jni/jni_glue.c")
+            .map(|(_, contents)| contents)
+            .expect("JNI source file");
+
+        assert!(source.contains("JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1fetch_1count(JNIEnv *env, jclass cls)"));
+        assert!(source.contains("RustFutureHandle result = boltffi_function_demo_fetch_count();"));
+        assert!(source.contains("return (jlong)result;"));
+        assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1function_1demo_1fetch_1count_1poll(JNIEnv *env, jclass cls, jlong handle, jlong callback_data, jlong callback)"));
+        assert!(source.contains("boltffi_async_function_demo_fetch_count_poll((RustFutureHandle)handle, callback_data, (void (*)(uint64_t, int8_t))callback);"));
+        assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1function_1demo_1fetch_1count_1complete(JNIEnv *env, jclass cls, jlong handle, jlong out_status)"));
+        assert!(source.contains("uint32_t result = boltffi_async_function_demo_fetch_count_complete((RustFutureHandle)handle, (FfiStatus *)out_status);"));
+        assert!(source.contains("return (jint)result;"));
     }
 
     #[test]
@@ -265,6 +296,36 @@ mod tests {
             Error::UnsupportedBridge {
                 bridge: "jni",
                 shape: "closure parameter",
+            }
+        );
+    }
+
+    #[test]
+    fn jni_bridge_rejects_callback_handle_c_abi_values() {
+        let bindings = bindings(
+            r#"
+            #[export]
+            pub trait Listener {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub fn install(listener: impl Listener) {}
+            "#,
+        );
+        let stack = BridgeLayer::new(
+            CBridge::new("jni/demo.h").expect("C header bridge"),
+            JniBridge::new("com.boltffi.demo", "Native", "jni/jni_glue.c").expect("JNI bridge"),
+        );
+        let error = stack
+            .build(&bindings)
+            .expect_err("JNI callback handle should be unsupported");
+
+        assert_eq!(
+            error,
+            Error::UnsupportedBridge {
+                bridge: "jni",
+                shape: "callback handle C ABI",
             }
         );
     }

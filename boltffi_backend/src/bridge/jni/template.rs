@@ -2,7 +2,7 @@ use askama::Template as AskamaTemplate;
 
 use crate::{
     bridge::{
-        c::{ArgumentList, Identifier, Literal, TypeFragment},
+        c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
         jni::{BytesParameter, JniBridgeContract, NativeMethod, NativeParameter, RecordParameter},
     },
     core::Result,
@@ -70,6 +70,7 @@ struct NativeMethodView {
     returns_boolean: bool,
     returns_bytes: bool,
     returns_record: bool,
+    return_value: Expression,
     checks_status: bool,
 }
 
@@ -99,12 +100,18 @@ impl NativeMethodView {
                 method
                     .parameters()
                     .iter()
-                    .flat_map(NativeParameter::c_arguments),
+                    .map(NativeParameter::c_arguments)
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten(),
             ),
             returns_void: method.returns_void(),
             returns_boolean: method.returns_boolean(),
             returns_bytes: method.returns_bytes(),
             returns_record: method.returns_record(),
+            return_value: method
+                .returns()
+                .return_expression(Expression::identifier(Identifier::parse("result")?)),
             checks_status: method.checks_status(),
         })
     }

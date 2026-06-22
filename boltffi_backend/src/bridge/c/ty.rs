@@ -5,7 +5,7 @@ use crate::core::{Error, Result};
 use super::{C_BRIDGE_LAYER, Identifier};
 
 /// A C ABI type.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum Type {
     /// `void`.

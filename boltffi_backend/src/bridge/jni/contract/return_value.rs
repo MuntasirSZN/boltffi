@@ -1,7 +1,7 @@
 use crate::{
     bridge::{
-        c::{self, TypeFragment},
-        jni::{JniType, RecordValue},
+        c::{self, Expression, TypeFragment},
+        jni::{RecordValue, ScalarReturn},
     },
     core::Result,
 };
@@ -13,7 +13,7 @@ pub enum NativeReturn {
     /// The C function returns `void`.
     Void,
     /// The C function returns a scalar value directly.
-    Value(JniType),
+    Value(ScalarReturn),
     /// The C function returns an owned BoltFFI byte buffer.
     Bytes,
     /// The C function returns a direct record by value.
@@ -27,7 +27,7 @@ impl NativeReturn {
     pub fn jni_type(&self) -> TypeFragment {
         match self {
             Self::Void | Self::Status => TypeFragment::new("void"),
-            Self::Value(ty) => (*ty).as_type_fragment(),
+            Self::Value(scalar) => scalar.jni_type().as_type_fragment(),
             Self::Bytes | Self::Record(_) => TypeFragment::new("jbyteArray"),
         }
     }
@@ -37,9 +37,17 @@ impl NativeReturn {
         match self {
             Self::Void => Ok(TypeFragment::new("void")),
             Self::Status => TypeFragment::anonymous(&c::Type::Status),
-            Self::Value(ty) => Ok((*ty).as_type_fragment()),
+            Self::Value(scalar) => scalar.c_result_type(),
             Self::Bytes => TypeFragment::anonymous(&c::Type::Buffer),
             Self::Record(record) => Ok(record.c_type_fragment()),
+        }
+    }
+
+    /// Returns the expression returned from the JNI method for scalar values.
+    pub fn return_expression(&self, value: Expression) -> Expression {
+        match self {
+            Self::Value(scalar) => scalar.return_expression(value),
+            Self::Void | Self::Bytes | Self::Record(_) | Self::Status => value,
         }
     }
 
@@ -60,7 +68,7 @@ impl NativeReturn {
             c::Type::Void => Ok(Self::Void),
             c::Type::Status => Ok(Self::Status),
             c::Type::Buffer => Ok(Self::Bytes),
-            ty => JniType::from_c_type(ty).map(Self::Value),
+            ty => ScalarReturn::from_c_type(ty).map(Self::Value),
         }
     }
 }

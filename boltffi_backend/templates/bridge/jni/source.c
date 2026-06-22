@@ -187,14 +187,12 @@ JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jcla
         (*env)->ReleaseByteArrayElements(env, {{ parameter.name }}, {{ parameter.pointer }}, JNI_ABORT);
     }
 {%- endfor %}
-{%- if method.returns_boolean %}
-    return (jboolean)result;
-{%- else if method.returns_bytes %}
+{%- if method.returns_bytes %}
     return boltffi_jni_buffer_to_byte_array(env, result);
 {%- else if method.returns_record %}
     return boltffi_jni_record_to_byte_array(env, &result, (uintptr_t)sizeof(result));
 {%- else %}
-    return result;
+    return {{ method.return_value }};
 {%- endif %}
 {%- endif %}
 }

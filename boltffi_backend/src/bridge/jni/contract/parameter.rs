@@ -1,7 +1,7 @@
 use crate::{
     bridge::{
         c::{self, Expression, Identifier, TypeFragment},
-        jni::{BytesParameter, JniType, RecordParameter},
+        jni::{BytesParameter, RecordParameter, ScalarParameter},
     },
     core::{Error, Result},
 };
@@ -35,12 +35,12 @@ impl NativeParameter {
     }
 
     /// Returns C bridge call arguments produced from this JNI parameter.
-    pub fn c_arguments(&self) -> Vec<Expression> {
+    pub fn c_arguments(&self) -> Result<Vec<Expression>> {
         match &self.kind {
             NativeParameterKind::Scalar(parameter) => {
-                vec![Expression::identifier(parameter.name().clone())]
+                parameter.c_argument().map(|value| vec![value])
             }
-            NativeParameterKind::Bytes(parameter) => vec![
+            NativeParameterKind::Bytes(parameter) => Ok(vec![
                 Expression::cast(
                     TypeFragment::new("const uint8_t *"),
                     Expression::identifier(parameter.pointer().clone()),
@@ -49,9 +49,9 @@ impl NativeParameter {
                     TypeFragment::new("uintptr_t"),
                     Expression::identifier(parameter.length().clone()),
                 ),
-            ],
+            ]),
             NativeParameterKind::Record(parameter) => {
-                vec![Expression::identifier(parameter.local().clone())]
+                Ok(vec![Expression::identifier(parameter.local().clone())])
             }
         }
     }
@@ -117,32 +117,4 @@ pub enum NativeParameterKind {
     Bytes(BytesParameter),
     /// A `jbyteArray` copied into one direct C record value.
     Record(RecordParameter),
-}
-
-/// Scalar JNI parameter mapped to one scalar C bridge argument.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct ScalarParameter {
-    name: Identifier,
-    ty: JniType,
-}
-
-impl ScalarParameter {
-    /// Returns the generated C parameter name.
-    pub fn name(&self) -> &Identifier {
-        &self.name
-    }
-
-    /// Returns the scalar JNI parameter type.
-    pub fn ty(&self) -> JniType {
-        self.ty
-    }
-
-    /// Creates a scalar JNI parameter from one scalar C ABI parameter.
-    pub fn from_c_parameter(parameter: &c::Parameter) -> Result<Self> {
-        Ok(Self {
-            name: Identifier::escape(parameter.name())?,
-            ty: JniType::from_c_type(parameter.ty())?,
-        })
-    }
 }

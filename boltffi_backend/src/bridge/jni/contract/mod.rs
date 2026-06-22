@@ -5,11 +5,13 @@ mod method;
 mod parameter;
 mod record;
 mod return_value;
+mod scalar;
 
 pub use bridge::JniBridgeContract;
 pub use bytes::BytesParameter;
 pub use jni_type::JniType;
 pub use method::NativeMethod;
-pub use parameter::{NativeParameter, NativeParameterKind, ScalarParameter};
+pub use parameter::{NativeParameter, NativeParameterKind};
 pub use record::{RecordParameter, RecordValue};
 pub use return_value::NativeReturn;
+pub use scalar::{ScalarParameter, ScalarReturn};
