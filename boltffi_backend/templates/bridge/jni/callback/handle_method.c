@@ -14,7 +14,7 @@ JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jcla
     const {{ method.vtable_type }} *vtable = callback_handle == NULL ? NULL : (const {{ method.vtable_type }} *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->{{ method.slot }} == NULL) {
         boltffi_jni_throw_runtime(env, "BoltFFI callback handle was null or invalid");
-{% include "bridge/jni/method/error_return.c" %}
+        goto __boltffi_error;
     }
 {% include "bridge/jni/method/locals.c" %}
 {% include "bridge/jni/method/borrowed_arrays.c" %}
@@ -42,13 +42,16 @@ JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jcla
     vtable->{{ method.slot }}({{ method.arguments }});
 {% include "bridge/jni/method/cleanup_arrays.c" %}
 {% include "bridge/jni/method/writebacks.c" %}
+    return;
 {%- else if method.checks_status %}
     {{ method.c_result_type }} status = vtable->{{ method.slot }}({{ method.arguments }});
 {% include "bridge/jni/method/cleanup_arrays.c" %}
-    if (status.code == 0) {
-{% include "bridge/jni/method/writebacks.c" %}
+    if (status.code != 0) {
+        boltffi_jni_throw_status(env, status);
+        return;
     }
-    boltffi_jni_throw_status(env, status);
+{% include "bridge/jni/method/writebacks.c" %}
+    return;
 {%- else %}
     {{ method.c_result_type }} result = vtable->{{ method.slot }}({{ method.arguments }});
 {% include "bridge/jni/method/cleanup_arrays.c" %}
@@ -61,4 +64,7 @@ JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jcla
     return {{ method.return_value }};
 {%- endif %}
 {%- endif %}
+__boltffi_error:
+{%- include "bridge/jni/method/cleanup_arrays.c" %}
+{%- include "bridge/jni/method/error_return.c" %}
 }

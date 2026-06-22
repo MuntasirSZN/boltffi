@@ -487,8 +487,7 @@ JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1
     const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->make_handler == NULL) {
         boltffi_jni_throw_runtime(env, "BoltFFI callback handle was null or invalid");
-
-    return 0;
+        goto __boltffi_error;
     }
 
     typedef struct {
@@ -505,6 +504,8 @@ JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1
     }
 
     return boltffi_jni____closure__u32_to_u32_handle_new(env, __boltffi_return.invoke, __boltffi_return.context, __boltffi_return.release);
+__boltffi_error:
+    return 0;
 }
 
 static ___ListenerVTable g____ListenerVTable_vtable = {

@@ -48,6 +48,16 @@ pub struct CallbackHandleMethodView {
 
 impl CallbackHandleMethodView {
     pub fn from_method(method: &CallbackHandleMethod) -> Result<Self> {
+        let borrowed_arrays = method
+            .parameters()
+            .iter()
+            .flat_map(BorrowedArrayParameterView::from_parameter)
+            .collect::<Result<Vec<_>>>()?;
+        let record_arrays = method
+            .parameters()
+            .iter()
+            .filter_map(|parameter| parameter.record().map(RecordParameterView::from_record))
+            .collect::<Vec<_>>();
         Ok(Self {
             symbol: method.symbol().as_identifier().clone(),
             return_type: method.jni_type(),
@@ -59,16 +69,8 @@ impl CallbackHandleMethodView {
                 .iter()
                 .map(NativeParameterView::from_parameter)
                 .collect(),
-            borrowed_arrays: method
-                .parameters()
-                .iter()
-                .flat_map(BorrowedArrayParameterView::from_parameter)
-                .collect::<Result<Vec<_>>>()?,
-            record_arrays: method
-                .parameters()
-                .iter()
-                .filter_map(|parameter| parameter.record().map(RecordParameterView::from_record))
-                .collect(),
+            borrowed_arrays,
+            record_arrays,
             arguments: method.arguments()?,
             completion: method
                 .completion()

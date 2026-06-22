@@ -357,12 +357,14 @@ JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1d
     const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->load == NULL) {
         boltffi_jni_throw_runtime(env, "BoltFFI callback handle was null or invalid");
-
-    return;
+        goto __boltffi_error;
     }
 
     vtable->load(callback_handle->handle, key, ___ListenerVTable_load_handle_completion, (void *)(uintptr_t)callback_data);
 
+    return;
+__boltffi_error:
+    return;
 }
 
 static ___ListenerVTable g____ListenerVTable_vtable = {
