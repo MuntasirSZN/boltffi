@@ -1,11 +1,15 @@
 mod array;
+mod parameter;
+mod record;
 
-use self::array::BorrowedArrayParameterView;
+pub use array::BorrowedArrayParameterView;
+pub use parameter::NativeParameterView;
+pub use record::RecordParameterView;
 
 use crate::{
     bridge::{
         c::{ArgumentList, Expression, Identifier, TypeFragment},
-        jni::{NativeMethod, NativeParameter, RecordParameter},
+        jni::{NativeMethod, NativeParameter},
     },
     core::Result,
 };
@@ -27,18 +31,6 @@ pub struct NativeMethodView {
     pub return_value: Expression,
     pub checks_status: bool,
     pub uses_continuations: bool,
-}
-
-pub struct NativeParameterView {
-    pub name: Identifier,
-    pub ty: TypeFragment,
-}
-
-#[derive(Clone)]
-pub struct RecordParameterView {
-    pub name: Identifier,
-    pub c_type: Identifier,
-    pub local: Identifier,
 }
 
 impl NativeMethodView {
@@ -97,24 +89,5 @@ impl NativeMethodView {
                     .direct_vector()
                     .map(BorrowedArrayParameterView::from_direct_vector)
             })
-    }
-}
-
-impl NativeParameterView {
-    fn from_parameter(parameter: &NativeParameter) -> Self {
-        Self {
-            name: parameter.name().clone(),
-            ty: parameter.ty(),
-        }
-    }
-}
-
-impl RecordParameterView {
-    fn from_record(parameter: &RecordParameter) -> Self {
-        Self {
-            name: parameter.name().clone(),
-            c_type: parameter.c_type().clone(),
-            local: parameter.local().clone(),
-        }
     }
 }
