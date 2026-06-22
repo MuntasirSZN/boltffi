@@ -447,3 +447,74 @@ fn jni_bridge_renders_closure_callback_handle_returns() {
         "BoltFFICallbackHandle result = boltffi_create_callback_demo_listener((uint64_t)__boltffi_return_handle);"
     ));
 }
+
+#[test]
+fn jni_bridge_renders_closure_direct_record_returns() {
+    let files = files(
+        r#"
+            #[repr(C)]
+            #[data]
+            pub struct Point {
+                pub x: i32,
+                pub y: i32,
+            }
+
+            #[export]
+            pub fn install(callback: impl Fn() -> Point) {}
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(
+        source.contains(
+            "static ___Point boltffi_jni____closure__to_demo_point_call(void *user_data)"
+        )
+    );
+    assert!(source.contains(
+        "GetStaticMethodID(env, g____closure__to_demo_point_class, \"call\", \"(J)[B\")"
+    ));
+    assert!(source.contains("jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, g____closure__to_demo_point_class, g____closure__to_demo_point_call_method, handle);"));
+    assert!(source.contains("___Point result = {0};"));
+    assert!(source.contains(
+        "boltffi_jni_read_record(env, __boltffi_return_array, (uintptr_t)sizeof(result), &result)"
+    ));
+}
+
+#[test]
+fn jni_bridge_renders_closure_class_handle_returns() {
+    let files = files(
+        r#"
+            pub struct Engine;
+
+            #[export(single_threaded)]
+            impl Engine {
+                pub fn new() -> Self {
+                    Self
+                }
+            }
+
+            #[export]
+            pub fn install(callback: impl Fn() -> Engine) {}
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(
+        source.contains(
+            "static uint64_t boltffi_jni____closure__to_demo_engine_call(void *user_data)"
+        )
+    );
+    assert!(source.contains(
+        "GetStaticMethodID(env, g____closure__to_demo_engine_class, \"call\", \"(J)J\")"
+    ));
+    assert!(source.contains("uint64_t result = (uint64_t)(*env)->CallStaticLongMethod(env, g____closure__to_demo_engine_class, g____closure__to_demo_engine_call_method, handle);"));
+    assert!(source.contains("return result;"));
+}
