@@ -12,7 +12,7 @@
 use crate::{
     bridge::{
         c::{Identifier, TypeFragment},
-        jni::{BytesParameter, DirectVectorParameter},
+        jni::{BytesParameter, DirectVectorParameter, NativeParameter},
     },
     core::Result,
 };
@@ -86,5 +86,12 @@ impl BorrowedArrayParameterView {
                 })
                 .transpose()?,
         })
+    }
+
+    pub fn from_parameter(parameter: &NativeParameter) -> Option<Result<Self>> {
+        parameter
+            .bytes()
+            .map(|parameter| Ok(Self::from_bytes(parameter)))
+            .or_else(|| parameter.direct_vector().map(Self::from_direct_vector))
     }
 }

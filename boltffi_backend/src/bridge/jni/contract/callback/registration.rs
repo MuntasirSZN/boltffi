@@ -12,7 +12,7 @@
 use crate::{
     bridge::{
         c::{self, Identifier},
-        jni::{CallbackMethod, ClosureRegistration, JvmClassPath},
+        jni::{CallbackHandleMethod, CallbackMethod, ClosureRegistration, JvmClassPath},
     },
     core::Result,
 };
@@ -33,6 +33,7 @@ pub struct CallbackRegistration {
     free: Identifier,
     clone: Identifier,
     methods: Vec<CallbackMethod>,
+    handle_methods: Vec<CallbackHandleMethod>,
 }
 
 impl CallbackRegistration {
@@ -42,6 +43,7 @@ impl CallbackRegistration {
         callback: &c::Callback,
         callbacks: &[c::Callback],
         closures: &[ClosureRegistration],
+        render_handle_methods: bool,
     ) -> Result<Self> {
         let stem = callback.vtable().name();
         Ok(Self {
@@ -61,6 +63,10 @@ impl CallbackRegistration {
                 .iter()
                 .map(|slot| CallbackMethod::from_slot(stem, slot, callbacks, closures))
                 .collect::<Result<Vec<_>>>()?,
+            handle_methods: render_handle_methods
+                .then(|| CallbackHandleMethod::from_callback(class, callback, callbacks, closures))
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 
@@ -122,5 +128,10 @@ impl CallbackRegistration {
     /// Returns registered callback method slots.
     pub fn methods(&self) -> &[CallbackMethod] {
         &self.methods
+    }
+
+    /// Returns native methods that call Rust-owned callback handles.
+    pub fn handle_methods(&self) -> &[CallbackHandleMethod] {
+        &self.handle_methods
     }
 }

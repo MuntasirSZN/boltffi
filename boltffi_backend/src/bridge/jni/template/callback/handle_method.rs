@@ -1,21 +1,19 @@
-//! Source fields for one generated `Java_*` native method.
+//! Source fields for calling Rust-owned callback handles from the JVM.
 //!
-//! The native method contract is shaped for correctness: parameters know their
-//! kind, returns know their ABI behavior, and records know their writeback
-//! rules. The final C template needs one ordered method body with declarations,
-//! borrowed-array setup, direct-record locals, C bridge arguments, status checks,
-//! cleanup, and the return expression.
+//! Returned callback handles live in native storage and expose their methods
+//! through a C vtable. The generated JNI method takes the handle token from
+//! Java, validates the stored vtable, prepares the Java-provided arguments, and
+//! invokes the matching vtable slot.
 //!
-//! This module performs that final projection from contract to source fields.
-//! It does not reinterpret the C bridge contract or inspect binding IR. The
-//! method template receives a prepared body shape, not raw declarations that it
-//! has to understand.
+//! This module prepares that source view from `CallbackHandleMethod`. It shares
+//! native-method parameter views for arrays, records, and return conversion
+//! instead of creating callback-handle-specific copies of those rules.
 
 use crate::{
     bridge::{
         c::{ArgumentList, Expression, Identifier, TypeFragment},
         jni::{
-            NativeMethod, NativeParameter,
+            CallbackHandleMethod,
             template::method::{
                 BorrowedArrayParameterView, NativeParameterView, RecordParameterView,
             },
@@ -24,12 +22,12 @@ use crate::{
     core::Result,
 };
 
-/// Template input for a generated JNI native method body.
-pub struct NativeMethodView {
+pub struct CallbackHandleMethodView {
     pub symbol: Identifier,
-    pub c_function: Identifier,
     pub return_type: TypeFragment,
     pub c_result_type: TypeFragment,
+    pub vtable_type: Identifier,
+    pub slot: Identifier,
     pub parameters: Vec<NativeParameterView>,
     pub borrowed_arrays: Vec<BorrowedArrayParameterView>,
     pub record_arrays: Vec<RecordParameterView>,
@@ -41,16 +39,16 @@ pub struct NativeMethodView {
     pub returns_callback: bool,
     pub return_value: Expression,
     pub checks_status: bool,
-    pub uses_continuations: bool,
 }
 
-impl NativeMethodView {
-    pub fn from_method(method: &NativeMethod) -> Result<Self> {
+impl CallbackHandleMethodView {
+    pub fn from_method(method: &CallbackHandleMethod) -> Result<Self> {
         Ok(Self {
             symbol: method.symbol().as_identifier().clone(),
-            c_function: Identifier::parse(method.c_function().name())?,
-            return_type: method.returns().jni_type(),
-            c_result_type: method.returns().c_result_type()?,
+            return_type: method.jni_type(),
+            c_result_type: method.c_result_type()?,
+            vtable_type: method.vtable_type().clone(),
+            slot: method.slot().clone(),
             parameters: method
                 .parameters()
                 .iter()
@@ -66,28 +64,15 @@ impl NativeMethodView {
                 .iter()
                 .filter_map(|parameter| parameter.record().map(RecordParameterView::from_record))
                 .collect(),
-            arguments: ArgumentList::from_iter(
-                method
-                    .parameters()
-                    .iter()
-                    .map(NativeParameter::c_arguments)
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .flatten(),
-            ),
+            arguments: method.arguments()?,
             returns_void: method.returns_void(),
             returns_boolean: method.returns_boolean(),
             returns_bytes: method.returns_bytes(),
             returns_record: method.returns_record(),
             returns_callback: method.returns_callback(),
             return_value: method
-                .returns()
-                .return_expression(Expression::identifier(Identifier::parse("result")?))?,
+                .return_value(Expression::identifier(Identifier::parse("result")?))?,
             checks_status: method.checks_status(),
-            uses_continuations: method
-                .parameters()
-                .iter()
-                .any(NativeParameter::is_continuation),
         })
     }
 }

@@ -31,39 +31,70 @@ impl CallbackFeatures {
                     .methods
                     .iter()
                     .any(|method| !method.byte_arrays.is_empty())
+                    || callback.handle_methods.iter().any(|method| {
+                        !method.borrowed_arrays.is_empty()
+                            || method.returns_bytes
+                            || method.returns_record
+                    })
             }),
             uses_direct_vectors: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| !method.direct_vectors.is_empty())
+                    || callback.handle_methods.iter().any(|method| {
+                        method
+                            .borrowed_arrays
+                            .iter()
+                            .any(|array| array.stack_copy.is_some())
+                    })
             }),
             uses_record_arrays: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| !method.record_arrays.is_empty())
+                    || callback
+                        .handle_methods
+                        .iter()
+                        .any(|method| !method.record_arrays.is_empty() || method.returns_record)
             }),
             uses_handles: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| !method.callback_handles.is_empty())
+                    || callback
+                        .handle_methods
+                        .iter()
+                        .any(|method| method.returns_callback)
             }),
             returns_byte_arrays: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| method.returns_bytes || method.returns_record)
+                    || callback
+                        .handle_methods
+                        .iter()
+                        .any(|method| method.returns_bytes || method.returns_record)
             }),
-            returns_records: callbacks
-                .iter()
-                .any(|callback| callback.methods.iter().any(|method| method.returns_record)),
+            returns_records: callbacks.iter().any(|callback| {
+                callback.methods.iter().any(|method| method.returns_record)
+                    || callback
+                        .handle_methods
+                        .iter()
+                        .any(|method| method.returns_record)
+            }),
             returns_callback_handles: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| method.returns_callback_handle)
+                    || callback
+                        .handle_methods
+                        .iter()
+                        .any(|method| method.returns_callback)
             }),
         }
     }

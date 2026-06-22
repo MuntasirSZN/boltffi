@@ -14,7 +14,7 @@ use crate::bridge::{
     jni::CallbackRegistration,
 };
 
-use super::CallbackMethodView;
+use super::{CallbackHandleMethodView, CallbackMethodView};
 
 pub struct CallbackRegistrationView {
     pub class: Literal,
@@ -29,11 +29,12 @@ pub struct CallbackRegistrationView {
     pub free: Identifier,
     pub clone: Identifier,
     pub methods: Vec<CallbackMethodView>,
+    pub handle_methods: Vec<CallbackHandleMethodView>,
 }
 
 impl CallbackRegistrationView {
-    pub fn from_registration(registration: &CallbackRegistration) -> Self {
-        Self {
+    pub fn from_registration(registration: &CallbackRegistration) -> crate::core::Result<Self> {
+        Ok(Self {
             class: Literal::string(&registration.class().as_jni_class_name()),
             global_class: registration.global_class().clone(),
             free_method: registration.free_method().clone(),
@@ -50,6 +51,11 @@ impl CallbackRegistrationView {
                 .iter()
                 .map(CallbackMethodView::from_method)
                 .collect(),
-        }
+            handle_methods: registration
+                .handle_methods()
+                .iter()
+                .map(CallbackHandleMethodView::from_method)
+                .collect::<crate::core::Result<Vec<_>>>()?,
+        })
     }
 }

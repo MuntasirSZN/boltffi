@@ -13,6 +13,10 @@ static jmethodID {{ method.method_id }} = NULL;
 {% include "bridge/jni/callback/method.c" %}
 {%- endfor %}
 
+{%- for method in callback.handle_methods %}
+{% include "bridge/jni/callback/handle_method.c" %}
+{%- endfor %}
+
 {% include "bridge/jni/callback/vtable.c" %}
 
 {% include "bridge/jni/callback/load.c" %}

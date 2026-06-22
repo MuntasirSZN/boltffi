@@ -14,6 +14,7 @@ mod argument;
 mod closure_return;
 mod completion;
 mod direct_vector;
+mod handle_method;
 mod method;
 mod registration;
 
@@ -24,5 +25,6 @@ pub use argument::{
 pub use closure_return::CallbackClosureReturnView;
 pub use completion::CallbackCompletionInvokerView;
 pub use direct_vector::CallbackDirectVectorArgumentView;
+pub use handle_method::CallbackHandleMethodView;
 pub use method::CallbackMethodView;
 pub use registration::CallbackRegistrationView;

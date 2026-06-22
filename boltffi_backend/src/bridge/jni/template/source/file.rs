@@ -68,7 +68,7 @@ impl SourceFile {
             .callbacks()
             .iter()
             .map(CallbackRegistrationView::from_registration)
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let callback_completions = contract
             .callback_completions()
             .iter()

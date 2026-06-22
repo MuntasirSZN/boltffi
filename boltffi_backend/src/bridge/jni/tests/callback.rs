@@ -715,6 +715,10 @@ fn jni_bridge_renders_callback_handle_returns() {
     assert!(source.contains("static jlong boltffi_jni_callback_handle_new_owned"));
     assert!(source.contains("JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1clone(JNIEnv *env, jclass cls, jlong handle)"));
     assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1release(JNIEnv *env, jclass cls, jlong handle)"));
+    assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1on_1value(JNIEnv *env, jclass cls, jlong callback, jint value)"));
+    assert!(source.contains("const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;"));
+    assert!(source.contains("uint32_t result = vtable->on_value(callback_handle->handle, value);"));
+    assert!(source.contains("return (jint)result;"));
     assert!(source.contains("JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1make_1listener(JNIEnv *env, jclass cls)"));
     assert!(
         source.contains("BoltFFICallbackHandle result = boltffi_function_demo_make_listener();")

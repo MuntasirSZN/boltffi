@@ -12,6 +12,8 @@
 
 use std::collections::BTreeSet;
 
+use boltffi_binding::CallbackId;
+
 use crate::{
     bridge::{
         c::{self, HeaderInclude, Identifier},
@@ -34,6 +36,7 @@ impl JniBridgeContract {
     ) -> Result<Self> {
         let closures =
             ClosureRegistration::from_c_bridge(&class, c_bridge.functions(), c_bridge.callbacks())?;
+        let returned_callbacks = Self::returned_callbacks(c_bridge);
         let callbacks = c_bridge
             .callbacks()
             .iter()
@@ -43,6 +46,7 @@ impl JniBridgeContract {
                     callback,
                     c_bridge.callbacks(),
                     &closures,
+                    returned_callbacks.contains(&callback.id()),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
@@ -86,5 +90,16 @@ impl JniBridgeContract {
             class,
             source_path,
         })
+    }
+
+    fn returned_callbacks(c_bridge: &c::CBridgeContract) -> BTreeSet<CallbackId> {
+        c_bridge
+            .functions()
+            .iter()
+            .filter_map(|function| match function.returns() {
+                c::Type::CallbackHandle(callback) => Some(*callback),
+                _ => None,
+            })
+            .collect()
     }
 }

@@ -20,6 +20,7 @@ mod closure;
 mod completion;
 mod direct_vector;
 mod handle;
+mod handle_method;
 mod method;
 mod parameter;
 mod record;
@@ -35,6 +36,7 @@ pub use completion::{
 };
 pub use direct_vector::CallbackDirectVectorArgument;
 pub use handle::CallbackHandleArgument;
+pub use handle_method::CallbackHandleMethod;
 pub use method::{CallbackClosureReturn, CallbackMethod};
 pub use parameter::CallbackParameter;
 pub use record::CallbackRecordArgument;
