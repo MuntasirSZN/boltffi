@@ -24,7 +24,7 @@ pub use callback::{
 };
 pub use closure::{
     CallbackClosureHandle, ClosureArgument, ClosureBytesArgument, ClosureCParameter,
-    ClosureDirectVectorArgument, ClosureParameter, ClosureRegistration,
+    ClosureDirectVectorArgument, ClosureHandleArgument, ClosureParameter, ClosureRegistration,
 };
 pub use continuation::ContinuationParameter;
 pub use direct_vector::DirectVectorParameter;

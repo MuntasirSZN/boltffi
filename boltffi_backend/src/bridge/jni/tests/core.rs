@@ -172,7 +172,6 @@ fn jni_bridge_renders_encoded_functions_as_byte_arrays() {
         .find(|(path, _)| path == "jni/jni_glue.c")
         .map(|(_, contents)| contents)
         .expect("JNI source file");
-
     [
         "FfiBuf_u8 boltffi_function_demo_keep_person(const uint8_t *person_ptr, uintptr_t person_len);",
         "FfiBuf_u8 boltffi_function_demo_keep_shape(const uint8_t *shape_ptr, uintptr_t shape_len);",
@@ -271,7 +270,6 @@ fn jni_bridge_renders_async_class_methods() {
         .find(|(path, _)| path == "jni/jni_glue.c")
         .map(|(_, contents)| contents)
         .expect("JNI source file");
-
     [
         "JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1compute(JNIEnv *env, jclass cls, jlong receiver, jint value)",
         "RustFutureHandle result = boltffi_method_class_demo_engine_compute(receiver, value);",
@@ -360,7 +358,7 @@ fn jni_bridge_renders_async_complete_return_shapes() {
         "return boltffi_jni_record_to_byte_array(env, &result, (uintptr_t)sizeof(result));",
     ]
     .into_iter()
-    .for_each(|expected| assert!(source.contains(expected), "{expected}"));
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
 }
 
 #[test]
@@ -456,6 +454,56 @@ fn jni_bridge_renders_direct_vector_closure_parameters_from_contract_group() {
     assert!(source.contains(
             "FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__vec_u32_to_u32_call, (void *)callback, boltffi_jni____closure__vec_u32_to_u32_release);"
         ));
+}
+
+#[test]
+fn jni_bridge_renders_nested_closure_parameters_from_contract_group() {
+    let files = files(
+        r#"
+            #[export]
+            pub fn install(callback: impl Fn(Box<dyn Fn(u32) -> u32>) -> u32) {}
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "uint32_t (*arg0_call)(void *, uint32_t)",
+        "jlong __boltffi_arg0_handle = 0;",
+        "__boltffi_arg0_handle = boltffi_jni____closure__u32_to_u32_handle_new(env, arg0_call, (void *)arg0_context, arg0_release);",
+        "boltffi_jni____closure__u32_to_u32_handle_release(__boltffi_arg0_handle);",
+        "GetStaticMethodID(env, g____closure__box_closure_to_u32_class, \"call\", \"(JJ)I\")",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
+}
+
+#[test]
+fn jni_bridge_renders_nested_closure_parameters_for_callback_owned_closures() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Listener {
+                fn install(&self, callback: impl Fn(Box<dyn Fn(u32) -> u32>) -> u32);
+            }
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "static jlong boltffi_jni____closure__box_closure_to_u32_handle_new(JNIEnv *env, uint32_t (*call)(void *, uint32_t (*)(void *, uint32_t), void *, void (*)(void *)), void *context, void (*release)(void *))",
+        "JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1closure_1_1_1_1closure_1_1box_1closure_1to_1u32_1call(JNIEnv *env, jclass cls, jlong value, jlong arg0)",
+        "uint32_t result = closure->call(closure->context, boltffi_jni____closure__u32_to_u32_call, (void *)arg0, boltffi_jni____closure__u32_to_u32_release);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
 }
 
 #[test]

@@ -2,7 +2,7 @@ use boltffi_binding::ClosureSignature;
 
 use crate::{
     bridge::{
-        c::{self, Identifier},
+        c,
         jni::{
             CallbackClosureHandle, ClosureArgument, ClosureRegistration, JvmClassPath,
             JvmMethodReturn,
@@ -11,6 +11,7 @@ use crate::{
     core::{Error, Result},
 };
 
+use super::super::names::ClosureNames;
 use super::index::ClosureRegistrationIndex;
 
 impl ClosureRegistration {
@@ -44,7 +45,7 @@ impl ClosureRegistrationConstructor {
             closure
                 .parameter_groups()
                 .iter()
-                .map(|group| ClosureArgument::from_closure_group(closure, group))
+                .map(|group| ClosureArgument::from_closure_group(class, closure, group))
                 .collect::<Result<Vec<_>>>()?,
         )
     }
@@ -63,7 +64,7 @@ impl ClosureRegistrationConstructor {
             returned
                 .parameter_groups()
                 .iter()
-                .map(|group| ClosureArgument::from_return_group(returned, group))
+                .map(|group| ClosureArgument::from_return_group(class, returned, group))
                 .collect::<Result<Vec<_>>>()?,
         )
     }
@@ -106,17 +107,17 @@ impl ClosureRegistrationConstructor {
                 invariant: "closure call parameter does not start with void context",
             });
         }
-        let stem = signature.symbol_part();
+        let names = ClosureNames::new(signature);
         Ok(ClosureRegistration {
             signature: signature.clone(),
             class: class.closure_class(signature)?,
-            global_class: Identifier::parse(format!("g_{stem}_class"))?,
-            call_method: Identifier::parse(format!("g_{stem}_call_method"))?,
-            free_method: Identifier::parse(format!("g_{stem}_free_method"))?,
-            load: Identifier::parse(format!("boltffi_jni_load_{stem}"))?,
-            unload: Identifier::parse(format!("boltffi_jni_unload_{stem}"))?,
-            call: Identifier::parse(format!("boltffi_jni_{stem}_call"))?,
-            release: Identifier::parse(format!("boltffi_jni_{stem}_release"))?,
+            global_class: names.global_class()?,
+            call_method: names.call_method()?,
+            free_method: names.free_method()?,
+            load: names.load()?,
+            unload: names.unload()?,
+            call: names.call()?,
+            release: names.release()?,
             callback_handle: callback_argument
                 .then(|| CallbackClosureHandle::new(class, signature, call_type))
                 .transpose()?,

@@ -8,6 +8,8 @@ use crate::{
     core::Result,
 };
 
+use super::names::ClosureNames;
+
 /// JNI handle contract for a Rust-owned closure passed into a JVM callback.
 ///
 /// Callback trait methods can receive inline closure parameters from Rust. The
@@ -31,20 +33,14 @@ impl CallbackClosureHandle {
         signature: &ClosureSignature,
         call_type: &c::Type,
     ) -> Result<Self> {
-        let stem = signature.symbol_part();
+        let names = ClosureNames::new(signature);
         Ok(Self {
-            ty: Identifier::parse(format!("BoltFFIJniClosure{stem}"))?,
-            new: Identifier::parse(format!("boltffi_jni_{stem}_handle_new"))?,
-            ref_: Identifier::parse(format!("boltffi_jni_{stem}_handle_ref"))?,
-            release: Identifier::parse(format!("boltffi_jni_{stem}_handle_release"))?,
-            call_symbol: JniSymbolName::native_method(
-                class,
-                &format!("boltffi_callback_closure_{stem}_call"),
-            )?,
-            release_symbol: JniSymbolName::native_method(
-                class,
-                &format!("boltffi_callback_closure_{stem}_release"),
-            )?,
+            ty: names.handle_type()?,
+            new: names.handle_new()?,
+            ref_: names.handle_ref()?,
+            release: names.handle_release()?,
+            call_symbol: names.handle_call_symbol(class)?,
+            release_symbol: names.handle_release_symbol(class)?,
             call_field: c::TypeFragment::declaration(call_type, "call")?,
         })
     }

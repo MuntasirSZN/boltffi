@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::BTreeMap;
 
 use boltffi_binding::ClosureSignature;
 
@@ -80,18 +80,13 @@ impl ClosureRegistrationIndex {
         callbacks: &[c::Callback],
     ) -> Result<()> {
         if let c::ParameterGroup::Closure(closure) = group {
-            match self.registrations.entry(closure.signature().clone()) {
-                Entry::Vacant(entry) => {
-                    entry.insert(ClosureRegistrationConstructor::from_closure_parameter(
-                        class,
-                        function.parameter(closure.call()).ty(),
-                        closure,
-                        false,
-                        callbacks,
-                    )?);
-                }
-                Entry::Occupied(_) => {}
-            }
+            self.insert_closure_parameter(
+                class,
+                function.parameter(closure.call()).ty(),
+                closure,
+                false,
+                callbacks,
+            )?;
         }
         Ok(())
     }
@@ -105,38 +100,111 @@ impl ClosureRegistrationIndex {
     ) -> Result<()> {
         match group {
             c::ParameterGroup::Closure(closure) => {
-                match self.registrations.entry(closure.signature().clone()) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(ClosureRegistrationConstructor::from_closure_parameter(
-                            class,
-                            method.parameter(closure.call()).ty(),
-                            closure,
-                            true,
-                            callbacks,
-                        )?);
-                    }
-                    Entry::Occupied(mut entry) => {
-                        let registration = entry.get_mut();
-                        ClosureRegistrationConstructor::retain_callback_handle(
-                            registration,
-                            class,
-                            method.parameter(closure.call()).ty(),
-                        )?;
-                    }
-                }
+                self.insert_closure_parameter(
+                    class,
+                    method.parameter(closure.call()).ty(),
+                    closure,
+                    true,
+                    callbacks,
+                )?;
             }
             c::ParameterGroup::ClosureReturn(returned) => {
-                match self.registrations.entry(returned.signature().clone()) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(ClosureRegistrationConstructor::from_closure_return(
-                            class, returned, callbacks,
-                        )?);
-                    }
-                    Entry::Occupied(_) => {}
-                }
+                self.insert_closure_return(class, returned, callbacks)?;
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn insert_closure_parameter(
+        &mut self,
+        class: &JvmClassPath,
+        call_type: &c::Type,
+        closure: &c::ClosureParameter,
+        callback_argument: bool,
+        callbacks: &[c::Callback],
+    ) -> Result<()> {
+        let inserted = match self.registrations.get_mut(closure.signature()) {
+            Some(registration) => {
+                if callback_argument {
+                    ClosureRegistrationConstructor::retain_callback_handle(
+                        registration,
+                        class,
+                        call_type,
+                    )?;
+                }
+                false
+            }
+            None => {
+                self.registrations.insert(
+                    closure.signature().clone(),
+                    ClosureRegistrationConstructor::from_closure_parameter(
+                        class,
+                        call_type,
+                        closure,
+                        callback_argument,
+                        callbacks,
+                    )?,
+                );
+                true
+            }
+        };
+
+        if inserted {
+            closure
+                .parameter_groups()
+                .iter()
+                .try_for_each(|group| -> Result<()> {
+                    if let c::ParameterGroup::Closure(nested) = group {
+                        self.insert_closure_parameter(
+                            class,
+                            closure.parameter(nested.call()).ty(),
+                            nested,
+                            true,
+                            callbacks,
+                        )?;
+                    }
+                    Ok(())
+                })?;
+        }
+
+        Ok(())
+    }
+
+    fn insert_closure_return(
+        &mut self,
+        class: &JvmClassPath,
+        returned: &c::ClosureReturnParameter,
+        callbacks: &[c::Callback],
+    ) -> Result<()> {
+        let inserted = if self.registrations.contains_key(returned.signature()) {
+            false
+        } else {
+            self.registrations.insert(
+                returned.signature().clone(),
+                ClosureRegistrationConstructor::from_closure_return(class, returned, callbacks)?,
+            );
+            true
+        };
+
+        if inserted {
+            returned
+                .parameter_groups()
+                .iter()
+                .try_for_each(|group| -> Result<()> {
+                    if let c::ParameterGroup::Closure(nested) = group {
+                        self.insert_closure_parameter(
+                            class,
+                            returned.parameter(nested.call()).ty(),
+                            nested,
+                            true,
+                            callbacks,
+                        )?;
+                    }
+                    Ok(())
+                })?;
+        }
+
         Ok(())
     }
 }

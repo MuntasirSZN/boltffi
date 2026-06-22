@@ -8,3 +8,6 @@
         (*env)->DeleteLocalRef(env, {{ vector.name }});
     }
 {%- endfor %}
+{%- for handle in closure.closure_handles %}
+    {{ handle.handle_release }}({{ handle.handle }});
+{%- endfor %}

@@ -3,7 +3,10 @@ use crate::bridge::{
     jni::{ClosureArgument, ClosureRegistration},
 };
 
-use super::{ClosureBytesArgumentView, ClosureCParameterView, ClosureDirectVectorArgumentView};
+use super::{
+    ClosureBytesArgumentView, ClosureCParameterView, ClosureDirectVectorArgumentView,
+    ClosureHandleArgumentView,
+};
 
 pub struct ClosureRegistrationView {
     pub class: Literal,
@@ -27,6 +30,7 @@ pub struct ClosureRegistrationView {
     pub c_parameters: Vec<ClosureCParameterView>,
     pub byte_arrays: Vec<ClosureBytesArgumentView>,
     pub direct_vectors: Vec<ClosureDirectVectorArgumentView>,
+    pub closure_handles: Vec<ClosureHandleArgumentView>,
     pub jni_arguments: ArgumentList,
     pub has_jni_arguments: bool,
     pub handle_parameters: Vec<ClosureCParameterView>,
@@ -77,6 +81,11 @@ impl ClosureRegistrationView {
                 .iter()
                 .filter_map(ClosureArgument::call_direct_vector)
                 .map(ClosureDirectVectorArgumentView::from_argument)
+                .collect(),
+            closure_handles: arguments
+                .iter()
+                .filter_map(ClosureArgument::call_closure)
+                .map(ClosureHandleArgumentView::from_argument)
                 .collect(),
             jni_arguments: ClosureArgument::jvm_argument_list(arguments),
             has_jni_arguments: !arguments.is_empty(),
