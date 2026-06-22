@@ -34,12 +34,12 @@ impl JniBridgeContract {
         source_path: FilePath,
         c_bridge: &c::CBridgeContract,
     ) -> Result<Self> {
-        let returned_callbacks = Self::returned_callbacks(c_bridge);
+        let handle_method_callbacks = Self::handle_method_callbacks(c_bridge);
         let closures = ClosureRegistration::from_c_bridge(
             &class,
             c_bridge.functions(),
             c_bridge.callbacks(),
-            &returned_callbacks,
+            &handle_method_callbacks,
         )?;
         let callbacks = c_bridge
             .callbacks()
@@ -50,7 +50,7 @@ impl JniBridgeContract {
                     callback,
                     c_bridge.callbacks(),
                     &closures,
-                    returned_callbacks.contains(&callback.id()),
+                    handle_method_callbacks.contains(&callback.id()),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
@@ -96,14 +96,35 @@ impl JniBridgeContract {
         })
     }
 
-    fn returned_callbacks(c_bridge: &c::CBridgeContract) -> BTreeSet<CallbackId> {
+    fn handle_method_callbacks(c_bridge: &c::CBridgeContract) -> BTreeSet<CallbackId> {
         c_bridge
             .functions()
             .iter()
-            .filter_map(|function| match function.returns() {
+            .filter_map(Self::returned_callback_handle)
+            .chain(
+                c_bridge
+                    .callbacks()
+                    .iter()
+                    .flat_map(Self::callback_argument_handles),
+            )
+            .collect()
+    }
+
+    fn returned_callback_handle(function: &c::Function) -> Option<CallbackId> {
+        match function.returns() {
+            c::Type::CallbackHandle(callback) => Some(*callback),
+            _ => None,
+        }
+    }
+
+    fn callback_argument_handles(callback: &c::Callback) -> impl Iterator<Item = CallbackId> + '_ {
+        callback
+            .methods()
+            .iter()
+            .flat_map(|method| method.parameters().iter())
+            .filter_map(|parameter| match parameter.ty() {
                 c::Type::CallbackHandle(callback) => Some(*callback),
                 _ => None,
             })
-            .collect()
     }
 }

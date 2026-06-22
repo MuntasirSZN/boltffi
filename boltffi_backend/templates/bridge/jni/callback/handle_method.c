@@ -10,13 +10,13 @@ JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jcla
 {%- when None %}
 {%- endmatch %}) {
     (void)cls;
+{% include "bridge/jni/method/locals.c" %}
     BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
     const {{ method.vtable_type }} *vtable = callback_handle == NULL ? NULL : (const {{ method.vtable_type }} *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->{{ method.slot }} == NULL) {
         boltffi_jni_throw_runtime(env, "BoltFFI callback handle was null or invalid");
         goto __boltffi_error;
     }
-{% include "bridge/jni/method/locals.c" %}
 {% include "bridge/jni/method/borrowed_arrays.c" %}
 {% include "bridge/jni/method/records.c" %}
 {%- if method.returns_closure %}

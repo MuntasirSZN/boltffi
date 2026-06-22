@@ -133,18 +133,49 @@ impl HeaderInclude {
     }
 
     fn normal_components(path: &Path) -> Option<Vec<OsString>> {
+        let mut pinned = 0;
         path.components()
             .try_fold(Vec::new(), |mut parts, component| {
                 match component {
-                    Component::Prefix(prefix) => parts.push(prefix.as_os_str().to_owned()),
-                    Component::RootDir => parts.push(component.as_os_str().to_owned()),
+                    Component::Prefix(prefix) => {
+                        pinned += 1;
+                        parts.push(prefix.as_os_str().to_owned());
+                    }
+                    Component::RootDir => {
+                        pinned += 1;
+                        parts.push(component.as_os_str().to_owned());
+                    }
                     Component::CurDir => {}
                     Component::ParentDir => {
-                        parts.pop()?;
+                        if parts.len() > pinned
+                            && !matches!(parts.last().and_then(|part| part.to_str()), Some(".."))
+                        {
+                            parts.pop();
+                        } else if pinned == 0 {
+                            parts.push(OsString::from(".."));
+                        }
                     }
                     Component::Normal(part) => parts.push(part.to_owned()),
                 }
                 Some(parts)
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        bridge::c::HeaderInclude,
+        core::{FilePath, Result},
+    };
+
+    #[test]
+    fn include_path_preserves_leading_parent_dirs() -> Result<()> {
+        let source = FilePath::new("src/jni_glue.c")?;
+        let header = FilePath::new("../include/ffi.h")?;
+        let include = HeaderInclude::from_files(&source, &header)?;
+
+        assert_eq!(include.as_str(), "../../include/ffi.h");
+        Ok(())
     }
 }

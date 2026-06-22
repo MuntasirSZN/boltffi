@@ -234,8 +234,9 @@ static jbyteArray boltffi_jni_buffer_to_byte_array(JNIEnv *env, FfiBuf_u8 buffer
     if (buffer.ptr == NULL) {
         if (buffer.len != 0) {
             boltffi_jni_throw_runtime(env, "BoltFFI buffer pointer was null with non-zero length");
+            return NULL;
         }
-        return NULL;
+        return (*env)->NewByteArray(env, 0);
     }
     if (buffer.len > (uintptr_t)INT32_MAX) {
         boltffi_free_buf(buffer);
@@ -653,6 +654,7 @@ static void ___ListenerVTable_name_handle_completion(void *context, FfiStatus st
 
 JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1name(JNIEnv *env, jclass cls, jlong callback, jlong callback_data) {
     (void)cls;
+
     BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
     const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->name == NULL) {
@@ -695,6 +697,7 @@ static void ___ListenerVTable_point_handle_completion(void *context, FfiStatus s
 
 JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1point(JNIEnv *env, jclass cls, jlong callback, jlong callback_data) {
     (void)cls;
+
     BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
     const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->point == NULL) {
@@ -735,6 +738,7 @@ static void ___ListenerVTable_child_handle_completion(void *context, FfiStatus s
 
 JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1child(JNIEnv *env, jclass cls, jlong callback, jlong callback_data) {
     (void)cls;
+
     BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
     const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->child == NULL) {
@@ -856,14 +860,14 @@ JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1co
     complete((void *)context, (FfiStatus){.code = 1}, (FfiBuf_u8){0});
 }
 
-JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1Callback_1BoltFFICallbackHandle(JNIEnv *env, jclass cls, jlong callback, jlong context, jlong result) {
+JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1Callback_1demo_1child(JNIEnv *env, jclass cls, jlong callback, jlong context, jlong result) {
     (void)cls;
     void (*complete)(void *, FfiStatus, BoltFFICallbackHandle) = (void (*)(void *, FfiStatus, BoltFFICallbackHandle))callback;
     BoltFFICallbackHandle payload = boltffi_create_callback_demo_child((uint64_t)result);
     complete((void *)context, (FfiStatus){.code = 0}, payload);
 }
 
-JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1Callback_1BoltFFICallbackHandle_1failure(JNIEnv *env, jclass cls, jlong callback, jlong context) {
+JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1Callback_1demo_1child_1failure(JNIEnv *env, jclass cls, jlong callback, jlong context) {
     (void)env;
     (void)cls;
     void (*complete)(void *, FfiStatus, BoltFFICallbackHandle) = (void (*)(void *, FfiStatus, BoltFFICallbackHandle))callback;

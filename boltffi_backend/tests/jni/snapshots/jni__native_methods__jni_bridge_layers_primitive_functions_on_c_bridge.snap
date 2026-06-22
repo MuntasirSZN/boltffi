@@ -109,8 +109,9 @@ static jbyteArray boltffi_jni_buffer_to_byte_array(JNIEnv *env, FfiBuf_u8 buffer
     if (buffer.ptr == NULL) {
         if (buffer.len != 0) {
             boltffi_jni_throw_runtime(env, "BoltFFI buffer pointer was null with non-zero length");
+            return NULL;
         }
-        return NULL;
+        return (*env)->NewByteArray(env, 0);
     }
     if (buffer.len > (uintptr_t)INT32_MAX) {
         boltffi_free_buf(buffer);

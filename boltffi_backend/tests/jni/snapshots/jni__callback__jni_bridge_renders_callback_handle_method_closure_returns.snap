@@ -487,6 +487,7 @@ __boltffi_fail:
 
 JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1make_1handler(JNIEnv *env, jclass cls, jlong callback) {
     (void)cls;
+
     BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
     const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->make_handler == NULL) {

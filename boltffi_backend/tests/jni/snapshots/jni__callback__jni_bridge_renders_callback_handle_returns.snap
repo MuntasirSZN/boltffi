@@ -66,6 +66,7 @@ typedef struct {
     void (*free)(uint64_t);
     uint64_t (*clone)(uint64_t);
     uint32_t (*on_value)(uint64_t, uint32_t);
+    void (*on_name)(uint64_t, const uint8_t *, uintptr_t);
 } ___ListenerVTable;
 void boltffi_register_callback_demo_listener(const ___ListenerVTable *vtable);
 BoltFFICallbackHandle boltffi_create_callback_demo_listener(uint64_t handle);
@@ -78,6 +79,7 @@ BoltFFICallbackHandle boltffi_function_demo_make_listener(void);
 #include <jni.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <stdlib.h>
 #if defined(__ANDROID__)
 #include <pthread.h>
@@ -216,6 +218,85 @@ static void boltffi_jni_throw_illegal_argument(JNIEnv *env, const char *message)
     (*env)->DeleteLocalRef(env, exception_class);
 }
 
+static jbyteArray boltffi_jni_buffer_to_byte_array(JNIEnv *env, FfiBuf_u8 buffer) {
+    if (buffer.ptr == NULL) {
+        if (buffer.len != 0) {
+            boltffi_jni_throw_runtime(env, "BoltFFI buffer pointer was null with non-zero length");
+            return NULL;
+        }
+        return (*env)->NewByteArray(env, 0);
+    }
+    if (buffer.len > (uintptr_t)INT32_MAX) {
+        boltffi_free_buf(buffer);
+        boltffi_jni_throw_runtime(env, "BoltFFI buffer too large for Java byte array");
+        return NULL;
+    }
+    jbyteArray array = (*env)->NewByteArray(env, (jsize)buffer.len);
+    if (array == NULL) {
+        boltffi_free_buf(buffer);
+        return NULL;
+    }
+    (*env)->SetByteArrayRegion(env, array, 0, (jsize)buffer.len, (const jbyte *)buffer.ptr);
+    boltffi_free_buf(buffer);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->DeleteLocalRef(env, array);
+        return NULL;
+    }
+    return array;
+}
+
+static jbyteArray boltffi_jni_bytes_to_byte_array(JNIEnv *env, const uint8_t *bytes, uintptr_t len) {
+    if (bytes == NULL && len != 0) {
+        boltffi_jni_throw_runtime(env, "BoltFFI byte slice pointer was null with non-zero length");
+        return NULL;
+    }
+    if (len > (uintptr_t)INT32_MAX) {
+        boltffi_jni_throw_runtime(env, "BoltFFI byte slice too large for Java byte array");
+        return NULL;
+    }
+    jbyteArray array = (*env)->NewByteArray(env, (jsize)len);
+    if (array == NULL) {
+        return NULL;
+    }
+    if (len != 0) {
+        (*env)->SetByteArrayRegion(env, array, 0, (jsize)len, (const jbyte *)bytes);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->DeleteLocalRef(env, array);
+            return NULL;
+        }
+    }
+    return array;
+}
+
+static FfiBuf_u8 boltffi_jni_byte_array_to_buffer(JNIEnv *env, jbyteArray array) {
+    FfiBuf_u8 empty = {0};
+    if (array == NULL) {
+        boltffi_jni_throw_runtime(env, "BoltFFI byte array return was null");
+        return empty;
+    }
+    jsize len = (*env)->GetArrayLength(env, array);
+    if (len == 0) {
+        return empty;
+    }
+    uint8_t *bytes = (uint8_t *)malloc((size_t)len);
+    if (bytes == NULL) {
+        boltffi_jni_throw_runtime(env, "failed to allocate BoltFFI byte array return");
+        return empty;
+    }
+    (*env)->GetByteArrayRegion(env, array, 0, len, (jbyte *)bytes);
+    if ((*env)->ExceptionCheck(env)) {
+        free(bytes);
+        return empty;
+    }
+    FfiBuf_u8 buffer = {
+        .ptr = bytes,
+        .len = (uintptr_t)len,
+        .cap = (uintptr_t)len,
+        .align = 1,
+    };
+    return buffer;
+}
+
 typedef struct {
     void (*free)(uint64_t handle);
     uint64_t (*clone)(uint64_t handle);
@@ -288,6 +369,7 @@ static jclass g____ListenerVTable_class = NULL;
 static jmethodID g____ListenerVTable_free_method = NULL;
 static jmethodID g____ListenerVTable_clone_method = NULL;
 static jmethodID g____ListenerVTable_on_value_method = NULL;
+static jmethodID g____ListenerVTable_on_name_method = NULL;
 
 static void ___ListenerVTable_free(uint64_t handle) {
     JNIEnv *env = NULL;
@@ -338,8 +420,48 @@ __boltffi_fail:
     return 0;
 }
 
+static void ___ListenerVTable_on_name(uint64_t handle, const uint8_t *name_ptr, uintptr_t name_len) {
+    JNIEnv *env = NULL;
+    int attached = 0;
+
+    jbyteArray name = NULL;
+    if (!boltffi_jni_enter(&env, &attached)) {
+        return;
+    }
+
+    name = boltffi_jni_bytes_to_byte_array(env, name_ptr, name_len);
+    if (name == NULL) {
+        goto __boltffi_fail;
+    }
+
+    (*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_on_name_method, (jlong)handle, name);
+    if (boltffi_jni_clear_exception(env)) {
+        goto __boltffi_fail;
+    }
+
+    if (name != NULL) {
+        (*env)->DeleteLocalRef(env, name);
+        name = NULL;
+    }
+
+    boltffi_jni_exit(env, attached);
+    return;
+__boltffi_fail:
+
+    if (name != NULL) {
+        (*env)->DeleteLocalRef(env, name);
+        name = NULL;
+    }
+
+    boltffi_jni_clear_exception(env);
+    boltffi_jni_exit(env, attached);
+
+    return;
+}
+
 JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1on_1value(JNIEnv *env, jclass cls, jlong callback, jint value) {
     (void)cls;
+
     BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
     const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
     if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->on_value == NULL) {
@@ -354,10 +476,49 @@ __boltffi_error:
     return 0;
 }
 
+JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1on_1name(JNIEnv *env, jclass cls, jlong callback, jbyteArray name) {
+    (void)cls;
+
+    jbyte *__boltffi_name_ptr = NULL;
+    jsize __boltffi_name_len = 0;
+    BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
+    const ___ListenerVTable *vtable = callback_handle == NULL ? NULL : (const ___ListenerVTable *)callback_handle->vtable;
+    if (callback_handle == NULL || callback_handle->handle == 0 || vtable == NULL || vtable->on_name == NULL) {
+        boltffi_jni_throw_runtime(env, "BoltFFI callback handle was null or invalid");
+        goto __boltffi_error;
+    }
+
+    if (name == NULL) {
+        boltffi_jni_throw_illegal_argument(env, "BoltFFI array argument was null");
+        goto __boltffi_error;
+    }
+    __boltffi_name_len = (*env)->GetArrayLength(env, name);
+    __boltffi_name_ptr = (*env)->GetByteArrayElements(env, name, NULL);
+    if (__boltffi_name_ptr == NULL) {
+        goto __boltffi_error;
+    }
+
+    vtable->on_name(callback_handle->handle, (const uint8_t *)__boltffi_name_ptr, (uintptr_t)__boltffi_name_len);
+
+    if (__boltffi_name_ptr != NULL) {
+        (*env)->ReleaseByteArrayElements(env, name, __boltffi_name_ptr, JNI_ABORT);
+        __boltffi_name_ptr = NULL;
+    }
+
+    return;
+__boltffi_error:
+    if (__boltffi_name_ptr != NULL) {
+        (*env)->ReleaseByteArrayElements(env, name, __boltffi_name_ptr, JNI_ABORT);
+        __boltffi_name_ptr = NULL;
+    }
+    return;
+}
+
 static ___ListenerVTable g____ListenerVTable_vtable = {
     .free = ___ListenerVTable_free,
     .clone = ___ListenerVTable_clone,
     .on_value = ___ListenerVTable_on_value,
+    .on_name = ___ListenerVTable_on_name,
 };
 
 static bool boltffi_jni_load____ListenerVTable_callbacks(JNIEnv *env) {
@@ -382,6 +543,10 @@ static bool boltffi_jni_load____ListenerVTable_callbacks(JNIEnv *env) {
     if (g____ListenerVTable_on_value_method == NULL) {
         goto fail;
     }
+    g____ListenerVTable_on_name_method = (*env)->GetStaticMethodID(env, g____ListenerVTable_class, "on_name", "(J[B)V");
+    if (g____ListenerVTable_on_name_method == NULL) {
+        goto fail;
+    }
     boltffi_register_callback_demo_listener(&g____ListenerVTable_vtable);
     return true;
 fail:
@@ -398,6 +563,7 @@ static void boltffi_jni_unload____ListenerVTable_callbacks(JNIEnv *env) {
     g____ListenerVTable_free_method = NULL;
     g____ListenerVTable_clone_method = NULL;
     g____ListenerVTable_on_value_method = NULL;
+    g____ListenerVTable_on_name_method = NULL;
 }
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {

@@ -88,7 +88,7 @@ impl CallbackFeatures {
                 callback
                     .handle_methods
                     .iter()
-                    .any(|method| method.returns_closure)
+                    .any(|method| method.returns_closure || method.checks_status)
             }),
             returns_byte_arrays: callbacks.iter().any(|callback| {
                 callback

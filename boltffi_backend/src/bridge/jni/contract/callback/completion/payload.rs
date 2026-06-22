@@ -64,15 +64,18 @@ impl CallbackCompletionPayload {
                         bridge: JNI_BRIDGE,
                         invariant: "async callback completion payload has no C callback declaration",
                     })?;
+                let create_handle = Identifier::parse(declaration.create_handle().name())?;
+                let suffix = create_handle
+                    .as_str()
+                    .strip_prefix("boltffi_create_callback_")
+                    .unwrap_or_else(|| create_handle.as_str());
                 let c_type = TypeFragment::anonymous(ty)?;
                 Ok(Self {
-                    suffix: format!("Callback_{c_type}"),
+                    suffix: format!("Callback_{suffix}"),
                     c_type,
                     jni_type: TypeFragment::new("jlong"),
                     jni_signature: "J".to_owned(),
-                    kind: CallbackCompletionPayloadKind::CallbackHandle {
-                        create_handle: Identifier::parse(declaration.create_handle().name())?,
-                    },
+                    kind: CallbackCompletionPayloadKind::CallbackHandle { create_handle },
                 })
             }
             c::Type::Void
