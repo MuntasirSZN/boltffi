@@ -1,4 +1,4 @@
-//! Template view for closure direct-vector arguments.
+//! Source fields for closure direct-vector arguments.
 //!
 //! The closure contract describes one direct-vector argument in both directions.
 //! The C templates need source-shaped fields for each side: array allocation and

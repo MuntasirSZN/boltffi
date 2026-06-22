@@ -1,4 +1,4 @@
-//! Source view for one generated `Java_*` native method.
+//! Source fields for one generated `Java_*` native method.
 //!
 //! The native method contract is shaped for correctness: parameters know their
 //! kind, returns know their ABI behavior, and records know their writeback
@@ -6,9 +6,10 @@
 //! borrowed-array setup, direct-record locals, C bridge arguments, status checks,
 //! cleanup, and the return expression.
 //!
-//! This module performs that final projection. It does not reinterpret the C
-//! bridge contract or inspect binding IR. It gathers the source-ready views that
-//! the Askama method template prints.
+//! This module performs that final projection from contract to source fields.
+//! It does not reinterpret the C bridge contract or inspect binding IR. The
+//! method template receives a prepared body shape, not raw declarations that it
+//! has to understand.
 
 use crate::{
     bridge::{

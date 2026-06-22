@@ -1,8 +1,14 @@
-//! Builder for registered closure contracts.
+//! Registered closure contracts built from C bridge closure signatures.
 //!
-//! The C bridge describes closure call and release functions by signature. This
-//! module validates those functions and builds the JNI contract used by closure
-//! templates.
+//! Inline closures appear in several places: exported function parameters,
+//! returned closures, callback method parameters, callback method returns, and
+//! nested closure arguments. The C bridge describes each occurrence as a
+//! signature with call, context, and release behavior.
+//!
+//! This module turns those repeated C shapes into deduplicated JNI closure
+//! registrations. Each registration owns the generated JVM class path, call and
+//! release symbols, argument contract, return contract, and optional callback
+//! handle wrapper for that signature.
 
 use boltffi_binding::ClosureSignature;
 

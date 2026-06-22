@@ -1,4 +1,4 @@
-//! Source views for stream-specific JNI helpers.
+//! Source fields for stream-specific JNI helpers.
 //!
 //! Most stream protocol functions render through the normal native-method path.
 //! Direct stream batches need extra source fields because the generated method

@@ -1,7 +1,13 @@
-//! Feature scan for async completion fragments.
+//! Support-fragment selection driven by async callback completions.
 //!
-//! Completion invokers decide whether the source file needs byte-array and
-//! direct-record helpers for async callback payloads.
+//! Async callback completion methods can carry success payloads back to Rust.
+//! When those payloads are encoded bytes or direct records, the generated source
+//! needs the same byte-array and record-array support used by normal callback
+//! returns.
+//!
+//! This module derives those requirements from completion views. It keeps async
+//! completion support tied to the rendered methods rather than to a separate
+//! guess about callback shapes.
 
 use crate::bridge::jni::template::callback::CallbackCompletionInvokerView;
 

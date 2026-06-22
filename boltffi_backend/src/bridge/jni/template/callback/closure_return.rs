@@ -1,8 +1,13 @@
-//! Template view for closure returns from callbacks.
+//! Source fields for closures returned by JVM callback methods.
 //!
-//! The callback template needs storage, output pointers, and release expressions
-//! when a JVM callback method returns an inline closure. This module prepares
-//! that view from the callback contract.
+//! When a callback method returns an inline closure, Rust expects C output
+//! storage containing the closure call pointer, context, and release pointer.
+//! The JVM side returns a handle token, so generated C must store the handle and
+//! write the native closure fields back to the C callback slot.
+//!
+//! This module prepares that writeback view. The callback contract owns the
+//! closure return shape; the template only receives the identifiers it must
+//! print.
 
 use crate::bridge::{
     c::{Identifier, Statement},

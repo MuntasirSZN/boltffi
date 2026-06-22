@@ -1,8 +1,14 @@
-//! Template views for callback arguments.
+//! Source fields for arguments passed from Rust into JVM callbacks.
 //!
-//! Callback argument contracts are typed for bridge correctness. This module
-//! turns them into the statements, declarations, and argument lists consumed by
-//! the callback Askama templates.
+//! A callback vtable slot receives C ABI parameters from Rust, then calls a
+//! static JVM method. Those parameters are already typed by the callback
+//! contract, but the C template needs source-ready names: byte-array locals,
+//! record arrays, callback handle tokens, closure handle tokens, completion
+//! callbacks, and the flat C parameter declarations.
+//!
+//! This module is the projection between those two shapes. It does not decide
+//! whether an argument is encoded, direct, borrowed, or async completion data.
+//! It only prepares the fields that the callback templates print.
 
 use crate::bridge::{
     c::{ArgumentList, Identifier, Statement},

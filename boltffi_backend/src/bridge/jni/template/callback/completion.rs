@@ -1,8 +1,12 @@
-//! Template views for async callback completion invokers.
+//! Source fields for async callback completion methods.
 //!
-//! Completion invokers are native methods called later by the JVM. This module
-//! prepares the success and failure method views, including payload-specific JNI
-//! types and C bridge call arguments.
+//! Async callback methods do not return their payload directly through the JVM
+//! method call. The JVM receives a completion handle and later calls generated
+//! native methods to report success or failure back to Rust.
+//!
+//! This module prepares those completion method fields from the contract:
+//! success and failure symbols, optional payload types, and callback-handle
+//! construction when the payload itself is a returned callback.
 
 use crate::bridge::{
     c::{Identifier, TypeFragment},

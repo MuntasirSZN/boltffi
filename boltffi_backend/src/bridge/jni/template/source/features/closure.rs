@@ -1,8 +1,13 @@
-//! Feature scan for closure template fragments.
+//! Support-fragment selection driven by closure registrations.
 //!
-//! Closure registrations decide whether the source file needs byte-array
-//! helpers, direct-vector helpers, return-buffer helpers, record helpers, or
-//! callback-handle closure helpers.
+//! Registered closures can need byte-array helpers, direct-vector helpers,
+//! return-buffer helpers, direct-record helpers, and callback-handle wrappers.
+//! Those fragments are shared across every closure signature in the generated
+//! source file.
+//!
+//! This module scans the rendered closure views and reports which shared
+//! fragments are needed. It does not rebuild closure signatures or inspect the
+//! original declaration that mentioned the closure.
 
 use crate::bridge::jni::template::closure::ClosureRegistrationView;
 

@@ -1,7 +1,13 @@
-//! Template view for callback registrations.
+//! Source fields for one JVM callback registration.
 //!
-//! Callback registrations provide the generated class name, global method ids,
-//! vtable methods, and local protocol symbols needed by the callback templates.
+//! A callback registration connects a Rust callback trait to a generated JVM
+//! class. The generated C file needs load and unload hooks for method ids, a C
+//! vtable with one slot per trait method, and local helper symbols for clone and
+//! free operations.
+//!
+//! This module gathers those source-facing names from the callback contract. It
+//! keeps the registration shape together so the root source template can render
+//! every callback class through the same path.
 
 use crate::bridge::{
     c::{Identifier, Literal},

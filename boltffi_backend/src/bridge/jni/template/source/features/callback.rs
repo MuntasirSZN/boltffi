@@ -1,8 +1,13 @@
-//! Feature scan for callback template fragments.
+//! Support-fragment selection driven by callback registrations.
 //!
-//! Callback registrations decide whether the source file needs byte-array
-//! helpers, direct-vector helpers, record-array helpers, handle storage, closure
-//! handles, async completion, or callback-return helpers.
+//! Callback vtable dispatch can need byte arrays, direct primitive vectors,
+//! direct-record arrays, callback handle storage, closure handles, async
+//! completion helpers, and callback-return helpers. The generated source should
+//! include each support block only when at least one rendered callback uses it.
+//!
+//! This module derives those booleans from callback template views. The callback
+//! contract has already selected the ABI behavior; this pass only controls which
+//! C fragments are printed.
 
 use crate::bridge::jni::template::callback::CallbackRegistrationView;
 

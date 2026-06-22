@@ -1,8 +1,13 @@
-//! Feature scan for native-method fragments.
+//! Support-fragment selection driven by native methods.
 //!
-//! Native methods decide whether the source file needs status checks,
-//! continuation helpers, exception paths, byte-array returns, direct-record
-//! arrays, and callback handle returns.
+//! The generated JNI source file includes small runtime fragments only when a
+//! rendered native method needs them. Methods can require status checks,
+//! continuation helpers, exception paths, byte-array helpers, direct-record
+//! array helpers, or callback-handle returns.
+//!
+//! This module reads the finished method views and records those requirements.
+//! It does not inspect binding IR or decide method support; it only prevents the
+//! root template from printing unused support code.
 
 use crate::bridge::jni::template::method::NativeMethodView;
 

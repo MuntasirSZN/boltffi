@@ -1,8 +1,14 @@
-//! Builder from C callback slots to JNI callback methods.
+//! JNI callback methods built from C callback vtable slots.
 //!
-//! The C bridge slot is the source of truth for parameter grouping and return
-//! shape. This module validates that slot and creates the JNI method descriptor
-//! and local contract used by generated callback glue.
+//! The C bridge owns the callback ABI that Rust calls: the slot name, handle
+//! parameter, grouped payload parameters, return type, and optional closure
+//! return storage. The JVM bridge needs the same slot as a static Java method
+//! call with a JVM descriptor, cached method id, typed JNI arguments, and return
+//! handling.
+//!
+//! This module performs that translation for one slot. It validates the C slot
+//! shape once and produces the callback method contract consumed by the callback
+//! templates.
 
 use crate::{
     bridge::{

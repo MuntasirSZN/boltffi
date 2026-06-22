@@ -1,8 +1,13 @@
-//! Template view for direct-record method parameters.
+//! Source fields for direct-record native method parameters.
 //!
-//! Direct records require byte-array length checks, local record storage, and
-//! optional mutation writeback. This module prepares those fields for the native
-//! method template.
+//! Java passes direct records as byte arrays. Before the C bridge call, the
+//! generated method checks the byte length and copies the bytes into local C
+//! record storage. Mutable records also need a writeback copy after Rust
+//! returns.
+//!
+//! This module prepares those local names from the record parameter contract.
+//! The template prints the copy and writeback steps; it does not decide whether
+//! the record is direct or mutable.
 
 use crate::bridge::{c::Identifier, jni::RecordParameter};
 

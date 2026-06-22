@@ -1,8 +1,14 @@
-//! Builder for JVM method return contracts.
+//! JVM method return contracts built from C ABI return types.
 //!
-//! Callback and closure trampolines call static JVM methods and then translate
-//! the result back to the C ABI. This module builds that return contract from
-//! the C return type selected by the bridge.
+//! Callback vtable slots and closure trampolines call static JVM methods. After
+//! the call returns, generated C must translate the Java value back into the C
+//! shape Rust expects: no value, scalar value, byte buffer, direct record, or
+//! callback handle.
+//!
+//! This module is the single place that maps a C return type into that JVM
+//! return contract. It keeps failure values, method descriptors, and callback
+//! handle construction aligned for callbacks and closures instead of letting
+//! each caller invent its own return mapping.
 
 use crate::{
     bridge::{

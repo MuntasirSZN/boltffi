@@ -1,11 +1,11 @@
-//! Template views for Java arrays borrowed by native methods.
+//! Source fields for Java arrays borrowed by native methods.
 //!
 //! The method contract knows which parameters arrive as Java arrays. The C
 //! source template needs a flatter view: local pointer names, length variables,
 //! JNI function-table members, cleanup rules, and optional stack-copy storage.
 //!
-//! This module is that projection layer. It prepares template data from the
-//! already typed contract and keeps the array lifetime rules out of the Askama
+//! This module is that projection layer. It prepares source fields from the
+//! already typed contract and keeps array lifetime rules out of the Askama
 //! fragments. Encoded byte arrays always use the borrowed-elements path. Direct
 //! primitive vectors may use the small stack-copy path recorded by the contract.
 

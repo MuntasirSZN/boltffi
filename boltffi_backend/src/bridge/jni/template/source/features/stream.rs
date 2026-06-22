@@ -1,8 +1,11 @@
-//! Feature scan for stream template fragments.
+//! Support-fragment selection driven by stream protocols.
 //!
-//! Stream protocols add direct-batch native methods when their item layout can
-//! be copied as a Java byte array. This module records whether those fragments
-//! are needed.
+//! Most stream operations render as ordinary native methods. Direct batch
+//! helpers are different because they allocate a native item buffer, ask the C
+//! bridge to fill it, and copy the used bytes into a Java array.
+//!
+//! This module records whether any rendered stream uses that direct-batch path,
+//! so the root template includes the extra source fragment only when needed.
 
 use crate::bridge::jni::template::stream::DirectStreamBatchView;
 

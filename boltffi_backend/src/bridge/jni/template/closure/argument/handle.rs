@@ -1,7 +1,13 @@
-//! Template view for nested closure handles.
+//! Source fields for nested closure handles.
 //!
-//! Nested closures are passed to the JVM as handle tokens. This module prepares
-//! the symbols needed to allocate, call, and release those handles.
+//! A closure argument can itself be another inline closure. The generated C
+//! cannot pass raw call, context, and release pointers to Java directly, so it
+//! wraps them in a JVM-visible handle token with native call and release helper
+//! methods.
+//!
+//! This module prepares those handle fields from the closure contract. Ownership
+//! remains in the contract; this view only gives the templates the names they
+//! need to allocate and release the handle.
 
 use crate::bridge::{c::Identifier, jni::ClosureHandleArgument};
 

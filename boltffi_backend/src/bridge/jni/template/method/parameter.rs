@@ -1,4 +1,4 @@
-//! Template view for JNI native method declarations.
+//! Source fields for JNI native method declarations.
 //!
 //! The contract layer keeps each native parameter tied to its C bridge
 //! arguments. The C source declaration only needs the Java-facing name and JNI

@@ -1,8 +1,13 @@
-//! Template view for callback direct vectors.
+//! Source fields for direct vectors delivered to JVM callbacks.
 //!
-//! Direct-vector callback arguments need a Java array local, a pinned pointer,
-//! and the JNI array functions for the element type. This module prepares those
-//! template fields.
+//! Rust passes direct vectors through C as pointer plus element count. The JVM
+//! method receives a Java primitive array instead, so the generated C must
+//! allocate the right array type and copy the native elements with the matching
+//! `Set*ArrayRegion` function.
+//!
+//! This module prepares that array allocation view from the callback contract.
+//! The element type and copy function are selected once by the contract layer,
+//! then printed by the callback template without re-reading the original type.
 
 use crate::bridge::{
     c::{Identifier, TypeFragment},

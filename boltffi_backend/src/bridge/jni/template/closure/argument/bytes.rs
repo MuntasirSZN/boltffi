@@ -1,7 +1,11 @@
-//! Template view for closure byte-array arguments.
+//! Source fields for encoded byte arguments in closure calls.
 //!
-//! Closure call templates need a Java byte array local plus the C pointer and
-//! length inputs that fill it. This module prepares those fields.
+//! Rust-to-JVM closure calls carry encoded payloads as pointer plus length C
+//! parameters. The JVM method receives one `jbyteArray`, so generated C needs a
+//! local buffer name, the source pointer, and the byte length.
+//!
+//! This module prepares that byte-array view from the closure contract. Encoding
+//! has already been planned by the binding IR and C bridge.
 
 use crate::bridge::{c::Identifier, jni::ClosureBytesArgument};
 

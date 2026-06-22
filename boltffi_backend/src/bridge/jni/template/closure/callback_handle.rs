@@ -1,8 +1,13 @@
-//! Template view for callback-owned closure handles.
+//! Source fields for closure handles that originate inside callbacks.
 //!
-//! Callback methods can receive closures from Rust and expose them to the JVM.
-//! This module prepares the generated native call and release methods for those
-//! closure handles.
+//! JVM callback methods can receive closures from Rust. Java sees those
+//! closures as handle tokens, while Rust expects a C function pointer plus
+//! context and release pointer. The generated bridge class therefore needs
+//! native methods that call and release the closure behind the token.
+//!
+//! This module prepares that handle wrapper view from the registered closure
+//! contract. It shares the same closure rendering path used by normal closure
+//! parameters instead of creating a callback-only closure model.
 
 use crate::{
     bridge::{
