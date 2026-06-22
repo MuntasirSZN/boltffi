@@ -72,6 +72,10 @@ impl fmt::Display for Expression {
 impl sealed::SyntaxFragment for Expression {}
 
 impl Expression {
+    pub(crate) fn new(fragment: impl Into<String>) -> Self {
+        Self(fragment.into())
+    }
+
     pub(crate) fn identifier(identifier: Identifier) -> Self {
         Self(identifier.to_string())
     }

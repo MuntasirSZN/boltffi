@@ -353,3 +353,34 @@ fn jni_bridge_renders_closure_parameters_from_contract_group() {
     );
     assert!(source.contains("FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__u32_to_u32_call, (void *)callback, boltffi_jni____closure__u32_to_u32_release);"));
 }
+
+#[test]
+fn jni_bridge_renders_encoded_closure_parameters_from_contract_group() {
+    let files = files(
+        r#"
+            #[export]
+            pub fn install(callback: impl Fn(String) -> String) {}
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(source.contains(
+            "static FfiBuf_u8 boltffi_jni____closure__string_to_string_call(void *user_data, const uint8_t *arg0_ptr, uintptr_t arg0_len)"
+        ));
+    assert!(source.contains("jbyteArray arg0 = NULL;"));
+    assert!(source.contains("arg0 = boltffi_jni_bytes_to_byte_array(env, arg0_ptr, arg0_len);"));
+    assert!(source.contains(
+            "jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, g____closure__string_to_string_class, g____closure__string_to_string_call_method, handle, arg0);"
+        ));
+    assert!(source.contains("(*env)->DeleteLocalRef(env, arg0);"));
+    assert!(source.contains(
+        "GetStaticMethodID(env, g____closure__string_to_string_class, \"call\", \"(J[B)[B\")"
+    ));
+    assert!(source.contains(
+            "FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__string_to_string_call, (void *)callback, boltffi_jni____closure__string_to_string_release);"
+        ));
+}

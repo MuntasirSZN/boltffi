@@ -213,6 +213,38 @@ fn jni_bridge_renders_callback_closure_parameters() {
 }
 
 #[test]
+fn jni_bridge_renders_callback_encoded_closure_parameters() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Listener {
+                fn install(&self, callback: impl Fn(String) -> String);
+            }
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(source.contains("FfiBuf_u8 (*call)(void *, const uint8_t *, uintptr_t);"));
+    assert!(source.contains("static jlong boltffi_jni____closure__string_to_string_handle_new(JNIEnv *env, FfiBuf_u8 (*call)(void *, const uint8_t *, uintptr_t), void *context, void (*release)(void *))"));
+    assert!(source.contains("JNIEXPORT jbyteArray JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1closure_1_1_1_1closure_1_1string_1to_1string_1call(JNIEnv *env, jclass cls, jlong value, jbyteArray arg0)"));
+    assert!(source.contains("FfiBuf_u8 arg0_buffer = {0};"));
+    assert!(source.contains("arg0_buffer = boltffi_jni_byte_array_to_buffer(env, arg0);"));
+    assert!(source.contains(
+        "FfiBuf_u8 result = closure->call(closure->context, arg0_buffer.ptr, arg0_buffer.len);"
+    ));
+    assert!(source.contains("boltffi_free_buf(arg0_buffer);"));
+    assert!(source.contains("return boltffi_jni_buffer_to_byte_array(env, result);"));
+    assert!(
+        source
+            .contains("GetStaticMethodID(env, g____ListenerVTable_class, \"install\", \"(JJ)V\")")
+    );
+}
+
+#[test]
 fn jni_bridge_renders_callback_encoded_returns() {
     let files = files(
         r#"

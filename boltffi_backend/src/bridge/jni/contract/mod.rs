@@ -21,7 +21,10 @@ pub use callback::{
     CallbackDirectVectorArgument, CallbackHandleArgument, CallbackMethod, CallbackParameter,
     CallbackRecordArgument, CallbackRegistration, CallbackReturn,
 };
-pub use closure::{CallbackClosureHandle, ClosureArgument, ClosureParameter, ClosureRegistration};
+pub use closure::{
+    CallbackClosureHandle, ClosureArgument, ClosureBytesArgument, ClosureCParameter,
+    ClosureParameter, ClosureRegistration,
+};
 pub use continuation::ContinuationParameter;
 pub use direct_vector::DirectVectorParameter;
 pub use jni_type::JniType;

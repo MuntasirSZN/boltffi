@@ -3,7 +3,7 @@ use crate::core::{Error, Result};
 use boltffi_binding::ClosureSignature;
 
 use super::super::{C_BRIDGE_CONTRACT, Identifier};
-use super::{Parameter, ParameterIndex};
+use super::{Parameter, ParameterGroup, ParameterIndex};
 
 /// C ABI parameters that carry one closure argument.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -14,6 +14,8 @@ pub struct ClosureParameter {
     call: ParameterIndex,
     context: ParameterIndex,
     release: ParameterIndex,
+    parameters: Vec<Parameter>,
+    parameter_groups: Vec<ParameterGroup>,
 }
 
 impl ClosureParameter {
@@ -42,11 +44,22 @@ impl ClosureParameter {
         self.release
     }
 
+    /// Returns the C ABI parameter at the given closure-call position.
+    pub fn parameter(&self, index: ParameterIndex) -> &Parameter {
+        &self.parameters[index.position()]
+    }
+
+    /// Returns source-level closure-call parameter groups in declaration order.
+    pub fn parameter_groups(&self) -> &[ParameterGroup] {
+        &self.parameter_groups
+    }
+
     pub(in crate::bridge::c::parameter) fn from_params(
         params: &[Parameter],
         call: usize,
         name: &Identifier,
         signature: &ClosureSignature,
+        parameters: &[Parameter],
     ) -> Result<Self> {
         let context = call + 1;
         let release = call + 2;
@@ -76,6 +89,8 @@ impl ClosureParameter {
             call: ParameterIndex::new(call),
             context: ParameterIndex::new(context),
             release: ParameterIndex::new(release),
+            parameters: parameters.to_vec(),
+            parameter_groups: ParameterGroup::from_params(parameters)?,
         })
     }
 }

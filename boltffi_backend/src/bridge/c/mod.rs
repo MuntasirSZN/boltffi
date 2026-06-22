@@ -267,6 +267,31 @@ mod tests {
     }
 
     #[test]
+    fn c_contract_preserves_closure_call_parameter_groups() {
+        let contract = contract(
+            r#"
+            #[export]
+            pub fn install(callback: impl Fn(String) -> String) {}
+            "#,
+        );
+        let function = contract
+            .functions()
+            .iter()
+            .find(|function| function.name() == "boltffi_function_demo_install")
+            .expect("exported function");
+        let [ParameterGroup::Closure(closure)] = function.parameter_groups() else {
+            panic!("expected one closure parameter group");
+        };
+        let [ParameterGroup::ByteSlice(argument)] = closure.parameter_groups() else {
+            panic!("expected closure byte-slice argument group");
+        };
+
+        assert_eq!(argument.name(), "arg0");
+        assert_eq!(closure.parameter(argument.pointer()).name(), "arg0_ptr");
+        assert_eq!(closure.parameter(argument.length()).name(), "arg0_len");
+    }
+
+    #[test]
     fn c_contract_groups_callback_method_closure_parameter_triples() {
         let contract = contract(
             r#"

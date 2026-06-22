@@ -14,10 +14,11 @@ pub use contract::{
     CallbackClosureArgument, CallbackClosureHandle, CallbackCompletionArgument,
     CallbackCompletionInvoker, CallbackCompletionPayload, CallbackDirectVectorArgument,
     CallbackHandleArgument, CallbackMethod, CallbackParameter, CallbackRecordArgument,
-    CallbackRegistration, CallbackReturn, ClosureArgument, ClosureParameter, ClosureRegistration,
-    ContinuationParameter, DirectStreamBatchMethod, DirectVectorParameter, JniBridgeContract,
-    JniType, JvmMethodReturn, NativeMethod, NativeParameter, NativeParameterKind, NativeReturn,
-    RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
+    CallbackRegistration, CallbackReturn, ClosureArgument, ClosureBytesArgument, ClosureCParameter,
+    ClosureParameter, ClosureRegistration, ContinuationParameter, DirectStreamBatchMethod,
+    DirectVectorParameter, JniBridgeContract, JniType, JvmMethodReturn, NativeMethod,
+    NativeParameter, NativeParameterKind, NativeReturn, RecordParameter, RecordValue,
+    ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
 

@@ -751,6 +751,8 @@ impl Signature {
         D: Direction,
         D::Opposite: ParamDirection<Native>,
     {
+        let call_params = params;
+        let return_params = self.callback_return_params(returns)?;
         Ok(vec![
             Parameter::closure_call(
                 name,
@@ -758,14 +760,11 @@ impl Signature {
                 Type::FunctionPointer {
                     returns: Box::new(self.callback_return_type(returns, error)?),
                     params: std::iter::once(Type::MutPointer(Box::new(Type::Void)))
-                        .chain(params.into_iter().map(|parameter| parameter.ty().clone()))
-                        .chain(
-                            self.callback_return_params(returns)?
-                                .into_iter()
-                                .map(|parameter| parameter.ty().clone()),
-                        )
+                        .chain(call_params.iter().map(|parameter| parameter.ty().clone()))
+                        .chain(return_params.iter().map(|parameter| parameter.ty().clone()))
                         .collect(),
                 },
+                call_params,
             )?,
             Parameter::closure_context(name)?,
             Parameter::closure_release(name)?,

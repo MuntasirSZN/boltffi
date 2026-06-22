@@ -1,6 +1,6 @@
 use crate::bridge::{
-    c::{Expression, Identifier, Literal, Statement, TypeFragment},
-    jni::{ClosureArgument, ClosureRegistration},
+    c::{ArgumentList, Expression, Identifier, Literal, Statement, TypeFragment},
+    jni::{ClosureArgument, ClosureBytesArgument, ClosureCParameter, ClosureRegistration},
 };
 
 pub struct ClosureRegistrationView {
@@ -20,7 +20,14 @@ pub struct ClosureRegistrationView {
     pub method_signature: Literal,
     pub call_method_suffix: String,
     pub failure_value: Expression,
-    pub arguments: Vec<ClosureArgumentView>,
+    pub c_parameters: Vec<ClosureCParameterView>,
+    pub byte_arrays: Vec<ClosureBytesArgumentView>,
+    pub jni_arguments: ArgumentList,
+    pub has_jni_arguments: bool,
+    pub handle_parameters: Vec<ClosureCParameterView>,
+    pub handle_byte_arrays: Vec<ClosureBytesArgumentView>,
+    pub rust_arguments: ArgumentList,
+    pub has_rust_arguments: bool,
 }
 
 pub struct CallbackClosureHandleView {
@@ -36,14 +43,20 @@ pub struct CallbackClosureHandleView {
     pub closure: ClosureRegistrationView,
 }
 
-pub struct ClosureArgumentView {
+pub struct ClosureCParameterView {
+    pub declaration: Statement,
+}
+
+pub struct ClosureBytesArgumentView {
     pub name: Identifier,
-    pub c_type: TypeFragment,
-    pub jni_type: TypeFragment,
+    pub pointer: Identifier,
+    pub length: Identifier,
+    pub buffer: Identifier,
 }
 
 impl ClosureRegistrationView {
     pub fn from_registration(registration: &ClosureRegistration) -> Self {
+        let arguments = registration.arguments();
         Self {
             class: Literal::string(&registration.class().as_jni_class_name()),
             global_class: registration.global_class().clone(),
@@ -66,11 +79,30 @@ impl ClosureRegistrationView {
             failure_value: registration
                 .failure_value()
                 .unwrap_or_else(|| Expression::literal(Literal::integer_zero())),
-            arguments: registration
-                .arguments()
+            c_parameters: arguments
                 .iter()
-                .map(ClosureArgumentView::from_argument)
+                .flat_map(ClosureArgument::c_parameters)
+                .map(ClosureCParameterView::from_parameter)
                 .collect(),
+            byte_arrays: arguments
+                .iter()
+                .filter_map(ClosureArgument::call_bytes)
+                .map(ClosureBytesArgumentView::from_argument)
+                .collect(),
+            jni_arguments: ClosureArgument::jvm_argument_list(arguments),
+            has_jni_arguments: !arguments.is_empty(),
+            handle_parameters: arguments
+                .iter()
+                .flat_map(ClosureArgument::handle_parameters)
+                .map(ClosureCParameterView::from_parameter)
+                .collect(),
+            handle_byte_arrays: arguments
+                .iter()
+                .filter_map(ClosureArgument::handle_bytes)
+                .map(ClosureBytesArgumentView::from_argument)
+                .collect(),
+            rust_arguments: ClosureArgument::rust_argument_list(arguments),
+            has_rust_arguments: !arguments.is_empty(),
         }
     }
 }
@@ -94,12 +126,21 @@ impl CallbackClosureHandleView {
     }
 }
 
-impl ClosureArgumentView {
-    fn from_argument(argument: &ClosureArgument) -> Self {
+impl ClosureCParameterView {
+    fn from_parameter(parameter: ClosureCParameter) -> Self {
+        Self {
+            declaration: parameter.declaration().clone(),
+        }
+    }
+}
+
+impl ClosureBytesArgumentView {
+    fn from_argument(argument: &ClosureBytesArgument) -> Self {
         Self {
             name: argument.name().clone(),
-            c_type: argument.c_type().clone(),
-            jni_type: argument.jni_type(),
+            pointer: argument.pointer().clone(),
+            length: argument.length().clone(),
+            buffer: argument.buffer().clone(),
         }
     }
 }

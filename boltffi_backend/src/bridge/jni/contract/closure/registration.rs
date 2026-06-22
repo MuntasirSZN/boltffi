@@ -244,11 +244,10 @@ impl ClosureRegistration {
                 .then(|| CallbackClosureHandle::new(class, closure.signature(), call_type))
                 .transpose()?,
             returns: JvmMethodReturn::from_c_type(returns)?,
-            arguments: params
+            arguments: closure
+                .parameter_groups()
                 .iter()
-                .skip(1)
-                .enumerate()
-                .map(ClosureArgument::from_c_type)
+                .map(|group| ClosureArgument::from_group(closure, group))
                 .collect::<Result<Vec<_>>>()?,
         })
     }

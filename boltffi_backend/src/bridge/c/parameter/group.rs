@@ -71,9 +71,12 @@ impl ParameterGroup {
                 bridge: C_BRIDGE_CONTRACT,
                 invariant: "continuation parameter group does not start with data parameter",
             }),
-            ParameterRole::ClosureCall { name, signature } => {
-                ClosureParameter::from_params(params, index, name, signature).map(Self::Closure)
-            }
+            ParameterRole::ClosureCall {
+                name,
+                signature,
+                parameters,
+            } => ClosureParameter::from_params(params, index, name, signature, parameters)
+                .map(Self::Closure),
             ParameterRole::ClosureContext(_) | ParameterRole::ClosureRelease(_) => {
                 Err(Error::BrokenBridgeContract {
                     bridge: C_BRIDGE_CONTRACT,

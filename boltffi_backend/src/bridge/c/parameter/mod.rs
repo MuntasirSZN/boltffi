@@ -51,6 +51,7 @@ enum ParameterRole {
     ClosureCall {
         name: Identifier,
         signature: ClosureSignature,
+        parameters: Vec<Parameter>,
     },
     ClosureContext(Identifier),
     ClosureRelease(Identifier),
@@ -141,13 +142,19 @@ impl Parameter {
     }
 
     /// Creates the call function pointer in a closure C ABI parameter group.
-    pub fn closure_call(name: &str, signature: &ClosureSignature, ty: Type) -> Result<Self> {
+    pub fn closure_call(
+        name: &str,
+        signature: &ClosureSignature,
+        ty: Type,
+        parameters: Vec<Parameter>,
+    ) -> Result<Self> {
         Self::with_role(
             format!("{name}_call"),
             ty,
             ParameterRole::ClosureCall {
                 name: Identifier::escape(name)?,
                 signature: signature.clone(),
+                parameters,
             },
         )
     }

@@ -4,7 +4,7 @@ static jclass {{ closure.global_class }} = NULL;
 static jmethodID {{ closure.call_method }} = NULL;
 static jmethodID {{ closure.free_method }} = NULL;
 
-static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for argument in closure.arguments %}, {{ argument.c_type }} {{ argument.name }}{% endfor %}) {
+static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for parameter in closure.c_parameters %}, {{ parameter.declaration }}{% endfor %}) {
     JNIEnv *env = NULL;
     int attached = 0;
     if (!boltffi_jni_enter(&env, &attached)) {
@@ -15,17 +15,21 @@ static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for argu
 {%- endif %}
     }
     jlong handle = (jlong)(uintptr_t)user_data;
+{% include "bridge/jni/closure/byte_array_declarations.c" %}
+{% include "bridge/jni/closure/byte_arrays.c" %}
 {%- if closure.returns_void %}
-    (*env)->CallStaticVoidMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% for argument in closure.arguments %}, ({{ argument.jni_type }}){{ argument.name }}{% endfor %});
+    (*env)->CallStaticVoidMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% if closure.has_jni_arguments %}, {{ closure.jni_arguments }}{% endif %});
     boltffi_jni_clear_exception(env);
+{% include "bridge/jni/closure/cleanup.c" %}
     boltffi_jni_exit(attached);
 {%- else %}
 {%- if closure.returns_byte_array %}
-    jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% for argument in closure.arguments %}, ({{ argument.jni_type }}){{ argument.name }}{% endfor %});
+    jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% if closure.has_jni_arguments %}, {{ closure.jni_arguments }}{% endif %});
 {%- else %}
-    {{ closure.c_return_type }} result = ({{ closure.c_return_type }})(*env)->CallStatic{{ closure.call_method_suffix }}Method(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% for argument in closure.arguments %}, ({{ argument.jni_type }}){{ argument.name }}{% endfor %});
+    {{ closure.c_return_type }} result = ({{ closure.c_return_type }})(*env)->CallStatic{{ closure.call_method_suffix }}Method(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% if closure.has_jni_arguments %}, {{ closure.jni_arguments }}{% endif %});
 {%- endif %}
     if (boltffi_jni_clear_exception(env)) {
+{% include "bridge/jni/closure/cleanup.c" %}
         boltffi_jni_exit(attached);
         return {{ closure.failure_value }};
     }
@@ -33,6 +37,7 @@ static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for argu
     {{ closure.c_return_type }} result = boltffi_jni_byte_array_to_buffer(env, __boltffi_return_array);
     (*env)->DeleteLocalRef(env, __boltffi_return_array);
     if (boltffi_jni_clear_exception(env)) {
+{% include "bridge/jni/closure/cleanup.c" %}
         boltffi_jni_exit(attached);
         return {{ closure.failure_value }};
     }
@@ -41,11 +46,13 @@ static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for argu
     if (!boltffi_jni_read_record(env, __boltffi_return_array, (uintptr_t)sizeof(result), &result)) {
         (*env)->DeleteLocalRef(env, __boltffi_return_array);
         boltffi_jni_clear_exception(env);
+{% include "bridge/jni/closure/cleanup.c" %}
         boltffi_jni_exit(attached);
         return {{ closure.failure_value }};
     }
     (*env)->DeleteLocalRef(env, __boltffi_return_array);
 {%- endif %}
+{% include "bridge/jni/closure/cleanup.c" %}
     boltffi_jni_exit(attached);
     return result;
 {%- endif %}
