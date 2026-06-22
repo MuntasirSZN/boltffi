@@ -41,7 +41,7 @@ impl JniBridgeContract {
             methods: c_bridge
                 .functions()
                 .iter()
-                .map(|function| NativeMethod::new(&class, function))
+                .map(|function| NativeMethod::new(&class, function, c_bridge.callbacks()))
                 .collect::<Result<Vec<_>>>()?,
             class,
             source_path,

@@ -10,8 +10,8 @@ mod template;
 
 pub use bridge::JniBridge;
 pub use contract::{
-    BytesParameter, ContinuationParameter, JniBridgeContract, JniType, NativeMethod,
-    NativeParameter, NativeParameterKind, NativeReturn, RecordParameter, RecordValue,
+    BytesParameter, CallbackParameter, ContinuationParameter, JniBridgeContract, JniType,
+    NativeMethod, NativeParameter, NativeParameterKind, NativeReturn, RecordParameter, RecordValue,
     ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
@@ -305,8 +305,8 @@ mod tests {
     }
 
     #[test]
-    fn jni_bridge_rejects_callback_handle_c_abi_values() {
-        let bindings = bindings(
+    fn jni_bridge_renders_callback_handle_parameters() {
+        let files = files(
             r#"
             #[export]
             pub trait Listener {
@@ -317,20 +317,27 @@ mod tests {
             pub fn install(listener: impl Listener) {}
             "#,
         );
-        let stack = BridgeLayer::new(
-            CBridge::new("jni/demo.h").expect("C header bridge"),
-            JniBridge::new("com.boltffi.demo", "Native", "jni/jni_glue.c").expect("JNI bridge"),
-        );
-        let error = stack
-            .build(&bindings)
-            .expect_err("JNI callback handle should be unsupported");
+        let header = files
+            .iter()
+            .find(|(path, _)| path == "jni/demo.h")
+            .map(|(_, contents)| contents)
+            .expect("C header file");
+        let source = files
+            .iter()
+            .find(|(path, _)| path == "jni/jni_glue.c")
+            .map(|(_, contents)| contents)
+            .expect("JNI source file");
 
-        assert_eq!(
-            error,
-            Error::UnsupportedBridge {
-                bridge: "jni",
-                shape: "callback handle C ABI",
-            }
+        assert!(header.contains(
+            "BoltFFICallbackHandle boltffi_create_callback_demo_listener(uint64_t handle);"
+        ));
+        assert!(
+            header.contains(
+                "FfiStatus boltffi_function_demo_install(BoltFFICallbackHandle listener);"
+            )
         );
+        assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1install(JNIEnv *env, jclass cls, jlong listener)"));
+        assert!(source.contains("FfiStatus status = boltffi_function_demo_install(boltffi_create_callback_demo_listener((uint64_t)listener));"));
+        assert!(source.contains("boltffi_jni_throw_status(env, status);"));
     }
 }

@@ -1,7 +1,10 @@
 use crate::{
     bridge::{
         c::{self, Expression, Identifier, TypeFragment},
-        jni::{BytesParameter, ContinuationParameter, RecordParameter, ScalarParameter},
+        jni::{
+            BytesParameter, CallbackParameter, ContinuationParameter, RecordParameter,
+            ScalarParameter,
+        },
     },
     core::{Error, Result},
 };
@@ -22,6 +25,7 @@ impl NativeParameter {
             NativeParameterKind::Scalar(parameter) => parameter.name(),
             NativeParameterKind::Bytes(parameter) => parameter.name(),
             NativeParameterKind::Record(parameter) => parameter.name(),
+            NativeParameterKind::Callback(parameter) => parameter.name(),
             NativeParameterKind::Continuation(parameter) => parameter.name(),
         }
     }
@@ -32,6 +36,7 @@ impl NativeParameter {
             NativeParameterKind::Scalar(parameter) => parameter.ty().as_type_fragment(),
             NativeParameterKind::Bytes(_) => TypeFragment::new("jbyteArray"),
             NativeParameterKind::Record(_) => TypeFragment::new("jbyteArray"),
+            NativeParameterKind::Callback(parameter) => parameter.ty(),
             NativeParameterKind::Continuation(parameter) => parameter.ty(),
         }
     }
@@ -55,6 +60,7 @@ impl NativeParameter {
             NativeParameterKind::Record(parameter) => {
                 Ok(vec![Expression::identifier(parameter.local().clone())])
             }
+            NativeParameterKind::Callback(parameter) => Ok(vec![parameter.c_argument()]),
             NativeParameterKind::Continuation(parameter) => parameter.c_arguments(),
         }
     }
@@ -64,6 +70,7 @@ impl NativeParameter {
         match &self.kind {
             NativeParameterKind::Scalar(_)
             | NativeParameterKind::Record(_)
+            | NativeParameterKind::Callback(_)
             | NativeParameterKind::Continuation(_) => None,
             NativeParameterKind::Bytes(parameter) => Some(parameter),
         }
@@ -74,6 +81,7 @@ impl NativeParameter {
         match &self.kind {
             NativeParameterKind::Scalar(_)
             | NativeParameterKind::Bytes(_)
+            | NativeParameterKind::Callback(_)
             | NativeParameterKind::Continuation(_) => None,
             NativeParameterKind::Record(parameter) => Some(parameter),
         }
@@ -85,15 +93,19 @@ impl NativeParameter {
     }
 
     /// Creates JNI parameters from C ABI parameter groups.
-    pub fn from_c_function(function: &c::Function) -> Result<Vec<Self>> {
+    pub fn from_c_function(function: &c::Function, callbacks: &[c::Callback]) -> Result<Vec<Self>> {
         function
             .parameter_groups()
             .iter()
-            .map(|group| Self::from_c_group(function, group))
+            .map(|group| Self::from_c_group(function, group, callbacks))
             .collect()
     }
 
-    fn from_c_group(function: &c::Function, group: &c::ParameterGroup) -> Result<Self> {
+    fn from_c_group(
+        function: &c::Function,
+        group: &c::ParameterGroup,
+        callbacks: &[c::Callback],
+    ) -> Result<Self> {
         match group {
             c::ParameterGroup::Value(index) => {
                 let parameter = function.parameter(*index);
@@ -101,9 +113,14 @@ impl NativeParameter {
                     Some(record) => Ok(Self {
                         kind: NativeParameterKind::Record(record),
                     }),
-                    None => ScalarParameter::from_c_parameter(parameter).map(|scalar| Self {
-                        kind: NativeParameterKind::Scalar(scalar),
-                    }),
+                    None => match CallbackParameter::from_c_parameter(parameter, callbacks)? {
+                        Some(callback) => Ok(Self {
+                            kind: NativeParameterKind::Callback(callback),
+                        }),
+                        None => ScalarParameter::from_c_parameter(parameter).map(|scalar| Self {
+                            kind: NativeParameterKind::Scalar(scalar),
+                        }),
+                    },
                 }
             }
             c::ParameterGroup::ByteSlice(bytes) => {
@@ -136,6 +153,8 @@ pub enum NativeParameterKind {
     Bytes(BytesParameter),
     /// A `jbyteArray` copied into one direct C record value.
     Record(RecordParameter),
+    /// A `jlong` Java callback handle converted through a C callback constructor.
+    Callback(CallbackParameter),
     /// A `jlong` callback data value paired with the generated JNI continuation callback.
     Continuation(ContinuationParameter),
 }

@@ -18,11 +18,15 @@ pub struct NativeMethod {
 
 impl NativeMethod {
     /// Creates a JNI native method from a C function declaration.
-    pub fn new(class: &JvmClassPath, function: &c::Function) -> Result<Self> {
+    pub fn new(
+        class: &JvmClassPath,
+        function: &c::Function,
+        callbacks: &[c::Callback],
+    ) -> Result<Self> {
         Ok(Self {
             symbol: JniSymbolName::native_method(class, function.name())?,
             returns: NativeReturn::from_c_type(function.returns())?,
-            parameters: NativeParameter::from_c_function(function)?,
+            parameters: NativeParameter::from_c_function(function, callbacks)?,
             c_function: function.clone(),
         })
     }
