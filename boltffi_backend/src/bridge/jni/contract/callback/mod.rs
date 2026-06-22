@@ -5,7 +5,8 @@ mod registration;
 mod return_value;
 
 pub use argument::{
-    CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackRecordArgument,
+    CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackHandleArgument,
+    CallbackRecordArgument,
 };
 pub use method::CallbackMethod;
 pub use parameter::CallbackParameter;

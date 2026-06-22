@@ -10,11 +10,11 @@ mod template;
 
 pub use bridge::JniBridge;
 pub use contract::{
-    BytesParameter, CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackMethod,
-    CallbackParameter, CallbackRecordArgument, CallbackRegistration, CallbackReturn,
-    ClosureArgument, ClosureParameter, ClosureRegistration, ContinuationParameter,
-    JniBridgeContract, JniReturn, JniType, NativeMethod, NativeParameter, NativeParameterKind,
-    NativeReturn, RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
+    BytesParameter, CallbackArgument, CallbackBytesArgument, CallbackCParameter,
+    CallbackHandleArgument, CallbackMethod, CallbackParameter, CallbackRecordArgument,
+    CallbackRegistration, CallbackReturn, ClosureArgument, ClosureParameter, ClosureRegistration,
+    ContinuationParameter, JniBridgeContract, JniReturn, JniType, NativeMethod, NativeParameter,
+    NativeParameterKind, NativeReturn, RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
 
@@ -389,6 +389,48 @@ mod tests {
         assert!(source.contains("(*env)->DeleteLocalRef(env, name);"));
         assert!(source.contains(
             "GetStaticMethodID(env, g____ListenerVTable_class, \"on_name\", \"(J[B)V\")"
+        ));
+    }
+
+    #[test]
+    fn jni_bridge_renders_callback_handle_method_parameters() {
+        let files = files(
+            r#"
+            #[export]
+            pub trait Child {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub trait Listener {
+                fn on_child(&self, child: Box<dyn Child>);
+            }
+            "#,
+        );
+        let header = files
+            .iter()
+            .find(|(path, _)| path == "jni/demo.h")
+            .map(|(_, contents)| contents)
+            .expect("C header file");
+        let source = files
+            .iter()
+            .find(|(path, _)| path == "jni/jni_glue.c")
+            .map(|(_, contents)| contents)
+            .expect("JNI source file");
+
+        assert!(header.contains("void (*on_child)(uint64_t, BoltFFICallbackHandle);"));
+        assert!(source.contains(
+            "static void ___ListenerVTable_on_child(uint64_t handle, BoltFFICallbackHandle child)"
+        ));
+        assert!(source.contains("jlong __boltffi_child_handle = 0;"));
+        assert!(source.contains(
+            "__boltffi_child_handle = boltffi_jni_callback_handle_new_owned(env, child);"
+        ));
+        assert!(source.contains(
+            "(*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_on_child_method, (jlong)handle, __boltffi_child_handle);"
+        ));
+        assert!(source.contains(
+            "GetStaticMethodID(env, g____ListenerVTable_class, \"on_child\", \"(JJ)V\")"
         ));
     }
 

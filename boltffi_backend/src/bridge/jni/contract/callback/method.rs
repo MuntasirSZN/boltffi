@@ -2,8 +2,8 @@ use crate::{
     bridge::{
         c::{self, ArgumentList, Identifier, TypeFragment},
         jni::{
-            CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackRecordArgument,
-            JniReturn,
+            CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackHandleArgument,
+            CallbackRecordArgument, JniReturn,
         },
     },
     core::{Error, Result},
@@ -90,6 +90,14 @@ impl CallbackMethod {
         self.arguments
             .iter()
             .filter_map(CallbackArgument::record)
+            .collect()
+    }
+
+    /// Returns callback-handle callback arguments.
+    pub fn callback_handles(&self) -> Vec<CallbackHandleArgument<'_>> {
+        self.arguments
+            .iter()
+            .filter_map(CallbackArgument::callback_handle)
             .collect()
     }
 

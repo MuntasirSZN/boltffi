@@ -57,11 +57,35 @@ static {{ method.c_return_type }} {{ method.function }}({% for parameter in meth
 {%- endif %}
     }
 {%- endfor %}
+{%- for callback_handle in method.callback_handles %}
+    jlong {{ callback_handle.handle }} = 0;
+{%- endfor %}
 {%- for record in method.record_arrays %}
     jbyteArray {{ record.array }} = boltffi_jni_record_to_byte_array(env, &{{ record.parameter }}, (uintptr_t)sizeof({{ record.parameter }}));
     if ({{ record.array }} == NULL) {
 {%- for bytes in method.byte_arrays %}
         (*env)->DeleteLocalRef(env, {{ bytes.name }});
+{%- endfor %}
+        boltffi_jni_clear_exception(env);
+        boltffi_jni_exit(attached);
+{%- if method.returns_void %}
+        return;
+{%- else %}
+        return {{ method.failure_value }};
+{%- endif %}
+    }
+{%- endfor %}
+{%- for callback_handle in method.callback_handles %}
+    {{ callback_handle.handle }} = boltffi_jni_callback_handle_new_owned(env, {{ callback_handle.parameter }});
+    if ((*env)->ExceptionCheck(env)) {
+{%- for bytes in method.byte_arrays %}
+        (*env)->DeleteLocalRef(env, {{ bytes.name }});
+{%- endfor %}
+{%- for record in method.record_arrays %}
+        (*env)->DeleteLocalRef(env, {{ record.array }});
+{%- endfor %}
+{%- for handle in method.callback_handles %}
+        boltffi_jni_callback_handle_release(boltffi_jni_callback_handle_ref({{ handle.handle }}));
 {%- endfor %}
         boltffi_jni_clear_exception(env);
         boltffi_jni_exit(attached);

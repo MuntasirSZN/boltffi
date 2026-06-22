@@ -69,6 +69,12 @@ impl SourceFile {
                 .iter()
                 .any(|method| !method.record_arrays.is_empty())
         });
+        let callback_uses_callback_handles = callbacks.iter().any(|callback| {
+            callback
+                .methods
+                .iter()
+                .any(|method| !method.callback_handles.is_empty())
+        });
         Ok(SourceFileTemplate {
             c_header: Literal::string(contract.c_header().as_str()),
             class_name: Literal::string(&contract.class().as_jni_class_name()),
@@ -88,6 +94,7 @@ impl SourceFile {
                 || callback_uses_record_arrays,
             uses_exceptions: callback_uses_byte_arrays
                 || callback_uses_record_arrays
+                || callback_uses_callback_handles
                 || methods.iter().any(|method| {
                     method.checks_status
                         || method.returns_bytes
@@ -100,7 +107,8 @@ impl SourceFile {
             uses_lifecycle: methods.iter().any(|method| method.uses_continuations)
                 || !callbacks.is_empty()
                 || !closures.is_empty(),
-            uses_callback_handles: methods.iter().any(|method| method.returns_callback),
+            uses_callback_handles: callback_uses_callback_handles
+                || methods.iter().any(|method| method.returns_callback),
             callback_clone_symbol: JniSymbolName::native_method(
                 contract.class(),
                 "boltffi_callback_handle_clone",

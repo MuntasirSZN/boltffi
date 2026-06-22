@@ -1,8 +1,8 @@
 use crate::bridge::{
     c::{ArgumentList, Identifier, Literal, TypeFragment},
     jni::{
-        CallbackBytesArgument, CallbackCParameter, CallbackMethod, CallbackRecordArgument,
-        CallbackRegistration,
+        CallbackBytesArgument, CallbackCParameter, CallbackHandleArgument, CallbackMethod,
+        CallbackRecordArgument, CallbackRegistration,
     },
 };
 
@@ -33,6 +33,7 @@ pub struct CallbackMethodView {
     pub c_parameters: Vec<CallbackCParameterView>,
     pub byte_arrays: Vec<CallbackBytesArgumentView>,
     pub record_arrays: Vec<CallbackRecordArgumentView>,
+    pub callback_handles: Vec<CallbackHandleArgumentView>,
     pub jni_arguments: ArgumentList,
 }
 
@@ -49,6 +50,11 @@ pub struct CallbackBytesArgumentView {
 
 pub struct CallbackRecordArgumentView {
     pub array: Identifier,
+    pub parameter: Identifier,
+}
+
+pub struct CallbackHandleArgumentView {
+    pub handle: Identifier,
     pub parameter: Identifier,
 }
 
@@ -101,6 +107,11 @@ impl CallbackMethodView {
                 .iter()
                 .map(CallbackRecordArgumentView::from_argument)
                 .collect(),
+            callback_handles: method
+                .callback_handles()
+                .iter()
+                .map(CallbackHandleArgumentView::from_argument)
+                .collect(),
             jni_arguments: method.jni_arguments(),
         }
     }
@@ -129,6 +140,15 @@ impl CallbackRecordArgumentView {
     pub fn from_argument(argument: &CallbackRecordArgument<'_>) -> Self {
         Self {
             array: argument.array().clone(),
+            parameter: argument.parameter().clone(),
+        }
+    }
+}
+
+impl CallbackHandleArgumentView {
+    pub fn from_argument(argument: &CallbackHandleArgument<'_>) -> Self {
+        Self {
+            handle: argument.handle().clone(),
             parameter: argument.parameter().clone(),
         }
     }

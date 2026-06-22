@@ -38,6 +38,10 @@ enum CallbackArgumentKind {
         array: Identifier,
         parameter: CallbackCParameter,
     },
+    CallbackHandle {
+        handle: Identifier,
+        parameter: CallbackCParameter,
+    },
 }
 
 impl CallbackArgument {
@@ -48,7 +52,8 @@ impl CallbackArgument {
             CallbackArgumentKind::Bytes {
                 pointer, length, ..
             } => vec![pointer.clone(), length.clone()],
-            CallbackArgumentKind::Record { parameter, .. } => vec![parameter.clone()],
+            CallbackArgumentKind::Record { parameter, .. }
+            | CallbackArgumentKind::CallbackHandle { parameter, .. } => vec![parameter.clone()],
         }
     }
 
@@ -57,6 +62,7 @@ impl CallbackArgument {
         match &self.kind {
             CallbackArgumentKind::Value { jni_type, .. } => jni_type.signature(),
             CallbackArgumentKind::Bytes { .. } | CallbackArgumentKind::Record { .. } => "[B",
+            CallbackArgumentKind::CallbackHandle { .. } => "J",
         }
     }
 
@@ -72,6 +78,9 @@ impl CallbackArgument {
             ),
             CallbackArgumentKind::Bytes { name, .. } => Expression::identifier(name.clone()),
             CallbackArgumentKind::Record { array, .. } => Expression::identifier(array.clone()),
+            CallbackArgumentKind::CallbackHandle { handle, .. } => {
+                Expression::identifier(handle.clone())
+            }
         }
     }
 
@@ -88,7 +97,9 @@ impl CallbackArgument {
                 pointer: &pointer.name,
                 length: &length.name,
             }),
-            CallbackArgumentKind::Record { .. } => None,
+            CallbackArgumentKind::Record { .. } | CallbackArgumentKind::CallbackHandle { .. } => {
+                None
+            }
         }
     }
 
@@ -96,10 +107,26 @@ impl CallbackArgument {
     pub fn record(&self) -> Option<CallbackRecordArgument<'_>> {
         match &self.kind {
             CallbackArgumentKind::Value { .. } | CallbackArgumentKind::Bytes { .. } => None,
+            CallbackArgumentKind::CallbackHandle { .. } => None,
             CallbackArgumentKind::Record { array, parameter } => Some(CallbackRecordArgument {
                 array,
                 parameter: &parameter.name,
             }),
+        }
+    }
+
+    /// Returns callback-handle setup data when this argument carries a callback handle.
+    pub fn callback_handle(&self) -> Option<CallbackHandleArgument<'_>> {
+        match &self.kind {
+            CallbackArgumentKind::Value { .. }
+            | CallbackArgumentKind::Bytes { .. }
+            | CallbackArgumentKind::Record { .. } => None,
+            CallbackArgumentKind::CallbackHandle { handle, parameter } => {
+                Some(CallbackHandleArgument {
+                    handle,
+                    parameter: &parameter.name,
+                })
+            }
         }
     }
 
@@ -122,6 +149,14 @@ impl CallbackArgument {
     }
 
     fn from_parameter(parameter: &c::Parameter) -> Result<Self> {
+        if matches!(parameter.ty(), c::Type::CallbackHandle(_)) {
+            return Ok(Self {
+                kind: CallbackArgumentKind::CallbackHandle {
+                    handle: Identifier::parse(format!("__boltffi_{}_handle", parameter.name()))?,
+                    parameter: CallbackCParameter::from_parameter(parameter)?,
+                },
+            });
+        }
         if matches!(parameter.ty(), c::Type::DirectRecord(_)) {
             return Ok(Self {
                 kind: CallbackArgumentKind::Record {
@@ -209,6 +244,26 @@ impl CallbackRecordArgument<'_> {
     }
 
     /// Returns the C record parameter.
+    pub fn parameter(&self) -> &Identifier {
+        self.parameter
+    }
+}
+
+/// Callback-handle argument passed from Rust into a JVM callback method.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct CallbackHandleArgument<'argument> {
+    handle: &'argument Identifier,
+    parameter: &'argument Identifier,
+}
+
+impl CallbackHandleArgument<'_> {
+    /// Returns the local JVM callback-handle token.
+    pub fn handle(&self) -> &Identifier {
+        self.handle
+    }
+
+    /// Returns the C callback-handle parameter.
     pub fn parameter(&self) -> &Identifier {
         self.parameter
     }
