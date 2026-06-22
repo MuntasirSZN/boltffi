@@ -14,8 +14,18 @@ use super::{
 pub struct Callback {
     id: CallbackId,
     vtable: Record,
+    methods: Vec<CallbackSlot>,
     register: Function,
     create_handle: Function,
+}
+
+/// One method slot in a native callback vtable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct CallbackSlot {
+    name: Identifier,
+    returns: Type,
+    params: Vec<Type>,
 }
 
 impl Callback {
@@ -27,6 +37,11 @@ impl Callback {
     /// Returns the callback vtable record.
     pub fn vtable(&self) -> &Record {
         &self.vtable
+    }
+
+    /// Returns callback method slots after `free` and `clone`.
+    pub fn methods(&self) -> &[CallbackSlot] {
+        &self.methods
     }
 
     /// Returns the callback registration function.
@@ -62,11 +77,14 @@ impl Callback {
         let methods = vtable
             .methods()
             .iter()
-            .map(|method| Field::callback_method(method, names))
+            .map(|method| CallbackSlot::from_method(method, names))
             .collect::<Result<Vec<_>>>()?;
         let vtable = Record::new(
             vtable_name.clone(),
-            [free, clone].into_iter().chain(methods).collect(),
+            [free, clone]
+                .into_iter()
+                .chain(methods.iter().map(CallbackSlot::field))
+                .collect(),
         );
         let register = Function::new(
             callback.protocol().register().name().as_str(),
@@ -84,23 +102,36 @@ impl Callback {
         Ok(Self {
             id: callback.id(),
             vtable,
+            methods,
             register,
             create_handle,
         })
     }
 }
 
-impl Field {
-    fn callback_method(
-        method: &ImportedMethodDecl<Native, VTableSlot>,
-        names: &Names,
-    ) -> Result<Self> {
+impl CallbackSlot {
+    /// Returns the callback slot name.
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    /// Returns the C return type for this callback slot.
+    pub fn returns(&self) -> &Type {
+        &self.returns
+    }
+
+    /// Returns the C parameter types for this callback slot.
+    pub fn params(&self) -> &[Type] {
+        &self.params
+    }
+
+    fn from_method(method: &ImportedMethodDecl<Native, VTableSlot>, names: &Names) -> Result<Self> {
         let signature = Signature::new(names, Vec::new());
         if matches!(
             method.callable().execution(),
             ExecutionDecl::Asynchronous(_)
         ) {
-            return Self::async_callback_method(method, &signature);
+            return Self::async_method(method, &signature);
         }
         let return_params = signature.callback_return_params(method.callable().returns().plan())?;
         let method_params = signature.imported_params(method.callable().params())?;
@@ -116,19 +147,17 @@ impl Field {
                     .map(|parameter| parameter.ty().clone()),
             )
             .collect();
-        Self::new(
-            method.target().as_str(),
-            Type::FunctionPointer {
-                returns: Box::new(signature.callback_return_type(
-                    method.callable().returns().plan(),
-                    method.callable().error(),
-                )?),
-                params,
-            },
-        )
+        Ok(Self {
+            name: Identifier::escape(method.target().as_str())?,
+            returns: signature.callback_return_type(
+                method.callable().returns().plan(),
+                method.callable().error(),
+            )?,
+            params,
+        })
     }
 
-    fn async_callback_method(
+    fn async_method(
         method: &ImportedMethodDecl<Native, VTableSlot>,
         signature: &Signature,
     ) -> Result<Self> {
@@ -145,11 +174,19 @@ impl Field {
             )
             .chain([completion, Type::MutPointer(Box::new(Type::Void))])
             .collect();
-        Self::new(
-            method.target().as_str(),
+        Ok(Self {
+            name: Identifier::escape(method.target().as_str())?,
+            returns: Type::Void,
+            params,
+        })
+    }
+
+    fn field(&self) -> Field {
+        Field::from_parts(
+            self.name.clone(),
             Type::FunctionPointer {
-                returns: Box::new(Type::Void),
-                params,
+                returns: Box::new(self.returns.clone()),
+                params: self.params.clone(),
             },
         )
     }

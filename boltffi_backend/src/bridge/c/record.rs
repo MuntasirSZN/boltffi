@@ -75,4 +75,9 @@ impl Field {
             ty,
         })
     }
+
+    /// Creates a C field from a validated identifier and type.
+    pub fn from_parts(name: Identifier, ty: Type) -> Self {
+        Self { name, ty }
+    }
 }
