@@ -1,8 +1,6 @@
 use super::{
-    callback::{CallbackCompletionInvokerView, CallbackRegistrationView},
-    closure::{CallbackClosureHandleView, ClosureRegistrationView},
-    method::NativeMethodView,
-    stream::DirectStreamBatchView,
+    CallbackClosureHandleView, CallbackCompletionInvokerView, CallbackRegistrationView,
+    ClosureRegistrationView, DirectStreamBatchView, NativeMethodView,
 };
 
 pub struct SourceFeatures {
