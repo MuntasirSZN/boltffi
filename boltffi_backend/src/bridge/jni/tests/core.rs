@@ -193,6 +193,52 @@ fn jni_bridge_renders_encoded_functions_as_byte_arrays() {
 }
 
 #[test]
+fn jni_bridge_renders_custom_type_functions_as_byte_arrays() {
+    let files = files(
+        r#"
+            custom_type!(
+                pub Timestamp,
+                remote = TimestampRust,
+                repr = i64,
+                into_ffi = timestamp_into_ffi,
+                try_from_ffi = timestamp_from_ffi
+            );
+
+            #[export]
+            pub fn keep_timestamp(value: TimestampRust) -> TimestampRust {
+                value
+            }
+            "#,
+    );
+    let header = files
+        .iter()
+        .find(|(path, _)| path == "jni/demo.h")
+        .map(|(_, contents)| contents)
+        .expect("C header file");
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "FfiBuf_u8 boltffi_function_demo_keep_timestamp(const uint8_t *value_ptr, uintptr_t value_len);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(header.contains(expected), "{expected}\n{header}"));
+
+    [
+        "JNIEXPORT jbyteArray JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1keep_1timestamp(JNIEnv *env, jclass cls, jbyteArray value)",
+        "jbyte *__boltffi_value_ptr = NULL;",
+        "jsize __boltffi_value_len = 0;",
+        "FfiBuf_u8 result = boltffi_function_demo_keep_timestamp((const uint8_t *)__boltffi_value_ptr, (uintptr_t)__boltffi_value_len);",
+        "return boltffi_jni_buffer_to_byte_array(env, result);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
+}
+
+#[test]
 fn jni_bridge_renders_class_handles_and_methods() {
     let files = files(
         r#"
