@@ -1,12 +1,10 @@
 use crate::{
     bridge::{
-        c::{self, Identifier, TypeFragment},
-        jni::{JniReturn, JniType, JvmClassPath},
+        c::{self, Identifier},
+        jni::{CallbackMethod, JvmClassPath},
     },
-    core::{Error, Result},
+    core::Result,
 };
-
-const JNI_BRIDGE: &str = "jni";
 
 /// JNI registration for one native callback vtable.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,27 +22,6 @@ pub struct CallbackRegistration {
     free: Identifier,
     clone: Identifier,
     methods: Vec<CallbackMethod>,
-}
-
-/// JNI method dispatch for one callback vtable slot.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackMethod {
-    function: Identifier,
-    method: Identifier,
-    method_id: Identifier,
-    signature: String,
-    returns: JniReturn,
-    parameters: Vec<CallbackArgument>,
-}
-
-/// One C argument forwarded to a JVM callback bridge method.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackArgument {
-    name: Identifier,
-    c_type: TypeFragment,
-    jni_type: JniType,
 }
 
 impl CallbackRegistration {
@@ -129,131 +106,5 @@ impl CallbackRegistration {
     /// Returns registered callback method slots.
     pub fn methods(&self) -> &[CallbackMethod] {
         &self.methods
-    }
-}
-
-impl CallbackMethod {
-    /// Returns the generated C vtable method implementation.
-    pub fn function(&self) -> &Identifier {
-        &self.function
-    }
-
-    /// Returns the JVM static method name.
-    pub fn method(&self) -> &Identifier {
-        &self.method
-    }
-
-    /// Returns the cached JNI method id symbol.
-    pub fn method_id(&self) -> &Identifier {
-        &self.method_id
-    }
-
-    /// Returns the JNI method descriptor.
-    pub fn signature(&self) -> &str {
-        &self.signature
-    }
-
-    /// Returns the C return type for the vtable slot implementation.
-    pub fn c_return_type(&self) -> &TypeFragment {
-        self.returns.c_type()
-    }
-
-    /// Returns whether the slot returns no value.
-    pub fn returns_void(&self) -> bool {
-        self.returns.is_void()
-    }
-
-    /// Returns the `CallStatic*Method` suffix for non-void slots.
-    pub fn call_method_suffix(&self) -> Option<&'static str> {
-        self.returns.call_method_suffix()
-    }
-
-    /// Returns the C value returned when dispatch fails.
-    pub fn failure_value(&self) -> Option<&'static str> {
-        self.returns.failure_value()
-    }
-
-    /// Returns generated C parameters.
-    pub fn parameters(&self) -> &[CallbackArgument] {
-        &self.parameters
-    }
-
-    fn from_slot(stem: &str, slot: &c::CallbackSlot) -> Result<Self> {
-        let Some(c::Type::Uint64) = slot.parameters().first().map(c::Parameter::ty) else {
-            return Err(Error::BrokenBridgeContract {
-                bridge: JNI_BRIDGE,
-                invariant: "callback vtable slot does not start with a uint64 handle",
-            });
-        };
-        let returns = JniReturn::from_c_type(slot.returns())?;
-        let parameters = slot
-            .parameter_groups()
-            .iter()
-            .map(|group| CallbackArgument::from_group(slot, group))
-            .collect::<Result<Vec<_>>>()?;
-        let signature = format!(
-            "({}){}",
-            parameters
-                .iter()
-                .map(CallbackArgument::jni_signature)
-                .collect::<Vec<_>>()
-                .join(""),
-            returns.signature()
-        );
-        Ok(Self {
-            function: Identifier::parse(format!("{stem}_{}", slot.name()))?,
-            method: slot.name().clone(),
-            method_id: Identifier::parse(format!("g_{stem}_{}_method", slot.name()))?,
-            signature,
-            returns,
-            parameters,
-        })
-    }
-}
-
-impl CallbackArgument {
-    /// Returns the C parameter name.
-    pub fn name(&self) -> &Identifier {
-        &self.name
-    }
-
-    /// Returns the C parameter type.
-    pub fn c_type(&self) -> &TypeFragment {
-        &self.c_type
-    }
-
-    /// Returns the JNI type used when calling Java.
-    pub fn jni_type(&self) -> TypeFragment {
-        self.jni_type.as_type_fragment()
-    }
-
-    fn jni_signature(&self) -> &'static str {
-        self.jni_type.signature()
-    }
-
-    fn from_group(slot: &c::CallbackSlot, group: &c::ParameterGroup) -> Result<Self> {
-        match group {
-            c::ParameterGroup::Value(index) => Self::from_parameter(slot.parameter(*index)),
-            c::ParameterGroup::ByteSlice(_) => Err(Error::UnsupportedBridge {
-                bridge: JNI_BRIDGE,
-                shape: "callback byte-slice parameter",
-            }),
-            c::ParameterGroup::Continuation(_) => Err(Error::UnsupportedBridge {
-                bridge: JNI_BRIDGE,
-                shape: "callback continuation parameter",
-            }),
-            c::ParameterGroup::Closure(_) => Err(Error::UnsupportedBridge {
-                bridge: JNI_BRIDGE,
-                shape: "callback closure parameter",
-            }),
-        }
-    }
-
-    fn from_parameter(parameter: &c::Parameter) -> Result<Self> {
-        Ok(Self {
-            name: Identifier::parse(parameter.name())?,
-            c_type: TypeFragment::anonymous(parameter.ty())?,
-            jni_type: JniType::from_c_type(parameter.ty())?,
-        })
     }
 }

@@ -1,6 +1,6 @@
 use crate::bridge::{
-    c::{Identifier, Literal, TypeFragment},
-    jni::{CallbackArgument, CallbackMethod, CallbackRegistration},
+    c::{ArgumentList, Identifier, Literal, TypeFragment},
+    jni::{CallbackBytesArgument, CallbackCParameter, CallbackMethod, CallbackRegistration},
 };
 
 pub struct CallbackRegistrationView {
@@ -27,13 +27,20 @@ pub struct CallbackMethodView {
     pub returns_void: bool,
     pub call_method_suffix: String,
     pub failure_value: String,
-    pub parameters: Vec<CallbackArgumentView>,
+    pub c_parameters: Vec<CallbackCParameterView>,
+    pub byte_arrays: Vec<CallbackBytesArgumentView>,
+    pub jni_arguments: ArgumentList,
 }
 
-pub struct CallbackArgumentView {
+pub struct CallbackCParameterView {
     pub name: Identifier,
     pub c_type: TypeFragment,
-    pub jni_type: TypeFragment,
+}
+
+pub struct CallbackBytesArgumentView {
+    pub name: Identifier,
+    pub pointer: Identifier,
+    pub length: Identifier,
 }
 
 impl CallbackRegistrationView {
@@ -70,21 +77,36 @@ impl CallbackMethodView {
             returns_void: method.returns_void(),
             call_method_suffix: method.call_method_suffix().unwrap_or_default().to_owned(),
             failure_value: method.failure_value().unwrap_or_default().to_owned(),
-            parameters: method
-                .parameters()
+            c_parameters: method
+                .c_parameters()
                 .iter()
-                .map(CallbackArgumentView::from_argument)
+                .map(CallbackCParameterView::from_parameter)
                 .collect(),
+            byte_arrays: method
+                .byte_arrays()
+                .iter()
+                .map(CallbackBytesArgumentView::from_argument)
+                .collect(),
+            jni_arguments: method.jni_arguments(),
         }
     }
 }
 
-impl CallbackArgumentView {
-    pub fn from_argument(argument: &CallbackArgument) -> Self {
+impl CallbackCParameterView {
+    pub fn from_parameter(parameter: &CallbackCParameter) -> Self {
+        Self {
+            name: parameter.name().clone(),
+            c_type: parameter.ty().clone(),
+        }
+    }
+}
+
+impl CallbackBytesArgumentView {
+    pub fn from_argument(argument: &CallbackBytesArgument<'_>) -> Self {
         Self {
             name: argument.name().clone(),
-            c_type: argument.c_type().clone(),
-            jni_type: argument.jni_type(),
+            pointer: argument.pointer().clone(),
+            length: argument.length().clone(),
         }
     }
 }

@@ -10,10 +10,11 @@ mod template;
 
 pub use bridge::JniBridge;
 pub use contract::{
-    BytesParameter, CallbackArgument, CallbackMethod, CallbackParameter, CallbackRegistration,
-    CallbackReturn, ClosureArgument, ClosureParameter, ClosureRegistration, ContinuationParameter,
-    JniBridgeContract, JniReturn, JniType, NativeMethod, NativeParameter, NativeParameterKind,
-    NativeReturn, RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
+    BytesParameter, CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackMethod,
+    CallbackParameter, CallbackRegistration, CallbackReturn, ClosureArgument, ClosureParameter,
+    ClosureRegistration, ContinuationParameter, JniBridgeContract, JniReturn, JniType,
+    NativeMethod, NativeParameter, NativeParameterKind, NativeReturn, RecordParameter, RecordValue,
+    ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
 
@@ -352,6 +353,43 @@ mod tests {
             source
                 .contains("boltffi_register_callback_demo_listener(&g____ListenerVTable_vtable);")
         );
+    }
+
+    #[test]
+    fn jni_bridge_renders_callback_byte_slice_parameters() {
+        let files = files(
+            r#"
+            #[export]
+            pub trait Listener {
+                fn on_name(&self, name: String);
+            }
+            "#,
+        );
+        let header = files
+            .iter()
+            .find(|(path, _)| path == "jni/demo.h")
+            .map(|(_, contents)| contents)
+            .expect("C header file");
+        let source = files
+            .iter()
+            .find(|(path, _)| path == "jni/jni_glue.c")
+            .map(|(_, contents)| contents)
+            .expect("JNI source file");
+
+        assert!(header.contains("void (*on_name)(uint64_t, const uint8_t *, uintptr_t);"));
+        assert!(source.contains(
+            "static void ___ListenerVTable_on_name(uint64_t handle, const uint8_t * name_ptr, uintptr_t name_len)"
+        ));
+        assert!(source.contains(
+            "jbyteArray name = boltffi_jni_bytes_to_byte_array(env, name_ptr, name_len);"
+        ));
+        assert!(source.contains(
+            "(*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_on_name_method, (jlong)handle, name);"
+        ));
+        assert!(source.contains("(*env)->DeleteLocalRef(env, name);"));
+        assert!(source.contains(
+            "GetStaticMethodID(env, g____ListenerVTable_class, \"on_name\", \"(J[B)V\")"
+        ));
     }
 
     #[test]

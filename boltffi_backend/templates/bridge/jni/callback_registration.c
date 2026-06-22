@@ -35,7 +35,7 @@ static uint64_t {{ callback.clone }}(uint64_t handle) {
 
 {%- for method in callback.methods %}
 
-static {{ method.c_return_type }} {{ method.function }}({% for parameter in method.parameters %}{{ parameter.c_type }} {{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+static {{ method.c_return_type }} {{ method.function }}({% for parameter in method.c_parameters %}{{ parameter.c_type }} {{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
     JNIEnv *env = NULL;
     int attached = 0;
     if (!boltffi_jni_enter(&env, &attached)) {
@@ -45,12 +45,30 @@ static {{ method.c_return_type }} {{ method.function }}({% for parameter in meth
         return {{ method.failure_value }};
 {%- endif %}
     }
+{%- for bytes in method.byte_arrays %}
+    jbyteArray {{ bytes.name }} = boltffi_jni_bytes_to_byte_array(env, {{ bytes.pointer }}, {{ bytes.length }});
+    if ({{ bytes.name }} == NULL) {
+        boltffi_jni_clear_exception(env);
+        boltffi_jni_exit(attached);
 {%- if method.returns_void %}
-    (*env)->CallStaticVoidMethod(env, {{ callback.global_class }}, {{ method.method_id }}{% for parameter in method.parameters %}, ({{ parameter.jni_type }}){{ parameter.name }}{% endfor %});
+        return;
+{%- else %}
+        return {{ method.failure_value }};
+{%- endif %}
+    }
+{%- endfor %}
+{%- if method.returns_void %}
+    (*env)->CallStaticVoidMethod(env, {{ callback.global_class }}, {{ method.method_id }}, {{ method.jni_arguments }});
+{%- for bytes in method.byte_arrays %}
+    (*env)->DeleteLocalRef(env, {{ bytes.name }});
+{%- endfor %}
     boltffi_jni_clear_exception(env);
     boltffi_jni_exit(attached);
 {%- else %}
-    {{ method.c_return_type }} result = ({{ method.c_return_type }})(*env)->CallStatic{{ method.call_method_suffix }}Method(env, {{ callback.global_class }}, {{ method.method_id }}{% for parameter in method.parameters %}, ({{ parameter.jni_type }}){{ parameter.name }}{% endfor %});
+    {{ method.c_return_type }} result = ({{ method.c_return_type }})(*env)->CallStatic{{ method.call_method_suffix }}Method(env, {{ callback.global_class }}, {{ method.method_id }}, {{ method.jni_arguments }});
+{%- for bytes in method.byte_arrays %}
+    (*env)->DeleteLocalRef(env, {{ bytes.name }});
+{%- endfor %}
     if (boltffi_jni_clear_exception(env)) {
         boltffi_jni_exit(attached);
         return {{ method.failure_value }};

@@ -57,6 +57,12 @@ impl SourceFile {
             .iter()
             .map(ClosureRegistrationView::from_registration)
             .collect();
+        let callback_uses_byte_arrays = callbacks.iter().any(|callback| {
+            callback
+                .methods
+                .iter()
+                .any(|method| !method.byte_arrays.is_empty())
+        });
         Ok(SourceFileTemplate {
             c_header: Literal::string(contract.c_header().as_str()),
             class_name: Literal::string(&contract.class().as_jni_class_name()),
@@ -67,18 +73,19 @@ impl SourceFile {
                     || method.returns_record
                     || !method.byte_arrays.is_empty()
                     || !method.record_arrays.is_empty()
-            }),
+            }) || callback_uses_byte_arrays,
             uses_record_arrays: methods
                 .iter()
                 .any(|method| method.returns_record || !method.record_arrays.is_empty()),
-            uses_exceptions: methods.iter().any(|method| {
-                method.checks_status
-                    || method.returns_bytes
-                    || method.returns_record
-                    || method.returns_callback
-                    || !method.byte_arrays.is_empty()
-                    || !method.record_arrays.is_empty()
-            }),
+            uses_exceptions: callback_uses_byte_arrays
+                || methods.iter().any(|method| {
+                    method.checks_status
+                        || method.returns_bytes
+                        || method.returns_record
+                        || method.returns_callback
+                        || !method.byte_arrays.is_empty()
+                        || !method.record_arrays.is_empty()
+                }),
             uses_continuations: methods.iter().any(|method| method.uses_continuations),
             uses_lifecycle: methods.iter().any(|method| method.uses_continuations)
                 || !callbacks.is_empty()
