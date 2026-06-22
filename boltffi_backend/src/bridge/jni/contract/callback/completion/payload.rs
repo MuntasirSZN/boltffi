@@ -50,9 +50,10 @@ impl CallbackCompletionPayload {
                         bridge: JNI_BRIDGE,
                         invariant: "async callback completion payload has no C callback declaration",
                     })?;
+                let c_type = TypeFragment::anonymous(ty)?;
                 Ok(Self {
-                    suffix: format!("Callback_{}", declaration.vtable().name()),
-                    c_type: TypeFragment::anonymous(ty)?,
+                    suffix: format!("Callback_{c_type}"),
+                    c_type,
                     jni_type: TypeFragment::new("jlong"),
                     kind: CallbackCompletionPayloadKind::CallbackHandle {
                         create_handle: Identifier::parse(declaration.create_handle().name())?,

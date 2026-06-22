@@ -397,6 +397,45 @@ fn jni_bridge_renders_async_callback_completion_shapes() {
 }
 
 #[test]
+fn jni_bridge_renders_async_callback_handle_completion_payloads() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Child {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub trait Listener {
+                async fn child(&self) -> Box<dyn Child>;
+            }
+            "#,
+    );
+    let header = files
+        .iter()
+        .find(|(path, _)| path == "jni/demo.h")
+        .map(|(_, contents)| contents)
+        .expect("C header file");
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(header.contains(
+        "void (*child)(uint64_t, void (*)(void *, FfiStatus, BoltFFICallbackHandle), void *);"
+    ));
+    [
+        "JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1Callback_1BoltFFICallbackHandle(JNIEnv *env, jclass cls, jlong callback, jlong context, jlong result)",
+        "void (*complete)(void *, FfiStatus, BoltFFICallbackHandle) = (void (*)(void *, FfiStatus, BoltFFICallbackHandle))callback;",
+        "BoltFFICallbackHandle payload = boltffi_create_callback_demo_child((uint64_t)result);",
+        "complete((void *)context, (FfiStatus){.code = 0}, payload);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}"));
+}
+
+#[test]
 fn jni_bridge_renders_callback_handle_returns() {
     let files = files(
         r#"
