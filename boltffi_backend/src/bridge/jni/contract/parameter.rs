@@ -3,8 +3,10 @@ use crate::{
         c::{self, Expression, Identifier, TypeFragment},
         jni::{BytesParameter, JniType, RecordParameter},
     },
-    core::Result,
+    core::{Error, Result},
 };
+
+const JNI_BRIDGE: &str = "jni";
 
 /// JNI parameter accepted by one native method.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,40 +72,38 @@ impl NativeParameter {
         }
     }
 
-    /// Creates JNI parameters from C ABI parameters.
-    pub fn from_c_parameters(parameters: &[c::Parameter]) -> Result<Vec<Self>> {
-        let mut index = 0;
-        std::iter::from_fn(|| {
-            (index < parameters.len()).then(|| {
-                let parameter = &parameters[index];
-                match BytesParameter::from_pair(parameter, parameters.get(index + 1)) {
-                    Ok(Some(bytes)) => {
-                        index += 2;
-                        Ok(Self {
-                            kind: NativeParameterKind::Bytes(bytes),
-                        })
-                    }
-                    Ok(None) => {
-                        index += 1;
-                        match RecordParameter::from_c_parameter(parameter)? {
-                            Some(record) => Ok(Self {
-                                kind: NativeParameterKind::Record(record),
-                            }),
-                            None => {
-                                ScalarParameter::from_c_parameter(parameter).map(|scalar| Self {
-                                    kind: NativeParameterKind::Scalar(scalar),
-                                })
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        index = parameters.len();
-                        Err(error)
-                    }
+    /// Creates JNI parameters from C ABI parameter groups.
+    pub fn from_c_function(function: &c::Function) -> Result<Vec<Self>> {
+        function
+            .parameter_groups()
+            .iter()
+            .map(|group| Self::from_c_group(function, group))
+            .collect()
+    }
+
+    fn from_c_group(function: &c::Function, group: &c::ParameterGroup) -> Result<Self> {
+        match group {
+            c::ParameterGroup::Value(index) => {
+                let parameter = function.parameter(*index);
+                match RecordParameter::from_c_parameter(parameter)? {
+                    Some(record) => Ok(Self {
+                        kind: NativeParameterKind::Record(record),
+                    }),
+                    None => ScalarParameter::from_c_parameter(parameter).map(|scalar| Self {
+                        kind: NativeParameterKind::Scalar(scalar),
+                    }),
                 }
-            })
-        })
-        .collect()
+            }
+            c::ParameterGroup::ByteSlice(bytes) => {
+                BytesParameter::from_c_group(bytes).map(|bytes| Self {
+                    kind: NativeParameterKind::Bytes(bytes),
+                })
+            }
+            c::ParameterGroup::Closure(_) => Err(Error::UnsupportedBridge {
+                bridge: JNI_BRIDGE,
+                shape: "closure parameter",
+            }),
+        }
     }
 }
 

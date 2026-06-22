@@ -23,6 +23,7 @@ mod tests {
     use boltffi_binding::{Native, lower};
 
     use crate::{
+        Error,
         bridge::{
             c::CBridge,
             jni::{JniBridge, JniBridgeContract},
@@ -241,5 +242,30 @@ mod tests {
         assert!(source.contains(
             "FfiStatus status = boltffi_method_class_demo_engine_advance(receiver, delta);"
         ));
+    }
+
+    #[test]
+    fn jni_bridge_rejects_closure_parameters_from_contract_group() {
+        let bindings = bindings(
+            r#"
+            #[export]
+            pub fn install(callback: impl Fn(u32) -> u32) {}
+            "#,
+        );
+        let stack = BridgeLayer::new(
+            CBridge::new("jni/demo.h").expect("C header bridge"),
+            JniBridge::new("com.boltffi.demo", "Native", "jni/jni_glue.c").expect("JNI bridge"),
+        );
+        let error = stack
+            .build(&bindings)
+            .expect_err("JNI closure parameter should be unsupported");
+
+        assert_eq!(
+            error,
+            Error::UnsupportedBridge {
+                bridge: "jni",
+                shape: "closure parameter",
+            }
+        );
     }
 }

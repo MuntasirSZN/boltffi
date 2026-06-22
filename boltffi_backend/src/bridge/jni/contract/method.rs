@@ -22,7 +22,7 @@ impl NativeMethod {
         Ok(Self {
             symbol: JniSymbolName::native_method(class, function.name())?,
             returns: NativeReturn::from_c_type(function.returns())?,
-            parameters: NativeParameter::from_c_parameters(function.params())?,
+            parameters: NativeParameter::from_c_function(function)?,
             c_function: function.clone(),
         })
     }
