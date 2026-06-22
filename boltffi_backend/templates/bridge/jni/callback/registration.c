@@ -4,6 +4,14 @@ static jmethodID {{ callback.clone_method }} = NULL;
 {%- for method in callback.methods %}
 static jmethodID {{ method.method_id }} = NULL;
 {%- endfor %}
+{%- for method in callback.handle_methods %}
+{%- match method.completion %}
+{%- when Some with (completion) %}
+static jmethodID {{ completion.success_method_id }} = NULL;
+static jmethodID {{ completion.failure_method_id }} = NULL;
+{%- when None %}
+{%- endmatch %}
+{%- endfor %}
 
 {% include "bridge/jni/callback/free.c" %}
 

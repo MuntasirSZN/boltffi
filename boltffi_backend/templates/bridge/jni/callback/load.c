@@ -22,6 +22,20 @@ static bool {{ callback.load }}(JNIEnv *env) {
         goto fail;
     }
 {%- endfor %}
+{%- for method in callback.handle_methods %}
+{%- match method.completion %}
+{%- when Some with (completion) %}
+    {{ completion.success_method_id }} = (*env)->GetStaticMethodID(env, {{ callback.global_class }}, "{{ completion.success_method }}", {{ completion.success_signature }});
+    if ({{ completion.success_method_id }} == NULL) {
+        goto fail;
+    }
+    {{ completion.failure_method_id }} = (*env)->GetStaticMethodID(env, {{ callback.global_class }}, "{{ completion.failure_method }}", {{ completion.failure_signature }});
+    if ({{ completion.failure_method_id }} == NULL) {
+        goto fail;
+    }
+{%- when None %}
+{%- endmatch %}
+{%- endfor %}
     {{ callback.register }}(&{{ callback.vtable }});
     return true;
 fail:

@@ -26,6 +26,7 @@ pub struct CallbackCompletionPayload {
     suffix: String,
     c_type: TypeFragment,
     jni_type: TypeFragment,
+    jni_signature: String,
     kind: CallbackCompletionPayloadKind,
 }
 
@@ -45,12 +46,14 @@ impl CallbackCompletionPayload {
                 suffix: "Bytes".to_owned(),
                 c_type: TypeFragment::anonymous(ty)?,
                 jni_type: TypeFragment::new("jbyteArray"),
+                jni_signature: "[B".to_owned(),
                 kind: CallbackCompletionPayloadKind::Bytes,
             }),
             c::Type::DirectRecord(name) => Ok(Self {
                 suffix: format!("Record_{}", name.as_str()),
                 c_type: TypeFragment::anonymous(ty)?,
                 jni_type: TypeFragment::new("jbyteArray"),
+                jni_signature: "[B".to_owned(),
                 kind: CallbackCompletionPayloadKind::Record,
             }),
             c::Type::CallbackHandle(callback) => {
@@ -66,6 +69,7 @@ impl CallbackCompletionPayload {
                     suffix: format!("Callback_{c_type}"),
                     c_type,
                     jni_type: TypeFragment::new("jlong"),
+                    jni_signature: "J".to_owned(),
                     kind: CallbackCompletionPayloadKind::CallbackHandle {
                         create_handle: Identifier::parse(declaration.create_handle().name())?,
                     },
@@ -102,6 +106,7 @@ impl CallbackCompletionPayload {
                 suffix: Self::scalar_suffix(ty)?,
                 c_type: TypeFragment::anonymous(ty)?,
                 jni_type: JniType::from_c_type(ty)?.as_type_fragment(),
+                jni_signature: JniType::from_c_type(ty)?.signature().to_owned(),
                 kind: CallbackCompletionPayloadKind::Scalar,
             }),
         }
@@ -120,6 +125,11 @@ impl CallbackCompletionPayload {
     /// Returns the JNI parameter type accepted by the success invoker.
     pub fn jni_type(&self) -> &TypeFragment {
         &self.jni_type
+    }
+
+    /// Returns the JVM method descriptor fragment for this payload.
+    pub fn jni_signature(&self) -> &str {
+        &self.jni_signature
     }
 
     /// Returns whether the payload is an owned byte buffer.

@@ -1,4 +1,14 @@
-JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jclass cls, jlong callback{% for parameter in method.parameters %}, {{ parameter.ty }} {{ parameter.name }}{% endfor %}) {
+{%- match method.completion %}
+{%- when Some with (completion) %}
+{% include "bridge/jni/callback/handle_method/completion.c" %}
+{%- when None %}
+{%- endmatch %}
+
+JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jclass cls, jlong callback{% for parameter in method.parameters %}, {{ parameter.ty }} {{ parameter.name }}{% endfor %}
+{%- match method.completion %}
+{%- when Some with (completion) %}, jlong {{ completion.context }}
+{%- when None %}
+{%- endmatch %}) {
     (void)cls;
     BoltFFICallbackHandle *callback_handle = boltffi_jni_callback_handle_ref(callback);
     const {{ method.vtable_type }} *vtable = callback_handle == NULL ? NULL : (const {{ method.vtable_type }} *)callback_handle->vtable;

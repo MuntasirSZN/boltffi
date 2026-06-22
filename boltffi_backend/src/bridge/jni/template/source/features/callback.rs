@@ -13,6 +13,7 @@ use crate::bridge::jni::template::callback::CallbackRegistrationView;
 
 pub struct CallbackFeatures {
     pub has_registrations: bool,
+    pub has_handle_methods: bool,
     pub uses_byte_arrays: bool,
     pub uses_direct_vectors: bool,
     pub uses_record_arrays: bool,
@@ -26,6 +27,9 @@ impl CallbackFeatures {
     pub fn from_registrations(callbacks: &[CallbackRegistrationView]) -> Self {
         Self {
             has_registrations: !callbacks.is_empty(),
+            has_handle_methods: callbacks
+                .iter()
+                .any(|callback| !callback.handle_methods.is_empty()),
             uses_byte_arrays: callbacks.iter().any(|callback| {
                 callback
                     .methods
@@ -35,6 +39,9 @@ impl CallbackFeatures {
                         !method.borrowed_arrays.is_empty()
                             || method.returns_bytes
                             || method.returns_record
+                            || method.completion.as_ref().is_some_and(|completion| {
+                                completion.payload_bytes || completion.payload_record
+                            })
                     })
             }),
             uses_direct_vectors: callbacks.iter().any(|callback| {
@@ -54,47 +61,63 @@ impl CallbackFeatures {
                     .methods
                     .iter()
                     .any(|method| !method.record_arrays.is_empty())
-                    || callback
-                        .handle_methods
-                        .iter()
-                        .any(|method| !method.record_arrays.is_empty() || method.returns_record)
+                    || callback.handle_methods.iter().any(|method| {
+                        !method.record_arrays.is_empty()
+                            || method.returns_record
+                            || method
+                                .completion
+                                .as_ref()
+                                .is_some_and(|completion| completion.payload_record)
+                    })
             }),
             uses_handles: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| !method.callback_handles.is_empty())
-                    || callback
-                        .handle_methods
-                        .iter()
-                        .any(|method| method.returns_callback)
+                    || callback.handle_methods.iter().any(|method| {
+                        method.returns_callback
+                            || method
+                                .completion
+                                .as_ref()
+                                .is_some_and(|completion| completion.payload_callback_handle)
+                    })
             }),
             returns_byte_arrays: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| method.returns_bytes || method.returns_record)
-                    || callback
-                        .handle_methods
-                        .iter()
-                        .any(|method| method.returns_bytes || method.returns_record)
+                    || callback.handle_methods.iter().any(|method| {
+                        method.returns_bytes
+                            || method.returns_record
+                            || method.completion.as_ref().is_some_and(|completion| {
+                                completion.payload_bytes || completion.payload_record
+                            })
+                    })
             }),
             returns_records: callbacks.iter().any(|callback| {
                 callback.methods.iter().any(|method| method.returns_record)
-                    || callback
-                        .handle_methods
-                        .iter()
-                        .any(|method| method.returns_record)
+                    || callback.handle_methods.iter().any(|method| {
+                        method.returns_record
+                            || method
+                                .completion
+                                .as_ref()
+                                .is_some_and(|completion| completion.payload_record)
+                    })
             }),
             returns_callback_handles: callbacks.iter().any(|callback| {
                 callback
                     .methods
                     .iter()
                     .any(|method| method.returns_callback_handle)
-                    || callback
-                        .handle_methods
-                        .iter()
-                        .any(|method| method.returns_callback)
+                    || callback.handle_methods.iter().any(|method| {
+                        method.returns_callback
+                            || method
+                                .completion
+                                .as_ref()
+                                .is_some_and(|completion| completion.payload_callback_handle)
+                    })
             }),
         }
     }

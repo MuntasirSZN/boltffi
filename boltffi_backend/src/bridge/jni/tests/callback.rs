@@ -727,6 +727,95 @@ fn jni_bridge_renders_callback_handle_returns() {
 }
 
 #[test]
+fn jni_bridge_renders_async_callback_handle_methods() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Listener {
+                async fn load(&self, key: u32) -> u32;
+            }
+
+            #[export]
+            pub fn make_listener() -> Box<dyn Listener> {
+                loop {}
+            }
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "static jmethodID g____ListenerVTable_load_success_method = NULL;",
+        "static jmethodID g____ListenerVTable_load_failure_method = NULL;",
+        "GetStaticMethodID(env, g____ListenerVTable_class, \"complete_load\", \"(JI)V\")",
+        "GetStaticMethodID(env, g____ListenerVTable_class, \"fail_load\", \"(J)V\")",
+        "static void ___ListenerVTable_load_handle_completion(void *context, FfiStatus status, uint32_t result)",
+        "(*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_load_failure_method, (jlong)(uintptr_t)context);",
+        "(*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_load_success_method, (jlong)(uintptr_t)context, (jint)result);",
+        "JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1demo_1listener_1load(JNIEnv *env, jclass cls, jlong callback, jint key, jlong callback_data)",
+        "vtable->load(callback_handle->handle, key, ___ListenerVTable_load_handle_completion, (void *)(uintptr_t)callback_data);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
+}
+
+#[test]
+fn jni_bridge_renders_async_callback_handle_method_payloads() {
+    let files = files(
+        r#"
+            #[repr(C)]
+            #[data]
+            pub struct Point {
+                pub x: i32,
+                pub y: i32,
+            }
+
+            #[export]
+            pub trait Child {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub trait Listener {
+                async fn name(&self) -> String;
+                async fn point(&self) -> Point;
+                async fn child(&self) -> Box<dyn Child>;
+            }
+
+            #[export]
+            pub fn make_listener() -> Box<dyn Listener> {
+                loop {}
+            }
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "GetStaticMethodID(env, g____ListenerVTable_class, \"complete_name\", \"(J[B)V\")",
+        "GetStaticMethodID(env, g____ListenerVTable_class, \"complete_point\", \"(J[B)V\")",
+        "GetStaticMethodID(env, g____ListenerVTable_class, \"complete_child\", \"(JJ)V\")",
+        "static void ___ListenerVTable_name_handle_completion(void *context, FfiStatus status, FfiBuf_u8 result)",
+        "jbyteArray payload = boltffi_jni_buffer_to_byte_array(env, result);",
+        "(*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_name_success_method, (jlong)(uintptr_t)context, payload);",
+        "static void ___ListenerVTable_point_handle_completion(void *context, FfiStatus status, ___Point result)",
+        "jbyteArray payload = boltffi_jni_record_to_byte_array(env, &result, (uintptr_t)sizeof(result));",
+        "(*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_point_success_method, (jlong)(uintptr_t)context, payload);",
+        "static void ___ListenerVTable_child_handle_completion(void *context, FfiStatus status, BoltFFICallbackHandle result)",
+        "jlong payload = boltffi_jni_callback_handle_new_owned(env, result);",
+        "(*env)->CallStaticVoidMethod(env, g____ListenerVTable_class, g____ListenerVTable_child_success_method, (jlong)(uintptr_t)context, payload);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
+}
+
+#[test]
 fn jni_bridge_renders_callback_method_callback_handle_returns() {
     let files = files(
         r#"

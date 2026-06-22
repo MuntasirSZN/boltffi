@@ -40,8 +40,8 @@ pub use callback::{
     CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackClosureArgument,
     CallbackClosureReturn, CallbackCompletionArgument, CallbackCompletionInvoker,
     CallbackCompletionPayload, CallbackDirectVectorArgument, CallbackHandleArgument,
-    CallbackHandleMethod, CallbackMethod, CallbackParameter, CallbackRecordArgument,
-    CallbackRegistration, CallbackReturn,
+    CallbackHandleCompletion, CallbackHandleMethod, CallbackMethod, CallbackParameter,
+    CallbackRecordArgument, CallbackRegistration, CallbackReturn,
 };
 pub use closure::{
     CallbackClosureHandle, ClosureArgument, ClosureBytesArgument, ClosureCParameter,

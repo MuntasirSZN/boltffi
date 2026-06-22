@@ -12,9 +12,9 @@
 
 use crate::{
     bridge::{
-        c::{ArgumentList, Expression, Identifier, TypeFragment},
+        c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
         jni::{
-            CallbackHandleMethod,
+            CallbackCompletionPayload, CallbackHandleCompletion, CallbackHandleMethod,
             template::method::{
                 BorrowedArrayParameterView, NativeParameterView, RecordParameterView,
             },
@@ -33,6 +33,7 @@ pub struct CallbackHandleMethodView {
     pub borrowed_arrays: Vec<BorrowedArrayParameterView>,
     pub record_arrays: Vec<RecordParameterView>,
     pub arguments: ArgumentList,
+    pub completion: Option<CallbackHandleCompletionView>,
     pub returns_void: bool,
     pub returns_boolean: bool,
     pub returns_bytes: bool,
@@ -66,6 +67,9 @@ impl CallbackHandleMethodView {
                 .filter_map(|parameter| parameter.record().map(RecordParameterView::from_record))
                 .collect(),
             arguments: method.arguments()?,
+            completion: method
+                .completion()
+                .map(CallbackHandleCompletionView::from_completion),
             returns_void: method.returns_void(),
             returns_boolean: method.returns_boolean(),
             returns_bytes: method.returns_bytes(),
@@ -75,5 +79,52 @@ impl CallbackHandleMethodView {
                 .return_value(Expression::identifier(Identifier::parse("result")?))?,
             checks_status: method.checks_status(),
         })
+    }
+}
+
+pub struct CallbackHandleCompletionView {
+    pub function: Identifier,
+    pub context: Identifier,
+    pub success_method: Identifier,
+    pub success_method_id: Identifier,
+    pub success_signature: Literal,
+    pub failure_method: Identifier,
+    pub failure_method_id: Identifier,
+    pub failure_signature: Literal,
+    pub has_payload: bool,
+    pub payload_c_type: TypeFragment,
+    pub payload_jni_type: TypeFragment,
+    pub payload_bytes: bool,
+    pub payload_record: bool,
+    pub payload_callback_handle: bool,
+}
+
+impl CallbackHandleCompletionView {
+    pub fn from_completion(completion: &CallbackHandleCompletion) -> Self {
+        let payload = completion.payload();
+        Self {
+            function: completion.function().clone(),
+            context: completion.context().clone(),
+            success_method: completion.success_method().clone(),
+            success_method_id: completion.success_method_id().clone(),
+            success_signature: Literal::string(completion.success_signature()),
+            failure_method: completion.failure_method().clone(),
+            failure_method_id: completion.failure_method_id().clone(),
+            failure_signature: Literal::string("(J)V"),
+            has_payload: payload.is_some(),
+            payload_c_type: payload
+                .map(CallbackCompletionPayload::c_type)
+                .cloned()
+                .unwrap_or_else(|| TypeFragment::new("void")),
+            payload_jni_type: payload
+                .map(CallbackCompletionPayload::jni_type)
+                .cloned()
+                .unwrap_or_else(|| TypeFragment::new("void")),
+            payload_bytes: payload.is_some_and(CallbackCompletionPayload::is_bytes),
+            payload_record: payload.is_some_and(CallbackCompletionPayload::is_record),
+            payload_callback_handle: payload
+                .and_then(CallbackCompletionPayload::callback_handle_constructor)
+                .is_some(),
+        }
     }
 }

@@ -73,6 +73,7 @@ impl SourceFeatures {
                 || callbacks.uses_direct_vectors
                 || callbacks.uses_record_arrays
                 || callbacks.uses_handles
+                || callbacks.has_handle_methods
                 || uses_closure_handles
                 || closures.uses_byte_arrays
                 || closures.uses_direct_vectors
@@ -88,6 +89,7 @@ impl SourceFeatures {
                 || callbacks.has_registrations
                 || closures.has_registrations,
             uses_callback_handles: callbacks.uses_handles
+                || callbacks.has_handle_methods
                 || callbacks.returns_callback_handles
                 || closures.returns_callback_handles
                 || methods.returns_callback_handles,
