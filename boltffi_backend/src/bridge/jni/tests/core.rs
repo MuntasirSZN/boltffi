@@ -439,6 +439,30 @@ fn jni_bridge_renders_closure_parameters_from_contract_group() {
 }
 
 #[test]
+fn jni_bridge_preserves_multi_argument_closure_signature_names() {
+    let files = files(
+        r#"
+            #[export]
+            pub fn install(callback: impl Fn(u32, u32) -> u32) {}
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "FindClass(env, \"com/boltffi/demo/ClosureU32_U32ToU32Callbacks\")",
+        "static uint32_t boltffi_jni____closure__u32__u32_to_u32_call(void *user_data, uint32_t arg0, uint32_t arg1)",
+        "GetStaticMethodID(env, g____closure__u32__u32_to_u32_class, \"call\", \"(JII)I\")",
+        "FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__u32__u32_to_u32_call, (void *)callback, boltffi_jni____closure__u32__u32_to_u32_release);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}\n{source}"));
+}
+
+#[test]
 fn jni_bridge_renders_encoded_closure_parameters_from_contract_group() {
     let files = files(
         r#"
