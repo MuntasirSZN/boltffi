@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use boltffi_binding::{
-    Bindings, CStyleEnumDecl, CallableDecl, CallbackDecl, CallbackId, ClassDecl, ClosureReturn,
-    ConstantDecl, ConstantValueDecl, DeclarationRef, DirectRecordDecl, DirectValueType,
-    DirectVectorElementType, Direction, EnumDecl, EnumId, ErrorDecl, ExecutionDecl,
-    ExportedCallable, ExportedMethodDecl, HandlePresence, HandleTarget, ImportedCallable,
-    ImportedMethodDecl, IncomingParam, InitializerDecl, IntoRust, Native, NativeSymbol, OutOfRust,
-    OutgoingParam, ParamDecl, ParamDirection, ParamPlan, ParamPlanRender, Primitive, Receive,
-    RecordDecl, RecordId, ReturnPlan, ReturnPlanRender, ReturnValueSlot, RustBody, StreamDecl,
-    StreamItemPlan, TypeRef, VTableSlot, native,
+    Bindings, CallableDecl, CallbackDecl, CallbackId, ClassDecl, ClosureReturn, ConstantDecl,
+    ConstantValueDecl, DeclarationRef, DirectValueType, DirectVectorElementType, Direction,
+    EnumDecl, EnumId, ErrorDecl, ExecutionDecl, ExportedCallable, ExportedMethodDecl,
+    HandlePresence, HandleTarget, ImportedCallable, ImportedMethodDecl, IncomingParam,
+    InitializerDecl, IntoRust, Native, NativeSymbol, OutOfRust, OutgoingParam, ParamDecl,
+    ParamDirection, ParamPlan, ParamPlanRender, Primitive, Receive, RecordDecl, RecordId,
+    ReturnPlan, ReturnPlanRender, ReturnValueSlot, RustBody, StreamDecl, StreamItemPlan, TypeRef,
+    VTableSlot, native,
 };
 
 use crate::core::{
@@ -16,7 +16,10 @@ use crate::core::{
 };
 
 use super::names::Names;
-use super::{C_BRIDGE_LAYER, Identifier, Parameter, ParameterGroup, ParameterIndex, Type, name};
+use super::{
+    C_BRIDGE_LAYER, Enum, Field, Identifier, Parameter, ParameterGroup, ParameterIndex, Record,
+    Type, name,
+};
 
 /// C ABI contract produced for native bindings.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,44 +36,11 @@ pub struct CBridgeContract {
     functions: Vec<Function>,
 }
 
-/// A C record typedef.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Record {
-    name: Identifier,
-    fields: Vec<Field>,
-}
-
-/// A C field declaration.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Field {
-    name: Identifier,
-    ty: Type,
-}
-
 /// C ABI support functions supplied by the BoltFFI runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct SupportFunctions {
     functions: Vec<Function>,
-}
-
-/// A C enum typedef with integer-valued variants.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Enum {
-    name: Identifier,
-    repr: Type,
-    variants: Vec<EnumVariant>,
-}
-
-/// A C enum variant constant.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct EnumVariant {
-    name: Identifier,
-    value: i128,
 }
 
 /// A native callback vtable declaration.
@@ -296,55 +266,7 @@ impl BridgeContract for CBridgeContract {
 
 impl sealed::BridgeContract for CBridgeContract {}
 
-impl Record {
-    /// Returns the C typedef name.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Returns the C fields in declaration order.
-    pub fn fields(&self) -> &[Field] {
-        &self.fields
-    }
-}
-
-impl Record {
-    fn direct(record: &DirectRecordDecl<Native>, names: &Names) -> Result<Self> {
-        let name = names.record(record.id())?;
-        let fields = record
-            .fields()
-            .iter()
-            .map(|field| {
-                Field::new(
-                    name::Field::new(field.key()).spelling()?,
-                    Type::primitive(field.ty().primitive())?,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self { name, fields })
-    }
-}
-
 impl Field {
-    /// Returns the field name.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Returns the field type.
-    pub fn ty(&self) -> &Type {
-        &self.ty
-    }
-}
-
-impl Field {
-    fn new(name: impl Into<String>, ty: Type) -> Result<Self> {
-        Ok(Self {
-            name: Identifier::escape(name)?,
-            ty,
-        })
-    }
-
     fn callback_method(
         method: &ImportedMethodDecl<Native, VTableSlot>,
         names: &Names,
@@ -466,87 +388,6 @@ impl SupportFunctions {
     }
 }
 
-impl Enum {
-    /// Returns the C typedef name.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Returns the C integer representation.
-    pub fn repr(&self) -> &Type {
-        &self.repr
-    }
-
-    /// Returns the enum constants in declaration order.
-    pub fn variants(&self) -> &[EnumVariant] {
-        &self.variants
-    }
-}
-
-impl Enum {
-    fn from_decl(enumeration: &EnumDecl<Native>, names: &Names) -> Result<Self> {
-        match enumeration {
-            EnumDecl::CStyle(enumeration) => Self::c_style(enumeration, names),
-            EnumDecl::Data(enumeration) => Ok(Self {
-                name: names.enumeration(enumeration.id())?,
-                repr: Type::Uint32,
-                variants: enumeration
-                    .variants()
-                    .iter()
-                    .map(|variant| {
-                        EnumVariant::new(
-                            name::EnumConstant::new(enumeration.name(), variant.name()).spelling(),
-                            i128::from(variant.tag().get()),
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            }),
-            _ => Err(Error::UnexpectedBindingShape {
-                layer: C_BRIDGE_LAYER,
-                shape: "unknown enum declaration",
-            }),
-        }
-    }
-
-    fn c_style(enumeration: &CStyleEnumDecl<Native>, names: &Names) -> Result<Self> {
-        Ok(Self {
-            name: names.enumeration(enumeration.id())?,
-            repr: Type::primitive(enumeration.repr().primitive())?,
-            variants: enumeration
-                .variants()
-                .iter()
-                .map(|variant| {
-                    EnumVariant::new(
-                        name::EnumConstant::new(enumeration.name(), variant.name()).spelling(),
-                        variant.discriminant().get(),
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?,
-        })
-    }
-}
-
-impl EnumVariant {
-    /// Returns the C constant name.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Returns the integer constant value.
-    pub const fn value(&self) -> i128 {
-        self.value
-    }
-}
-
-impl EnumVariant {
-    fn new(name: impl Into<String>, value: i128) -> Result<Self> {
-        Ok(Self {
-            name: Identifier::parse(name)?,
-            value,
-        })
-    }
-}
-
 impl Callback {
     /// Returns the source callback trait id.
     pub const fn id(&self) -> CallbackId {
@@ -592,10 +433,10 @@ impl Callback {
             .iter()
             .map(|method| Field::callback_method(method, names))
             .collect::<Result<Vec<_>>>()?;
-        let vtable = Record {
-            name: vtable_name.clone(),
-            fields: [free, clone].into_iter().chain(methods).collect(),
-        };
+        let vtable = Record::new(
+            vtable_name.clone(),
+            [free, clone].into_iter().chain(methods).collect(),
+        );
         let register = Function::new(
             callback.protocol().register().name().as_str(),
             vec![Parameter::new(

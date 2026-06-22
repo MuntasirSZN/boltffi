@@ -5,23 +5,25 @@
 //! without parsing header text.
 
 mod contract;
+mod enumeration;
 mod header;
 mod identifier;
 mod name;
 mod names;
 mod parameter;
+mod record;
 pub(crate) mod syntax;
 mod template;
 mod ty;
 
-pub use contract::{
-    CBridgeContract, Callback, Enum, EnumVariant, Field, Function, Record, SupportFunctions,
-};
+pub use contract::{CBridgeContract, Callback, Function, SupportFunctions};
+pub use enumeration::{Enum, EnumVariant};
 pub use header::{CBridge, HeaderInclude};
 pub use identifier::Identifier;
 pub use parameter::{
     ByteSliceParameter, ClosureParameter, Parameter, ParameterGroup, ParameterIndex,
 };
+pub use record::{Field, Record};
 pub use syntax::{ArgumentList, Expression, Literal, Statement, Syntax, TypeFragment};
 pub use ty::Type;
 
