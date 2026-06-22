@@ -2,10 +2,7 @@ use std::{borrow::Borrow, fmt};
 
 use crate::core::{LanguageSyntax, Result, syntax::sealed};
 
-use super::{
-    contract::{Function, Parameter, Type},
-    identifier::Identifier,
-};
+use super::{Function, Identifier, Parameter, Type};
 
 /// C syntax fragment family.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -75,6 +72,10 @@ impl fmt::Display for Expression {
 impl sealed::SyntaxFragment for Expression {}
 
 impl Expression {
+    pub(crate) fn new(fragment: impl Into<String>) -> Self {
+        Self(fragment.into())
+    }
+
     pub(crate) fn identifier(identifier: Identifier) -> Self {
         Self(identifier.to_string())
     }
@@ -140,6 +141,14 @@ impl Literal {
         Self("{0}".to_owned())
     }
 
+    pub(crate) fn null_pointer() -> Self {
+        Self("NULL".to_owned())
+    }
+
+    pub(crate) fn status_failure() -> Self {
+        Self("{.code = 1}".to_owned())
+    }
+
     pub(crate) fn string(value: &str) -> Self {
         Self(format!("{value:?}"))
     }
@@ -190,8 +199,9 @@ impl TypeFragment {
             Type::FutureHandle => "RustFutureHandle".to_owned(),
             Type::StreamPollResult => "StreamPollResult".to_owned(),
             Type::WaitResult => "WaitResult".to_owned(),
-            Type::CallbackHandle => "BoltFFICallbackHandle".to_owned(),
-            Type::Named(name) => name.to_string(),
+            Type::CallbackHandle(_) => "BoltFFICallbackHandle".to_owned(),
+            Type::Named(name) | Type::DirectRecord(name) => name.to_string(),
+            Type::CStyleEnum { name, .. } => name.to_string(),
             Type::ConstPointer(inner) => format!("const {} *", Self::anonymous(inner)?),
             Type::MutPointer(inner) => format!("{} *", Self::anonymous(inner)?),
             Type::FunctionPointer { returns, params } => {

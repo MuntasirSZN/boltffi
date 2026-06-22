@@ -2,9 +2,9 @@ use askama::Template as AskamaTemplate;
 
 use crate::core::Result;
 
-use super::contract::{CBridgeContract, Callback, Enum, Field, Function, Record};
 use super::identifier::Identifier;
 use super::syntax::{Statement, TypeFragment};
+use super::{CBridgeContract, Callback, Enum, Field, Function, Record};
 
 #[derive(AskamaTemplate)]
 #[template(path = "bridge/c/header.h", escape = "none")]

@@ -416,7 +416,7 @@ impl Conversion {
             index,
             name,
             kind: Kind::Direct(Direct {
-                c_type: TypeFragment::anonymous(&Type::CallbackHandle)?,
+                c_type: TypeFragment::anonymous(&Type::CallbackHandle(callback))?,
                 parser: symbols.parser(presence).clone(),
             }),
             primitive: None,
