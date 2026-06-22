@@ -1,16 +1,21 @@
+//! Conversion from C closure parameter groups into closure arguments.
+//!
+//! The C bridge represents a closure call as a function pointer plus grouped
+//! parameters. This module turns each group into one typed closure argument while
+//! preserving the difference between normal closure parameters and returned
+//! closure storage.
+
+mod bytes;
+mod direct_vector;
+mod nested_closure;
+mod scalar;
+
 use crate::{
-    bridge::{
-        c,
-        jni::{CallbackClosureHandle, JvmClassPath},
-    },
+    bridge::{c, jni::JvmClassPath},
     core::{Error, Result},
 };
 
-use super::super::names::ClosureNames;
-use super::{
-    ClosureArgument, ClosureArgumentKind, ClosureBytesArgument, ClosureCParameter,
-    ClosureDirectVectorArgument, ClosureHandleArgument, ClosureScalarArgument,
-};
+use super::{ClosureArgument, ClosureArgumentKind};
 
 const JNI_BRIDGE: &str = "jni";
 
@@ -45,23 +50,13 @@ impl ClosureArgument {
     ) -> Result<Self> {
         match group {
             c::ParameterGroup::Value(index) => Ok(Self {
-                kind: ClosureArgumentKind::Scalar(ClosureScalarArgument::from_parameter(
-                    call.parameter(*index),
-                )?),
+                kind: ClosureArgumentKind::Scalar(scalar::from_index(call, *index)?),
             }),
             c::ParameterGroup::ByteSlice(bytes) => Ok(Self {
-                kind: ClosureArgumentKind::Bytes(ClosureBytesArgument::from_bytes(
-                    call.parameter(bytes.pointer()),
-                    call.parameter(bytes.length()),
-                    bytes,
-                )?),
+                kind: ClosureArgumentKind::Bytes(bytes::from_group(call, bytes)?),
             }),
             c::ParameterGroup::DirectVector(vector) => Ok(Self {
-                kind: ClosureArgumentKind::DirectVector(ClosureDirectVectorArgument::from_vector(
-                    call.parameter(vector.pointer()),
-                    call.parameter(vector.length()),
-                    vector,
-                )?),
+                kind: ClosureArgumentKind::DirectVector(direct_vector::from_group(call, vector)?),
             }),
             c::ParameterGroup::DirectWriteback(_) => Err(Error::BrokenBridgeContract {
                 bridge: JNI_BRIDGE,
@@ -76,7 +71,9 @@ impl ClosureArgument {
                 invariant: "closure call argument cannot be a poll continuation",
             }),
             c::ParameterGroup::Closure(nested) => Ok(Self {
-                kind: ClosureArgumentKind::Closure(Self::from_nested_closure(class, call, nested)?),
+                kind: ClosureArgumentKind::Closure(nested_closure::from_group(
+                    class, call, nested,
+                )?),
             }),
             c::ParameterGroup::ClosureReturn(_) => Err(Error::BrokenBridgeContract {
                 bridge: JNI_BRIDGE,
@@ -84,32 +81,10 @@ impl ClosureArgument {
             }),
         }
     }
-
-    fn from_nested_closure(
-        class: &JvmClassPath,
-        call: ClosureCall<'_>,
-        nested: &c::ClosureParameter,
-    ) -> Result<ClosureHandleArgument> {
-        let names = ClosureNames::new(nested.signature());
-        let handle = CallbackClosureHandle::new(
-            class,
-            nested.signature(),
-            call.parameter(nested.call()).ty(),
-        )?;
-        ClosureHandleArgument::new(
-            nested.name(),
-            ClosureCParameter::from_parameter(call.parameter(nested.call()))?,
-            ClosureCParameter::from_parameter(call.parameter(nested.context()))?,
-            ClosureCParameter::from_parameter(call.parameter(nested.release()))?,
-            &handle,
-            names.call()?,
-            names.release()?,
-        )
-    }
 }
 
-impl ClosureCall<'_> {
-    fn parameter(&self, index: c::ParameterIndex) -> &c::Parameter {
+impl<'source> ClosureCall<'source> {
+    pub fn parameter(&self, index: c::ParameterIndex) -> &'source c::Parameter {
         match self {
             Self::Parameter(closure) => closure.parameter(index),
             Self::Return(returned) => returned.parameter(index),
