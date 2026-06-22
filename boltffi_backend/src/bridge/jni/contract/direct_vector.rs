@@ -1,6 +1,6 @@
 use crate::{
     bridge::{
-        c::{self, DirectVectorElementAbi, Expression, Identifier, Type, TypeFragment},
+        c::{self, Expression, Identifier, TypeFragment},
         jni::JniType,
     },
     core::Result,
@@ -79,15 +79,8 @@ impl DirectVectorParameter {
             pointer: Identifier::parse(format!("__boltffi_{}_ptr", vector.name()))?,
             length: Identifier::parse(format!("__boltffi_{}_len", vector.name()))?,
             pointer_type: TypeFragment::anonymous(pointer.ty())?,
-            jni_type: Self::jni_type(vector.element())?,
+            jni_type: JniType::from_direct_vector_element(vector.element())?,
             name: Identifier::escape(vector.name())?,
         })
-    }
-
-    fn jni_type(element: &DirectVectorElementAbi) -> Result<JniType> {
-        match element {
-            DirectVectorElementAbi::Typed(element) => JniType::from_c_type(element),
-            DirectVectorElementAbi::PackedBytes => JniType::from_c_type(&Type::Uint8),
-        }
     }
 }

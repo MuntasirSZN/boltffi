@@ -245,6 +245,39 @@ fn jni_bridge_renders_callback_encoded_closure_parameters() {
 }
 
 #[test]
+fn jni_bridge_renders_callback_direct_vector_closure_parameters() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Listener {
+                fn install(&self, callback: impl Fn(Vec<u32>) -> u32);
+            }
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(source.contains("uint32_t (*call)(void *, const uint32_t *, uintptr_t);"));
+    assert!(source.contains("static jlong boltffi_jni____closure__vec_u32_to_u32_handle_new(JNIEnv *env, uint32_t (*call)(void *, const uint32_t *, uintptr_t), void *context, void (*release)(void *))"));
+    assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1closure_1_1_1_1closure_1_1vec_1u32_1to_1u32_1call(JNIEnv *env, jclass cls, jlong value, jintArray arg0)"));
+    assert!(source.contains("jint *arg0_ptr = NULL;"));
+    assert!(source.contains("jsize arg0_len = 0;"));
+    assert!(source.contains("arg0_len = (*env)->GetArrayLength(env, arg0);"));
+    assert!(source.contains("arg0_ptr = (*env)->GetIntArrayElements(env, arg0, NULL);"));
+    assert!(source.contains(
+        "uint32_t result = closure->call(closure->context, (const uint32_t *)arg0_ptr, (uintptr_t)arg0_len);"
+    ));
+    assert!(source.contains("(*env)->ReleaseIntArrayElements(env, arg0, arg0_ptr, JNI_ABORT);"));
+    assert!(
+        source
+            .contains("GetStaticMethodID(env, g____ListenerVTable_class, \"install\", \"(JJ)V\")")
+    );
+}
+
+#[test]
 fn jni_bridge_renders_callback_encoded_returns() {
     let files = files(
         r#"

@@ -384,3 +384,36 @@ fn jni_bridge_renders_encoded_closure_parameters_from_contract_group() {
             "FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__string_to_string_call, (void *)callback, boltffi_jni____closure__string_to_string_release);"
         ));
 }
+
+#[test]
+fn jni_bridge_renders_direct_vector_closure_parameters_from_contract_group() {
+    let files = files(
+        r#"
+            #[export]
+            pub fn install(callback: impl Fn(Vec<u32>) -> u32) {}
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(source.contains(
+            "static uint32_t boltffi_jni____closure__vec_u32_to_u32_call(void *user_data, const uint32_t *arg0_ptr, uintptr_t arg0_len)"
+        ));
+    assert!(source.contains("jintArray arg0 = NULL;"));
+    assert!(source.contains("arg0 = (*env)->NewIntArray(env, (jsize)arg0_len);"));
+    assert!(source.contains(
+        "(*env)->SetIntArrayRegion(env, arg0, 0, (jsize)arg0_len, (const jint *)arg0_ptr);"
+    ));
+    assert!(source.contains(
+        "uint32_t result = (uint32_t)(*env)->CallStaticIntMethod(env, g____closure__vec_u32_to_u32_class, g____closure__vec_u32_to_u32_call_method, handle, arg0);"
+    ));
+    assert!(source.contains(
+        "GetStaticMethodID(env, g____closure__vec_u32_to_u32_class, \"call\", \"(J[I)I\")"
+    ));
+    assert!(source.contains(
+            "FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__vec_u32_to_u32_call, (void *)callback, boltffi_jni____closure__vec_u32_to_u32_release);"
+        ));
+}

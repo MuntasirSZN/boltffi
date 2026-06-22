@@ -32,6 +32,7 @@ impl SourceFeatures {
         let callback_handles = Self::callback_handles(callbacks);
         let uses_closure_handles = !closure_handles.is_empty();
         let closure_byte_arrays = Self::closure_byte_arrays(closures);
+        let closure_direct_vectors = Self::closure_direct_vectors(closures);
         let byte_array_returns = Self::byte_array_returns(callbacks, closures);
         let record_returns = Self::record_returns(callbacks, closures);
         let method_byte_array_returns = methods.iter().any(|method| method.returns_bytes);
@@ -66,7 +67,10 @@ impl SourceFeatures {
             || completion_record_arrays;
 
         Self {
-            uses_limits: uses_byte_arrays || uses_record_arrays || callback_direct_vectors,
+            uses_limits: uses_byte_arrays
+                || uses_record_arrays
+                || callback_direct_vectors
+                || closure_direct_vectors,
             checks_status: methods.iter().any(|method| method.checks_status),
             uses_byte_arrays,
             uses_record_arrays,
@@ -76,6 +80,7 @@ impl SourceFeatures {
                 || callback_handles
                 || uses_closure_handles
                 || closure_byte_arrays
+                || closure_direct_vectors
                 || byte_array_returns
                 || completion_byte_arrays
                 || direct_stream_batch_returns
@@ -127,6 +132,12 @@ impl SourceFeatures {
     fn closure_byte_arrays(closures: &[ClosureRegistrationView]) -> bool {
         closures.iter().any(|closure| {
             !closure.byte_arrays.is_empty() || !closure.handle_byte_arrays.is_empty()
+        })
+    }
+
+    fn closure_direct_vectors(closures: &[ClosureRegistrationView]) -> bool {
+        closures.iter().any(|closure| {
+            !closure.direct_vectors.is_empty() || !closure.handle_direct_vectors.is_empty()
         })
     }
 

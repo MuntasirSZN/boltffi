@@ -3,7 +3,10 @@ use crate::{
     core::{Error, Result},
 };
 
-use super::{ClosureArgument, ClosureArgumentKind, ClosureBytesArgument, ClosureScalarArgument};
+use super::{
+    ClosureArgument, ClosureArgumentKind, ClosureBytesArgument, ClosureDirectVectorArgument,
+    ClosureScalarArgument,
+};
 
 const JNI_BRIDGE: &str = "jni";
 
@@ -21,9 +24,10 @@ impl ClosureArgument {
             c::ParameterGroup::ByteSlice(bytes) => Ok(Self {
                 kind: ClosureArgumentKind::Bytes(ClosureBytesArgument::from_bytes(closure, bytes)?),
             }),
-            c::ParameterGroup::DirectVector(_) => Err(Error::UnsupportedBridge {
-                bridge: JNI_BRIDGE,
-                shape: "closure direct-vector argument",
+            c::ParameterGroup::DirectVector(vector) => Ok(Self {
+                kind: ClosureArgumentKind::DirectVector(ClosureDirectVectorArgument::from_vector(
+                    closure, vector,
+                )?),
             }),
             c::ParameterGroup::CallbackCompletion(_) => Err(Error::BrokenBridgeContract {
                 bridge: JNI_BRIDGE,

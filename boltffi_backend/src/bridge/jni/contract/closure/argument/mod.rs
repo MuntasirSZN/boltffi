@@ -1,11 +1,13 @@
 mod bytes;
 mod c_abi;
 mod c_bridge;
+mod direct_vector;
 mod jvm;
 mod scalar;
 
 pub use bytes::ClosureBytesArgument;
 pub use c_abi::ClosureCParameter;
+pub use direct_vector::ClosureDirectVectorArgument;
 pub use scalar::ClosureScalarArgument;
 
 use crate::bridge::c::Expression;
@@ -21,6 +23,7 @@ pub struct ClosureArgument {
 enum ClosureArgumentKind {
     Scalar(ClosureScalarArgument),
     Bytes(ClosureBytesArgument),
+    DirectVector(ClosureDirectVectorArgument),
 }
 
 impl ClosureArgument {
@@ -29,6 +32,7 @@ impl ClosureArgument {
         match &self.kind {
             ClosureArgumentKind::Scalar(argument) => argument.c_parameters(),
             ClosureArgumentKind::Bytes(argument) => argument.c_parameters(),
+            ClosureArgumentKind::DirectVector(argument) => argument.c_parameters(),
         }
     }
 
@@ -37,6 +41,7 @@ impl ClosureArgument {
         match &self.kind {
             ClosureArgumentKind::Scalar(argument) => argument.handle_parameters(),
             ClosureArgumentKind::Bytes(argument) => argument.handle_parameters(),
+            ClosureArgumentKind::DirectVector(argument) => argument.handle_parameters(),
         }
     }
 
@@ -45,6 +50,7 @@ impl ClosureArgument {
         match &self.kind {
             ClosureArgumentKind::Scalar(_) => None,
             ClosureArgumentKind::Bytes(argument) => Some(argument),
+            ClosureArgumentKind::DirectVector(_) => None,
         }
     }
 
@@ -53,11 +59,25 @@ impl ClosureArgument {
         self.call_bytes()
     }
 
+    /// Returns the direct-vector argument when the JVM receives an array.
+    pub fn call_direct_vector(&self) -> Option<&ClosureDirectVectorArgument> {
+        match &self.kind {
+            ClosureArgumentKind::DirectVector(argument) => Some(argument),
+            ClosureArgumentKind::Scalar(_) | ClosureArgumentKind::Bytes(_) => None,
+        }
+    }
+
+    /// Returns the direct-vector argument when the JVM sends an array.
+    pub fn handle_direct_vector(&self) -> Option<&ClosureDirectVectorArgument> {
+        self.call_direct_vector()
+    }
+
     /// Returns the expressions passed to the static JVM closure method.
     pub fn jvm_arguments(&self) -> Vec<Expression> {
         match &self.kind {
             ClosureArgumentKind::Scalar(argument) => argument.jvm_arguments(),
             ClosureArgumentKind::Bytes(argument) => argument.jvm_arguments(),
+            ClosureArgumentKind::DirectVector(argument) => argument.jvm_arguments(),
         }
     }
 
@@ -66,6 +86,7 @@ impl ClosureArgument {
         match &self.kind {
             ClosureArgumentKind::Scalar(argument) => argument.rust_arguments(),
             ClosureArgumentKind::Bytes(argument) => argument.rust_arguments(),
+            ClosureArgumentKind::DirectVector(argument) => argument.rust_arguments(),
         }
     }
 
@@ -74,6 +95,7 @@ impl ClosureArgument {
         match &self.kind {
             ClosureArgumentKind::Scalar(argument) => argument.jni_signature(),
             ClosureArgumentKind::Bytes(argument) => argument.jni_signature(),
+            ClosureArgumentKind::DirectVector(argument) => argument.jni_signature(),
         }
     }
 }

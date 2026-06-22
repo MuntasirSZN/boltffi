@@ -1,6 +1,9 @@
 use crate::bridge::{
     c::{ArgumentList, Expression, Identifier, Literal, Statement, TypeFragment},
-    jni::{ClosureArgument, ClosureBytesArgument, ClosureCParameter, ClosureRegistration},
+    jni::{
+        ClosureArgument, ClosureBytesArgument, ClosureCParameter, ClosureDirectVectorArgument,
+        ClosureRegistration,
+    },
 };
 
 pub struct ClosureRegistrationView {
@@ -22,10 +25,12 @@ pub struct ClosureRegistrationView {
     pub failure_value: Expression,
     pub c_parameters: Vec<ClosureCParameterView>,
     pub byte_arrays: Vec<ClosureBytesArgumentView>,
+    pub direct_vectors: Vec<ClosureDirectVectorArgumentView>,
     pub jni_arguments: ArgumentList,
     pub has_jni_arguments: bool,
     pub handle_parameters: Vec<ClosureCParameterView>,
     pub handle_byte_arrays: Vec<ClosureBytesArgumentView>,
+    pub handle_direct_vectors: Vec<ClosureDirectVectorArgumentView>,
     pub rust_arguments: ArgumentList,
     pub has_rust_arguments: bool,
 }
@@ -52,6 +57,20 @@ pub struct ClosureBytesArgumentView {
     pub pointer: Identifier,
     pub length: Identifier,
     pub buffer: Identifier,
+}
+
+pub struct ClosureDirectVectorArgumentView {
+    pub name: Identifier,
+    pub pointer: Identifier,
+    pub length: Identifier,
+    pub pointer_local: Identifier,
+    pub length_local: Identifier,
+    pub array_type: TypeFragment,
+    pub element_type: TypeFragment,
+    pub new_array: &'static str,
+    pub set_region: &'static str,
+    pub getter: &'static str,
+    pub releaser: &'static str,
 }
 
 impl ClosureRegistrationView {
@@ -89,6 +108,11 @@ impl ClosureRegistrationView {
                 .filter_map(ClosureArgument::call_bytes)
                 .map(ClosureBytesArgumentView::from_argument)
                 .collect(),
+            direct_vectors: arguments
+                .iter()
+                .filter_map(ClosureArgument::call_direct_vector)
+                .map(ClosureDirectVectorArgumentView::from_argument)
+                .collect(),
             jni_arguments: ClosureArgument::jvm_argument_list(arguments),
             has_jni_arguments: !arguments.is_empty(),
             handle_parameters: arguments
@@ -100,6 +124,11 @@ impl ClosureRegistrationView {
                 .iter()
                 .filter_map(ClosureArgument::handle_bytes)
                 .map(ClosureBytesArgumentView::from_argument)
+                .collect(),
+            handle_direct_vectors: arguments
+                .iter()
+                .filter_map(ClosureArgument::handle_direct_vector)
+                .map(ClosureDirectVectorArgumentView::from_argument)
                 .collect(),
             rust_arguments: ClosureArgument::rust_argument_list(arguments),
             has_rust_arguments: !arguments.is_empty(),
@@ -141,6 +170,24 @@ impl ClosureBytesArgumentView {
             pointer: argument.pointer().clone(),
             length: argument.length().clone(),
             buffer: argument.buffer().clone(),
+        }
+    }
+}
+
+impl ClosureDirectVectorArgumentView {
+    fn from_argument(argument: &ClosureDirectVectorArgument) -> Self {
+        Self {
+            name: argument.name().clone(),
+            pointer: argument.pointer().clone(),
+            length: argument.length().clone(),
+            pointer_local: argument.pointer_local().clone(),
+            length_local: argument.length_local().clone(),
+            array_type: argument.array_type(),
+            element_type: argument.element_type(),
+            new_array: argument.new_array(),
+            set_region: argument.set_region(),
+            getter: argument.getter(),
+            releaser: argument.releaser(),
         }
     }
 }

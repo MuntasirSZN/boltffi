@@ -1,5 +1,5 @@
 use crate::{
-    bridge::c::{self, Literal, TypeFragment},
+    bridge::c::{self, DirectVectorElementAbi, Literal, Type, TypeFragment},
     core::{Error, Result},
 };
 
@@ -190,6 +190,14 @@ impl JniType {
                 bridge: JNI_BRIDGE,
                 shape: "non-scalar C ABI function",
             }),
+        }
+    }
+
+    /// Creates the JNI scalar type used for a direct-vector element.
+    pub fn from_direct_vector_element(element: &DirectVectorElementAbi) -> Result<Self> {
+        match element {
+            DirectVectorElementAbi::Typed(element) => Self::from_c_type(element),
+            DirectVectorElementAbi::PackedBytes => Self::from_c_type(&Type::Uint8),
         }
     }
 }

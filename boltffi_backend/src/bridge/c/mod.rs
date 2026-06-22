@@ -292,6 +292,31 @@ mod tests {
     }
 
     #[test]
+    fn c_contract_preserves_closure_call_direct_vector_groups() {
+        let contract = contract(
+            r#"
+            #[export]
+            pub fn install(callback: impl Fn(Vec<u32>) -> u32) {}
+            "#,
+        );
+        let function = contract
+            .functions()
+            .iter()
+            .find(|function| function.name() == "boltffi_function_demo_install")
+            .expect("exported function");
+        let [ParameterGroup::Closure(closure)] = function.parameter_groups() else {
+            panic!("expected one closure parameter group");
+        };
+        let [ParameterGroup::DirectVector(argument)] = closure.parameter_groups() else {
+            panic!("expected closure direct-vector argument group");
+        };
+
+        assert_eq!(argument.name(), "arg0");
+        assert_eq!(closure.parameter(argument.pointer()).name(), "arg0_ptr");
+        assert_eq!(closure.parameter(argument.length()).name(), "arg0_len");
+    }
+
+    #[test]
     fn c_contract_groups_callback_method_closure_parameter_triples() {
         let contract = contract(
             r#"

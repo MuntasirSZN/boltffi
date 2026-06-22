@@ -76,12 +76,7 @@ impl CallbackArgument {
                 array: Identifier::escape(vector.name())?,
                 pointer: CallbackCParameter::from_parameter(slot.parameter(vector.pointer()))?,
                 length: CallbackCParameter::from_parameter(slot.parameter(vector.length()))?,
-                jni_type: match vector.element() {
-                    c::DirectVectorElementAbi::Typed(element) => JniType::from_c_type(element)?,
-                    c::DirectVectorElementAbi::PackedBytes => {
-                        JniType::from_c_type(&c::Type::Uint8)?
-                    }
-                },
+                jni_type: JniType::from_direct_vector_element(vector.element())?,
             },
         })
     }

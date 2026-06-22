@@ -55,6 +55,8 @@ JNIEXPORT {{ handle.jni_return_type }} JNICALL {{ handle.call_symbol }}(JNIEnv *
     }
 {% include "bridge/jni/closure/handle_buffer_declarations.c" %}
 {% include "bridge/jni/closure/handle_byte_arrays.c" %}
+{% include "bridge/jni/closure/handle_vector_declarations.c" %}
+{% include "bridge/jni/closure/handle_direct_vectors.c" %}
 {%- if handle.closure.returns_void %}
     closure->call(closure->context{% if handle.closure.has_rust_arguments %}, {{ handle.closure.rust_arguments }}{% endif %});
 {% include "bridge/jni/closure/handle_cleanup.c" %}

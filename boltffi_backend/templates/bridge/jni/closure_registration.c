@@ -17,6 +17,8 @@ static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for para
     jlong handle = (jlong)(uintptr_t)user_data;
 {% include "bridge/jni/closure/byte_array_declarations.c" %}
 {% include "bridge/jni/closure/byte_arrays.c" %}
+{% include "bridge/jni/closure/direct_vector_declarations.c" %}
+{% include "bridge/jni/closure/direct_vectors.c" %}
 {%- if closure.returns_void %}
     (*env)->CallStaticVoidMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% if closure.has_jni_arguments %}, {{ closure.jni_arguments }}{% endif %});
     boltffi_jni_clear_exception(env);
