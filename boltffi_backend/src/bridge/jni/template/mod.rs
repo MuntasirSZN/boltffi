@@ -75,6 +75,18 @@ impl SourceFile {
                 .iter()
                 .any(|method| !method.callback_handles.is_empty())
         });
+        let callback_returns_byte_arrays = callbacks.iter().any(|callback| {
+            callback
+                .methods
+                .iter()
+                .any(|method| method.returns_bytes || method.returns_record)
+        }) || closures
+            .iter()
+            .any(|closure| closure.returns_bytes || closure.returns_record);
+        let callback_returns_records = callbacks
+            .iter()
+            .any(|callback| callback.methods.iter().any(|method| method.returns_record))
+            || closures.iter().any(|closure| closure.returns_record);
         Ok(SourceFileTemplate {
             c_header: Literal::string(contract.c_header().as_str()),
             class_name: Literal::string(&contract.class().as_jni_class_name()),
@@ -82,6 +94,7 @@ impl SourceFile {
             checks_status: methods.iter().any(|method| method.checks_status),
             uses_byte_arrays: callback_uses_byte_arrays
                 || callback_uses_record_arrays
+                || callback_returns_byte_arrays
                 || methods.iter().any(|method| {
                     method.returns_bytes
                         || method.returns_record
@@ -91,10 +104,12 @@ impl SourceFile {
             uses_record_arrays: methods
                 .iter()
                 .any(|method| method.returns_record || !method.record_arrays.is_empty())
-                || callback_uses_record_arrays,
+                || callback_uses_record_arrays
+                || callback_returns_records,
             uses_exceptions: callback_uses_byte_arrays
                 || callback_uses_record_arrays
                 || callback_uses_callback_handles
+                || callback_returns_byte_arrays
                 || methods.iter().any(|method| {
                     method.checks_status
                         || method.returns_bytes

@@ -1,5 +1,5 @@
 use crate::bridge::{
-    c::{Identifier, Literal, TypeFragment},
+    c::{Expression, Identifier, Literal, TypeFragment},
     jni::{ClosureArgument, ClosureRegistration},
 };
 
@@ -14,9 +14,12 @@ pub struct ClosureRegistrationView {
     pub release: Identifier,
     pub c_return_type: TypeFragment,
     pub returns_void: bool,
+    pub returns_byte_array: bool,
+    pub returns_bytes: bool,
+    pub returns_record: bool,
     pub method_signature: Literal,
     pub call_method_suffix: String,
-    pub failure_value: String,
+    pub failure_value: Expression,
     pub arguments: Vec<ClosureArgumentView>,
 }
 
@@ -39,12 +42,17 @@ impl ClosureRegistrationView {
             release: registration.release().clone(),
             c_return_type: registration.c_return_type().clone(),
             returns_void: registration.returns_void(),
+            returns_byte_array: registration.returns_byte_array(),
+            returns_bytes: registration.returns_bytes(),
+            returns_record: registration.returns_record(),
             method_signature: Literal::string(&registration.method_signature()),
             call_method_suffix: registration
                 .call_method_suffix()
                 .unwrap_or_default()
                 .to_owned(),
-            failure_value: registration.failure_value().unwrap_or_default().to_owned(),
+            failure_value: registration
+                .failure_value()
+                .unwrap_or_else(|| Expression::literal(Literal::integer_zero())),
             arguments: registration
                 .arguments()
                 .iter()

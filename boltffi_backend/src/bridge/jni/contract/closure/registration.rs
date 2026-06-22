@@ -5,7 +5,7 @@ use boltffi_binding::ClosureSignature;
 use crate::{
     bridge::{
         c::{self, Identifier, TypeFragment},
-        jni::{ClosureArgument, JniReturn, JvmClassPath},
+        jni::{ClosureArgument, JvmClassPath, JvmMethodReturn},
     },
     core::{Error, Result},
 };
@@ -25,7 +25,7 @@ pub struct ClosureRegistration {
     unload: Identifier,
     call: Identifier,
     release: Identifier,
-    returns: JniReturn,
+    returns: JvmMethodReturn,
     arguments: Vec<ClosureArgument>,
 }
 
@@ -109,6 +109,21 @@ impl ClosureRegistration {
         self.returns.is_void()
     }
 
+    /// Returns whether the JVM closure method returns a byte array.
+    pub fn returns_byte_array(&self) -> bool {
+        self.returns.returns_byte_array()
+    }
+
+    /// Returns whether the JVM closure method returns owned encoded bytes.
+    pub fn returns_bytes(&self) -> bool {
+        self.returns.returns_bytes()
+    }
+
+    /// Returns whether the JVM closure method returns a direct record byte array.
+    pub fn returns_record(&self) -> bool {
+        self.returns.returns_record()
+    }
+
     /// Returns the JNI method descriptor.
     pub fn method_signature(&self) -> String {
         format!(
@@ -128,7 +143,7 @@ impl ClosureRegistration {
     }
 
     /// Returns the C value returned when JVM dispatch fails.
-    pub fn failure_value(&self) -> Option<&'static str> {
+    pub fn failure_value(&self) -> Option<c::Expression> {
         self.returns.failure_value()
     }
 
@@ -169,7 +184,7 @@ impl ClosureRegistration {
             unload: Identifier::parse(format!("boltffi_jni_unload_{stem}"))?,
             call: Identifier::parse(format!("boltffi_jni_{stem}_call"))?,
             release: Identifier::parse(format!("boltffi_jni_{stem}_release"))?,
-            returns: JniReturn::from_c_type(returns)?,
+            returns: JvmMethodReturn::from_c_type(returns)?,
             arguments: params
                 .iter()
                 .skip(1)

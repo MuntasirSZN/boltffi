@@ -3,7 +3,7 @@ use crate::{
         c::{self, ArgumentList, Identifier, TypeFragment},
         jni::{
             CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackHandleArgument,
-            CallbackRecordArgument, JniReturn,
+            CallbackRecordArgument, JvmMethodReturn,
         },
     },
     core::{Error, Result},
@@ -19,7 +19,7 @@ pub struct CallbackMethod {
     method: Identifier,
     method_id: Identifier,
     signature: String,
-    returns: JniReturn,
+    returns: JvmMethodReturn,
     arguments: Vec<CallbackArgument>,
 }
 
@@ -54,13 +54,28 @@ impl CallbackMethod {
         self.returns.is_void()
     }
 
+    /// Returns whether the JVM callback method returns a byte array.
+    pub fn returns_byte_array(&self) -> bool {
+        self.returns.returns_byte_array()
+    }
+
+    /// Returns whether the JVM callback method returns owned encoded bytes.
+    pub fn returns_bytes(&self) -> bool {
+        self.returns.returns_bytes()
+    }
+
+    /// Returns whether the JVM callback method returns a direct record byte array.
+    pub fn returns_record(&self) -> bool {
+        self.returns.returns_record()
+    }
+
     /// Returns the `CallStatic*Method` suffix for non-void slots.
     pub fn call_method_suffix(&self) -> Option<&'static str> {
         self.returns.call_method_suffix()
     }
 
     /// Returns the C value returned when dispatch fails.
-    pub fn failure_value(&self) -> Option<&'static str> {
+    pub fn failure_value(&self) -> Option<c::Expression> {
         self.returns.failure_value()
     }
 
@@ -111,7 +126,7 @@ impl CallbackMethod {
                 invariant: "callback vtable slot does not start with a uint64 handle",
             });
         };
-        let returns = JniReturn::from_c_type(slot.returns())?;
+        let returns = JvmMethodReturn::from_c_type(slot.returns())?;
         let arguments = slot
             .parameter_groups()
             .iter()

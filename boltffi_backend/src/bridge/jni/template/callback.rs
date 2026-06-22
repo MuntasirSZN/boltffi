@@ -1,5 +1,5 @@
 use crate::bridge::{
-    c::{ArgumentList, Identifier, Literal, TypeFragment},
+    c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
     jni::{
         CallbackBytesArgument, CallbackCParameter, CallbackHandleArgument, CallbackMethod,
         CallbackRecordArgument, CallbackRegistration,
@@ -28,8 +28,11 @@ pub struct CallbackMethodView {
     pub signature: Literal,
     pub c_return_type: TypeFragment,
     pub returns_void: bool,
+    pub returns_byte_array: bool,
+    pub returns_bytes: bool,
+    pub returns_record: bool,
     pub call_method_suffix: String,
-    pub failure_value: String,
+    pub failure_value: Expression,
     pub c_parameters: Vec<CallbackCParameterView>,
     pub byte_arrays: Vec<CallbackBytesArgumentView>,
     pub record_arrays: Vec<CallbackRecordArgumentView>,
@@ -90,8 +93,13 @@ impl CallbackMethodView {
             signature: Literal::string(method.signature()),
             c_return_type: method.c_return_type().clone(),
             returns_void: method.returns_void(),
+            returns_byte_array: method.returns_byte_array(),
+            returns_bytes: method.returns_bytes(),
+            returns_record: method.returns_record(),
             call_method_suffix: method.call_method_suffix().unwrap_or_default().to_owned(),
-            failure_value: method.failure_value().unwrap_or_default().to_owned(),
+            failure_value: method
+                .failure_value()
+                .unwrap_or_else(|| Expression::literal(Literal::integer_zero())),
             c_parameters: method
                 .c_parameters()
                 .iter()

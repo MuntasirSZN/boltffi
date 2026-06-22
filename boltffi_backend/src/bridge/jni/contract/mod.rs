@@ -4,6 +4,7 @@ mod callback;
 mod closure;
 mod continuation;
 mod jni_type;
+mod jvm_method;
 mod method;
 mod parameter;
 mod record;
@@ -19,7 +20,8 @@ pub use callback::{
 };
 pub use closure::{ClosureArgument, ClosureParameter, ClosureRegistration};
 pub use continuation::ContinuationParameter;
-pub use jni_type::{JniReturn, JniType};
+pub use jni_type::JniType;
+pub use jvm_method::JvmMethodReturn;
 pub use method::NativeMethod;
 pub use parameter::{NativeParameter, NativeParameterKind};
 pub use record::{RecordParameter, RecordValue};

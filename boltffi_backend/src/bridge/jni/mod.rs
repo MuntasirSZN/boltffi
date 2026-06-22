@@ -13,8 +13,9 @@ pub use contract::{
     BytesParameter, CallbackArgument, CallbackBytesArgument, CallbackCParameter,
     CallbackHandleArgument, CallbackMethod, CallbackParameter, CallbackRecordArgument,
     CallbackRegistration, CallbackReturn, ClosureArgument, ClosureParameter, ClosureRegistration,
-    ContinuationParameter, JniBridgeContract, JniReturn, JniType, NativeMethod, NativeParameter,
-    NativeParameterKind, NativeReturn, RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
+    ContinuationParameter, JniBridgeContract, JniType, JvmMethodReturn, NativeMethod,
+    NativeParameter, NativeParameterKind, NativeReturn, RecordParameter, RecordValue,
+    ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
 
@@ -478,6 +479,84 @@ mod tests {
         assert!(source.contains(
             "GetStaticMethodID(env, g____ListenerVTable_class, \"on_point\", \"(J[B)V\")"
         ));
+    }
+
+    #[test]
+    fn jni_bridge_renders_callback_encoded_returns() {
+        let files = files(
+            r#"
+            #[export]
+            pub trait Listener {
+                fn name(&self) -> String;
+            }
+            "#,
+        );
+        let header = files
+            .iter()
+            .find(|(path, _)| path == "jni/demo.h")
+            .map(|(_, contents)| contents)
+            .expect("C header file");
+        let source = files
+            .iter()
+            .find(|(path, _)| path == "jni/jni_glue.c")
+            .map(|(_, contents)| contents)
+            .expect("JNI source file");
+
+        assert!(header.contains("FfiBuf_u8 (*name)(uint64_t);"));
+        assert!(source.contains("static FfiBuf_u8 ___ListenerVTable_name(uint64_t handle)"));
+        assert!(source.contains(
+            "jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, g____ListenerVTable_class, g____ListenerVTable_name_method, (jlong)handle);"
+        ));
+        assert!(source.contains(
+            "FfiBuf_u8 result = boltffi_jni_byte_array_to_buffer(env, __boltffi_return_array);"
+        ));
+        assert!(
+            source
+                .contains("GetStaticMethodID(env, g____ListenerVTable_class, \"name\", \"(J)[B\")")
+        );
+    }
+
+    #[test]
+    fn jni_bridge_renders_callback_record_returns() {
+        let files = files(
+            r#"
+            #[repr(C)]
+            #[data]
+            pub struct Point {
+                pub x: i32,
+                pub y: i32,
+            }
+
+            #[export]
+            pub trait Listener {
+                fn point(&self) -> Point;
+            }
+            "#,
+        );
+        let header = files
+            .iter()
+            .find(|(path, _)| path == "jni/demo.h")
+            .map(|(_, contents)| contents)
+            .expect("C header file");
+        let source = files
+            .iter()
+            .find(|(path, _)| path == "jni/jni_glue.c")
+            .map(|(_, contents)| contents)
+            .expect("JNI source file");
+
+        assert!(header.contains("___Point (*point)(uint64_t);"));
+        assert!(source.contains("static ___Point ___ListenerVTable_point(uint64_t handle)"));
+        assert!(source.contains(
+            "jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, g____ListenerVTable_class, g____ListenerVTable_point_method, (jlong)handle);"
+        ));
+        assert!(source.contains(
+            "if (!boltffi_jni_read_record(env, __boltffi_return_array, (uintptr_t)sizeof(result), &result))"
+        ));
+        assert!(
+            source.contains(
+                "GetStaticMethodID(env, g____ListenerVTable_class, \"point\", \"(J)[B\")"
+            )
+        );
     }
 
     #[test]

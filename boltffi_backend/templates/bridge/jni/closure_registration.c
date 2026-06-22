@@ -20,11 +20,32 @@ static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for argu
     boltffi_jni_clear_exception(env);
     boltffi_jni_exit(attached);
 {%- else %}
+{%- if closure.returns_byte_array %}
+    jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% for argument in closure.arguments %}, ({{ argument.jni_type }}){{ argument.name }}{% endfor %});
+{%- else %}
     {{ closure.c_return_type }} result = ({{ closure.c_return_type }})(*env)->CallStatic{{ closure.call_method_suffix }}Method(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% for argument in closure.arguments %}, ({{ argument.jni_type }}){{ argument.name }}{% endfor %});
+{%- endif %}
     if (boltffi_jni_clear_exception(env)) {
         boltffi_jni_exit(attached);
         return {{ closure.failure_value }};
     }
+{%- if closure.returns_bytes %}
+    {{ closure.c_return_type }} result = boltffi_jni_byte_array_to_buffer(env, __boltffi_return_array);
+    (*env)->DeleteLocalRef(env, __boltffi_return_array);
+    if (boltffi_jni_clear_exception(env)) {
+        boltffi_jni_exit(attached);
+        return {{ closure.failure_value }};
+    }
+{%- else if closure.returns_record %}
+    {{ closure.c_return_type }} result = {0};
+    if (!boltffi_jni_read_record(env, __boltffi_return_array, (uintptr_t)sizeof(result), &result)) {
+        (*env)->DeleteLocalRef(env, __boltffi_return_array);
+        boltffi_jni_clear_exception(env);
+        boltffi_jni_exit(attached);
+        return {{ closure.failure_value }};
+    }
+    (*env)->DeleteLocalRef(env, __boltffi_return_array);
+{%- endif %}
     boltffi_jni_exit(attached);
     return result;
 {%- endif %}
