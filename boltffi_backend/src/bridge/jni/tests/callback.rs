@@ -357,3 +357,54 @@ fn jni_bridge_renders_callback_handle_returns() {
     );
     assert!(source.contains("return boltffi_jni_callback_handle_new_owned(env, result);"));
 }
+
+#[test]
+fn jni_bridge_renders_nullable_callback_handle_returns() {
+    let files = files(
+        r#"
+            use std::sync::Arc;
+
+            #[export]
+            pub trait Listener {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub fn optional_boxed_listener() -> Option<Box<dyn Listener>> {
+                todo!()
+            }
+
+            #[export]
+            pub fn optional_shared_listener() -> Option<Arc<dyn Listener>> {
+                todo!()
+            }
+            "#,
+    );
+    let header = files
+        .iter()
+        .find(|(path, _)| path == "jni/demo.h")
+        .map(|(_, contents)| contents)
+        .expect("C header file");
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    [
+        "BoltFFICallbackHandle boltffi_function_demo_optional_boxed_listener(void);",
+        "BoltFFICallbackHandle boltffi_function_demo_optional_shared_listener(void);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(header.contains(expected), "{expected}"));
+
+    [
+        "JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1optional_1boxed_1listener(JNIEnv *env, jclass cls)",
+        "BoltFFICallbackHandle result = boltffi_function_demo_optional_boxed_listener();",
+        "JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1optional_1shared_1listener(JNIEnv *env, jclass cls)",
+        "BoltFFICallbackHandle result = boltffi_function_demo_optional_shared_listener();",
+        "return boltffi_jni_callback_handle_new_owned(env, result);",
+    ]
+    .into_iter()
+    .for_each(|expected| assert!(source.contains(expected), "{expected}"));
+}
