@@ -73,7 +73,7 @@ impl SourceFile {
             .closures()
             .iter()
             .map(ClosureRegistrationView::from_registration)
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let direct_stream_batches = contract
             .streams()
             .iter()
@@ -93,7 +93,10 @@ impl SourceFile {
         let closure_handles = contract
             .closures()
             .iter()
-            .filter_map(CallbackClosureHandleView::from_registration)
+            .map(CallbackClosureHandleView::from_registration)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect::<Vec<_>>();
         let features = SourceFeatures::from_views(
             &methods,

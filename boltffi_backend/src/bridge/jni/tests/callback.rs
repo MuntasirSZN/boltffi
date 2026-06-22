@@ -298,11 +298,19 @@ fn jni_bridge_renders_callback_direct_vector_closure_parameters() {
     assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1closure_1_1_1_1closure_1_1vec_1u32_1to_1u32_1call(JNIEnv *env, jclass cls, jlong value, jintArray arg0)"));
     assert!(source.contains("jint *arg0_ptr = NULL;"));
     assert!(source.contains("jsize arg0_len = 0;"));
+    assert!(source.contains("jint __boltffi_arg0_stack[8];"));
+    assert!(source.contains("bool __boltffi_arg0_needs_release = false;"));
     assert!(source.contains("arg0_len = (*env)->GetArrayLength(env, arg0);"));
+    assert!(source.contains("if (arg0_len <= (jsize)8)"));
+    assert!(
+        source.contains("(*env)->GetIntArrayRegion(env, arg0, 0, arg0_len, __boltffi_arg0_stack);")
+    );
+    assert!(source.contains("arg0_ptr = __boltffi_arg0_stack;"));
     assert!(source.contains("arg0_ptr = (*env)->GetIntArrayElements(env, arg0, NULL);"));
     assert!(source.contains(
         "uint32_t result = closure->call(closure->context, (const uint32_t *)arg0_ptr, (uintptr_t)arg0_len);"
     ));
+    assert!(source.contains("if (__boltffi_arg0_needs_release)"));
     assert!(source.contains("(*env)->ReleaseIntArrayElements(env, arg0, arg0_ptr, JNI_ABORT);"));
     assert!(
         source

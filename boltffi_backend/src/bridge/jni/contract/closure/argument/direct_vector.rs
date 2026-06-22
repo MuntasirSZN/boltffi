@@ -1,18 +1,25 @@
-//! Direct-vector arguments passed into JVM-owned closures.
+//! Direct-vector arguments for closure calls crossing the JNI bridge.
 //!
-//! Direct vectors arrive at the closure trampoline as pointer and length C
-//! parameters. This module turns that pair into the Java primitive array passed
-//! to the JVM closure method.
+//! Closure signatures are shared in both directions. When Rust calls a
+//! JVM-owned closure, the C trampoline receives pointer plus length and builds a
+//! Java primitive array. When Java calls a Rust-owned closure handle, the native
+//! method receives a Java primitive array and forwards pointer plus length to the
+//! C closure call.
+//!
+//! This module keeps both halves tied to one argument contract. The JNI element
+//! type, C pointer cast, Java array type, and small-array stack-copy policy are
+//! selected once from the C direct-vector group and then reused by both template
+//! paths.
 
 use crate::{
     bridge::{
-        c::{self, Expression, Identifier, TypeFragment},
-        jni::{ClosureCParameter, JniType},
+        c::{self, DirectVectorElementAbi, Expression, Identifier, TypeFragment},
+        jni::{ClosureCParameter, DirectVectorStackCopy, JniType},
     },
     core::Result,
 };
 
-/// Direct-vector inline-closure argument crossing the JNI bridge as a Java array.
+/// A closure direct-vector argument with both Java-array and C pointer shapes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ClosureDirectVectorArgument {
@@ -23,6 +30,7 @@ pub struct ClosureDirectVectorArgument {
     length_local: Identifier,
     pointer_type: TypeFragment,
     jni_type: JniType,
+    stack_copy: Option<DirectVectorStackCopy>,
 }
 
 impl ClosureDirectVectorArgument {
@@ -31,13 +39,16 @@ impl ClosureDirectVectorArgument {
         length: &c::Parameter,
         vector: &c::DirectVectorParameter,
     ) -> Result<Self> {
+        let jni_type = JniType::from_direct_vector_element(vector.element())?;
         Ok(Self {
             pointer: ClosureCParameter::from_parameter(pointer)?,
             length: ClosureCParameter::from_parameter(length)?,
             pointer_local: Identifier::parse(format!("{}_ptr", vector.name()))?,
             length_local: Identifier::parse(format!("{}_len", vector.name()))?,
             pointer_type: TypeFragment::anonymous(pointer.ty())?,
-            jni_type: JniType::from_direct_vector_element(vector.element())?,
+            stack_copy: matches!(vector.element(), DirectVectorElementAbi::Typed(_))
+                .then(|| DirectVectorStackCopy::for_primitive(jni_type)),
+            jni_type,
             name: Identifier::escape(vector.name())?,
         })
     }
@@ -100,6 +111,11 @@ impl ClosureDirectVectorArgument {
     /// Returns the `Release*ArrayElements` JNI function table member.
     pub fn releaser(&self) -> &'static str {
         self.jni_type.array_elements_releaser()
+    }
+
+    /// Returns the stack-copy path for small primitive arrays.
+    pub fn stack_copy(&self) -> Option<&DirectVectorStackCopy> {
+        self.stack_copy.as_ref()
     }
 
     /// Returns the C parameters accepted by the closure call trampoline.

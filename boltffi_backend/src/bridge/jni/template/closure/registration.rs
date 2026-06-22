@@ -10,9 +10,12 @@
 //! signature, which keeps closure rendering shared across functions, callbacks,
 //! nested closures, and returned closures.
 
-use crate::bridge::{
-    c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
-    jni::{ClosureArgument, ClosureRegistration},
+use crate::{
+    bridge::{
+        c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
+        jni::{ClosureArgument, ClosureRegistration},
+    },
+    core::Result,
 };
 
 use super::{
@@ -53,9 +56,9 @@ pub struct ClosureRegistrationView {
 }
 
 impl ClosureRegistrationView {
-    pub fn from_registration(registration: &ClosureRegistration) -> Self {
+    pub fn from_registration(registration: &ClosureRegistration) -> Result<Self> {
         let arguments = registration.arguments();
-        Self {
+        Ok(Self {
             class: Literal::string(&registration.class().as_jni_class_name()),
             global_class: registration.global_class().clone(),
             call_method: registration.call_method().clone(),
@@ -93,7 +96,7 @@ impl ClosureRegistrationView {
                 .iter()
                 .filter_map(ClosureArgument::call_direct_vector)
                 .map(ClosureDirectVectorArgumentView::from_argument)
-                .collect(),
+                .collect::<Result<Vec<_>>>()?,
             closure_handles: arguments
                 .iter()
                 .filter_map(ClosureArgument::call_closure)
@@ -115,9 +118,9 @@ impl ClosureRegistrationView {
                 .iter()
                 .filter_map(ClosureArgument::handle_direct_vector)
                 .map(ClosureDirectVectorArgumentView::from_argument)
-                .collect(),
+                .collect::<Result<Vec<_>>>()?,
             rust_arguments: ClosureArgument::rust_argument_list(arguments),
             has_rust_arguments: !arguments.is_empty(),
-        }
+        })
     }
 }

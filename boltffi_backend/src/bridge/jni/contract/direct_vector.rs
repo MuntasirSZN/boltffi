@@ -119,7 +119,7 @@ impl DirectVectorParameter {
             length: Identifier::parse(format!("__boltffi_{}_len", vector.name()))?,
             pointer_type: TypeFragment::anonymous(pointer.ty())?,
             stack_copy: matches!(vector.element(), DirectVectorElementAbi::Typed(_))
-                .then(|| DirectVectorStackCopy::new(DIRECT_VECTOR_STACK_COPY_MAX_LEN, jni_type)),
+                .then(|| DirectVectorStackCopy::for_primitive(jni_type)),
             jni_type,
             name: Identifier::escape(vector.name())?,
         })
@@ -127,6 +127,14 @@ impl DirectVectorParameter {
 }
 
 impl DirectVectorStackCopy {
+    /// Creates the stack-copy policy for a primitive JNI array.
+    pub fn for_primitive(jni_type: JniType) -> Self {
+        Self {
+            max_len: DIRECT_VECTOR_STACK_COPY_MAX_LEN,
+            region_getter: jni_type.array_region_getter(),
+        }
+    }
+
     /// Returns the largest Java array length copied through the stack buffer.
     pub fn max_len(&self) -> usize {
         self.max_len
@@ -135,12 +143,5 @@ impl DirectVectorStackCopy {
     /// Returns the `Get*ArrayRegion` JNI function table member.
     pub fn region_getter(&self) -> &'static str {
         self.region_getter
-    }
-
-    fn new(max_len: usize, jni_type: JniType) -> Self {
-        Self {
-            max_len,
-            region_getter: jni_type.array_region_getter(),
-        }
     }
 }
