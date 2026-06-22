@@ -27,7 +27,7 @@ object.workspace = true
 
 [dev-dependencies]
 boltffi_ast.workspace = true
-insta = "1.46"
+insta.workspace = true
 rstest.workspace = true
 
 [lints]

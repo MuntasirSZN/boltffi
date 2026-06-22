@@ -21,16 +21,32 @@ impl ClosureRegistrationIndex {
         &mut self,
         class: &JvmClassPath,
         returned: &c::ClosureReturnParameter,
+        callback_handle: bool,
         callbacks: &[c::Callback],
     ) -> Result<()> {
-        let inserted = if self.registrations.contains_key(returned.signature()) {
-            false
-        } else {
-            self.registrations.insert(
-                returned.signature().clone(),
-                ClosureRegistrationConstructor::from_closure_return(class, returned, callbacks)?,
-            );
-            true
+        let inserted = match self.registrations.get_mut(returned.signature()) {
+            Some(registration) => {
+                if callback_handle {
+                    ClosureRegistrationConstructor::retain_callback_handle(
+                        registration,
+                        class,
+                        returned.call_type(),
+                    )?;
+                }
+                false
+            }
+            None => {
+                self.registrations.insert(
+                    returned.signature().clone(),
+                    ClosureRegistrationConstructor::from_closure_return(
+                        class,
+                        returned,
+                        callback_handle,
+                        callbacks,
+                    )?,
+                );
+                true
+            }
         };
 
         if inserted {

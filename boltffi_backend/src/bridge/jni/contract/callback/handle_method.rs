@@ -20,7 +20,7 @@
 
 use crate::{
     bridge::{
-        c::{self, ArgumentList, Expression, Identifier, TypeFragment},
+        c::{self, ArgumentList, Expression, Identifier, Statement, TypeFragment},
         jni::{
             CallbackCompletionPayload, ClosureRegistration, JniSymbolName, JvmClassPath,
             NativeParameter, NativeReturn,
@@ -50,6 +50,7 @@ pub struct CallbackHandleMethod {
 enum CallbackHandleMethodCall {
     Synchronous(NativeReturn),
     Asynchronous(Box<CallbackHandleCompletion>),
+    ClosureReturn(CallbackHandleClosureReturn),
 }
 
 /// Completion callback used by an async Rust-owned callback handle method.
@@ -68,6 +69,20 @@ pub struct CallbackHandleCompletion {
     failure_method: Identifier,
     failure_method_id: Identifier,
     payload: Option<CallbackCompletionPayload>,
+}
+
+/// Closure returned by a Rust-owned callback handle method.
+///
+/// The Rust callback vtable writes the native closure triple into a local
+/// out-pointer. The JNI method wraps that triple with the shared closure-handle
+/// allocator and returns the resulting `jlong` to Java.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct CallbackHandleClosureReturn {
+    storage: Identifier,
+    invoke_field: Statement,
+    local: Identifier,
+    new_handle: Identifier,
 }
 
 impl CallbackHandleMethod {
@@ -140,6 +155,11 @@ impl CallbackHandleMethod {
         matches!(&self.call, CallbackHandleMethodCall::Synchronous(returns) if returns.is_callback())
     }
 
+    /// Returns whether this method returns a closure handle token.
+    pub fn returns_closure(&self) -> bool {
+        matches!(&self.call, CallbackHandleMethodCall::ClosureReturn(_))
+    }
+
     /// Returns whether this method checks a returned `FfiStatus`.
     pub fn checks_status(&self) -> bool {
         matches!(
@@ -153,6 +173,16 @@ impl CallbackHandleMethod {
         match &self.call {
             CallbackHandleMethodCall::Synchronous(_) => None,
             CallbackHandleMethodCall::Asynchronous(completion) => Some(completion.as_ref()),
+            CallbackHandleMethodCall::ClosureReturn(_) => None,
+        }
+    }
+
+    /// Returns the closure-return contract when this method returns a closure.
+    pub fn closure_return(&self) -> Option<&CallbackHandleClosureReturn> {
+        match &self.call {
+            CallbackHandleMethodCall::Synchronous(_)
+            | CallbackHandleMethodCall::Asynchronous(_) => None,
+            CallbackHandleMethodCall::ClosureReturn(returned) => Some(returned),
         }
     }
 
@@ -164,33 +194,33 @@ impl CallbackHandleMethod {
         closures: &[ClosureRegistration],
     ) -> Result<Self> {
         let completion = Self::completion_group(slot)?;
+        let closure_return = Self::closure_return_group(slot)?;
+        if completion.is_some() && closure_return.is_some() {
+            return Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback handle method has completion and closure return groups",
+            });
+        }
         let function = c::Function::new(
             Self::method_name(callback, slot.name()),
-            Self::method_parameters(slot, completion),
+            Self::method_parameters(slot, completion, closure_return),
             match completion {
                 Some(_) => c::Type::Void,
+                None if closure_return.is_some() => c::Type::Status,
                 None => slot.returns().clone(),
             },
         )?;
-        let call = match completion {
-            Some(completion) => CallbackHandleMethodCall::Asynchronous(Box::new(
+        let call = match (completion, closure_return) {
+            (Some(completion), None) => CallbackHandleMethodCall::Asynchronous(Box::new(
                 CallbackHandleCompletion::from_group(callback, slot, completion, callbacks)?,
             )),
-            None => {
-                if slot
-                    .parameter_groups()
-                    .iter()
-                    .any(|group| matches!(group, c::ParameterGroup::ClosureReturn(_)))
-                {
-                    return Err(Error::UnsupportedBridge {
-                        bridge: JNI_BRIDGE,
-                        shape: "returned callback handle method returning closure",
-                    });
-                }
-                CallbackHandleMethodCall::Synchronous(NativeReturn::from_c_type(
-                    function.returns(),
-                )?)
-            }
+            (None, Some(returned)) => CallbackHandleMethodCall::ClosureReturn(
+                CallbackHandleClosureReturn::from_group(returned, closures)?,
+            ),
+            (None, None) => CallbackHandleMethodCall::Synchronous(NativeReturn::from_c_type(
+                function.returns(),
+            )?),
+            (Some(_), Some(_)) => unreachable!(),
         };
         Ok(Self {
             symbol: JniSymbolName::native_method(class, function.name())?,
@@ -228,9 +258,28 @@ impl CallbackHandleMethod {
         Ok(completion)
     }
 
+    fn closure_return_group(slot: &c::CallbackSlot) -> Result<Option<&c::ClosureReturnParameter>> {
+        let mut returns = slot
+            .parameter_groups()
+            .iter()
+            .filter_map(|group| match group {
+                c::ParameterGroup::ClosureReturn(returned) => Some(returned),
+                _ => None,
+            });
+        let returned = returns.next();
+        if returns.next().is_some() {
+            return Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback handle method has more than one closure return group",
+            });
+        }
+        Ok(returned)
+    }
+
     fn method_parameters(
         slot: &c::CallbackSlot,
         completion: Option<&c::CallbackCompletionParameter>,
+        closure_return: Option<&c::ClosureReturnParameter>,
     ) -> Vec<c::Parameter> {
         slot.parameters()
             .iter()
@@ -241,6 +290,7 @@ impl CallbackHandleMethod {
                         *index != completion.callback().position()
                             && *index != completion.context().position()
                     })
+                    && closure_return.is_none_or(|returned| *index != returned.output().position())
             })
             .map(|(_, parameter)| parameter.clone())
             .collect()
@@ -263,6 +313,11 @@ impl CallbackHandleMethod {
                     self.completion()
                         .into_iter()
                         .flat_map(CallbackHandleCompletion::c_arguments),
+                )
+                .chain(
+                    self.closure_return()
+                        .into_iter()
+                        .map(CallbackHandleClosureReturn::c_argument),
                 ),
         ))
     }
@@ -272,6 +327,7 @@ impl CallbackHandleMethod {
         match &self.call {
             CallbackHandleMethodCall::Synchronous(returns) => returns.return_expression(value),
             CallbackHandleMethodCall::Asynchronous(_) => Ok(value),
+            CallbackHandleMethodCall::ClosureReturn(returned) => Ok(returned.handle_expression()),
         }
     }
 
@@ -280,6 +336,7 @@ impl CallbackHandleMethod {
         match &self.call {
             CallbackHandleMethodCall::Synchronous(returns) => returns.jni_type(),
             CallbackHandleMethodCall::Asynchronous(_) => TypeFragment::new("void"),
+            CallbackHandleMethodCall::ClosureReturn(_) => TypeFragment::new("jlong"),
         }
     }
 
@@ -288,6 +345,7 @@ impl CallbackHandleMethod {
         match &self.call {
             CallbackHandleMethodCall::Synchronous(returns) => returns.c_result_type(),
             CallbackHandleMethodCall::Asynchronous(_) => Ok(TypeFragment::new("void")),
+            CallbackHandleMethodCall::ClosureReturn(_) => TypeFragment::anonymous(&c::Type::Status),
         }
     }
 }
@@ -413,5 +471,71 @@ impl CallbackHandleCompletion {
                 ),
             ),
         ]
+    }
+}
+
+impl CallbackHandleClosureReturn {
+    /// Returns the C storage type used for the native closure triple.
+    pub fn storage(&self) -> &Identifier {
+        &self.storage
+    }
+
+    /// Returns the closure invoke field declaration.
+    pub fn invoke_field(&self) -> &Statement {
+        &self.invoke_field
+    }
+
+    /// Returns the local closure-return storage identifier.
+    pub fn local(&self) -> &Identifier {
+        &self.local
+    }
+
+    /// Returns the shared closure-handle allocation helper.
+    pub fn new_handle(&self) -> &Identifier {
+        &self.new_handle
+    }
+
+    fn from_group(
+        returned: &c::ClosureReturnParameter,
+        closures: &[ClosureRegistration],
+    ) -> Result<Self> {
+        let registration = closures
+            .iter()
+            .find(|registration| registration.signature() == returned.signature())
+            .ok_or(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback handle closure return has no JNI closure registration",
+            })?;
+        let handle = registration
+            .callback_handle()
+            .ok_or(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback handle closure return has no closure handle registration",
+            })?;
+        Ok(Self {
+            storage: Identifier::parse(format!(
+                "BoltFFIJniClosureReturn{}",
+                returned.signature().as_str()
+            ))?,
+            invoke_field: TypeFragment::declaration(returned.call_type(), "invoke")?,
+            local: Identifier::parse("__boltffi_return")?,
+            new_handle: handle.new_function().clone(),
+        })
+    }
+
+    fn c_argument(&self) -> Expression {
+        Expression::address_of(Expression::identifier(self.local.clone()))
+    }
+
+    fn handle_expression(&self) -> Expression {
+        Expression::call(
+            self.new_handle.clone(),
+            ArgumentList::from_iter([
+                Expression::new("env"),
+                Expression::new(format!("{}.invoke", self.local)),
+                Expression::new(format!("{}.context", self.local)),
+                Expression::new(format!("{}.release", self.local)),
+            ]),
+        )
     }
 }

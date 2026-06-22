@@ -10,7 +10,9 @@
 //! release symbols, argument contract, return contract, and optional callback
 //! handle wrapper for that signature.
 
-use boltffi_binding::ClosureSignature;
+use std::collections::BTreeSet;
+
+use boltffi_binding::{CallbackId, ClosureSignature};
 
 use crate::{
     bridge::{
@@ -30,8 +32,9 @@ impl ClosureRegistration {
         class: &JvmClassPath,
         functions: &[c::Function],
         callbacks: &[c::Callback],
+        returned_callbacks: &BTreeSet<CallbackId>,
     ) -> Result<Vec<Self>> {
-        ClosureRegistrationIndex::from_c_bridge(class, functions, callbacks)
+        ClosureRegistrationIndex::from_c_bridge(class, functions, callbacks, returned_callbacks)
             .map(ClosureRegistrationIndex::into_registrations)
     }
 }
@@ -63,13 +66,14 @@ impl ClosureRegistrationConstructor {
     pub fn from_closure_return(
         class: &JvmClassPath,
         returned: &c::ClosureReturnParameter,
+        callback_handle: bool,
         callbacks: &[c::Callback],
     ) -> Result<ClosureRegistration> {
         Self::from_c_group(
             class,
             returned.call_type(),
             returned.signature(),
-            false,
+            callback_handle,
             callbacks,
             returned
                 .parameter_groups()

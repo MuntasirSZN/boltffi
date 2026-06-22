@@ -18,6 +18,7 @@ pub struct CallbackFeatures {
     pub uses_direct_vectors: bool,
     pub uses_record_arrays: bool,
     pub uses_handles: bool,
+    pub checks_status: bool,
     pub returns_byte_arrays: bool,
     pub returns_records: bool,
     pub returns_callback_handles: bool,
@@ -82,6 +83,12 @@ impl CallbackFeatures {
                                 .as_ref()
                                 .is_some_and(|completion| completion.payload_callback_handle)
                     })
+            }),
+            checks_status: callbacks.iter().any(|callback| {
+                callback
+                    .handle_methods
+                    .iter()
+                    .any(|method| method.returns_closure)
             }),
             returns_byte_arrays: callbacks.iter().any(|callback| {
                 callback

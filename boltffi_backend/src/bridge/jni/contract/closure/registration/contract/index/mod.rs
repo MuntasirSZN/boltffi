@@ -15,9 +15,9 @@ mod function;
 mod parameter;
 mod return_value;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use boltffi_binding::ClosureSignature;
+use boltffi_binding::{CallbackId, ClosureSignature};
 
 use crate::{
     bridge::{c, jni::JvmClassPath},
@@ -36,6 +36,7 @@ impl ClosureRegistrationIndex {
         class: &JvmClassPath,
         functions: &[c::Function],
         callbacks: &[c::Callback],
+        returned_callbacks: &BTreeSet<CallbackId>,
     ) -> Result<Self> {
         functions
             .iter()
@@ -43,12 +44,12 @@ impl ClosureRegistrationIndex {
                 index.collect_function(class, function, callbacks)
             })
             .and_then(|index| {
-                callbacks
-                    .iter()
-                    .flat_map(|callback| callback.methods().iter())
-                    .try_fold(index, |index, slot| {
-                        index.collect_callback_method(class, slot, callbacks)
+                callbacks.iter().try_fold(index, |index, callback| {
+                    let returned_callback = returned_callbacks.contains(&callback.id());
+                    callback.methods().iter().try_fold(index, |index, slot| {
+                        index.collect_callback_method(class, slot, returned_callback, callbacks)
                     })
+                })
             })
     }
 

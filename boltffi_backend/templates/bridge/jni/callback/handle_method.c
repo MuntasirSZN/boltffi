@@ -19,7 +19,26 @@ JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jcla
 {% include "bridge/jni/method/locals.c" %}
 {% include "bridge/jni/method/borrowed_arrays.c" %}
 {% include "bridge/jni/method/records.c" %}
-{%- if method.returns_void %}
+{%- if method.returns_closure %}
+{%- match method.closure_return %}
+{%- when Some with (closure_return) %}
+    typedef struct {
+        {{ closure_return.invoke_field }};
+        void *context;
+        void (*release)(void *);
+    } {{ closure_return.storage }};
+    {{ closure_return.storage }} {{ closure_return.local }} = {0};
+    FfiStatus status = vtable->{{ method.slot }}({{ method.arguments }});
+{% include "bridge/jni/method/cleanup_arrays.c" %}
+    if (status.code != 0) {
+        boltffi_jni_throw_status(env, status);
+        return 0;
+    }
+{% include "bridge/jni/method/writebacks.c" %}
+    return {{ method.return_value }};
+{%- when None %}
+{%- endmatch %}
+{%- else if method.returns_void %}
     vtable->{{ method.slot }}({{ method.arguments }});
 {% include "bridge/jni/method/cleanup_arrays.c" %}
 {% include "bridge/jni/method/writebacks.c" %}

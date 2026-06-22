@@ -12,9 +12,10 @@
 
 use crate::{
     bridge::{
-        c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
+        c::{ArgumentList, Expression, Identifier, Literal, Statement, TypeFragment},
         jni::{
-            CallbackCompletionPayload, CallbackHandleCompletion, CallbackHandleMethod,
+            CallbackCompletionPayload, CallbackHandleClosureReturn, CallbackHandleCompletion,
+            CallbackHandleMethod,
             template::method::{
                 BorrowedArrayParameterView, NativeParameterView, RecordParameterView,
             },
@@ -39,8 +40,10 @@ pub struct CallbackHandleMethodView {
     pub returns_bytes: bool,
     pub returns_record: bool,
     pub returns_callback: bool,
+    pub returns_closure: bool,
     pub return_value: Expression,
     pub checks_status: bool,
+    pub closure_return: Option<CallbackHandleClosureReturnView>,
 }
 
 impl CallbackHandleMethodView {
@@ -75,9 +78,13 @@ impl CallbackHandleMethodView {
             returns_bytes: method.returns_bytes(),
             returns_record: method.returns_record(),
             returns_callback: method.returns_callback(),
+            returns_closure: method.returns_closure(),
             return_value: method
                 .return_value(Expression::identifier(Identifier::parse("result")?))?,
             checks_status: method.checks_status(),
+            closure_return: method
+                .closure_return()
+                .map(CallbackHandleClosureReturnView::from_return),
         })
     }
 }
@@ -97,6 +104,22 @@ pub struct CallbackHandleCompletionView {
     pub payload_bytes: bool,
     pub payload_record: bool,
     pub payload_callback_handle: bool,
+}
+
+pub struct CallbackHandleClosureReturnView {
+    pub storage: Identifier,
+    pub invoke_field: Statement,
+    pub local: Identifier,
+}
+
+impl CallbackHandleClosureReturnView {
+    pub fn from_return(returned: &CallbackHandleClosureReturn) -> Self {
+        Self {
+            storage: returned.storage().clone(),
+            invoke_field: returned.invoke_field().clone(),
+            local: returned.local().clone(),
+        }
+    }
 }
 
 impl CallbackHandleCompletionView {

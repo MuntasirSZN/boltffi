@@ -20,12 +20,13 @@ impl ClosureRegistrationIndex {
         self,
         class: &JvmClassPath,
         method: &c::CallbackSlot,
+        returned_callback: bool,
         callbacks: &[c::Callback],
     ) -> Result<Self> {
         method.parameter_groups().iter().try_fold(
             self,
             |mut index, group| -> Result<ClosureRegistrationIndex> {
-                index.insert_callback_group(class, method, group, callbacks)?;
+                index.insert_callback_group(class, method, group, returned_callback, callbacks)?;
                 Ok(index)
             },
         )
@@ -36,6 +37,7 @@ impl ClosureRegistrationIndex {
         class: &JvmClassPath,
         method: &c::CallbackSlot,
         group: &c::ParameterGroup,
+        returned_callback: bool,
         callbacks: &[c::Callback],
     ) -> Result<()> {
         match group {
@@ -49,7 +51,7 @@ impl ClosureRegistrationIndex {
                 )?;
             }
             c::ParameterGroup::ClosureReturn(returned) => {
-                self.insert_closure_return(class, returned, callbacks)?;
+                self.insert_closure_return(class, returned, returned_callback, callbacks)?;
             }
             _ => {}
         }

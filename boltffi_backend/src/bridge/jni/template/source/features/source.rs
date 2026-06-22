@@ -66,7 +66,7 @@ impl SourceFeatures {
                 || uses_record_arrays
                 || callbacks.uses_direct_vectors
                 || closures.uses_direct_vectors,
-            checks_status: methods.checks_status,
+            checks_status: methods.checks_status || callbacks.checks_status,
             uses_byte_arrays,
             uses_record_arrays,
             uses_exceptions: callbacks.uses_byte_arrays

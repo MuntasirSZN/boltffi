@@ -34,9 +34,13 @@ impl JniBridgeContract {
         source_path: FilePath,
         c_bridge: &c::CBridgeContract,
     ) -> Result<Self> {
-        let closures =
-            ClosureRegistration::from_c_bridge(&class, c_bridge.functions(), c_bridge.callbacks())?;
         let returned_callbacks = Self::returned_callbacks(c_bridge);
+        let closures = ClosureRegistration::from_c_bridge(
+            &class,
+            c_bridge.functions(),
+            c_bridge.callbacks(),
+            &returned_callbacks,
+        )?;
         let callbacks = c_bridge
             .callbacks()
             .iter()
