@@ -1,8 +1,12 @@
 //! JVM handles for Rust-owned closures inside callbacks.
 //!
-//! A callback method can receive a closure from Rust and pass it back to the JVM
-//! as a handle. This module builds the generated call and release native methods
-//! tied to that closure signature.
+//! A JVM callback method can receive a closure owned by Rust. Java cannot call
+//! the native call pointer directly, so the JNI bridge exposes a handle token
+//! plus generated native methods that invoke and release the underlying closure.
+//!
+//! This module builds those handle methods from the registered closure
+//! signature. It keeps callback-carried closures on the same registration path
+//! as normal inline closures.
 
 use boltffi_binding::ClosureSignature;
 

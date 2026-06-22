@@ -1,8 +1,13 @@
-//! Native-method parameter contract.
+//! Parameters accepted by generated JNI native methods.
 //!
-//! JNI methods receive Java values, but the generated body must forward C ABI
-//! arguments to the lower C bridge. This module keeps the Java parameter shape
-//! and the C call arguments together for one method parameter.
+//! A Java call enters the bridge through a `Java_*` function, but Rust is still
+//! reached through the lower C bridge. One Java parameter can expand to one C
+//! argument, several C arguments, or a grouped protocol such as bytes, direct
+//! records, callback handles, closures, continuations, or direct vectors.
+//!
+//! This module owns that method-parameter contract. It keeps the Java-facing
+//! parameter beside the exact C expressions passed to the lower bridge, so
+//! method rendering does not need to inspect C parameter groups again.
 
 use crate::{
     bridge::{

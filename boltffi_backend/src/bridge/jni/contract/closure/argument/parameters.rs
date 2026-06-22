@@ -1,8 +1,13 @@
-//! C-parameter projection for closure calls.
+//! Flat C parameter list for generated closure trampolines.
 //!
-//! Closure arguments can expand to one C parameter or a grouped set of C
-//! parameters. This module exposes the flat C parameter list accepted by the
-//! generated closure trampoline.
+//! Closure arguments are stored by meaning, but the generated C function pointer
+//! needs a plain parameter list. A scalar contributes one parameter, bytes and
+//! direct vectors contribute two, and nested closures contribute their native
+//! call/context/release group.
+//!
+//! This module exposes that flattened ABI list from the closure argument
+//! contract. It keeps signature printing away from the logic that prepares Java
+//! arguments.
 
 use super::{ClosureArgument, ClosureArgumentKind, ClosureCParameter};
 

@@ -1,8 +1,11 @@
-//! Setup views for closure arguments.
+//! Local setup required before invoking a JVM-owned closure.
 //!
-//! Closure templates need grouped setup data for byte arrays, direct vectors, and
-//! nested handles. This module exposes those views from the typed closure
-//! argument contract.
+//! Some closure arguments require work before the static JVM method can be
+//! called. Encoded bytes need byte arrays, direct vectors need primitive arrays,
+//! and nested closures need handle tokens with call and release functions.
+//!
+//! This module exposes those setup groups from the closure argument contract so
+//! templates do not match argument variants just to find local work.
 
 use super::{
     ClosureArgument, ClosureArgumentKind, ClosureBytesArgument, ClosureDirectVectorArgument,

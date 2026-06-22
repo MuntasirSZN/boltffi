@@ -1,7 +1,12 @@
-//! Closure registrations referenced by callback methods.
+//! Closure registrations discovered inside callback methods.
 //!
-//! Callback vtable slots can receive closure arguments or return closures. This
-//! module scans each slot and feeds the shared closure registration index.
+//! Callback vtable slots can mention closures in both directions: Rust can pass
+//! a closure into the JVM callback, and the JVM callback can return a closure to
+//! Rust. Both forms must resolve to the same shared closure registration table.
+//!
+//! This module scans callback slots for those closure shapes and feeds the
+//! registration index. It does not build template data; it only ensures the
+//! required closure signatures are registered once.
 
 use crate::{
     bridge::{c, jni::JvmClassPath},

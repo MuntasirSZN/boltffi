@@ -1,8 +1,13 @@
 //! Validated JVM name segments.
 //!
-//! Java package segments, class names, generated callback classes, and generated
-//! closure classes all share the same identifier rules. This module validates
-//! those pieces before the JNI bridge turns them into source paths or symbols.
+//! Package segments, class names, generated callback classes, and generated
+//! closure classes all have to be valid JVM identifiers before they can become
+//! file paths, class lookups, or JNI symbols. Treating them as raw strings would
+//! move that validation to every caller.
+//!
+//! This module owns the segment validation rule and the derived generated names
+//! used by callbacks and closures. Higher layers compose segments; they do not
+//! sanitize names themselves.
 
 use boltffi_binding::{CanonicalName, ClosureSignature};
 

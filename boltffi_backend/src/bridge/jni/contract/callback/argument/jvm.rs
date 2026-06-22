@@ -1,8 +1,13 @@
-//! JVM argument projection for callback methods.
+//! JVM call shape for callback arguments.
 //!
-//! Callback slot parameters arrive as C values from Rust. This module turns each
-//! typed callback argument into the JNI method descriptor segment and expression
-//! list passed to the generated static JVM callback method.
+//! After callback arguments have been grouped from the C slot, the generated C
+//! code still needs the JVM-facing spellings: the descriptor segment for the
+//! static Java method and the C expressions passed to `CallStatic*Method`.
+//!
+//! This module provides that projection from `CallbackArgument`. It is not a
+//! classifier. The argument kind was already chosen by the C-group conversion;
+//! this code only exposes the descriptor and call expressions that follow from
+//! that contract.
 
 use crate::bridge::c::{Expression, TypeFragment};
 

@@ -1,7 +1,12 @@
-//! Closure registrations referenced by native methods.
+//! Closure registrations discovered inside native methods.
 //!
-//! Native methods can accept closure parameters or return closures. This module
-//! scans those C function groups and feeds the shared closure registration index.
+//! Exported Rust functions and methods can accept JVM-owned closures or return
+//! Rust-owned closures. The lower C function groups contain those closure
+//! signatures, and the JNI bridge needs each signature registered before native
+//! method rendering can use it.
+//!
+//! This module scans C functions for closure parameter and return groups and
+//! feeds the shared registration index.
 
 use crate::{
     bridge::{c, jni::JvmClassPath},

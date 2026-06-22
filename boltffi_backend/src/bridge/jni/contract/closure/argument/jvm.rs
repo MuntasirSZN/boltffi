@@ -1,8 +1,12 @@
-//! JVM argument projection for closure calls.
+//! JVM call shape for closure arguments.
 //!
 //! A generated closure trampoline receives C ABI parameters and calls a static
-//! JVM method. This module turns each typed closure argument into the expression
-//! list passed to that JVM method.
+//! JVM method. The closure argument contract already knows which C parameters
+//! form bytes, direct vectors, nested closures, and scalar values.
+//!
+//! This module projects those typed arguments into the C expressions passed to
+//! the JVM method. It does not decide argument meaning; it only spells the Java
+//! call from the existing contract.
 
 use crate::bridge::c::{ArgumentList, Expression};
 

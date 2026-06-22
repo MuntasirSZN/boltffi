@@ -1,9 +1,13 @@
-//! Setup views for callback arguments.
+//! Local JVM setup required before invoking a callback method.
 //!
-//! Callback arguments often need local JNI setup before the JVM method call:
-//! byte arrays, direct arrays, direct records, callback handles, closure handles,
-//! or async completion tokens. This module exposes those setup views without
-//! making templates inspect the argument enum directly.
+//! Some callback arguments can be passed to Java as a direct expression. Others
+//! need local JNI work first: creating byte arrays, copying direct vectors,
+//! wrapping callback handles, retaining closure handles, or building async
+//! completion tokens.
+//!
+//! This module exposes those prepared setup views from `CallbackArgument`. The
+//! callback template receives named groups of work instead of matching the
+//! argument enum and reconstructing setup rules itself.
 
 use crate::bridge::{
     c::{ArgumentList, Expression, Literal, TypeFragment},

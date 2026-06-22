@@ -1,8 +1,13 @@
-//! Value callback arguments from C callback slots.
+//! Single-value C callback parameters as JVM callback arguments.
 //!
-//! This module maps a single C callback parameter into the JVM value it
-//! represents. Scalars stay scalar, direct records become byte arrays, and
-//! callback handles become JVM handle tokens.
+//! Not every callback argument is a multi-parameter C group. Scalars, direct
+//! records, and callback handles each start as one C slot parameter, but they
+//! have different JVM shapes. Scalars stay primitive, direct records travel as
+//! bytes, and callback handles become opaque JVM tokens.
+//!
+//! This module owns that single-parameter mapping. It keeps the value decision
+//! beside the C slot parameter so the callback method contract can treat all
+//! callback arguments uniformly after construction.
 
 use crate::{
     bridge::{

@@ -1,8 +1,14 @@
-//! Callback vtable slot contract.
+//! JNI dispatch contract for one callback vtable slot.
 //!
-//! One Rust callback method becomes one C vtable slot. This module stores the C
-//! function signature, cached JVM method id, Java method descriptor, argument
-//! conversions, and return handling for that slot.
+//! The lower C bridge exposes a callback method as a vtable slot that Rust can
+//! call. The JNI bridge forwards that call to a static JVM method. Both sides
+//! must stay aligned: C parameter declarations, grouped Java arguments, the JVM
+//! method descriptor, cached method id, return behavior, and optional async
+//! completion.
+//!
+//! This module is the typed contract for that one slot. It is the value the
+//! callback template renders, so every callback method decision is made before
+//! source generation starts.
 
 mod arguments;
 mod slot;

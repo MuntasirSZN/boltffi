@@ -1,8 +1,12 @@
-//! Closure parameters for JNI native methods.
+//! Closure parameters accepted by generated native methods.
 //!
-//! Foreign JVM closures enter Rust through a handle token. This module maps that
-//! token to the call, context, and release C arguments expected by the lower C
-//! bridge.
+//! Java passes an inline closure to Rust as an opaque handle token. The C bridge
+//! expects the native call function, context pointer, and release function for
+//! the registered closure signature.
+//!
+//! This module records that expansion from one JNI parameter into the C bridge
+//! arguments. Native method rendering can pass the prepared argument list
+//! forward without knowing how closure handles are stored.
 
 use crate::{
     bridge::{

@@ -1,9 +1,12 @@
 //! Registered JNI closure signatures.
 //!
-//! Multiple functions and callback methods can use the same inline closure
-//! signature. The registration contract deduplicates those signatures, records
-//! the JVM bridge class for each one, and keeps the generated call/release
-//! symbols together.
+//! Inline closures are identified by signature, not by the declaration where
+//! they appear. The same signature should produce one JVM bridge class, one call
+//! trampoline, and one release trampoline across the generated source file.
+//!
+//! This module exposes that deduplicated registration contract to the rest of
+//! the JNI bridge. Construction lives under `contract` so discovery and storage
+//! stay together.
 
 mod contract;
 

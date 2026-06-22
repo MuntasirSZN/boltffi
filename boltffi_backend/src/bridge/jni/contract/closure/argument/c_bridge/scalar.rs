@@ -1,7 +1,12 @@
-//! Scalar closure arguments from C parameter groups.
+//! Single-value C closure parameters as JVM scalar arguments.
 //!
-//! Plain closure parameters are single C values. This module maps that value to
-//! the JNI scalar argument used by the generated closure trampoline.
+//! Plain closure arguments are not grouped protocols. They are one C parameter
+//! with a scalar type that can be passed to the JVM method after the right JNI
+//! cast.
+//!
+//! This module owns that scalar mapping for closure calls. It keeps the C
+//! parameter and JNI primitive type together instead of making templates inspect
+//! C types directly.
 
 use crate::{bridge::c, core::Result};
 

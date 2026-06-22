@@ -1,7 +1,12 @@
-//! Direct-record arguments passed into JVM callbacks.
+//! Direct records passed into JVM callback methods.
 //!
-//! Direct records sent from Rust into a JVM callback are copied into Java byte
-//! arrays. This module ties the array local to the original C record parameter.
+//! Rust callback methods can pass direct records by value through the C callback
+//! slot. Java cannot receive that C record layout directly, so the JNI bridge
+//! copies the record bytes into a `jbyteArray` before invoking the JVM method.
+//!
+//! This contract names the C record value and the Java byte-array argument that
+//! represents it. It keeps record callback handling aligned with direct-record
+//! native method returns without making templates inspect record layouts.
 
 use crate::bridge::c::Identifier;
 

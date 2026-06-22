@@ -1,8 +1,13 @@
-//! Conversion from C callback parameter groups into callback arguments.
+//! C callback parameter groups as JVM callback arguments.
 //!
-//! The C bridge has already grouped raw callback slot parameters by meaning.
-//! This module maps each group into one typed `CallbackArgument`, keeping the
-//! validation close to the C shape that produced it.
+//! The C bridge groups callback slot parameters by ABI meaning before JNI sees
+//! them. A byte payload is a pointer plus length, a closure is a call/context
+//! pair plus release, and an async method receives a completion token. The JVM
+//! callback method should not see those raw groups directly.
+//!
+//! This module is the boundary between those two views. Each child module owns
+//! one C group shape and produces one typed `CallbackArgument`, so callback
+//! method construction never has to re-learn how raw C parameters fit together.
 
 mod bytes;
 mod closure;

@@ -1,8 +1,13 @@
-//! Native invokers for async callback completion.
+//! Shared native invokers for async callback completion.
 //!
-//! Async callback methods do not return their payload directly. The JVM calls a
-//! generated success or failure native method later; this module deduplicates
-//! those invokers by payload shape.
+//! Many async callback methods can complete with the same payload shape. The JNI
+//! bridge does not need a separate native completion helper for every method
+//! when the ABI is identical. It needs one stable success symbol and one stable
+//! failure symbol per payload contract.
+//!
+//! This module builds and deduplicates those invokers from callback
+//! registrations. Callback methods refer to the invoker they need; the source
+//! template emits each invoker once.
 
 use std::collections::{BTreeMap, btree_map::Entry};
 

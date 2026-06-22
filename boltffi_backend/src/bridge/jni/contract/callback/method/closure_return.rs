@@ -1,8 +1,13 @@
-//! Closure returns from JVM callback methods.
+//! Inline closures returned from JVM callback methods.
 //!
-//! A callback method can return an inline closure through a C out-pointer. This
-//! module keeps the out-pointer parameter, JVM handle token, and release path
-//! tied to that returned closure.
+//! Some callback methods return a closure to Rust. The C callback slot receives
+//! that closure through out-parameters, while the JVM method returns a handle
+//! token. The bridge must translate that handle back into the native call,
+//! context, and release values expected by Rust.
+//!
+//! This module owns that closure-return contract for callback slots. It checks
+//! the C out-parameter shape and connects the returned JVM handle to the
+//! registered closure signature.
 
 use crate::{
     bridge::{

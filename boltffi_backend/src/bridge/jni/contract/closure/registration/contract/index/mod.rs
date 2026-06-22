@@ -1,9 +1,14 @@
-//! Closure registration index.
+//! Deduplicated closure registration index.
 //!
-//! The JNI bridge needs one registration per closure signature, even when the
-//! signature appears in several functions, callback methods, or nested closure
-//! arguments. This index walks those C bridge groups and keeps the deduplicated
-//! registrations in signature order.
+//! Closure signatures are structural. The same signature can be used by a
+//! function parameter, callback argument, returned closure, or nested closure.
+//! Generating a separate bridge class for every occurrence would produce
+//! duplicate symbols and make callback-carried closures drift from normal
+//! closures.
+//!
+//! This index walks the C bridge shapes that can mention closures and stores one
+//! registration per signature. The order is deterministic so generated source is
+//! stable.
 
 mod callback_method;
 mod function;

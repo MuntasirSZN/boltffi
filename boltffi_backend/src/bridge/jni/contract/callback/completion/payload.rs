@@ -1,8 +1,13 @@
-//! Success payloads for async callback completion.
+//! Success payloads carried by async callback completion.
 //!
-//! A completed async callback can return void, a scalar, owned encoded bytes, a
-//! direct record, or a callback handle. This module models that payload before
-//! the generated completion method forwards it to Rust.
+//! Async callback completion moves the callback result through a generated
+//! native method instead of through the original vtable return. That result can
+//! be void, a scalar, owned encoded bytes, a direct record, or a callback
+//! handle. Each shape has a different JNI parameter and C argument expression.
+//!
+//! This module owns the payload contract for that later completion call. It
+//! validates that the C return shape can be represented by a JVM completion
+//! method and records the exact argument fragments needed to call Rust back.
 
 use crate::{
     bridge::{

@@ -1,7 +1,11 @@
 //! Scalar arguments passed into JVM-owned closures.
 //!
-//! Scalar closure arguments keep the C parameter and JNI primitive type together
-//! so the trampoline can cast before calling the JVM method.
+//! Scalar closure arguments cross both boundaries as direct primitive values,
+//! but C and JNI still use different type spellings and sometimes need casts.
+//! The trampoline should not recompute those details while rendering.
+//!
+//! This module keeps the C parameter and JNI primitive type together for one
+//! scalar closure argument.
 
 use crate::{
     bridge::{

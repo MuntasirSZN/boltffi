@@ -1,8 +1,12 @@
 //! JNI exported symbol names.
 //!
-//! Native methods called from Java use the `Java_<package>_<class>_<method>`
-//! convention with JNI escaping for underscores and special signature
-//! characters. This module keeps that escape rule in one place.
+//! Java finds native methods through `Java_<package>_<class>_<method>` symbols.
+//! The symbol is not simple string concatenation: underscores and non-identifier
+//! characters have JNI-specific escaping rules, and overloaded method forms add
+//! their own suffix rules.
+//!
+//! This module owns that exported symbol spelling. Native method contracts ask
+//! for a `JniSymbolName`; they do not build `Java_*` names manually.
 
 use std::fmt;
 

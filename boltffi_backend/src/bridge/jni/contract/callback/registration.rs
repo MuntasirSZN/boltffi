@@ -1,8 +1,13 @@
-//! Callback registration contracts.
+//! Registration contract for one JVM-implemented callback trait.
 //!
-//! Each callback trait becomes a generated JVM callback bridge class plus a C
-//! vtable implementation. This module collects the vtable methods, cached class
-//! names, and generated symbols for one callback trait.
+//! A callback trait implemented on the JVM side needs more than method
+//! wrappers. The generated C file must cache the callback class and method ids,
+//! expose clone and free functions to the C bridge, and build one vtable with a
+//! slot for every callback method.
+//!
+//! This module collects those pieces for one callback trait. It is built from
+//! the C callback contract and then rendered as a single registration block in
+//! the JNI source file.
 
 use crate::{
     bridge::{

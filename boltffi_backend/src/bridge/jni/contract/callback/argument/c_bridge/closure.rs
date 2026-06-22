@@ -1,8 +1,13 @@
-//! Closure callback arguments from C callback slots.
+//! C callback closure groups turned into JVM closure handles.
 //!
-//! Rust can pass inline closures into a JVM callback method. The C bridge carries
-//! those closures as function pointer, context, and release parameters; this
-//! module groups them into one JVM closure handle.
+//! Rust can pass an inline closure while invoking a callback implemented on the
+//! JVM side. The C callback slot represents that closure as the usual native
+//! triple: call function, context pointer, and release function. Java should not
+//! receive those three raw ABI pieces.
+//!
+//! This module checks that the slot group has the complete closure triple and
+//! connects it to a registered closure signature. The output is one callback
+//! argument that templates can expose as a JVM handle token.
 
 use crate::{
     bridge::{

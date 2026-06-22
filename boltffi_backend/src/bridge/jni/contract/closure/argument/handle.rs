@@ -1,7 +1,12 @@
 //! Nested closure handles passed into JVM-owned closures.
 //!
-//! A closure can receive another closure. This module keeps the nested closure
-//! handle, C trampoline parameters, and JVM token together.
+//! A closure argument can itself be another closure. Native code carries the
+//! nested closure as call, context, and release values; the JVM closure method
+//! receives one handle token with generated call and release helpers.
+//!
+//! This module keeps that handle token tied to the native closure pieces and the
+//! registered nested signature. The template can then expose the nested closure
+//! without rebuilding the closure ABI.
 
 use crate::{
     bridge::{

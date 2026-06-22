@@ -1,8 +1,12 @@
 //! Scalar parameters for JNI native methods.
 //!
-//! Scalar C bridge parameters map to JNI primitive parameters. This module keeps
-//! the JNI type, C bridge type, and cast expression together so templates do not
-//! decide scalar conversion locally.
+//! Primitive values can cross JNI directly, but the bridge still needs an
+//! explicit contract. JNI primitive aliases and C bridge types do not always
+//! share the same spelling, and the generated C call may need a cast.
+//!
+//! This module stores the Java parameter name, JNI primitive type, C type, and
+//! call expression for one scalar parameter. Templates print those facts; they
+//! do not decide scalar conversion locally.
 
 use crate::{
     bridge::{

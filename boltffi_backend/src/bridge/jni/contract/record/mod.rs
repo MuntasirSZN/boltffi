@@ -1,9 +1,13 @@
 //! Direct-record JNI contract.
 //!
-//! Direct records travel through JNI as fixed-size byte arrays and through the C
-//! bridge as record values. This module keeps the record value, parameter, and
-//! mutation writeback contracts separate so direct-record handling does not leak
-//! into scalar or byte-buffer paths.
+//! A direct record is neither a scalar nor an encoded byte buffer. Java sees a
+//! fixed-size byte array, while the C bridge sees the concrete record ABI type.
+//! The JNI bridge has to copy between those shapes and sometimes copy the
+//! mutated value back.
+//!
+//! This module keeps those responsibilities split into value layout, method
+//! parameters, and mutation writeback. Other bridge paths can reuse the same
+//! direct-record facts without reinterpreting record fields.
 
 mod parameter;
 mod value;

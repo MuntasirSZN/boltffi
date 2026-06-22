@@ -1,8 +1,13 @@
-//! Rust-owned closures passed into JVM callbacks.
+//! Rust-owned closures passed into JVM callback methods.
 //!
-//! Callback trait methods can receive inline closure parameters. The JNI bridge
-//! represents each closure as one `jlong` handle that points at the function
-//! pointer, context, and release hook held on the native side.
+//! Callback trait methods can receive inline closure parameters. Native code
+//! owns the closure call pointer, context, and release hook, but the JVM method
+//! should receive one handle token that can be called or released through
+//! generated native methods.
+//!
+//! This contract ties that JVM handle to the native closure pieces and the
+//! registered closure signature. It lets callback templates expose closures to
+//! Java without creating a callback-specific closure model.
 
 use crate::bridge::c::Identifier;
 

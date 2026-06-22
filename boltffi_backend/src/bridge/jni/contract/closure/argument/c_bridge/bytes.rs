@@ -1,8 +1,11 @@
-//! Borrowed-byte closure arguments from C parameter groups.
+//! C closure byte groups turned into JVM byte-array arguments.
 //!
-//! The C bridge groups encoded closure arguments as pointer and length. This
-//! module turns that group into the byte-array argument used by the JNI closure
-//! trampoline.
+//! A closure call carries encoded arguments through the C bridge as borrowed
+//! bytes. The generated JVM closure method should receive one byte array, not a
+//! native pointer and length pair.
+//!
+//! This module validates that group and builds the `ClosureBytesArgument` used
+//! by both the C trampoline signature and the Java call expression.
 
 use crate::{
     bridge::{c, jni::ClosureBytesArgument},

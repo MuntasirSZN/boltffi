@@ -1,8 +1,12 @@
-//! Scalar return values for JNI native methods.
+//! Scalar return values from JNI native methods.
 //!
-//! Scalar C bridge returns can be passed back to Java directly, but boolean and
-//! width-sensitive values still need the right JNI type and return cast. This
-//! module owns that mapping.
+//! Scalar C bridge returns can usually be handed back to Java directly, but the
+//! generated method still needs the right JNI return type and a safe cast. Bool
+//! and width-sensitive integer aliases are the common cases where loose strings
+//! would drift.
+//!
+//! This module owns the return-side scalar mapping. Native return contracts use
+//! it instead of spelling primitive casts in templates.
 
 use crate::{
     bridge::{

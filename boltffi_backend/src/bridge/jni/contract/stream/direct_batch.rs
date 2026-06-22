@@ -1,8 +1,13 @@
 //! Direct stream batch method contract.
 //!
-//! Some stream item types can be copied as a Java primitive byte array instead
-//! of decoded item by item. This module describes the extra JNI method that
-//! returns that direct batch from the C stream protocol.
+//! Most stream protocol methods can render as ordinary JNI native methods.
+//! Direct batches are different: the C bridge fills a native item buffer and the
+//! JNI bridge copies the used bytes into a Java byte array. That needs extra
+//! source fields and a dedicated method shape.
+//!
+//! This module records that direct-batch method from the C stream protocol. It
+//! keeps the buffer allocation, C call, and Java byte-array return tied together
+//! before templates render the stream helper.
 
 use crate::{
     bridge::{

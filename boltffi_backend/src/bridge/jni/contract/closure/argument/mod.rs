@@ -1,8 +1,12 @@
 //! Arguments passed when Rust invokes a JVM-owned closure.
 //!
-//! Closure arguments are built from C closure parameter groups. They describe the
-//! C function-pointer parameters, the JVM values passed to the closure method,
-//! and any setup needed for borrowed bytes, direct vectors, or nested closures.
+//! A JVM-owned closure is called by Rust through a generated C trampoline. The
+//! trampoline receives C ABI parameters, prepares the Java values required by
+//! the JVM closure method, and converts the result back to the C return shape.
+//!
+//! This module owns the argument side of that contract. It keeps the C
+//! parameters, JVM call expressions, and setup requirements together for
+//! scalars, encoded bytes, direct vectors, and nested closure handles.
 
 mod bytes;
 mod c_abi;

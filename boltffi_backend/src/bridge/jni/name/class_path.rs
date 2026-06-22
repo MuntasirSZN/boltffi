@@ -1,8 +1,13 @@
 //! JVM class paths used by generated JNI glue.
 //!
-//! The JNI bridge needs the same class in three spellings: Java source form,
-//! slash-separated JNI lookup form, and escaped `Java_*` symbol prefix form.
-//! This module keeps those spellings tied to one validated class path.
+//! The generated bridge talks about the same class in several languages. Java
+//! source uses dotted package names, JNI lookup uses slash-separated paths, file
+//! routing uses path segments, and exported native methods use the class inside
+//! an escaped `Java_*` symbol.
+//!
+//! This module stores one validated class path and exposes those spellings from
+//! that single value. Callers do not split package strings or hand-roll JNI
+//! lookup paths.
 
 use std::fmt;
 

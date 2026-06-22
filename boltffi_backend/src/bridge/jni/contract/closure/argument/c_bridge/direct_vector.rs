@@ -1,7 +1,12 @@
-//! Direct-vector closure arguments from C parameter groups.
+//! C closure direct-vector groups turned into JVM primitive arrays.
 //!
-//! The C bridge groups direct vectors as pointer and length. This module keeps
-//! that group as one Java primitive array argument for the closure trampoline.
+//! Direct-vector closure arguments cross the C ABI as pointer plus element
+//! count. The JVM closure method receives a primitive array with a matching JNI
+//! element type.
+//!
+//! This module validates the C group and records the direct-vector argument
+//! contract shared by Rust-to-Java closure calls and Java-to-Rust closure-handle
+//! calls.
 
 use crate::{
     bridge::{c, jni::ClosureDirectVectorArgument},

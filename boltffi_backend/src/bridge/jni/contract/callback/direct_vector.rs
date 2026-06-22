@@ -1,8 +1,13 @@
-//! Direct-vector arguments passed into JVM callbacks.
+//! Direct vectors passed into JVM callback methods.
 //!
-//! Rust supplies direct vectors through a C pointer and length pair. This module
-//! records the Java array name and JNI element type used to build the callback
-//! method argument.
+//! Rust supplies a direct vector to a callback as native pointer plus element
+//! count. Java receives that data as a primitive array with a fixed JNI element
+//! type. The generated C code must allocate the array, copy the native elements,
+//! and pass the Java object to the callback method.
+//!
+//! This contract stores the names and element type for that operation. It is
+//! built from the C callback slot group, so templates do not need to rediscover
+//! which pair of parameters forms the vector.
 
 use crate::bridge::{
     c::{Identifier, TypeFragment},

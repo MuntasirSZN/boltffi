@@ -1,8 +1,12 @@
-//! Callback handles passed into JVM callbacks.
+//! Callback handles passed into JVM callback methods.
 //!
-//! Callback methods can receive another callback handle from Rust. This module
-//! keeps the C callback handle parameter and the JVM token built from it
-//! together.
+//! A callback method can receive another callback value from Rust. Native code
+//! holds that value as a C callback handle, while Java needs an opaque token that
+//! can be cloned, released, and called through generated bridge methods.
+//!
+//! This contract connects the original C handle parameter to the JVM token
+//! created for it. Keeping both names together prevents callback templates from
+//! treating callback handles like ordinary scalar values.
 
 use crate::bridge::c::Identifier;
 

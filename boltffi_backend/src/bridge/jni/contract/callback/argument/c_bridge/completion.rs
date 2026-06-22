@@ -1,8 +1,14 @@
-//! Async-completion callback arguments from C callback slots.
+//! C callback completion groups for async JVM callbacks.
 //!
-//! Async callback methods receive a completion function pointer and context from
-//! Rust. This module keeps that pair as one JVM argument group so the Java side
-//! can complete or fail the callback later.
+//! An async callback method cannot return its result from the vtable call. Rust
+//! gives the JVM side a completion callback and context instead. The JVM method
+//! keeps that token and calls a generated completion method when the async work
+//! succeeds or fails.
+//!
+//! This module validates the C completion group and turns it into the single JVM
+//! callback argument that carries the completion token. The result payload shape
+//! is kept beside the argument so later rendering knows which completion helper
+//! must exist.
 
 use crate::{
     bridge::{

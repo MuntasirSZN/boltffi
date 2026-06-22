@@ -1,8 +1,13 @@
-//! C callback-slot parameters.
+//! C parameters accepted by generated callback vtable slots.
 //!
-//! Generated callback functions are still C vtable slots. This module keeps the
-//! C parameter name and type for those slots so callback templates can declare
-//! the exact ABI Rust will call.
+//! JNI dispatch is wrapped around a C callback ABI. Rust still calls a function
+//! pointer whose parameter list must exactly match the lower C bridge contract.
+//! The JVM bridge may group those parameters into Java arguments, but the C
+//! function signature itself cannot be approximated.
+//!
+//! This module keeps each callback slot parameter as a typed C declaration. The
+//! callback templates use it when printing the vtable function signature and
+//! when passing raw C values into grouped JVM setup.
 
 use crate::{
     bridge::c::{self, Identifier, Statement, TypeFragment},

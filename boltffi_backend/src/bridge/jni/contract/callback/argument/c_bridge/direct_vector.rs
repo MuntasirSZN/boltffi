@@ -1,8 +1,13 @@
-//! Direct-vector callback arguments from C callback slots.
+//! C callback direct-vector groups turned into JVM primitive arrays.
 //!
-//! Direct vectors passed from Rust to a JVM callback arrive as pointer and length
-//! C parameters. This module turns that pair into one Java primitive array
-//! argument with the right JNI element type.
+//! The C bridge passes a direct vector as pointer plus element count. For a JVM
+//! callback method, that is one primitive array argument with a concrete JNI
+//! array type. The element type and array functions come from the lower C shape,
+//! not from looking back at the Rust source type.
+//!
+//! This module validates the pointer/count group and records the Java argument
+//! that represents it. Templates later allocate and fill the array from this
+//! contract.
 
 use crate::{
     bridge::{

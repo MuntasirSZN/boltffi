@@ -1,9 +1,13 @@
-//! Conversion from C closure parameter groups into closure arguments.
+//! C closure parameter groups as JVM closure arguments.
 //!
-//! The C bridge represents a closure call as a function pointer plus grouped
-//! parameters. This module turns each group into one typed closure argument while
-//! preserving the difference between normal closure parameters and returned
-//! closure storage.
+//! Closure signatures are described by the C bridge as grouped parameters:
+//! scalars, borrowed bytes, direct vectors, nested closures, and sometimes
+//! storage for a returned closure. The JVM method should receive the Java shape
+//! of each group.
+//!
+//! This module translates those groups into typed closure arguments. It keeps
+//! returned-closure storage separate from normal arguments so the closure
+//! registration cannot accidentally render an out-pointer as a Java parameter.
 
 mod bytes;
 mod direct_vector;

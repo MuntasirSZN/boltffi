@@ -1,8 +1,13 @@
-//! Borrowed-byte callback arguments from C callback slots.
+//! C callback byte groups turned into JVM byte-array arguments.
 //!
-//! The C bridge passes encoded callback payloads as pointer and length
-//! parameters. This module groups those raw parameters into one JVM byte-array
-//! argument.
+//! Rust calls a callback vtable with the ABI selected by the C bridge. Encoded
+//! callback payloads arrive there as two C parameters, a pointer and a length,
+//! but the generated JVM callback method should see one byte-array argument.
+//!
+//! This module owns that one translation. It validates that the C slot group is
+//! really the borrowed-byte shape and returns the single callback argument used
+//! by the JVM method contract. The payload format itself is not decoded here;
+//! codec planning already happened before the C bridge contract was built.
 
 use crate::{
     bridge::{

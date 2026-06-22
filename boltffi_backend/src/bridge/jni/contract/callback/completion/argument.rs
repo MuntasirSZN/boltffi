@@ -1,8 +1,13 @@
-//! Callback completion failure arguments.
+//! Arguments for generated async callback completion methods.
 //!
-//! Async callback failures are reported through a generated native completion
-//! method. This module models the status and error-buffer arguments that the JVM
-//! passes back into Rust.
+//! Async callback methods return later, after the original C vtable call has
+//! already ended. The generated JVM side completes them by calling a native
+//! method with the original completion callback, failure status data, and an
+//! optional success payload.
+//!
+//! This module models the argument list for that completion method. It keeps the
+//! success payload and failure arguments together so completion rendering cannot
+//! forget either side of the protocol.
 
 use crate::bridge::{
     c::{ArgumentList, Identifier},

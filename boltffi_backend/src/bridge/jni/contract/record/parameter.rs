@@ -1,8 +1,13 @@
 //! Direct-record parameters for JNI native methods.
 //!
-//! Direct records cross JNI as fixed-size byte arrays. The generated method body
-//! copies the bytes into the C bridge record layout, calls Rust, and writes the
-//! value back when the source parameter is mutable.
+//! Java passes direct records as fixed-size byte arrays. The C bridge expects
+//! the concrete record ABI type, so the generated method copies the Java bytes
+//! into native storage before calling Rust. Mutable record parameters need a
+//! second native local and a byte-array writeback after the call.
+//!
+//! This module owns that parameter contract: input byte array, native record
+//! value, and optional writeback. Templates receive those facts directly instead
+//! of deciding record mutability from the source type.
 
 use crate::{
     bridge::c::{self, Identifier},

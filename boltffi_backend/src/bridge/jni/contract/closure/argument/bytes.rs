@@ -1,7 +1,12 @@
 //! Encoded arguments passed into JVM-owned closures.
 //!
-//! Rust closure calls pass encoded payloads as pointer and length C parameters.
-//! This module groups those parameters into one Java byte-array argument.
+//! Rust calls a JVM-owned closure through a generated C trampoline. Encoded
+//! arguments reach that trampoline as pointer plus length, while the JVM closure
+//! method expects one byte-array argument.
+//!
+//! This module keeps the byte-array argument and its backing C parameters
+//! together. It does not interpret the encoded payload; the closure registration
+//! already came from the binding and C bridge plans.
 
 use crate::{
     bridge::c::{self, Expression, Identifier, TypeFragment},

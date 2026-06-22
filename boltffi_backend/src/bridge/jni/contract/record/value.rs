@@ -1,8 +1,13 @@
 //! Direct-record value layout for JNI.
 //!
-//! The C bridge already knows the concrete record ABI type. This module captures
-//! the fixed byte length and C type spelling needed to move that record through
-//! a Java byte array without reinterpreting the record fields.
+//! Direct records cross the JVM boundary as raw bytes, but the bridge must still
+//! know which C ABI type those bytes represent and how many bytes are expected.
+//! That information comes from the lower C bridge, where record layout was
+//! already selected.
+//!
+//! This module stores the fixed layout facts needed by parameters, returns, and
+//! callback arguments. It never looks into record fields; it only carries the ABI
+//! value shape already chosen by the C bridge.
 
 use crate::bridge::c::{self, Identifier, TypeFragment};
 

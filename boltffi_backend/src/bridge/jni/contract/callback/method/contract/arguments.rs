@@ -1,8 +1,12 @@
-//! Callback method argument projections.
+//! Grouped argument views for callback method rendering.
 //!
-//! Templates need grouped views of a callback method's arguments: byte arrays,
-//! direct vectors, direct records, handles, closures, and completion callbacks.
-//! This module derives those views from the method contract.
+//! A callback method stores its arguments as one ordered list, but the C source
+//! template needs them in several groups. Byte arrays need allocation, direct
+//! vectors need element copies, records need fixed-size byte arrays, handles
+//! need wrapper construction, and async completions need their own token setup.
+//!
+//! This module exposes those groups from the method contract. It keeps template
+//! code from matching every argument kind just to find the subset it needs.
 
 use crate::bridge::{
     c::ArgumentList,

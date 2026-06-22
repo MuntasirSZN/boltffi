@@ -1,8 +1,12 @@
 //! Callback handles returned to the JVM.
 //!
-//! Rust can return callback implementations through the C bridge. This module
-//! converts that C handle shape into the JVM token returned by a native method or
-//! callback completion.
+//! Rust can return a callback implementation through the C bridge. The C side
+//! carries that value as an owned callback handle, while Java needs an opaque
+//! token whose lifetime is managed by generated retain and release methods.
+//!
+//! This module owns the return-side handle conversion. Native methods, callback
+//! returns, and async completion payloads can all reuse the same JVM token
+//! contract instead of inventing local handle wrappers.
 
 use boltffi_binding::CallbackId;
 

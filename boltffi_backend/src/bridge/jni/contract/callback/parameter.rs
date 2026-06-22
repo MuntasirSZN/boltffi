@@ -1,8 +1,13 @@
-//! Callback-handle parameters for JNI native methods.
+//! Callback-handle parameters accepted by generated native methods.
 //!
-//! Foreign JVM callback implementations enter Rust as opaque handle tokens.
-//! This module maps that token through the C bridge callback constructor so Rust
-//! receives the callback handle shape selected by lowering.
+//! Java passes a callback implementation through JNI as an opaque `jlong`
+//! handle. The C bridge does not want that Java token; it wants the native
+//! callback handle value used by Rust. The generated method must therefore wrap
+//! the token with the C bridge callback constructor before calling Rust.
+//!
+//! This module records that JNI parameter and the C call expression derived from
+//! it. Native method rendering can pass the expression forward without knowing
+//! how callback handles are stored.
 
 use crate::{
     bridge::c::{self, ArgumentList, Expression, Identifier, TypeFragment},
