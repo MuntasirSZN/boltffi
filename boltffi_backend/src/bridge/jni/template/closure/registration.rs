@@ -19,6 +19,8 @@ pub struct ClosureRegistrationView {
     pub returns_byte_array: bool,
     pub returns_bytes: bool,
     pub returns_record: bool,
+    pub returns_callback_handle: bool,
+    pub callback_handle_constructor: Option<Identifier>,
     pub method_signature: Literal,
     pub call_method_suffix: String,
     pub failure_value: Expression,
@@ -51,6 +53,8 @@ impl ClosureRegistrationView {
             returns_byte_array: registration.returns_byte_array(),
             returns_bytes: registration.returns_bytes(),
             returns_record: registration.returns_record(),
+            returns_callback_handle: registration.returns_callback_handle(),
+            callback_handle_constructor: registration.callback_handle_constructor().cloned(),
             method_signature: Literal::string(&registration.method_signature()),
             call_method_suffix: registration
                 .call_method_suffix()

@@ -64,6 +64,16 @@ impl CallbackMethod {
         self.returns.returns_record()
     }
 
+    /// Returns whether the JVM callback method returns a callback handle token.
+    pub fn returns_callback_handle(&self) -> bool {
+        self.returns.returns_callback_handle()
+    }
+
+    /// Returns the C callback handle constructor for callback handle returns.
+    pub fn callback_handle_constructor(&self) -> Option<&Identifier> {
+        self.returns.callback_handle_constructor()
+    }
+
     /// Returns the `CallStatic*Method` suffix for non-void slots.
     pub fn call_method_suffix(&self) -> Option<&'static str> {
         self.returns.call_method_suffix()

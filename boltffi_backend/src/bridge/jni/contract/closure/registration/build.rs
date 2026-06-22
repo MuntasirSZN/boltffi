@@ -25,14 +25,14 @@ impl ClosureRegistration {
         functions
             .iter()
             .try_fold(BTreeMap::new(), |registrations, function| {
-                Self::collect_function_closures(class, registrations, function)
+                Self::collect_function_closures(class, registrations, function, callbacks)
             })
             .and_then(|registrations| {
                 callbacks
                     .iter()
                     .flat_map(|callback| callback.methods().iter())
                     .try_fold(registrations, |registrations, slot| {
-                        Self::collect_callback_closures(class, registrations, slot)
+                        Self::collect_callback_closures(class, registrations, slot, callbacks)
                     })
             })
             .map(BTreeMap::into_values)
@@ -43,12 +43,13 @@ impl ClosureRegistration {
         class: &JvmClassPath,
         registrations: BTreeMap<ClosureSignature, Self>,
         function: &c::Function,
+        callbacks: &[c::Callback],
     ) -> Result<BTreeMap<ClosureSignature, Self>> {
         function
             .parameter_groups()
             .iter()
             .try_fold(registrations, |registrations, group| {
-                Self::insert_function_closure(class, registrations, function, group)
+                Self::insert_function_closure(class, registrations, function, group, callbacks)
             })
     }
 
@@ -56,11 +57,12 @@ impl ClosureRegistration {
         class: &JvmClassPath,
         registrations: BTreeMap<ClosureSignature, Self>,
         slot: &c::CallbackSlot,
+        callbacks: &[c::Callback],
     ) -> Result<BTreeMap<ClosureSignature, Self>> {
         slot.parameter_groups()
             .iter()
             .try_fold(registrations, |registrations, group| {
-                Self::insert_callback_closure(class, registrations, slot, group)
+                Self::insert_callback_closure(class, registrations, slot, group, callbacks)
             })
     }
 
@@ -69,6 +71,7 @@ impl ClosureRegistration {
         mut registrations: BTreeMap<ClosureSignature, Self>,
         function: &c::Function,
         group: &c::ParameterGroup,
+        callbacks: &[c::Callback],
     ) -> Result<BTreeMap<ClosureSignature, Self>> {
         if let c::ParameterGroup::Closure(closure) = group {
             match registrations.entry(closure.signature().clone()) {
@@ -78,6 +81,7 @@ impl ClosureRegistration {
                         function.parameter(closure.call()).ty(),
                         closure,
                         false,
+                        callbacks,
                     )?);
                 }
                 Entry::Occupied(_) => {}
@@ -91,6 +95,7 @@ impl ClosureRegistration {
         mut registrations: BTreeMap<ClosureSignature, Self>,
         slot: &c::CallbackSlot,
         group: &c::ParameterGroup,
+        callbacks: &[c::Callback],
     ) -> Result<BTreeMap<ClosureSignature, Self>> {
         if let c::ParameterGroup::Closure(closure) = group {
             match registrations.entry(closure.signature().clone()) {
@@ -100,6 +105,7 @@ impl ClosureRegistration {
                         slot.parameter(closure.call()).ty(),
                         closure,
                         true,
+                        callbacks,
                     )?);
                 }
                 Entry::Occupied(mut entry) => {
@@ -117,6 +123,7 @@ impl ClosureRegistration {
         call_type: &c::Type,
         closure: &c::ClosureParameter,
         callback_argument: bool,
+        callbacks: &[c::Callback],
     ) -> Result<Self> {
         let c::Type::FunctionPointer { returns, params } = call_type else {
             return Err(Error::BrokenBridgeContract {
@@ -147,7 +154,7 @@ impl ClosureRegistration {
             callback_handle: callback_argument
                 .then(|| CallbackClosureHandle::new(class, closure.signature(), call_type))
                 .transpose()?,
-            returns: JvmMethodReturn::from_c_type(returns)?,
+            returns: JvmMethodReturn::from_c_type(returns, callbacks)?,
             arguments: closure
                 .parameter_groups()
                 .iter()

@@ -106,6 +106,16 @@ impl ClosureRegistration {
         self.returns.returns_record()
     }
 
+    /// Returns whether the JVM closure method returns a callback handle token.
+    pub fn returns_callback_handle(&self) -> bool {
+        self.returns.returns_callback_handle()
+    }
+
+    /// Returns the C callback handle constructor for callback handle returns.
+    pub fn callback_handle_constructor(&self) -> Option<&Identifier> {
+        self.returns.callback_handle_constructor()
+    }
+
     /// Returns the JNI method descriptor.
     pub fn method_signature(&self) -> String {
         format!(

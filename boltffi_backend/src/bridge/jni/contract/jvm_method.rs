@@ -1,10 +1,12 @@
 use crate::{
     bridge::{
-        c::{self, Expression, Literal, TypeFragment},
+        c::{self, Expression, Identifier, Literal, TypeFragment},
         jni::JniType,
     },
-    core::Result,
+    core::{Error, Result},
 };
+
+const JNI_BRIDGE: &str = "jni";
 
 /// Return contract for a static JVM method called from generated C.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -32,11 +34,18 @@ pub enum JvmMethodReturn {
         /// C return type of the generated trampoline.
         c_type: TypeFragment,
     },
+    /// The JVM method returns a callback object handle.
+    CallbackHandle {
+        /// C return type of the generated trampoline.
+        c_type: TypeFragment,
+        /// C callback handle constructor.
+        create_handle: Identifier,
+    },
 }
 
 impl JvmMethodReturn {
     /// Creates a JVM method return contract from one C ABI return type.
-    pub fn from_c_type(ty: &c::Type) -> Result<Self> {
+    pub fn from_c_type(ty: &c::Type, callbacks: &[c::Callback]) -> Result<Self> {
         match ty {
             c::Type::Void => Ok(Self::Void {
                 c_type: TypeFragment::anonymous(ty)?,
@@ -47,6 +56,19 @@ impl JvmMethodReturn {
             c::Type::DirectRecord(_) => Ok(Self::Record {
                 c_type: TypeFragment::anonymous(ty)?,
             }),
+            c::Type::CallbackHandle(callback) => {
+                let declaration = callbacks
+                    .iter()
+                    .find(|declaration| declaration.id() == *callback)
+                    .ok_or(Error::BrokenBridgeContract {
+                        bridge: JNI_BRIDGE,
+                        invariant: "JVM callback handle return has no C callback declaration",
+                    })?;
+                Ok(Self::CallbackHandle {
+                    c_type: TypeFragment::anonymous(ty)?,
+                    create_handle: Identifier::parse(declaration.create_handle().name())?,
+                })
+            }
             ty => Ok(Self::Value {
                 c_type: TypeFragment::anonymous(ty)?,
                 jni_type: JniType::from_c_type(ty)?,
@@ -60,7 +82,8 @@ impl JvmMethodReturn {
             Self::Void { c_type }
             | Self::Value { c_type, .. }
             | Self::Bytes { c_type }
-            | Self::Record { c_type } => c_type,
+            | Self::Record { c_type }
+            | Self::CallbackHandle { c_type, .. } => c_type,
         }
     }
 
@@ -70,6 +93,7 @@ impl JvmMethodReturn {
             Self::Void { c_type } => c_type.clone(),
             Self::Value { jni_type, .. } => jni_type.as_type_fragment(),
             Self::Bytes { .. } | Self::Record { .. } => TypeFragment::new("jbyteArray"),
+            Self::CallbackHandle { .. } => TypeFragment::new("jlong"),
         }
     }
 
@@ -79,6 +103,7 @@ impl JvmMethodReturn {
             Self::Void { .. } => "V",
             Self::Value { jni_type, .. } => jni_type.signature(),
             Self::Bytes { .. } | Self::Record { .. } => "[B",
+            Self::CallbackHandle { .. } => "J",
         }
     }
 
@@ -102,12 +127,28 @@ impl JvmMethodReturn {
         matches!(self, Self::Record { .. })
     }
 
+    /// Returns whether the JVM method returns a callback handle token.
+    pub fn returns_callback_handle(&self) -> bool {
+        matches!(self, Self::CallbackHandle { .. })
+    }
+
+    /// Returns the C callback handle constructor for callback handle returns.
+    pub fn callback_handle_constructor(&self) -> Option<&Identifier> {
+        match self {
+            Self::CallbackHandle { create_handle, .. } => Some(create_handle),
+            Self::Void { .. } | Self::Value { .. } | Self::Bytes { .. } | Self::Record { .. } => {
+                None
+            }
+        }
+    }
+
     /// Returns the `CallStatic*Method` suffix for non-void returns.
     pub fn call_method_suffix(&self) -> Option<&'static str> {
         match self {
             Self::Void { .. } => None,
             Self::Value { jni_type, .. } => Some(jni_type.call_method_suffix()),
             Self::Bytes { .. } | Self::Record { .. } => Some("Object"),
+            Self::CallbackHandle { .. } => Some("Long"),
         }
     }
 
@@ -116,7 +157,9 @@ impl JvmMethodReturn {
         match self {
             Self::Void { .. } => None,
             Self::Value { jni_type, .. } => Some(Expression::literal(jni_type.failure_value())),
-            Self::Bytes { c_type } | Self::Record { c_type } => Some(Expression::cast(
+            Self::Bytes { c_type }
+            | Self::Record { c_type }
+            | Self::CallbackHandle { c_type, .. } => Some(Expression::cast(
                 c_type.clone(),
                 Expression::literal(Literal::compound_zero()),
             )),
@@ -131,6 +174,7 @@ impl JvmMethodReturn {
             Self::Bytes { .. } | Self::Record { .. } => {
                 Some(Expression::literal(Literal::null_pointer()))
             }
+            Self::CallbackHandle { .. } => Some(Expression::literal(Literal::integer_zero())),
         }
     }
 }

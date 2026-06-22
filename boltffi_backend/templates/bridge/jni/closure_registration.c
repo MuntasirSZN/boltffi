@@ -27,6 +27,8 @@ static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for para
 {%- else %}
 {%- if closure.returns_byte_array %}
     jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% if closure.has_jni_arguments %}, {{ closure.jni_arguments }}{% endif %});
+{%- else if closure.returns_callback_handle %}
+    jlong __boltffi_return_handle = (*env)->CallStaticLongMethod(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% if closure.has_jni_arguments %}, {{ closure.jni_arguments }}{% endif %});
 {%- else %}
     {{ closure.c_return_type }} result = ({{ closure.c_return_type }})(*env)->CallStatic{{ closure.call_method_suffix }}Method(env, {{ closure.global_class }}, {{ closure.call_method }}, handle{% if closure.has_jni_arguments %}, {{ closure.jni_arguments }}{% endif %});
 {%- endif %}
@@ -53,6 +55,13 @@ static {{ closure.c_return_type }} {{ closure.call }}(void *user_data{% for para
         return {{ closure.failure_value }};
     }
     (*env)->DeleteLocalRef(env, __boltffi_return_array);
+{%- else if closure.returns_callback_handle %}
+    {%- match closure.callback_handle_constructor %}
+    {%- when Some with (create_handle) %}
+    {{ closure.c_return_type }} result = {{ create_handle }}((uint64_t)__boltffi_return_handle);
+    {%- when None %}
+    {{ closure.c_return_type }} result = {{ closure.failure_value }};
+    {%- endmatch %}
 {%- endif %}
 {% include "bridge/jni/closure/cleanup.c" %}
     boltffi_jni_exit(attached);

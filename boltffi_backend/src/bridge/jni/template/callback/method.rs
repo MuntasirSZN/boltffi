@@ -19,6 +19,8 @@ pub struct CallbackMethodView {
     pub returns_byte_array: bool,
     pub returns_bytes: bool,
     pub returns_record: bool,
+    pub returns_callback_handle: bool,
+    pub callback_handle_constructor: Option<Identifier>,
     pub call_method_suffix: String,
     pub failure_value: Expression,
     pub c_parameters: Vec<CallbackCParameterView>,
@@ -43,6 +45,8 @@ impl CallbackMethodView {
             returns_byte_array: method.returns_byte_array(),
             returns_bytes: method.returns_bytes(),
             returns_record: method.returns_record(),
+            returns_callback_handle: method.returns_callback_handle(),
+            callback_handle_constructor: method.callback_handle_constructor().cloned(),
             call_method_suffix: method.call_method_suffix().unwrap_or_default().to_owned(),
             failure_value: method
                 .failure_value()

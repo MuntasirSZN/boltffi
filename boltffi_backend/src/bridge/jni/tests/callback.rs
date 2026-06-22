@@ -23,7 +23,6 @@ fn jni_bridge_renders_callback_handle_parameters() {
         .find(|(path, _)| path == "jni/jni_glue.c")
         .map(|(_, contents)| contents)
         .expect("JNI source file");
-
     assert!(
         header.contains(
             "BoltFFICallbackHandle boltffi_create_callback_demo_listener(uint64_t handle);"
@@ -535,6 +534,42 @@ fn jni_bridge_renders_callback_handle_returns() {
         source.contains("BoltFFICallbackHandle result = boltffi_function_demo_make_listener();")
     );
     assert!(source.contains("return boltffi_jni_callback_handle_new_owned(env, result);"));
+}
+
+#[test]
+fn jni_bridge_renders_callback_method_callback_handle_returns() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Child {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub trait Listener {
+                fn child(&self) -> Box<dyn Child>;
+            }
+            "#,
+    );
+    let header = files
+        .iter()
+        .find(|(path, _)| path == "jni/demo.h")
+        .map(|(_, contents)| contents)
+        .expect("C header file");
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(header.contains("BoltFFICallbackHandle (*child)(uint64_t);"));
+    assert!(
+        source.contains("GetStaticMethodID(env, g____ListenerVTable_class, \"child\", \"(J)J\")")
+    );
+    assert!(source.contains("jlong __boltffi_return_handle = (*env)->CallStaticLongMethod(env, g____ListenerVTable_class, g____ListenerVTable_child_method"));
+    assert!(source.contains(
+        "BoltFFICallbackHandle result = boltffi_create_callback_demo_child((uint64_t)__boltffi_return_handle);"
+    ));
 }
 
 #[test]

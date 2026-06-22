@@ -23,7 +23,7 @@ impl CallbackMethod {
                 invariant: "callback vtable slot does not start with a uint64 handle",
             });
         };
-        let returns = JvmMethodReturn::from_c_type(slot.returns())?;
+        let returns = JvmMethodReturn::from_c_type(slot.returns(), callbacks)?;
         let arguments = slot
             .parameter_groups()
             .iter()

@@ -67,6 +67,8 @@ JNIEXPORT {{ handle.jni_return_type }} JNICALL {{ handle.call_symbol }}(JNIEnv *
     return boltffi_jni_buffer_to_byte_array(env, result);
 {%- else if handle.closure.returns_record %}
     return boltffi_jni_record_to_byte_array(env, &result, (uintptr_t)sizeof(result));
+{%- else if handle.closure.returns_callback_handle %}
+    return boltffi_jni_callback_handle_new_owned(env, result);
 {%- else %}
     return ({{ handle.jni_return_type }})result;
 {%- endif %}

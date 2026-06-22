@@ -35,7 +35,6 @@ fn jni_bridge_layers_primitive_functions_on_c_bridge() {
         .find(|(path, _)| path == "jni/jni_glue.c")
         .map(|(_, contents)| contents)
         .expect("JNI source file");
-
     assert!(header.contains("int32_t boltffi_function_demo_add(int32_t left, int32_t right);"));
     assert!(source.contains("#include \"demo.h\""));
     assert!(source.contains("JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1add(JNIEnv *env, jclass cls, jint left, jint right)"));
@@ -416,4 +415,35 @@ fn jni_bridge_renders_direct_vector_closure_parameters_from_contract_group() {
     assert!(source.contains(
             "FfiStatus status = boltffi_function_demo_install(boltffi_jni____closure__vec_u32_to_u32_call, (void *)callback, boltffi_jni____closure__vec_u32_to_u32_release);"
         ));
+}
+
+#[test]
+fn jni_bridge_renders_closure_callback_handle_returns() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Listener {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub fn install(callback: impl Fn() -> Box<dyn Listener>) {}
+            "#,
+    );
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(source.contains(
+        "GetStaticMethodID(env, g____closure__to_box_demo_listener_class, \"call\", \"(J)J\")"
+    ));
+    assert!(source.contains(
+        "static BoltFFICallbackHandle boltffi_jni____closure__to_box_demo_listener_call(void *user_data)"
+    ));
+    assert!(source.contains("jlong __boltffi_return_handle = (*env)->CallStaticLongMethod(env, g____closure__to_box_demo_listener_class, g____closure__to_box_demo_listener_call_method, handle);"));
+    assert!(source.contains(
+        "BoltFFICallbackHandle result = boltffi_create_callback_demo_listener((uint64_t)__boltffi_return_handle);"
+    ));
 }

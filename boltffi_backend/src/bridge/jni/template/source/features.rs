@@ -33,6 +33,7 @@ impl SourceFeatures {
         let closure_direct_vectors = Self::closure_direct_vectors(closures);
         let byte_array_returns = Self::byte_array_returns(callbacks, closures);
         let record_returns = Self::record_returns(callbacks, closures);
+        let callback_handle_returns = Self::callback_handle_returns(callbacks, closures);
         let method_byte_array_returns = methods.iter().any(|method| method.returns_bytes);
         let completion_byte_arrays = callback_completions
             .iter()
@@ -80,12 +81,14 @@ impl SourceFeatures {
                 || closure_byte_arrays
                 || closure_direct_vectors
                 || byte_array_returns
+                || callback_handle_returns
                 || completion_byte_arrays
                 || direct_stream_batch_returns
                 || method_exceptions,
             uses_continuations,
             uses_lifecycle: uses_continuations || !callbacks.is_empty() || !closures.is_empty(),
             uses_callback_handles: callback_handles
+                || callback_handle_returns
                 || methods.iter().any(|method| method.returns_callback),
             uses_closure_handles,
         }
@@ -161,5 +164,19 @@ impl SourceFeatures {
             .iter()
             .any(|callback| callback.methods.iter().any(|method| method.returns_record))
             || closures.iter().any(|closure| closure.returns_record)
+    }
+
+    fn callback_handle_returns(
+        callbacks: &[CallbackRegistrationView],
+        closures: &[ClosureRegistrationView],
+    ) -> bool {
+        callbacks.iter().any(|callback| {
+            callback
+                .methods
+                .iter()
+                .any(|method| method.returns_callback_handle)
+        }) || closures
+            .iter()
+            .any(|closure| closure.returns_callback_handle)
     }
 }
