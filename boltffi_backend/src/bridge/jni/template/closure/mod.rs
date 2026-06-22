@@ -1,13 +1,13 @@
-//! Template data for inline closure trampolines.
+//! Template data for JVM-owned inline closure trampolines.
 //!
 //! A JVM-owned closure is stored as a global Java object and called from Rust
-//! through a C function pointer. The generated source therefore needs a call
+//! through a C function pointer. The generated C source therefore needs a call
 //! trampoline, release trampoline, argument setup, return conversion, and
 //! optional callback-handle helpers for each registered closure signature.
 //!
-//! This module prepares those template views from the closure contract. It keeps
-//! closure rendering reusable across functions, callback methods, nested
-//! closures, and returned closures.
+//! This module prepares those source views from the closure contract. The same
+//! rendering path is used whether the closure appears as a function parameter, a
+//! callback method parameter, a nested closure argument, or a returned closure.
 
 mod argument;
 mod callback_handle;

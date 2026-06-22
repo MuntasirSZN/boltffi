@@ -1,8 +1,13 @@
-//! JVM method contracts shared by callbacks and closures.
+//! Return contracts for static JVM methods called from generated C.
 //!
-//! The generated C code often calls static JVM methods and then translates the
-//! result back into the C ABI expected by Rust. This module owns the return-side
-//! contract for those calls.
+//! Callback vtable slots and inline closure trampolines both call static JVM
+//! methods. After the call, the generated C must translate the Java result back
+//! into the C ABI that Rust expects: scalar value, byte buffer, direct record,
+//! callback handle, closure handle, status, or no value.
+//!
+//! This module owns that return-side contract for JVM method calls. It is shared
+//! by callbacks and closures so both paths use the same descriptor and failure
+//! behavior.
 
 mod method_return;
 

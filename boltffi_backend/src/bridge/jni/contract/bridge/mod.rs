@@ -1,14 +1,14 @@
-//! Root JNI bridge contract.
+//! Complete contract for one generated JNI source file.
 //!
-//! A `JniBridgeContract` is the complete plan for one generated JNI C file. It
-//! names the JVM owner class, the C header to include, the lifecycle hooks, and
+//! A `JniBridgeContract` is the crate-level result of adapting the C bridge to
+//! JNI. It names the JVM owner class, the C header include, lifecycle hooks, and
 //! every native method, callback registration, closure registration, stream
-//! helper, and async completion invoker that must be emitted.
+//! helper, and async completion invoker that must be emitted into the file.
 //!
-//! This is the only place where the JNI bridge walks the whole C bridge
-//! contract. After construction, lower modules work from these typed pieces, so
-//! templates never need to rediscover which declarations exist or how they fit
-//! together.
+//! This is the only JNI module that walks the whole C bridge contract. After it
+//! is built, lower modules work from the typed pieces stored here. That keeps
+//! templates from rediscovering which declarations exist, which helper groups
+//! are needed, or how callbacks, closures, streams, and methods relate.
 
 mod build;
 

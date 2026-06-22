@@ -1,13 +1,16 @@
-//! JNI contract for Rust callback traits.
+//! JNI contract for callback traits implemented on the JVM.
 //!
-//! Rust calls callback traits through C vtables. On the JVM side, those calls
-//! need to become static Java method invocations with cached classes and method
-//! ids, converted arguments, return handling, and async completion helpers when a
-//! callback method is asynchronous.
+//! Rust sees callback traits as C vtables. The JVM sees static methods on a
+//! generated callback class. This module connects those views: it records the C
+//! vtable slot, the JVM method descriptor, cached method ids, argument
+//! conversion, return conversion, and async completion hooks for each callback
+//! method.
 //!
-//! This module owns callback-trait dispatch. Inline closures live in the closure
-//! module because they are registered by function signature and travel as
-//! function pointer, context, and release triples rather than vtable slots.
+//! Callback traits are different from inline closures. A callback trait is a
+//! named protocol with vtable slots. An inline closure is registered by function
+//! signature and travels as call, context, and release values. Keeping those two
+//! contracts separate prevents one path from guessing the ownership rules of the
+//! other.
 
 mod argument;
 mod bytes;

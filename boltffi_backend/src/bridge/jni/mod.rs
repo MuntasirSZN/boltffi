@@ -1,15 +1,16 @@
-//! JNI bridge for JVM targets.
+//! JVM bridge layered on top of the C ABI bridge.
 //!
-//! The C bridge owns the Rust ABI. A JVM cannot call that ABI directly because
-//! it speaks in JNI symbols, Java arrays, method descriptors, cached class
-//! references, and `JNIEnv` lifetimes. This bridge is the layer that makes those
-//! two worlds meet.
+//! The lower C bridge already describes the Rust-facing ABI: exported symbols,
+//! record layouts, callback vtables, stream protocols, async continuations, and
+//! owned buffers. A JVM target cannot call that contract directly. It needs
+//! `Java_*` entry points, JNI descriptors, Java arrays, cached classes and
+//! method ids, global references, and `JNIEnv`-scoped cleanup.
 //!
-//! The bridge reads the C bridge contract and produces one JNI source file with
-//! `Java_*` entry points, callback vtables, closure trampolines, stream helpers,
-//! async continuation hooks, and lifecycle code. Java and Kotlin targets compose
-//! with this contract instead of rediscovering JNI naming, parameter grouping, or
-//! callback ownership locally.
+//! This module owns that second bridge. It reads the C bridge contract once,
+//! builds a typed JNI contract, and renders one C source file that the Java or
+//! Kotlin target can compile beside the C bridge output. Host targets compose
+//! with this bridge instead of rediscovering JNI naming, callback ownership, or
+//! parameter grouping in their own renderers.
 
 mod bridge;
 mod contract;

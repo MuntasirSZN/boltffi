@@ -1,14 +1,13 @@
-//! Public construction point for the JNI bridge.
+//! Construction point for a generated JNI bridge file.
 //!
-//! A backend stack asks this type to add a JVM-facing bridge on top of an
-//! existing C bridge. The caller supplies the Java package, owner class, output
-//! path, and C header include. Everything else comes from the lower bridge
-//! contract.
+//! `JniBridge` is the value a JVM target places above a `CBridge` in the backend
+//! stack. The target chooses the Java package, owner class, and output path. The
+//! C header include and all ABI details come from the lower bridge contract.
 //!
-//! The output is a generated C source file. It contains the exported JNI methods
-//! and the support code those methods need: lifecycle hooks, callback dispatch,
-//! closure registration, stream protocol helpers, async continuations, and
-//! forwarding calls into the C ABI.
+//! Rendering produces the generated C source file for that JVM class. The file
+//! contains the native entry points and the support code they need: lifecycle
+//! hooks, callback dispatch, closure registration, stream protocol helpers,
+//! async continuations, and forwarding calls into the C ABI.
 
 use std::path::PathBuf;
 

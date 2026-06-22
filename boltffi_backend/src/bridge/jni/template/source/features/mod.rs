@@ -1,9 +1,13 @@
-//! Feature scan for JNI source fragments.
+//! Source-fragment selection for generated JNI glue.
 //!
-//! JNI glue only includes runtime fragments that the generated contract uses.
-//! This module reads the already-renderable template views and records whether
-//! the source needs exceptions, byte arrays, callback handles, closure handles,
-//! continuations, lifecycle hooks, stream helpers, or status checks.
+//! The generated C file should include only the support code required by the
+//! contract. A crate without streams does not need stream helpers. A crate
+//! without closure returns does not need closure-handle return helpers.
+//!
+//! This module scans template views, not the binding IR, and records which
+//! fragments the root source template must include: exceptions, byte arrays,
+//! callback handles, closure handles, continuations, lifecycle hooks, stream
+//! helpers, direct records, or status checks.
 
 mod callback;
 mod closure;
