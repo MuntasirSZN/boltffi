@@ -6,8 +6,7 @@ pub use signature::Signature;
 
 use boltffi_binding::{
     ClassDecl, ConstantDecl, ConstantValueDecl, DeclarationRef, EnumDecl, ExportedCallable,
-    ExportedMethodDecl, InitializerDecl, Native, NativeSymbol, RecordDecl, StreamDecl,
-    StreamItemPlan,
+    ExportedMethodDecl, InitializerDecl, Native, NativeSymbol, RecordDecl,
 };
 
 use crate::core::{Error, Result};
@@ -68,7 +67,7 @@ impl Function {
             DeclarationRef::Enum(enumeration) => Self::enum_functions(enumeration, names),
             DeclarationRef::Class(class) => Self::class_functions(class, names),
             DeclarationRef::Constant(constant) => Self::constant_functions(constant, names),
-            DeclarationRef::Stream(stream) => Self::stream_functions(stream, names),
+            DeclarationRef::Stream(_) => Ok(Vec::new()),
             DeclarationRef::Callback(_) | DeclarationRef::CustomType(_) => Ok(Vec::new()),
         }
     }
@@ -152,85 +151,6 @@ impl Function {
                 shape: "unknown constant value declaration",
             }),
         }
-    }
-
-    fn stream_functions(stream: &StreamDecl<Native>, names: &Names) -> Result<Vec<Self>> {
-        let protocol = stream.protocol();
-        let subscription = Type::handle_carrier(stream.handle())?;
-        let subscribe_params = stream
-            .owner()
-            .map(|owner| {
-                names
-                    .class_handle(owner)
-                    .and_then(Type::handle_carrier)
-                    .and_then(|ty| Parameter::new("receiver", ty))
-            })
-            .transpose()?
-            .into_iter()
-            .collect();
-        let pop_batch = match stream.item() {
-            StreamItemPlan::Direct { ty, .. } => Self::new(
-                protocol.pop_batch().name().as_str(),
-                vec![
-                    Parameter::new("subscription", subscription.clone())?,
-                    Parameter::new(
-                        "output_ptr",
-                        Type::MutPointer(Box::new(names.direct_value(ty)?)),
-                    )?,
-                    Parameter::new("output_capacity", Type::PointerWidth)?,
-                ],
-                Type::PointerWidth,
-            )?,
-            StreamItemPlan::Encoded { shape, .. } => Self::new(
-                protocol.pop_batch().name().as_str(),
-                vec![
-                    Parameter::new("subscription", subscription.clone())?,
-                    Parameter::new("max_count", Type::PointerWidth)?,
-                ],
-                Signature::new(names, Vec::new()).encoded_return(*shape)?,
-            )?,
-            _ => {
-                return Err(Error::UnexpectedBindingShape {
-                    layer: C_BRIDGE_LAYER,
-                    shape: "unknown stream item plan",
-                });
-            }
-        };
-        Ok(vec![
-            Self::new(
-                protocol.subscribe().name().as_str(),
-                subscribe_params,
-                subscription.clone(),
-            )?,
-            pop_batch,
-            Self::new(
-                protocol.wait().name().as_str(),
-                vec![
-                    Parameter::new("subscription", subscription.clone())?,
-                    Parameter::new("timeout_milliseconds", Type::Uint32)?,
-                ],
-                Type::WaitResult,
-            )?,
-            Self::new(
-                protocol.poll().name().as_str(),
-                vec![
-                    Parameter::new("subscription", subscription.clone())?,
-                    Parameter::continuation_data("callback")?,
-                    Parameter::continuation_callback("callback", Type::StreamPollResult)?,
-                ],
-                Type::Void,
-            )?,
-            Self::new(
-                protocol.unsubscribe().name().as_str(),
-                vec![Parameter::new("subscription", subscription.clone())?],
-                Type::Void,
-            )?,
-            Self::new(
-                protocol.free().name().as_str(),
-                vec![Parameter::new("subscription", subscription)?],
-                Type::Void,
-            )?,
-        ])
     }
 
     fn associated_functions(

@@ -2,6 +2,7 @@ use super::{
     callback::CallbackRegistrationView,
     closure::{CallbackClosureHandleView, ClosureRegistrationView},
     method::NativeMethodView,
+    stream::DirectStreamBatchView,
 };
 
 pub struct SourceFeatures {
@@ -19,6 +20,7 @@ pub struct SourceFeatures {
 impl SourceFeatures {
     pub fn from_views(
         methods: &[NativeMethodView],
+        direct_stream_batches: &[DirectStreamBatchView],
         callbacks: &[CallbackRegistrationView],
         closures: &[ClosureRegistrationView],
         closure_handles: &[CallbackClosureHandleView],
@@ -31,6 +33,7 @@ impl SourceFeatures {
         let byte_array_returns = Self::byte_array_returns(callbacks, closures);
         let record_returns = Self::record_returns(callbacks, closures);
         let method_byte_array_returns = methods.iter().any(|method| method.returns_bytes);
+        let direct_stream_batch_returns = !direct_stream_batches.is_empty();
         let method_record_arrays = methods
             .iter()
             .any(|method| method.returns_record || !method.record_arrays.is_empty());
@@ -43,8 +46,10 @@ impl SourceFeatures {
                 || !method.record_arrays.is_empty()
         });
         let uses_continuations = methods.iter().any(|method| method.uses_continuations);
-        let uses_byte_arrays =
-            callback_byte_arrays || byte_array_returns || method_byte_array_returns;
+        let uses_byte_arrays = callback_byte_arrays
+            || byte_array_returns
+            || method_byte_array_returns
+            || direct_stream_batch_returns;
         let uses_record_arrays = method_record_arrays || callback_record_arrays || record_returns;
 
         Self {
@@ -58,6 +63,7 @@ impl SourceFeatures {
                 || callback_handles
                 || uses_closure_handles
                 || byte_array_returns
+                || direct_stream_batch_returns
                 || method_exceptions,
             uses_continuations,
             uses_lifecycle: uses_continuations || !callbacks.is_empty() || !closures.is_empty(),

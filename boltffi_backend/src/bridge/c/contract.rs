@@ -7,7 +7,9 @@ use crate::core::{
 };
 
 use super::names::Names;
-use super::{C_BRIDGE_LAYER, Callback, Enum, Function, Record, SupportFunctions};
+use super::{
+    C_BRIDGE_CONTRACT, C_BRIDGE_LAYER, Callback, Enum, Function, Record, Stream, SupportFunctions,
+};
 
 /// C ABI contract produced for native bindings.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,6 +23,7 @@ pub struct CBridgeContract {
     source_c_style_enums: BTreeMap<EnumId, Enum>,
     enums: Vec<Enum>,
     callbacks: Vec<Callback>,
+    streams: Vec<Stream>,
     functions: Vec<Function>,
 }
 
@@ -102,10 +105,35 @@ impl CBridgeContract {
             })
             .map(|callback| Callback::from_decl(callback, &names))
             .collect::<Result<Vec<_>>>()?;
+        let streams = bindings
+            .decls()
+            .iter()
+            .filter_map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Stream(stream) => Some(stream),
+                DeclarationRef::Record(_)
+                | DeclarationRef::Enum(_)
+                | DeclarationRef::Function(_)
+                | DeclarationRef::Class(_)
+                | DeclarationRef::Callback(_)
+                | DeclarationRef::Constant(_)
+                | DeclarationRef::CustomType(_) => None,
+            })
+            .map(|stream| Stream::from_decl(stream, &names))
+            .collect::<Result<Vec<_>>>()?;
+        let mut stream_protocols = streams.iter();
         let functions = bindings
             .decls()
             .iter()
-            .map(|decl| Function::from_decl(DeclarationRef::from(decl), &names))
+            .map(|decl| match DeclarationRef::from(decl) {
+                DeclarationRef::Stream(_) => stream_protocols
+                    .next()
+                    .ok_or(Error::BrokenBridgeContract {
+                        bridge: C_BRIDGE_CONTRACT,
+                        invariant: "missing typed stream protocol",
+                    })
+                    .map(|stream| stream.functions().into_iter().cloned().collect::<Vec<_>>()),
+                decl => Function::from_decl(decl, &names),
+            })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
@@ -120,6 +148,7 @@ impl CBridgeContract {
             source_c_style_enums,
             enums,
             callbacks,
+            streams,
             functions,
         })
     }
@@ -167,6 +196,11 @@ impl CBridgeContract {
     /// Returns C callback vtable declarations.
     pub fn callbacks(&self) -> &[Callback] {
         &self.callbacks
+    }
+
+    /// Returns C stream protocol declarations.
+    pub fn streams(&self) -> &[Stream] {
+        &self.streams
     }
 
     /// Returns C function declarations.

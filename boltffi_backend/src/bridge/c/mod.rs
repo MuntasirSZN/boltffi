@@ -14,6 +14,7 @@ mod name;
 mod names;
 mod parameter;
 mod record;
+mod stream;
 mod support;
 pub(crate) mod syntax;
 mod template;
@@ -30,6 +31,7 @@ pub use parameter::{
     DirectVectorElementAbi, DirectVectorParameter, Parameter, ParameterGroup, ParameterIndex,
 };
 pub use record::{Field, Record};
+pub use stream::{DirectStreamBatch, Stream, StreamBatch};
 pub use support::SupportFunctions;
 pub use syntax::{ArgumentList, Expression, Literal, Statement, Syntax, TypeFragment};
 pub use ty::Type;

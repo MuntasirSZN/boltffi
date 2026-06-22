@@ -11,6 +11,7 @@ mod parameter;
 mod record;
 mod return_value;
 mod scalar;
+mod stream;
 
 pub use bridge::JniBridgeContract;
 pub use bytes::BytesParameter;
@@ -30,3 +31,4 @@ pub use parameter::{NativeParameter, NativeParameterKind};
 pub use record::{RecordParameter, RecordValue};
 pub use return_value::NativeReturn;
 pub use scalar::{ScalarParameter, ScalarReturn};
+pub use stream::{DirectStreamBatchMethod, StreamProtocolMethods};

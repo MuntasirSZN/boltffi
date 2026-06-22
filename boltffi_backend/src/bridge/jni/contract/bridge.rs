@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use boltffi_binding::Native;
 
 use crate::{
@@ -10,7 +12,7 @@ use crate::{
     },
 };
 
-use super::{CallbackRegistration, ClosureRegistration, NativeMethod};
+use super::{CallbackRegistration, ClosureRegistration, NativeMethod, StreamProtocolMethods};
 
 /// Contract produced by the JNI bridge layer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,6 +26,7 @@ pub struct JniBridgeContract {
     callbacks: Vec<CallbackRegistration>,
     closures: Vec<ClosureRegistration>,
     methods: Vec<NativeMethod>,
+    streams: Vec<StreamProtocolMethods>,
 }
 
 impl JniBridgeContract {
@@ -40,6 +43,30 @@ impl JniBridgeContract {
             .iter()
             .map(|callback| CallbackRegistration::from_c_callback(&class, callback, &closures))
             .collect::<Result<Vec<_>>>()?;
+        let stream_function_names = c_bridge
+            .streams()
+            .iter()
+            .flat_map(c::Stream::functions)
+            .map(|function| function.name().to_owned())
+            .collect::<BTreeSet<_>>();
+        let methods = c_bridge
+            .functions()
+            .iter()
+            .filter(|function| !stream_function_names.contains(function.name()))
+            .map(|function| NativeMethod::new(&class, function, c_bridge.callbacks(), &closures))
+            .collect::<Result<Vec<_>>>()?;
+        let streams = c_bridge
+            .streams()
+            .iter()
+            .map(|stream| {
+                StreamProtocolMethods::from_c_stream(
+                    &class,
+                    stream,
+                    c_bridge.callbacks(),
+                    &closures,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             capabilities: c_bridge
                 .capabilities()
@@ -48,13 +75,8 @@ impl JniBridgeContract {
             c_header: HeaderInclude::from_files(&source_path, c_bridge.header_path())?,
             free_buffer: Identifier::parse(c_bridge.support().buffer_free()?.name())?,
             callbacks,
-            methods: c_bridge
-                .functions()
-                .iter()
-                .map(|function| {
-                    NativeMethod::new(&class, function, c_bridge.callbacks(), &closures)
-                })
-                .collect::<Result<Vec<_>>>()?,
+            methods,
+            streams,
             closures,
             class,
             source_path,
@@ -94,6 +116,11 @@ impl JniBridgeContract {
     /// Returns generated native methods.
     pub fn methods(&self) -> &[NativeMethod] {
         &self.methods
+    }
+
+    /// Returns generated stream protocol methods.
+    pub fn streams(&self) -> &[StreamProtocolMethods] {
+        &self.streams
     }
 }
 

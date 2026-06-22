@@ -280,3 +280,7 @@ JNIEXPORT {{ method.return_type }} JNICALL {{ method.symbol }}(JNIEnv *env, jcla
 {%- endif %}
 }
 {%- endfor %}
+
+{%- for batch in direct_stream_batches %}
+{% include "bridge/jni/stream_direct_batch.c" %}
+{%- endfor %}

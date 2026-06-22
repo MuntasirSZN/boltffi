@@ -4,11 +4,13 @@ mod callback;
 mod closure;
 mod features;
 mod method;
+mod stream;
 
 use self::callback::CallbackRegistrationView;
 use self::closure::{CallbackClosureHandleView, ClosureRegistrationView};
 use self::features::SourceFeatures;
 use self::method::NativeMethodView;
+use self::stream::DirectStreamBatchView;
 
 use crate::{
     bridge::{
@@ -39,6 +41,7 @@ struct SourceFileTemplate {
     closure_handles: Vec<CallbackClosureHandleView>,
     closures: Vec<ClosureRegistrationView>,
     methods: Vec<NativeMethodView>,
+    direct_stream_batches: Vec<DirectStreamBatchView>,
 }
 
 /// JNI C source rendered from a JNI bridge contract.
@@ -62,13 +65,34 @@ impl SourceFile {
             .iter()
             .map(ClosureRegistrationView::from_registration)
             .collect();
+        let direct_stream_batches = contract
+            .streams()
+            .iter()
+            .flat_map(|stream| stream.direct_batches())
+            .map(DirectStreamBatchView::from_method)
+            .collect::<Result<Vec<_>>>()?;
+        let stream_methods = contract
+            .streams()
+            .iter()
+            .flat_map(|stream| stream.methods())
+            .map(NativeMethodView::from_method)
+            .collect::<Result<Vec<_>>>()?;
+        let methods = methods
+            .into_iter()
+            .chain(stream_methods)
+            .collect::<Vec<_>>();
         let closure_handles: Vec<_> = contract
             .closures()
             .iter()
             .filter_map(CallbackClosureHandleView::from_registration)
             .collect();
-        let features =
-            SourceFeatures::from_views(&methods, &callbacks, &closures, &closure_handles);
+        let features = SourceFeatures::from_views(
+            &methods,
+            &direct_stream_batches,
+            &callbacks,
+            &closures,
+            &closure_handles,
+        );
         Ok(SourceFileTemplate {
             c_header: Literal::string(contract.c_header().as_str()),
             class_name: Literal::string(&contract.class().as_jni_class_name()),
@@ -98,6 +122,7 @@ impl SourceFile {
             closure_handles,
             closures,
             methods,
+            direct_stream_batches,
         }
         .render()?)
     }

@@ -39,8 +39,11 @@ fn jni_bridge_renders_stream_protocol_functions() {
     [
         "JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1stream_1demo_1engine_1points_1subscribe(JNIEnv *env, jclass cls, jlong receiver)",
         "uint64_t result = boltffi_stream_demo_engine_points_subscribe(receiver);",
-        "JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1stream_1demo_1engine_1points_1pop_1batch(JNIEnv *env, jclass cls, jlong subscription, jlong output_ptr, jlong output_capacity)",
-        "uintptr_t result = boltffi_stream_demo_engine_points_pop_batch(subscription, (___Point *)output_ptr, output_capacity);",
+        "JNIEXPORT jbyteArray JNICALL Java_com_boltffi_demo_Native_boltffi_1stream_1demo_1engine_1points_1pop_1batch(JNIEnv *env, jclass cls, jlong subscription, jlong max_count)",
+        "uint8_t *__boltffi_items = NULL;",
+        "uintptr_t __boltffi_count = boltffi_stream_demo_engine_points_pop_batch((uint64_t)subscription, (___Point *)__boltffi_items, __boltffi_capacity);",
+        "jbyteArray __boltffi_array = boltffi_jni_bytes_to_byte_array(env, __boltffi_items, __boltffi_byte_len);",
+        "return __boltffi_array;",
         "JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1stream_1demo_1engine_1points_1wait(JNIEnv *env, jclass cls, jlong subscription, jint timeout_milliseconds)",
         "WaitResult result = boltffi_stream_demo_engine_points_wait(subscription, timeout_milliseconds);",
         "JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1stream_1demo_1engine_1points_1poll(JNIEnv *env, jclass cls, jlong subscription, jlong callback_data)",
