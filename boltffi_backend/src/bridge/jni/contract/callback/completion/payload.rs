@@ -78,7 +78,22 @@ impl CallbackCompletionPayload {
                 bridge: JNI_BRIDGE,
                 shape: "async callback completion payload",
             }),
-            ty => Ok(Self {
+            ty @ (c::Type::Bool
+            | c::Type::Int8
+            | c::Type::Uint8
+            | c::Type::Int16
+            | c::Type::Uint16
+            | c::Type::Int32
+            | c::Type::Uint32
+            | c::Type::Int64
+            | c::Type::Uint64
+            | c::Type::SignedPointerWidth
+            | c::Type::PointerWidth
+            | c::Type::Float32
+            | c::Type::Float64
+            | c::Type::StreamPollResult
+            | c::Type::WaitResult
+            | c::Type::CStyleEnum { .. }) => Ok(Self {
                 suffix: Self::scalar_suffix(ty)?,
                 c_type: TypeFragment::anonymous(ty)?,
                 jni_type: JniType::from_c_type(ty)?.as_type_fragment(),
@@ -136,7 +151,18 @@ impl CallbackCompletionPayload {
             c::Type::Float32 => "F32".to_owned(),
             c::Type::Float64 => "F64".to_owned(),
             c::Type::CStyleEnum { name, .. } => format!("Enum_{}", name.as_str()),
-            _ => {
+            c::Type::Void
+            | c::Type::Status
+            | c::Type::Buffer
+            | c::Type::String
+            | c::Type::Span
+            | c::Type::FutureHandle
+            | c::Type::CallbackHandle(_)
+            | c::Type::Named(_)
+            | c::Type::DirectRecord(_)
+            | c::Type::ConstPointer(_)
+            | c::Type::MutPointer(_)
+            | c::Type::FunctionPointer { .. } => {
                 return Err(Error::UnsupportedBridge {
                     bridge: JNI_BRIDGE,
                     shape: "scalar async callback completion payload",
