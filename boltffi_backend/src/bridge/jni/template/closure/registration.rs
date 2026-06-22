@@ -1,8 +1,14 @@
-//! Template view for registered closure signatures.
+//! Final source view for one registered closure signature.
 //!
-//! A registered closure signature renders one bridge class contract: call
-//! trampoline, release trampoline, argument setup, return handling, and optional
-//! callback-handle helpers.
+//! A closure registration becomes a small generated bridge class in C: load and
+//! unload hooks, a call trampoline, a release trampoline, argument conversion,
+//! return conversion, and optional helper methods for closure handles passed
+//! through callbacks.
+//!
+//! This module flattens the closure contract into the fields that source
+//! template needs. The same view is used for every declaration that mentions the
+//! signature, which keeps closure rendering shared across functions, callbacks,
+//! nested closures, and returned closures.
 
 use crate::bridge::{
     c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},

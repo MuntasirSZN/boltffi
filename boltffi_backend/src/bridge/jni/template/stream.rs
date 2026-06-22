@@ -1,8 +1,13 @@
-//! Template views for stream helpers.
+//! Source views for stream-specific JNI helpers.
 //!
-//! Stream protocols are rendered mostly as native methods. This module prepares
-//! the extra direct-batch method view used when stream items can be returned as
-//! one Java byte array.
+//! Most stream protocol functions render through the normal native-method path.
+//! Direct stream batches need extra source fields because the generated method
+//! allocates a Java byte array, asks the C bridge to fill a native item buffer,
+//! and copies the used bytes back to the JVM.
+//!
+//! This module prepares that direct-batch view from the stream contract. It
+//! keeps the direct-batch allocation and copy names in one place instead of
+//! scattering them through the root source template.
 
 use crate::{
     bridge::{

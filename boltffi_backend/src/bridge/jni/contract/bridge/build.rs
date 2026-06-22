@@ -1,14 +1,14 @@
-//! Builder for the root JNI bridge contract.
+//! Crate-wide build pass for the JNI bridge contract.
 //!
-//! The builder performs the crate-level pass for this bridge. It reads the lower
-//! C bridge contract, validates that each C shape has a JNI representation, and
-//! collects the result into a `JniBridgeContract`.
+//! JNI glue is one generated C file, but its pieces are connected. A native
+//! method can use a closure signature that is also used by a callback method. A
+//! callback can need an async completion helper. Stream protocol functions must
+//! not also appear as normal native methods.
 //!
-//! Keeping that pass here matters because native methods, callbacks, closures,
-//! and streams cross-reference each other. Closure signatures must be registered
-//! once even if they appear in several places, callbacks need completion helpers,
-//! and the source file needs lifecycle symbols only when the contract requires
-//! them.
+//! This module performs that whole-file pass once. It reads the lower C bridge
+//! contract, registers shared closure signatures, builds callback registrations,
+//! filters stream protocol functions out of the native method list, and records
+//! the support symbols the final source file needs.
 
 use std::collections::BTreeSet;
 

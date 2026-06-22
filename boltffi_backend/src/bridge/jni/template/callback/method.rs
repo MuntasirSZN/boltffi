@@ -1,8 +1,14 @@
-//! Template view for callback vtable methods.
+//! Final source view for one callback vtable slot.
 //!
-//! Callback method templates render the C vtable slot that calls a static JVM
-//! method. This module prepares method ids, parameter declarations, local setup,
-//! return handling, and cleanup views.
+//! A callback method contract describes a C function that Rust will call and the
+//! static JVM method that should receive the call. The C template needs those
+//! facts flattened into a function body: C parameters, byte-array locals,
+//! direct-vector locals, callback and closure handle setup, completion objects,
+//! JVM call arguments, return conversion, failure value, and cleanup state.
+//!
+//! This module performs that flattening. It does not decide the callback
+//! protocol or return shape; those decisions are already present in
+//! `CallbackMethod`.
 
 use crate::bridge::{
     c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},

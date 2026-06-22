@@ -1,8 +1,11 @@
-//! Template view for one native method.
+//! Final source view for one generated `Java_*` method.
 //!
-//! This module is the final shape consumed by the native-method Askama template.
-//! It collects parameters, borrowed arrays, direct records, C bridge arguments,
-//! return handling, and status checks from the method contract.
+//! The native method contract is still domain-shaped: parameters know their
+//! kind, returns know their ABI behavior, and records know their writeback
+//! rules. The Askama template needs one flat C method body. This module performs
+//! that last projection by collecting parameter declarations, borrowed arrays,
+//! direct-record locals, C bridge arguments, status checks, and return fields in
+//! the order the generated source prints them.
 
 use crate::{
     bridge::{

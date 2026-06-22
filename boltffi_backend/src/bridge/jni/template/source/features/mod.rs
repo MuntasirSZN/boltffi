@@ -1,13 +1,14 @@
-//! Source-fragment selection for generated JNI glue.
+//! Support-fragment selection for the generated JNI C file.
 //!
-//! The generated C file should include only the support code required by the
-//! contract. A crate without streams does not need stream helpers. A crate
-//! without closure returns does not need closure-handle return helpers.
+//! The root source template contains optional support blocks: exception helpers,
+//! byte-array copying, direct-record copying, callback handle storage, closure
+//! handle storage, continuations, stream helpers, status checks, and lifecycle
+//! hooks. Emitting every block for every crate would make the generated file
+//! noisy and easier to break.
 //!
-//! This module scans template views, not the binding IR, and records which
-//! fragments the root source template must include: exceptions, byte arrays,
-//! callback handles, closure handles, continuations, lifecycle hooks, stream
-//! helpers, direct records, or status checks.
+//! This module decides which support blocks are needed from the finished
+//! template views. It deliberately scans views, not `Bindings` or `TypeRef`, so
+//! feature selection follows the contract that will actually be rendered.
 
 mod callback;
 mod closure;
