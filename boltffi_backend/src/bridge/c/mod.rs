@@ -265,6 +265,44 @@ mod tests {
     }
 
     #[test]
+    fn c_contract_groups_callback_method_closure_parameter_triples() {
+        let contract = contract(
+            r#"
+            #[export]
+            pub trait Listener {
+                fn on_event(&self, callback: impl Fn(u32) -> u32);
+            }
+            "#,
+        );
+        let callback = contract
+            .callbacks()
+            .iter()
+            .find(|callback| {
+                callback.create_handle().name() == "boltffi_create_callback_demo_listener"
+            })
+            .expect("callback declaration");
+        let slot = callback
+            .methods()
+            .iter()
+            .find(|slot| slot.name().as_str() == "on_event")
+            .expect("callback method slot");
+        let [
+            ParameterGroup::Value(handle),
+            ParameterGroup::Closure(closure),
+        ] = slot.parameter_groups()
+        else {
+            panic!("expected handle plus closure parameter group");
+        };
+
+        assert_eq!(slot.parameter(*handle).name(), "handle");
+        assert_eq!(closure.name(), "callback");
+        assert_eq!(closure.signature().as_str(), "U32ToU32");
+        assert_eq!(slot.parameter(closure.call()).name(), "callback_call");
+        assert_eq!(slot.parameter(closure.context()).name(), "callback_context");
+        assert_eq!(slot.parameter(closure.release()).name(), "callback_release");
+    }
+
+    #[test]
     fn c_contract_preserves_callback_handle_identity() {
         let contract = contract(
             r#"

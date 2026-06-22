@@ -342,7 +342,7 @@ mod tests {
         assert!(source.contains("boltffi_jni_throw_status(env, status);"));
         assert!(source.contains("static jclass g____ListenerVTable_class = NULL;"));
         assert!(source.contains(
-            "static uint32_t ___ListenerVTable_on_value(uint64_t handle, uint32_t arg0)"
+            "static uint32_t ___ListenerVTable_on_value(uint64_t handle, uint32_t value)"
         ));
         assert!(source.contains("FindClass(env, \"com/boltffi/demo/ListenerCallbacks\")"));
         assert!(source.contains(

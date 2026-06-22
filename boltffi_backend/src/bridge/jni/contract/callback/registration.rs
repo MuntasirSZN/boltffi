@@ -179,7 +179,7 @@ impl CallbackMethod {
     }
 
     fn from_slot(stem: &str, slot: &c::CallbackSlot) -> Result<Self> {
-        let Some(c::Type::Uint64) = slot.params().first() else {
+        let Some(c::Type::Uint64) = slot.parameters().first().map(c::Parameter::ty) else {
             return Err(Error::BrokenBridgeContract {
                 bridge: JNI_BRIDGE,
                 invariant: "callback vtable slot does not start with a uint64 handle",
@@ -187,10 +187,9 @@ impl CallbackMethod {
         };
         let returns = JniReturn::from_c_type(slot.returns())?;
         let parameters = slot
-            .params()
+            .parameter_groups()
             .iter()
-            .enumerate()
-            .map(CallbackArgument::from_c_type)
+            .map(|group| CallbackArgument::from_group(slot, group))
             .collect::<Result<Vec<_>>>()?;
         let signature = format!(
             "({}){}",
@@ -232,14 +231,29 @@ impl CallbackArgument {
         self.jni_type.signature()
     }
 
-    fn from_c_type((index, ty): (usize, &c::Type)) -> Result<Self> {
+    fn from_group(slot: &c::CallbackSlot, group: &c::ParameterGroup) -> Result<Self> {
+        match group {
+            c::ParameterGroup::Value(index) => Self::from_parameter(slot.parameter(*index)),
+            c::ParameterGroup::ByteSlice(_) => Err(Error::UnsupportedBridge {
+                bridge: JNI_BRIDGE,
+                shape: "callback byte-slice parameter",
+            }),
+            c::ParameterGroup::Continuation(_) => Err(Error::UnsupportedBridge {
+                bridge: JNI_BRIDGE,
+                shape: "callback continuation parameter",
+            }),
+            c::ParameterGroup::Closure(_) => Err(Error::UnsupportedBridge {
+                bridge: JNI_BRIDGE,
+                shape: "callback closure parameter",
+            }),
+        }
+    }
+
+    fn from_parameter(parameter: &c::Parameter) -> Result<Self> {
         Ok(Self {
-            name: Identifier::parse(match index {
-                0 => "handle".to_owned(),
-                index => format!("arg{}", index - 1),
-            })?,
-            c_type: TypeFragment::anonymous(ty)?,
-            jni_type: JniType::from_c_type(ty)?,
+            name: Identifier::parse(parameter.name())?,
+            c_type: TypeFragment::anonymous(parameter.ty())?,
+            jni_type: JniType::from_c_type(parameter.ty())?,
         })
     }
 }
