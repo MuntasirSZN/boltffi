@@ -4,14 +4,15 @@ mod completion;
 mod method;
 mod stream;
 
-use super::{
-    CallbackClosureHandleView, CallbackCompletionInvokerView, CallbackRegistrationView,
-    ClosureRegistrationView, DirectStreamBatchView, NativeMethodView,
-};
-
 use self::{
     callback::CallbackFeatures, closure::ClosureFeatures, completion::CompletionFeatures,
     method::MethodFeatures, stream::StreamFeatures,
+};
+use crate::bridge::jni::template::{
+    callback::{CallbackCompletionInvokerView, CallbackRegistrationView},
+    closure::{CallbackClosureHandleView, ClosureRegistrationView},
+    method::NativeMethodView,
+    stream::DirectStreamBatchView,
 };
 
 pub struct SourceFeatures {
