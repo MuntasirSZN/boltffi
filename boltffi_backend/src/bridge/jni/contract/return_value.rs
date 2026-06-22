@@ -16,8 +16,10 @@ use crate::{
         c::{self, Expression, TypeFragment},
         jni::{CallbackReturn, RecordValue, ScalarReturn},
     },
-    core::Result,
+    core::{Error, Result},
 };
+
+const JNI_BRIDGE: &str = "jni";
 
 /// JNI return behavior for one native method.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -94,7 +96,36 @@ impl NativeReturn {
             c::Type::Void => Ok(Self::Void),
             c::Type::Status => Ok(Self::Status),
             c::Type::Buffer => Ok(Self::Bytes),
-            ty => ScalarReturn::from_c_type(ty).map(Self::Value),
+            ty @ (c::Type::Bool
+            | c::Type::Int8
+            | c::Type::Uint8
+            | c::Type::Int16
+            | c::Type::Uint16
+            | c::Type::Int32
+            | c::Type::Uint32
+            | c::Type::Int64
+            | c::Type::Uint64
+            | c::Type::SignedPointerWidth
+            | c::Type::PointerWidth
+            | c::Type::Float32
+            | c::Type::Float64
+            | c::Type::FutureHandle
+            | c::Type::StreamPollResult
+            | c::Type::WaitResult
+            | c::Type::ConstPointer(_)
+            | c::Type::MutPointer(_)
+            | c::Type::FunctionPointer { .. }
+            | c::Type::CStyleEnum { .. }) => ScalarReturn::from_c_type(ty).map(Self::Value),
+            c::Type::String | c::Type::Span | c::Type::Named(_) => Err(Error::UnsupportedBridge {
+                bridge: JNI_BRIDGE,
+                shape: "native method return",
+            }),
+            c::Type::CallbackHandle(_) | c::Type::DirectRecord(_) => {
+                Err(Error::BrokenBridgeContract {
+                    bridge: JNI_BRIDGE,
+                    invariant: "native return should have been handled before scalar mapping",
+                })
+            }
         }
     }
 }
