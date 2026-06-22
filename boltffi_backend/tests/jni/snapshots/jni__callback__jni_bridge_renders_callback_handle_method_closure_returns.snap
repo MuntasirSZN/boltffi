@@ -216,6 +216,12 @@ static void boltffi_jni_throw_illegal_argument(JNIEnv *env, const char *message)
     (*env)->DeleteLocalRef(env, exception_class);
 }
 
+static void boltffi_jni_throw_status(JNIEnv *env, FfiStatus status) {
+    if (status.code != 0) {
+        boltffi_jni_throw_runtime(env, "BoltFFI call failed");
+    }
+}
+
 typedef struct {
     void (*free)(uint64_t handle);
     uint64_t (*clone)(uint64_t handle);
@@ -283,6 +289,9 @@ JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1r
     (void)cls;
     boltffi_jni_callback_handle_release(boltffi_jni_callback_handle_ref(handle));
 }
+
+static uint32_t boltffi_jni____closure__u32_to_u32_call(void *user_data, uint32_t arg0);
+static void boltffi_jni____closure__u32_to_u32_release(void *user_data);
 
 typedef struct {
     uint32_t (*call)(void *, uint32_t);
@@ -589,12 +598,6 @@ JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
     }
     boltffi_jni_vm = NULL;
     boltffi_jni_native_class = NULL;
-}
-
-static void boltffi_jni_throw_status(JNIEnv *env, FfiStatus status) {
-    if (status.code != 0) {
-        boltffi_jni_throw_runtime(env, "BoltFFI call failed");
-    }
 }
 
 JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1make_1listener(JNIEnv *env, jclass cls) {

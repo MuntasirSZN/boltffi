@@ -196,6 +196,9 @@ static void boltffi_jni_exit(JNIEnv *env, int attached) {
     }
 }
 
+static uint32_t boltffi_jni____closure__u32_to_u32_call(void *user_data, uint32_t arg0);
+static void boltffi_jni____closure__u32_to_u32_release(void *user_data);
+
 static jclass g____closure__u32_to_u32_class = NULL;
 static jmethodID g____closure__u32_to_u32_call_method = NULL;
 static jmethodID g____closure__u32_to_u32_free_method = NULL;

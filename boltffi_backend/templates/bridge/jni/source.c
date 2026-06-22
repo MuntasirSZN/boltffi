@@ -12,8 +12,24 @@
 {% include "bridge/jni/source/exceptions.c" %}
 {%- endif %}
 
+{%- if checks_status %}
+{% include "bridge/jni/source/status.c" %}
+{%- endif %}
+
+{%- if uses_byte_arrays %}
+{% include "bridge/jni/source/byte_arrays.c" %}
+{%- endif %}
+
+{%- if uses_record_arrays %}
+{% include "bridge/jni/source/records.c" %}
+{%- endif %}
+
 {%- if uses_callback_handles %}
 {% include "bridge/jni/callback.c" %}
+{%- endif %}
+
+{%- if closures.len() > 0 %}
+{% include "bridge/jni/closure_registration/prototypes.c" %}
 {%- endif %}
 
 {%- if closure_handles.len() > 0 %}
@@ -34,18 +50,6 @@
 
 {%- if uses_lifecycle %}
 {% include "bridge/jni/lifecycle.c" %}
-{%- endif %}
-
-{%- if checks_status %}
-{% include "bridge/jni/source/status.c" %}
-{%- endif %}
-
-{%- if uses_byte_arrays %}
-{% include "bridge/jni/source/byte_arrays.c" %}
-{%- endif %}
-
-{%- if uses_record_arrays %}
-{% include "bridge/jni/source/records.c" %}
 {%- endif %}
 
 {%- for method in methods %}

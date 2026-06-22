@@ -248,43 +248,6 @@ static void boltffi_jni_throw_illegal_argument(JNIEnv *env, const char *message)
     (*env)->DeleteLocalRef(env, exception_class);
 }
 
-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
-    (void)reserved;
-    JNIEnv *env = NULL;
-    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
-        return JNI_ERR;
-    }
-    jclass local_class = (*env)->FindClass(env, "com/boltffi/demo/Native");
-    if (local_class == NULL) {
-        return JNI_ERR;
-    }
-    boltffi_jni_native_class = (*env)->NewGlobalRef(env, local_class);
-    (*env)->DeleteLocalRef(env, local_class);
-    if (boltffi_jni_native_class == NULL) {
-        return JNI_ERR;
-    }
-    if (!boltffi_jni_continuation_load(env)) {
-        (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);
-        boltffi_jni_native_class = NULL;
-        return JNI_ERR;
-    }
-    boltffi_jni_vm = vm;
-    return JNI_VERSION_1_6;
-}
-
-JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
-    (void)reserved;
-    JNIEnv *env = NULL;
-    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK) {
-        boltffi_jni_continuation_unload(env);
-        if (boltffi_jni_native_class != NULL) {
-            (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);
-        }
-    }
-    boltffi_jni_vm = NULL;
-    boltffi_jni_native_class = NULL;
-}
-
 static jbyteArray boltffi_jni_buffer_to_byte_array(JNIEnv *env, FfiBuf_u8 buffer) {
     if (buffer.ptr == NULL) {
         if (buffer.len != 0) {
@@ -392,6 +355,43 @@ static jbyteArray boltffi_jni_record_to_byte_array(JNIEnv *env, const void *reco
         return NULL;
     }
     return array;
+}
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+    (void)reserved;
+    JNIEnv *env = NULL;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        return JNI_ERR;
+    }
+    jclass local_class = (*env)->FindClass(env, "com/boltffi/demo/Native");
+    if (local_class == NULL) {
+        return JNI_ERR;
+    }
+    boltffi_jni_native_class = (*env)->NewGlobalRef(env, local_class);
+    (*env)->DeleteLocalRef(env, local_class);
+    if (boltffi_jni_native_class == NULL) {
+        return JNI_ERR;
+    }
+    if (!boltffi_jni_continuation_load(env)) {
+        (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);
+        boltffi_jni_native_class = NULL;
+        return JNI_ERR;
+    }
+    boltffi_jni_vm = vm;
+    return JNI_VERSION_1_6;
+}
+
+JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
+    (void)reserved;
+    JNIEnv *env = NULL;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK) {
+        boltffi_jni_continuation_unload(env);
+        if (boltffi_jni_native_class != NULL) {
+            (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);
+        }
+    }
+    boltffi_jni_vm = NULL;
+    boltffi_jni_native_class = NULL;
 }
 
 JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1record_1demo_1point_1compute(JNIEnv *env, jclass cls, jbyteArray receiver) {

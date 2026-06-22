@@ -210,6 +210,15 @@ static void boltffi_jni_throw_illegal_argument(JNIEnv *env, const char *message)
     (*env)->DeleteLocalRef(env, exception_class);
 }
 
+static void boltffi_jni_throw_status(JNIEnv *env, FfiStatus status) {
+    if (status.code != 0) {
+        boltffi_jni_throw_runtime(env, "BoltFFI call failed");
+    }
+}
+
+static uint64_t boltffi_jni____closure__to_demo_engine_call(void *user_data);
+static void boltffi_jni____closure__to_demo_engine_release(void *user_data);
+
 static jclass g____closure__to_demo_engine_class = NULL;
 static jmethodID g____closure__to_demo_engine_call_method = NULL;
 static jmethodID g____closure__to_demo_engine_free_method = NULL;
@@ -313,12 +322,6 @@ JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
     }
     boltffi_jni_vm = NULL;
     boltffi_jni_native_class = NULL;
-}
-
-static void boltffi_jni_throw_status(JNIEnv *env, FfiStatus status) {
-    if (status.code != 0) {
-        boltffi_jni_throw_runtime(env, "BoltFFI call failed");
-    }
 }
 
 JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1release_1class_1demo_1engine(JNIEnv *env, jclass cls, jlong handle) {
