@@ -44,7 +44,7 @@ mod tests {
 
     use crate::core::bridge::BridgeBackend;
 
-    use super::{CBridge, ParameterGroup};
+    use super::{CBridge, ParameterGroup, Type};
 
     fn bindings(source: &str) -> boltffi_binding::Bindings<Native> {
         let file = syn::parse_str(source).expect("valid source fixture");
@@ -260,6 +260,45 @@ mod tests {
         assert_eq!(
             function.parameter(closure.release()).name(),
             "callback_release"
+        );
+    }
+
+    #[test]
+    fn c_contract_preserves_callback_handle_identity() {
+        let contract = contract(
+            r#"
+            #[export]
+            pub trait Listener {
+                fn on_value(&self, value: u32) -> u32;
+            }
+
+            #[export]
+            pub fn install(listener: impl Listener) {}
+            "#,
+        );
+        let callback = contract
+            .callbacks()
+            .iter()
+            .find(|callback| {
+                callback.create_handle().name() == "boltffi_create_callback_demo_listener"
+            })
+            .expect("callback declaration");
+        let function = contract
+            .functions()
+            .iter()
+            .find(|function| function.name() == "boltffi_function_demo_install")
+            .expect("exported function");
+        let [ParameterGroup::Value(listener)] = function.parameter_groups() else {
+            panic!("expected one callback-handle parameter");
+        };
+
+        assert_eq!(
+            function.parameter(*listener).ty(),
+            &Type::CallbackHandle(callback.id())
+        );
+        assert_eq!(
+            callback.create_handle().returns(),
+            &Type::CallbackHandle(callback.id())
         );
     }
 

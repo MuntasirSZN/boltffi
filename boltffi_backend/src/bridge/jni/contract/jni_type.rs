@@ -62,7 +62,7 @@ impl JniType {
             | c::Type::FunctionPointer { .. } => Ok(Self::Long),
             c::Type::Float32 => Ok(Self::Float),
             c::Type::Float64 => Ok(Self::Double),
-            c::Type::CallbackHandle => Err(Error::UnsupportedBridge {
+            c::Type::CallbackHandle(_) => Err(Error::UnsupportedBridge {
                 bridge: JNI_BRIDGE,
                 shape: "callback handle C ABI",
             }),

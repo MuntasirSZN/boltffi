@@ -187,7 +187,7 @@ impl TypeFragment {
             Type::FutureHandle => "RustFutureHandle".to_owned(),
             Type::StreamPollResult => "StreamPollResult".to_owned(),
             Type::WaitResult => "WaitResult".to_owned(),
-            Type::CallbackHandle => "BoltFFICallbackHandle".to_owned(),
+            Type::CallbackHandle(_) => "BoltFFICallbackHandle".to_owned(),
             Type::Named(name) | Type::DirectRecord(name) => name.to_string(),
             Type::CStyleEnum { name, .. } => name.to_string(),
             Type::ConstPointer(inner) => format!("const {} *", Self::anonymous(inner)?),

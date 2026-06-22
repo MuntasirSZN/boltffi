@@ -79,7 +79,7 @@ impl Callback {
         let create_handle = Function::new(
             callback.protocol().create_handle().name().as_str(),
             vec![Parameter::new("handle", Type::Uint64)?],
-            Type::CallbackHandle,
+            Type::CallbackHandle(callback.id()),
         )?;
         Ok(Self {
             id: callback.id(),

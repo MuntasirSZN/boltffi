@@ -1,4 +1,4 @@
-use boltffi_binding::{Primitive, native};
+use boltffi_binding::{CallbackId, HandleTarget, Primitive, native};
 
 use crate::core::{Error, Result};
 
@@ -51,7 +51,7 @@ pub enum Type {
     /// `WaitResult`.
     WaitResult,
     /// `BoltFFICallbackHandle`.
-    CallbackHandle,
+    CallbackHandle(CallbackId),
     /// A generated named C type.
     Named(Identifier),
     /// A generated direct record typedef passed by value.
@@ -110,11 +110,28 @@ impl Type {
         match carrier {
             native::HandleCarrier::U64 => Ok(Self::Uint64),
             native::HandleCarrier::USize => Ok(Self::PointerWidth),
-            native::HandleCarrier::CallbackHandle => Ok(Self::CallbackHandle),
+            native::HandleCarrier::CallbackHandle => Err(Error::UnexpectedBindingShape {
+                layer: C_BRIDGE_LAYER,
+                shape: "callback handle carrier without target",
+            }),
             _ => Err(Error::UnexpectedBindingShape {
                 layer: C_BRIDGE_LAYER,
                 shape: "unknown native handle carrier",
             }),
+        }
+    }
+
+    /// Creates the C ABI type for a typed native handle target.
+    pub fn handle_target(target: &HandleTarget, carrier: native::HandleCarrier) -> Result<Self> {
+        match (target, carrier) {
+            (HandleTarget::Callback(callback), native::HandleCarrier::CallbackHandle) => {
+                Ok(Self::CallbackHandle(*callback))
+            }
+            (HandleTarget::Callback(_), _) => Err(Error::UnexpectedBindingShape {
+                layer: C_BRIDGE_LAYER,
+                shape: "callback handle carrier",
+            }),
+            (_, carrier) => Self::handle_carrier(carrier),
         }
     }
 }

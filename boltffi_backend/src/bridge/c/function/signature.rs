@@ -99,9 +99,14 @@ impl CallableReturnType {
         }
     }
 
-    fn handle_slot(&self, slot: ReturnValueSlot, carrier: native::HandleCarrier) -> Result<Type> {
+    fn handle_slot(
+        &self,
+        slot: ReturnValueSlot,
+        target: &HandleTarget,
+        carrier: native::HandleCarrier,
+    ) -> Result<Type> {
         match slot {
-            ReturnValueSlot::ReturnSlot => Type::handle_carrier(carrier),
+            ReturnValueSlot::ReturnSlot => Type::handle_target(target, carrier),
             ReturnValueSlot::OutPointer => Ok(Type::Status),
             _ => Err(Error::UnexpectedBindingShape {
                 layer: C_BRIDGE_LAYER,
@@ -169,14 +174,14 @@ where
 
     fn handle(
         &mut self,
-        _: &'plan HandleTarget,
+        target: &'plan HandleTarget,
         carrier: native::HandleCarrier,
         _: HandlePresence,
         _: D::Receive,
     ) -> Self::Output {
         Ok(vec![Parameter::new(
             self.name.as_str(),
-            Type::handle_carrier(carrier)?,
+            Type::handle_target(target, carrier)?,
         )?])
     }
 
@@ -237,14 +242,14 @@ where
     fn handle(
         &mut self,
         slot: ReturnValueSlot,
-        _: &'plan HandleTarget,
+        target: &'plan HandleTarget,
         carrier: native::HandleCarrier,
         _: HandlePresence,
     ) -> Self::Output {
         match slot {
             ReturnValueSlot::OutPointer => Ok(vec![Parameter::new(
                 "return_out",
-                Type::MutPointer(Box::new(Type::handle_carrier(carrier)?)),
+                Type::MutPointer(Box::new(Type::handle_target(target, carrier)?)),
             )?]),
             ReturnValueSlot::ReturnSlot => Ok(Vec::new()),
             _ => Err(Error::UnexpectedBindingShape {
@@ -298,11 +303,11 @@ where
     fn handle(
         &mut self,
         slot: ReturnValueSlot,
-        _: &'plan HandleTarget,
+        target: &'plan HandleTarget,
         carrier: native::HandleCarrier,
         _: HandlePresence,
     ) -> Self::Output {
-        self.handle_slot(slot, carrier)
+        self.handle_slot(slot, target, carrier)
     }
 
     fn scalar_option(&mut self, _: Primitive) -> Self::Output {
@@ -352,14 +357,14 @@ where
     fn handle(
         &mut self,
         slot: ReturnValueSlot,
-        _: &'plan HandleTarget,
+        target: &'plan HandleTarget,
         carrier: native::HandleCarrier,
         _: HandlePresence,
     ) -> Self::Output {
         CallableReturnType {
             signature: self.signature.clone(),
         }
-        .handle_slot(slot, carrier)
+        .handle_slot(slot, target, carrier)
     }
 
     fn scalar_option(&mut self, _: Primitive) -> Self::Output {
@@ -432,12 +437,12 @@ where
     fn handle(
         &mut self,
         slot: ReturnValueSlot,
-        _: &'plan HandleTarget,
+        target: &'plan HandleTarget,
         carrier: native::HandleCarrier,
         _: HandlePresence,
     ) -> Self::Output {
         match slot {
-            ReturnValueSlot::ReturnSlot => Ok(Some(Type::handle_carrier(carrier)?)),
+            ReturnValueSlot::ReturnSlot => Ok(Some(Type::handle_target(target, carrier)?)),
             ReturnValueSlot::OutPointer => Err(Error::UnexpectedBindingShape {
                 layer: C_BRIDGE_LAYER,
                 shape: "infallible async callback out-pointer return",
