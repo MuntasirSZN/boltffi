@@ -1,3 +1,9 @@
+//! Conversion from C callback parameter groups into callback arguments.
+//!
+//! The C bridge has already grouped raw callback slot parameters by meaning.
+//! This module maps each group into one typed `CallbackArgument`, keeping the
+//! validation close to the C shape that produced it.
+
 mod bytes;
 mod closure;
 mod completion;

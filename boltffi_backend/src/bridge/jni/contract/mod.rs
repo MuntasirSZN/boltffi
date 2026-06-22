@@ -1,3 +1,13 @@
+//! Typed JNI contract built from the C bridge contract.
+//!
+//! The C bridge has already decided ABI shape: functions, callbacks, streams,
+//! handles, byte buffers, direct records, and async completion slots. This module
+//! translates those facts into the JNI surface that a JVM host needs to call.
+//!
+//! The important boundary is that this layer does not lower Rust declarations
+//! again. It reads the C bridge contract and gives templates typed JNI concepts
+//! instead of raw strings.
+
 mod bridge;
 mod bytes;
 mod callback;

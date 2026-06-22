@@ -1,3 +1,11 @@
+//! Return contract for static JVM method calls.
+//!
+//! Callback vtable slots and closure trampolines both call static JVM methods.
+//! Their return values can be void, scalar, byte-array backed buffers, direct
+//! records, callback handles, or closure handles. This module keeps the JNI
+//! method descriptor, C return type, and failure value for that return shape in
+//! one typed contract.
+
 mod build;
 mod failure;
 

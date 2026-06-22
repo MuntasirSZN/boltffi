@@ -1,3 +1,10 @@
+//! Closure registration index.
+//!
+//! The JNI bridge needs one registration per closure signature, even when the
+//! signature appears in several functions, callback methods, or nested closure
+//! arguments. This index walks those C bridge groups and keeps the deduplicated
+//! registrations in signature order.
+
 mod callback_method;
 mod function;
 mod parameter;

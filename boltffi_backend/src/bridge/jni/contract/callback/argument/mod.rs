@@ -1,3 +1,10 @@
+//! Callback method arguments passed from Rust into the JVM.
+//!
+//! These arguments start as C callback slot parameters. The JNI bridge groups
+//! them into the Java values that the static callback method expects: scalars,
+//! byte arrays, direct vectors, direct records, callback handles, closure
+//! handles, and async completion callbacks.
+
 mod c_bridge;
 mod jvm;
 mod jvm_setup;

@@ -1,3 +1,9 @@
+//! Arguments passed when Rust invokes a JVM-owned closure.
+//!
+//! Closure arguments are built from C closure parameter groups. They describe the
+//! C function-pointer parameters, the JVM values passed to the closure method,
+//! and any setup needed for borrowed bytes, direct vectors, or nested closures.
+
 mod bytes;
 mod c_abi;
 mod c_bridge;

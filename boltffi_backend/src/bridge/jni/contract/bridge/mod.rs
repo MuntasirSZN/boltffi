@@ -1,3 +1,14 @@
+//! Root JNI bridge contract.
+//!
+//! A `JniBridgeContract` is the bridge-level view of one generated JNI source
+//! file. It carries the JVM class, the C header include, lifecycle symbols, and
+//! every native method, callback, closure, and stream helper that must appear in
+//! that file.
+//!
+//! Building this contract is the only place where the JNI bridge walks the C
+//! bridge contract as a whole. Everything below this module works from the typed
+//! pieces stored here.
+
 mod build;
 
 use boltffi_binding::Native;
