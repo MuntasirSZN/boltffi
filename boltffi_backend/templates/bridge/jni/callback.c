@@ -27,3 +27,41 @@ static jlong boltffi_jni_callback_handle_new_owned(JNIEnv *env, BoltFFICallbackH
     *stored_callback = callback;
     return (jlong)(uintptr_t)stored_callback;
 }
+
+static BoltFFICallbackHandle *boltffi_jni_callback_handle_ref(jlong handle) {
+    return handle == 0 ? NULL : (BoltFFICallbackHandle *)(uintptr_t)handle;
+}
+
+static void boltffi_jni_callback_handle_release(BoltFFICallbackHandle *callback) {
+    if (callback == NULL) {
+        return;
+    }
+    boltffi_jni_release_callback_value(*callback);
+    free(callback);
+}
+
+static jlong boltffi_jni_callback_handle_clone(JNIEnv *env, const BoltFFICallbackHandle *callback) {
+    const BoltFFICallbackVTablePrefix *vtable = boltffi_jni_callback_vtable_prefix(callback);
+    if (callback == NULL || callback->handle == 0 || vtable == NULL || vtable->clone == NULL) {
+        return 0;
+    }
+    BoltFFICallbackHandle cloned_callback = {
+        .handle = vtable->clone(callback->handle),
+        .vtable = callback->vtable,
+    };
+    if (cloned_callback.handle == 0) {
+        return 0;
+    }
+    return boltffi_jni_callback_handle_new_owned(env, cloned_callback);
+}
+
+JNIEXPORT jlong JNICALL {{ callback_clone_symbol }}(JNIEnv *env, jclass cls, jlong handle) {
+    (void)cls;
+    return boltffi_jni_callback_handle_clone(env, boltffi_jni_callback_handle_ref(handle));
+}
+
+JNIEXPORT void JNICALL {{ callback_release_symbol }}(JNIEnv *env, jclass cls, jlong handle) {
+    (void)env;
+    (void)cls;
+    boltffi_jni_callback_handle_release(boltffi_jni_callback_handle_ref(handle));
+}

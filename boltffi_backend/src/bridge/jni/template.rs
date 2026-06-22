@@ -3,7 +3,10 @@ use askama::Template as AskamaTemplate;
 use crate::{
     bridge::{
         c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
-        jni::{BytesParameter, JniBridgeContract, NativeMethod, NativeParameter, RecordParameter},
+        jni::{
+            BytesParameter, JniBridgeContract, JniSymbolName, NativeMethod, NativeParameter,
+            RecordParameter,
+        },
     },
     core::Result,
 };
@@ -20,6 +23,8 @@ struct SourceFileTemplate {
     uses_exceptions: bool,
     uses_continuations: bool,
     uses_callback_handles: bool,
+    callback_clone_symbol: Identifier,
+    callback_release_symbol: Identifier,
     methods: Vec<NativeMethodView>,
 }
 
@@ -58,6 +63,18 @@ impl SourceFile {
             }),
             uses_continuations: methods.iter().any(|method| method.uses_continuations),
             uses_callback_handles: methods.iter().any(|method| method.returns_callback),
+            callback_clone_symbol: JniSymbolName::native_method(
+                contract.class(),
+                "boltffi_callback_handle_clone",
+            )?
+            .as_identifier()
+            .clone(),
+            callback_release_symbol: JniSymbolName::native_method(
+                contract.class(),
+                "boltffi_callback_handle_release",
+            )?
+            .as_identifier()
+            .clone(),
             methods,
         }
         .render()?)

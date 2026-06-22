@@ -371,6 +371,8 @@ mod tests {
             header.contains("BoltFFICallbackHandle boltffi_function_demo_make_listener(void);")
         );
         assert!(source.contains("static jlong boltffi_jni_callback_handle_new_owned"));
+        assert!(source.contains("JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1clone(JNIEnv *env, jclass cls, jlong handle)"));
+        assert!(source.contains("JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1handle_1release(JNIEnv *env, jclass cls, jlong handle)"));
         assert!(source.contains("JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1make_1listener(JNIEnv *env, jclass cls)"));
         assert!(
             source
