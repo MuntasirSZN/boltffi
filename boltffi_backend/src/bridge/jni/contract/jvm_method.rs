@@ -41,6 +41,11 @@ pub enum JvmMethodReturn {
         /// C callback handle constructor.
         create_handle: Identifier,
     },
+    /// The JVM method returns a closure handle and the C trampoline returns `FfiStatus`.
+    Closure {
+        /// C return type of the generated trampoline.
+        c_type: TypeFragment,
+    },
 }
 
 impl JvmMethodReturn {
@@ -76,6 +81,13 @@ impl JvmMethodReturn {
         }
     }
 
+    /// Creates the return contract for closure-return callback methods.
+    pub fn closure_status() -> Result<Self> {
+        Ok(Self::Closure {
+            c_type: TypeFragment::anonymous(&c::Type::Status)?,
+        })
+    }
+
     /// Returns the generated C return type.
     pub fn c_type(&self) -> &TypeFragment {
         match self {
@@ -83,7 +95,8 @@ impl JvmMethodReturn {
             | Self::Value { c_type, .. }
             | Self::Bytes { c_type }
             | Self::Record { c_type }
-            | Self::CallbackHandle { c_type, .. } => c_type,
+            | Self::CallbackHandle { c_type, .. }
+            | Self::Closure { c_type } => c_type,
         }
     }
 
@@ -94,6 +107,7 @@ impl JvmMethodReturn {
             Self::Value { jni_type, .. } => jni_type.as_type_fragment(),
             Self::Bytes { .. } | Self::Record { .. } => TypeFragment::new("jbyteArray"),
             Self::CallbackHandle { .. } => TypeFragment::new("jlong"),
+            Self::Closure { .. } => TypeFragment::new("jlong"),
         }
     }
 
@@ -104,6 +118,7 @@ impl JvmMethodReturn {
             Self::Value { jni_type, .. } => jni_type.signature(),
             Self::Bytes { .. } | Self::Record { .. } => "[B",
             Self::CallbackHandle { .. } => "J",
+            Self::Closure { .. } => "J",
         }
     }
 
@@ -132,13 +147,20 @@ impl JvmMethodReturn {
         matches!(self, Self::CallbackHandle { .. })
     }
 
+    /// Returns whether the JVM method returns an inline closure handle.
+    pub fn returns_closure(&self) -> bool {
+        matches!(self, Self::Closure { .. })
+    }
+
     /// Returns the C callback handle constructor for callback handle returns.
     pub fn callback_handle_constructor(&self) -> Option<&Identifier> {
         match self {
             Self::CallbackHandle { create_handle, .. } => Some(create_handle),
-            Self::Void { .. } | Self::Value { .. } | Self::Bytes { .. } | Self::Record { .. } => {
-                None
-            }
+            Self::Void { .. }
+            | Self::Value { .. }
+            | Self::Bytes { .. }
+            | Self::Record { .. }
+            | Self::Closure { .. } => None,
         }
     }
 
@@ -149,6 +171,7 @@ impl JvmMethodReturn {
             Self::Value { jni_type, .. } => Some(jni_type.call_method_suffix()),
             Self::Bytes { .. } | Self::Record { .. } => Some("Object"),
             Self::CallbackHandle { .. } => Some("Long"),
+            Self::Closure { .. } => Some("Long"),
         }
     }
 
@@ -163,6 +186,10 @@ impl JvmMethodReturn {
                 c_type.clone(),
                 Expression::literal(Literal::compound_zero()),
             )),
+            Self::Closure { c_type } => Some(Expression::cast(
+                c_type.clone(),
+                Expression::literal(Literal::status_failure()),
+            )),
         }
     }
 
@@ -175,6 +202,7 @@ impl JvmMethodReturn {
                 Some(Expression::literal(Literal::null_pointer()))
             }
             Self::CallbackHandle { .. } => Some(Expression::literal(Literal::integer_zero())),
+            Self::Closure { .. } => Some(Expression::literal(Literal::integer_zero())),
         }
     }
 }

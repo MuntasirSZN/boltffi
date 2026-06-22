@@ -27,8 +27,9 @@ pub use function::Function;
 pub use header::{CBridge, HeaderInclude};
 pub use identifier::Identifier;
 pub use parameter::{
-    ByteSliceParameter, CallbackCompletionParameter, ClosureParameter, ContinuationParameter,
-    DirectVectorElementAbi, DirectVectorParameter, Parameter, ParameterGroup, ParameterIndex,
+    ByteSliceParameter, CallbackCompletionParameter, ClosureParameter, ClosureReturnParameter,
+    ContinuationParameter, DirectVectorElementAbi, DirectVectorParameter, Parameter,
+    ParameterGroup, ParameterIndex,
 };
 pub use record::{Field, Record};
 pub use stream::{DirectStreamBatch, Stream, StreamBatch};

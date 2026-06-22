@@ -76,7 +76,7 @@ impl ClosureRegistration {
         if let c::ParameterGroup::Closure(closure) = group {
             match registrations.entry(closure.signature().clone()) {
                 Entry::Vacant(entry) => {
-                    entry.insert(Self::from_c_group(
+                    entry.insert(Self::from_closure_parameter(
                         class,
                         function.parameter(closure.call()).ty(),
                         closure,
@@ -97,33 +97,85 @@ impl ClosureRegistration {
         group: &c::ParameterGroup,
         callbacks: &[c::Callback],
     ) -> Result<BTreeMap<ClosureSignature, Self>> {
-        if let c::ParameterGroup::Closure(closure) = group {
-            match registrations.entry(closure.signature().clone()) {
-                Entry::Vacant(entry) => {
-                    entry.insert(Self::from_c_group(
-                        class,
-                        slot.parameter(closure.call()).ty(),
-                        closure,
-                        true,
-                        callbacks,
-                    )?);
-                }
-                Entry::Occupied(mut entry) => {
-                    entry
-                        .get_mut()
-                        .add_callback_handle(class, slot.parameter(closure.call()).ty())?;
+        match group {
+            c::ParameterGroup::Closure(closure) => {
+                match registrations.entry(closure.signature().clone()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(Self::from_closure_parameter(
+                            class,
+                            slot.parameter(closure.call()).ty(),
+                            closure,
+                            true,
+                            callbacks,
+                        )?);
+                    }
+                    Entry::Occupied(mut entry) => {
+                        entry
+                            .get_mut()
+                            .add_callback_handle(class, slot.parameter(closure.call()).ty())?;
+                    }
                 }
             }
+            c::ParameterGroup::ClosureReturn(returned) => {
+                match registrations.entry(returned.signature().clone()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(Self::from_closure_return(class, returned, callbacks)?);
+                    }
+                    Entry::Occupied(_) => {}
+                }
+            }
+            _ => {}
         }
         Ok(registrations)
     }
 
-    fn from_c_group(
+    fn from_closure_parameter(
         class: &JvmClassPath,
         call_type: &c::Type,
         closure: &c::ClosureParameter,
         callback_argument: bool,
         callbacks: &[c::Callback],
+    ) -> Result<Self> {
+        Self::from_c_group(
+            class,
+            call_type,
+            closure.signature(),
+            callback_argument,
+            callbacks,
+            closure
+                .parameter_groups()
+                .iter()
+                .map(|group| ClosureArgument::from_closure_group(closure, group))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    }
+
+    fn from_closure_return(
+        class: &JvmClassPath,
+        returned: &c::ClosureReturnParameter,
+        callbacks: &[c::Callback],
+    ) -> Result<Self> {
+        Self::from_c_group(
+            class,
+            returned.call_type(),
+            returned.signature(),
+            false,
+            callbacks,
+            returned
+                .parameter_groups()
+                .iter()
+                .map(|group| ClosureArgument::from_return_group(returned, group))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    }
+
+    fn from_c_group(
+        class: &JvmClassPath,
+        call_type: &c::Type,
+        signature: &ClosureSignature,
+        callback_argument: bool,
+        callbacks: &[c::Callback],
+        arguments: Vec<ClosureArgument>,
     ) -> Result<Self> {
         let c::Type::FunctionPointer { returns, params } = call_type else {
             return Err(Error::BrokenBridgeContract {
@@ -140,10 +192,10 @@ impl ClosureRegistration {
                 invariant: "closure call parameter does not start with void context",
             });
         }
-        let stem = closure.signature().symbol_part();
+        let stem = signature.symbol_part();
         Ok(Self {
-            signature: closure.signature().clone(),
-            class: class.closure_class(closure.signature())?,
+            signature: signature.clone(),
+            class: class.closure_class(signature)?,
             global_class: Identifier::parse(format!("g_{stem}_class"))?,
             call_method: Identifier::parse(format!("g_{stem}_call_method"))?,
             free_method: Identifier::parse(format!("g_{stem}_free_method"))?,
@@ -152,14 +204,10 @@ impl ClosureRegistration {
             call: Identifier::parse(format!("boltffi_jni_{stem}_call"))?,
             release: Identifier::parse(format!("boltffi_jni_{stem}_release"))?,
             callback_handle: callback_argument
-                .then(|| CallbackClosureHandle::new(class, closure.signature(), call_type))
+                .then(|| CallbackClosureHandle::new(class, signature, call_type))
                 .transpose()?,
             returns: JvmMethodReturn::from_c_type(returns, callbacks)?,
-            arguments: closure
-                .parameter_groups()
-                .iter()
-                .map(|group| ClosureArgument::from_group(closure, group))
-                .collect::<Result<Vec<_>>>()?,
+            arguments,
         })
     }
 

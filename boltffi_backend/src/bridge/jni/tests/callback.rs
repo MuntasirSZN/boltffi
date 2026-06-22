@@ -277,6 +277,44 @@ fn jni_bridge_renders_callback_direct_vector_closure_parameters() {
 }
 
 #[test]
+fn jni_bridge_renders_callback_closure_returns() {
+    let files = files(
+        r#"
+            #[export]
+            pub trait Listener {
+                fn make_handler(&self) -> impl Fn(u32) -> u32;
+            }
+            "#,
+    );
+    let header = files
+        .iter()
+        .find(|(path, _)| path == "jni/demo.h")
+        .map(|(_, contents)| contents)
+        .expect("C header file");
+    let source = files
+        .iter()
+        .find(|(path, _)| path == "jni/jni_glue.c")
+        .map(|(_, contents)| contents)
+        .expect("JNI source file");
+
+    assert!(header.contains("FfiStatus (*make_handler)(uint64_t, void *);"));
+    assert!(
+        source.contains(
+            "GetStaticMethodID(env, g____ListenerVTable_class, \"make_handler\", \"(J)J\")"
+        )
+    );
+    assert!(source.contains("jlong __boltffi_return_handle = (*env)->CallStaticLongMethod(env, g____ListenerVTable_class, g____ListenerVTable_make_handler_method"));
+    assert!(source.contains("typedef struct {\n        uint32_t (*invoke)(void *, uint32_t);"));
+    assert!(source.contains(".invoke = boltffi_jni____closure__u32_to_u32_call,"));
+    assert!(source.contains(".context = (void *)(uintptr_t)__boltffi_return_handle,"));
+    assert!(source.contains(".release = boltffi_jni____closure__u32_to_u32_release,"));
+    assert!(
+        source.contains("*((BoltFFIJniClosureReturnU32ToU32 *)return_out) = __boltffi_return;")
+    );
+    assert!(source.contains("FfiStatus result = (FfiStatus){.code = 0};"));
+}
+
+#[test]
 fn jni_bridge_renders_callback_encoded_returns() {
     let files = files(
         r#"

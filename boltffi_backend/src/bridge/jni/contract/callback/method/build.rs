@@ -1,7 +1,10 @@
 use crate::{
     bridge::{
         c::{self, Identifier},
-        jni::{CallbackArgument, ClosureRegistration, JvmMethodReturn},
+        jni::{
+            CallbackArgument, CallbackCParameter, CallbackClosureReturn, ClosureRegistration,
+            JvmMethodReturn,
+        },
     },
     core::{Error, Result},
 };
@@ -11,7 +14,8 @@ use super::CallbackMethod;
 const JNI_BRIDGE: &str = "jni";
 
 impl CallbackMethod {
-    pub(in crate::bridge::jni::contract::callback) fn from_slot(
+    /// Builds a JNI callback method from one C callback vtable slot.
+    pub fn from_slot(
         stem: &str,
         slot: &c::CallbackSlot,
         callbacks: &[c::Callback],
@@ -23,11 +27,12 @@ impl CallbackMethod {
                 invariant: "callback vtable slot does not start with a uint64 handle",
             });
         };
-        let returns = JvmMethodReturn::from_c_type(slot.returns(), callbacks)?;
-        let arguments = slot
-            .parameter_groups()
+        let (returns, closure_return) = Self::returns(slot, callbacks, closures)?;
+        let arguments = Self::arguments(slot, callbacks, closures)?;
+        let c_parameters = slot
+            .parameters()
             .iter()
-            .map(|group| CallbackArgument::from_group(slot, group, callbacks, closures))
+            .map(CallbackCParameter::from_parameter)
             .collect::<Result<Vec<_>>>()?;
         let signature = format!(
             "({}){}",
@@ -44,7 +49,52 @@ impl CallbackMethod {
             method_id: Identifier::parse(format!("g_{stem}_{}_method", slot.name()))?,
             signature,
             returns,
+            c_parameters,
+            closure_return,
             arguments,
         })
+    }
+
+    fn returns(
+        slot: &c::CallbackSlot,
+        callbacks: &[c::Callback],
+        closures: &[ClosureRegistration],
+    ) -> Result<(JvmMethodReturn, Option<CallbackClosureReturn>)> {
+        let closure_return = slot
+            .parameter_groups()
+            .iter()
+            .filter_map(|group| match group {
+                c::ParameterGroup::ClosureReturn(returned) => Some(returned),
+                _ => None,
+            })
+            .map(|returned| CallbackClosureReturn::from_return(slot, returned, closures))
+            .collect::<Result<Vec<_>>>()?;
+        match closure_return.as_slice() {
+            [] => JvmMethodReturn::from_c_type(slot.returns(), callbacks)
+                .map(|returns| (returns, None)),
+            [returned] if matches!(slot.returns(), c::Type::Status) => {
+                Ok((JvmMethodReturn::closure_status()?, Some(returned.clone())))
+            }
+            [_] => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback closure return does not use FfiStatus",
+            }),
+            _ => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback method has multiple closure return out-pointers",
+            }),
+        }
+    }
+
+    fn arguments(
+        slot: &c::CallbackSlot,
+        callbacks: &[c::Callback],
+        closures: &[ClosureRegistration],
+    ) -> Result<Vec<CallbackArgument>> {
+        slot.parameter_groups()
+            .iter()
+            .filter(|group| !matches!(group, c::ParameterGroup::ClosureReturn(_)))
+            .map(|group| CallbackArgument::from_group(slot, group, callbacks, closures))
+            .collect()
     }
 }

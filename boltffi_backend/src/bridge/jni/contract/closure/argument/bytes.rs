@@ -17,15 +17,16 @@ pub struct ClosureBytesArgument {
 
 impl ClosureBytesArgument {
     pub(in crate::bridge::jni::contract::closure) fn from_bytes(
-        closure: &c::ClosureParameter,
+        pointer: &c::Parameter,
+        length: &c::Parameter,
         bytes: &c::ByteSliceParameter,
     ) -> Result<Self> {
         let name = Identifier::escape(bytes.name())?;
         Ok(Self {
             buffer: Identifier::parse(format!("{name}_buffer"))?,
             name,
-            pointer: ClosureCParameter::from_parameter(closure.parameter(bytes.pointer()))?,
-            length: ClosureCParameter::from_parameter(closure.parameter(bytes.length()))?,
+            pointer: ClosureCParameter::from_parameter(pointer)?,
+            length: ClosureCParameter::from_parameter(length)?,
         })
     }
 

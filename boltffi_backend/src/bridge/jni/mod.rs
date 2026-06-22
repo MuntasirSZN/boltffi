@@ -11,14 +11,14 @@ mod template;
 pub use bridge::JniBridge;
 pub use contract::{
     BytesParameter, CallbackArgument, CallbackBytesArgument, CallbackCParameter,
-    CallbackClosureArgument, CallbackClosureHandle, CallbackCompletionArgument,
-    CallbackCompletionInvoker, CallbackCompletionPayload, CallbackDirectVectorArgument,
-    CallbackHandleArgument, CallbackMethod, CallbackParameter, CallbackRecordArgument,
-    CallbackRegistration, CallbackReturn, ClosureArgument, ClosureBytesArgument, ClosureCParameter,
-    ClosureDirectVectorArgument, ClosureParameter, ClosureRegistration, ContinuationParameter,
-    DirectStreamBatchMethod, DirectVectorParameter, JniBridgeContract, JniType, JvmMethodReturn,
-    NativeMethod, NativeParameter, NativeParameterKind, NativeReturn, RecordParameter, RecordValue,
-    ScalarParameter, ScalarReturn,
+    CallbackClosureArgument, CallbackClosureHandle, CallbackClosureReturn,
+    CallbackCompletionArgument, CallbackCompletionInvoker, CallbackCompletionPayload,
+    CallbackDirectVectorArgument, CallbackHandleArgument, CallbackMethod, CallbackParameter,
+    CallbackRecordArgument, CallbackRegistration, CallbackReturn, ClosureArgument,
+    ClosureBytesArgument, ClosureCParameter, ClosureDirectVectorArgument, ClosureParameter,
+    ClosureRegistration, ContinuationParameter, DirectStreamBatchMethod, DirectVectorParameter,
+    JniBridgeContract, JniType, JvmMethodReturn, NativeMethod, NativeParameter,
+    NativeParameterKind, NativeReturn, RecordParameter, RecordValue, ScalarParameter, ScalarReturn,
 };
 pub use name::{JniSymbolName, JvmClassPath, JvmNameSegment};
 

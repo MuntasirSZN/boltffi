@@ -1,9 +1,9 @@
 use boltffi_binding::{
-    ClosureParameter as BindingClosureParameter, ClosureReturn, ClosureSignature, DirectValueType,
-    DirectVectorElementType, Direction, ErrorDecl, ExecutionDecl, ExportedCallable, HandlePresence,
-    HandleTarget, IncomingParam, IntoRust, Native, NativeSymbol, OutOfRust, OutgoingParam,
-    ParamDecl, ParamDirection, ParamPlan, ParamPlanRender, Primitive, Receive, ReturnPlan,
-    ReturnPlanRender, ReturnValueSlot, TypeRef, native,
+    CallableScope, ClosureParameter as BindingClosureParameter, ClosureReturn, ClosureSignature,
+    DirectValueType, DirectVectorElementType, Direction, ErrorDecl, ExecutionDecl,
+    ExportedCallable, ForeignBody, HandlePresence, HandleTarget, IncomingParam, IntoRust, Native,
+    NativeSymbol, OutOfRust, OutgoingParam, ParamDecl, ParamDirection, ParamPlan, ParamPlanRender,
+    Primitive, Receive, ReturnPlan, ReturnPlanRender, ReturnValueSlot, RustBody, TypeRef, native,
 };
 
 use crate::core::{Error, Result};
@@ -46,6 +46,17 @@ trait EncodedWritebackReceive {
     fn needs_encoded_writeback(self) -> bool;
 }
 
+/// C ABI projection for the callable body behind a closure handle.
+pub trait ClosureInvokeScope: CallableScope
+where
+    Self::ParamDirection: ParamDirection<Native>,
+{
+    fn parameters(
+        signature: &Signature,
+        params: &[ParamDecl<Native, Self::ParamDirection>],
+    ) -> Result<Vec<Parameter>>;
+}
+
 impl EncodedWritebackReceive for Receive {
     fn needs_encoded_writeback(self) -> bool {
         self == Receive::ByMutRef
@@ -55,6 +66,24 @@ impl EncodedWritebackReceive for Receive {
 impl EncodedWritebackReceive for () {
     fn needs_encoded_writeback(self) -> bool {
         false
+    }
+}
+
+impl ClosureInvokeScope for ForeignBody {
+    fn parameters(
+        signature: &Signature,
+        params: &[ParamDecl<Native, Self::ParamDirection>],
+    ) -> Result<Vec<Parameter>> {
+        signature.imported_params(params)
+    }
+}
+
+impl ClosureInvokeScope for RustBody {
+    fn parameters(
+        signature: &Signature,
+        params: &[ParamDecl<Native, Self::ParamDirection>],
+    ) -> Result<Vec<Parameter>> {
+        signature.exported_params(params)
     }
 }
 
@@ -183,6 +212,7 @@ impl<'plan, D> ReturnPlanRender<'plan, Native, D> for ReturnParameters
 where
     D: Direction,
     D::Opposite: ParamDirection<Native>,
+    D::InvokeScope: ClosureInvokeScope,
 {
     type Output = Result<Vec<Parameter>>;
 
@@ -249,11 +279,10 @@ where
         Ok(Vec::new())
     }
 
-    fn closure(&mut self, _: &'plan ClosureReturn<Native, D>) -> Self::Output {
-        Ok(vec![Parameter::new(
-            "return_out",
-            Type::MutPointer(Box::new(Type::Void)),
-        )?])
+    fn closure(&mut self, closure: &'plan ClosureReturn<Native, D>) -> Self::Output {
+        self.signature
+            .closure_return_out(closure)
+            .map(|param| vec![param])
     }
 }
 
@@ -750,6 +779,7 @@ impl Signature {
     where
         D: Direction,
         D::Opposite: ParamDirection<Native>,
+        D::InvokeScope: ClosureInvokeScope,
     {
         let call_params = params;
         let return_params = self.callback_return_params(returns)?;
@@ -771,10 +801,30 @@ impl Signature {
         ])
     }
 
+    fn closure_return_out<D>(&self, closure: &ClosureReturn<Native, D>) -> Result<Parameter>
+    where
+        D: Direction,
+        D::Opposite: ParamDirection<Native>,
+        D::InvokeScope: ClosureInvokeScope,
+    {
+        let invoke = closure.invoke();
+        let call_params = D::InvokeScope::parameters(self, invoke.params())?;
+        let return_params = self.callback_return_params(invoke.returns().plan())?;
+        let call_type = Type::FunctionPointer {
+            returns: Box::new(self.callback_return_type(invoke.returns().plan(), invoke.error())?),
+            params: std::iter::once(Type::MutPointer(Box::new(Type::Void)))
+                .chain(call_params.iter().map(|parameter| parameter.ty().clone()))
+                .chain(return_params.iter().map(|parameter| parameter.ty().clone()))
+                .collect(),
+        };
+        Parameter::closure_return("return_out", closure.signature(), call_type, call_params)
+    }
+
     fn return_params<D>(&self, plan: &ReturnPlan<Native, D>) -> Result<Vec<Parameter>>
     where
         D: Direction,
         D::Opposite: ParamDirection<Native>,
+        D::InvokeScope: ClosureInvokeScope,
     {
         plan.render_with(&mut ReturnParameters {
             signature: self.clone(),
@@ -898,6 +948,7 @@ impl Signature {
     where
         D: Direction,
         D::Opposite: ParamDirection<Native>,
+        D::InvokeScope: ClosureInvokeScope,
     {
         self.return_params(plan)
     }

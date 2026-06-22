@@ -2,8 +2,8 @@ use crate::core::{Error, Result};
 
 use super::super::C_BRIDGE_CONTRACT;
 use super::{
-    ByteSliceParameter, CallbackCompletionParameter, ClosureParameter, ContinuationParameter,
-    DirectVectorParameter, Parameter, ParameterIndex, ParameterRole,
+    ByteSliceParameter, CallbackCompletionParameter, ClosureParameter, ClosureReturnParameter,
+    ContinuationParameter, DirectVectorParameter, Parameter, ParameterIndex, ParameterRole,
 };
 
 /// Source-level parameter group represented by one or more C ABI parameters.
@@ -22,6 +22,8 @@ pub enum ParameterGroup {
     Continuation(ContinuationParameter),
     /// One closure parameter maps to call, context, and release C ABI parameters.
     Closure(ClosureParameter),
+    /// One closure return maps to one caller-owned out-pointer.
+    ClosureReturn(ClosureReturnParameter),
 }
 
 impl ParameterGroup {
@@ -83,6 +85,15 @@ impl ParameterGroup {
                     invariant: "closure parameter group does not start with call parameter",
                 })
             }
+            ParameterRole::ClosureReturn {
+                name,
+                signature,
+                call_type,
+                parameters,
+            } => ClosureReturnParameter::from_params(
+                params, index, name, signature, call_type, parameters,
+            )
+            .map(Self::ClosureReturn),
         }
     }
 
@@ -94,6 +105,7 @@ impl ParameterGroup {
             Self::CallbackCompletion(_) => 2,
             Self::Continuation(_) => 2,
             Self::Closure(_) => 3,
+            Self::ClosureReturn(_) => 1,
         }
     }
 }

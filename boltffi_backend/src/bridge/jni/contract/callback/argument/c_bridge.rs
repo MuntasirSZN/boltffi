@@ -25,6 +25,10 @@ impl CallbackArgument {
                 Self::from_completion(slot, completion, callbacks)
             }
             c::ParameterGroup::Closure(closure) => Self::from_closure(slot, closure, closures),
+            c::ParameterGroup::ClosureReturn(_) => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback method argument cannot be a closure return out-pointer",
+            }),
             c::ParameterGroup::Continuation(_) => Err(Error::UnsupportedBridge {
                 bridge: JNI_BRIDGE,
                 shape: "callback continuation parameter",

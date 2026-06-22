@@ -5,8 +5,8 @@ use crate::bridge::{
 
 use super::{
     CallbackBytesArgumentView, CallbackCParameterView, CallbackClosureArgumentView,
-    CallbackCompletionArgumentView, CallbackDirectVectorArgumentView, CallbackHandleArgumentView,
-    CallbackRecordArgumentView,
+    CallbackClosureReturnView, CallbackCompletionArgumentView, CallbackDirectVectorArgumentView,
+    CallbackHandleArgumentView, CallbackRecordArgumentView,
 };
 
 pub struct CallbackMethodView {
@@ -20,7 +20,9 @@ pub struct CallbackMethodView {
     pub returns_bytes: bool,
     pub returns_record: bool,
     pub returns_callback_handle: bool,
+    pub returns_closure: bool,
     pub callback_handle_constructor: Option<Identifier>,
+    pub closure_return: Option<CallbackClosureReturnView>,
     pub call_method_suffix: String,
     pub failure_value: Expression,
     pub c_parameters: Vec<CallbackCParameterView>,
@@ -46,7 +48,11 @@ impl CallbackMethodView {
             returns_bytes: method.returns_bytes(),
             returns_record: method.returns_record(),
             returns_callback_handle: method.returns_callback_handle(),
+            returns_closure: method.returns_closure(),
             callback_handle_constructor: method.callback_handle_constructor().cloned(),
+            closure_return: method
+                .closure_return()
+                .map(CallbackClosureReturnView::from_return),
             call_method_suffix: method.call_method_suffix().unwrap_or_default().to_owned(),
             failure_value: method
                 .failure_value()

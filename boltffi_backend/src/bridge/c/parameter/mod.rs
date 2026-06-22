@@ -1,6 +1,7 @@
 mod byte_slice;
 mod callback_completion;
 mod closure;
+mod closure_return;
 mod continuation;
 mod direct_vector;
 mod group;
@@ -14,6 +15,7 @@ use super::{Identifier, Type};
 pub use byte_slice::ByteSliceParameter;
 pub use callback_completion::CallbackCompletionParameter;
 pub use closure::ClosureParameter;
+pub use closure_return::ClosureReturnParameter;
 pub use continuation::ContinuationParameter;
 pub use direct_vector::{DirectVectorElementAbi, DirectVectorParameter};
 pub use group::ParameterGroup;
@@ -55,6 +57,12 @@ enum ParameterRole {
     },
     ClosureContext(Identifier),
     ClosureRelease(Identifier),
+    ClosureReturn {
+        name: Identifier,
+        signature: ClosureSignature,
+        call_type: Type,
+        parameters: Vec<Parameter>,
+    },
 }
 
 impl Parameter {
@@ -177,6 +185,25 @@ impl Parameter {
                 params: vec![Type::MutPointer(Box::new(Type::Void))],
             },
             ParameterRole::ClosureRelease(Identifier::escape(name)?),
+        )
+    }
+
+    /// Creates the out-pointer for a closure return C ABI parameter group.
+    pub fn closure_return(
+        name: &str,
+        signature: &ClosureSignature,
+        call_type: Type,
+        parameters: Vec<Parameter>,
+    ) -> Result<Self> {
+        Self::with_role(
+            name,
+            Type::MutPointer(Box::new(Type::Void)),
+            ParameterRole::ClosureReturn {
+                name: Identifier::escape(name)?,
+                signature: signature.clone(),
+                call_type,
+                parameters,
+            },
         )
     }
 

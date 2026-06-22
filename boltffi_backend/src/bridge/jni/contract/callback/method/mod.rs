@@ -1,10 +1,13 @@
 mod arguments;
 mod build;
+mod closure_return;
 
 use crate::bridge::{
     c::{self, Identifier, TypeFragment},
-    jni::{CallbackArgument, JvmMethodReturn},
+    jni::{CallbackArgument, CallbackCParameter, JvmMethodReturn},
 };
+
+pub use closure_return::CallbackClosureReturn;
 
 /// JNI method dispatch for one callback vtable slot.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +18,8 @@ pub struct CallbackMethod {
     method_id: Identifier,
     signature: String,
     returns: JvmMethodReturn,
+    c_parameters: Vec<CallbackCParameter>,
+    closure_return: Option<CallbackClosureReturn>,
     arguments: Vec<CallbackArgument>,
 }
 
@@ -69,9 +74,19 @@ impl CallbackMethod {
         self.returns.returns_callback_handle()
     }
 
+    /// Returns whether the JVM callback method returns an inline closure handle.
+    pub fn returns_closure(&self) -> bool {
+        self.returns.returns_closure()
+    }
+
     /// Returns the C callback handle constructor for callback handle returns.
     pub fn callback_handle_constructor(&self) -> Option<&Identifier> {
         self.returns.callback_handle_constructor()
+    }
+
+    /// Returns the returned closure out-pointer contract.
+    pub fn closure_return(&self) -> Option<&CallbackClosureReturn> {
+        self.closure_return.as_ref()
     }
 
     /// Returns the `CallStatic*Method` suffix for non-void slots.

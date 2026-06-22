@@ -62,6 +62,10 @@ impl NativeParameter {
                     kind: NativeParameterKind::Closure(closure),
                 })
             }
+            c::ParameterGroup::ClosureReturn(_) => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "closure return out-pointer cannot appear on a JNI native method",
+            }),
         }
     }
 

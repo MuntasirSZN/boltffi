@@ -12,10 +12,7 @@ use super::CallbackMethod;
 impl CallbackMethod {
     /// Returns generated C parameters.
     pub fn c_parameters(&self) -> Vec<CallbackCParameter> {
-        self.arguments
-            .iter()
-            .flat_map(CallbackArgument::c_parameters)
-            .collect()
+        self.c_parameters.clone()
     }
 
     /// Returns the arguments passed to the static JVM callback method.

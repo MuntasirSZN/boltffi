@@ -20,7 +20,7 @@ pub use completion::{
 };
 pub use direct_vector::CallbackDirectVectorArgument;
 pub use handle::CallbackHandleArgument;
-pub use method::CallbackMethod;
+pub use method::{CallbackClosureReturn, CallbackMethod};
 pub use parameter::CallbackParameter;
 pub use record::CallbackRecordArgument;
 pub use registration::CallbackRegistration;

@@ -21,13 +21,13 @@ pub struct ClosureDirectVectorArgument {
 
 impl ClosureDirectVectorArgument {
     pub(in crate::bridge::jni::contract::closure) fn from_vector(
-        closure: &c::ClosureParameter,
+        pointer: &c::Parameter,
+        length: &c::Parameter,
         vector: &c::DirectVectorParameter,
     ) -> Result<Self> {
-        let pointer = closure.parameter(vector.pointer());
         Ok(Self {
             pointer: ClosureCParameter::from_parameter(pointer)?,
-            length: ClosureCParameter::from_parameter(closure.parameter(vector.length()))?,
+            length: ClosureCParameter::from_parameter(length)?,
             pointer_local: Identifier::parse(format!("{}_ptr", vector.name()))?,
             length_local: Identifier::parse(format!("{}_len", vector.name()))?,
             pointer_type: TypeFragment::anonymous(pointer.ty())?,

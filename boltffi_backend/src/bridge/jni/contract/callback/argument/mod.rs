@@ -1,4 +1,3 @@
-mod c_abi;
 mod c_bridge;
 mod jvm;
 mod jvm_setup;
