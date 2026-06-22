@@ -1,10 +1,9 @@
 use crate::bridge::{
-    c::{ArgumentList, Expression, Identifier, Literal, Statement, TypeFragment},
-    jni::{
-        ClosureArgument, ClosureBytesArgument, ClosureCParameter, ClosureDirectVectorArgument,
-        ClosureRegistration,
-    },
+    c::{ArgumentList, Expression, Identifier, Literal, TypeFragment},
+    jni::{ClosureArgument, ClosureRegistration},
 };
+
+use super::{ClosureBytesArgumentView, ClosureCParameterView, ClosureDirectVectorArgumentView};
 
 pub struct ClosureRegistrationView {
     pub class: Literal,
@@ -33,44 +32,6 @@ pub struct ClosureRegistrationView {
     pub handle_direct_vectors: Vec<ClosureDirectVectorArgumentView>,
     pub rust_arguments: ArgumentList,
     pub has_rust_arguments: bool,
-}
-
-pub struct CallbackClosureHandleView {
-    pub ty: Identifier,
-    pub new: Identifier,
-    pub ref_: Identifier,
-    pub release: Identifier,
-    pub call_symbol: Identifier,
-    pub release_symbol: Identifier,
-    pub call_field: Statement,
-    pub jni_return_type: TypeFragment,
-    pub failure_value: Expression,
-    pub closure: ClosureRegistrationView,
-}
-
-pub struct ClosureCParameterView {
-    pub declaration: Statement,
-}
-
-pub struct ClosureBytesArgumentView {
-    pub name: Identifier,
-    pub pointer: Identifier,
-    pub length: Identifier,
-    pub buffer: Identifier,
-}
-
-pub struct ClosureDirectVectorArgumentView {
-    pub name: Identifier,
-    pub pointer: Identifier,
-    pub length: Identifier,
-    pub pointer_local: Identifier,
-    pub length_local: Identifier,
-    pub array_type: TypeFragment,
-    pub element_type: TypeFragment,
-    pub new_array: &'static str,
-    pub set_region: &'static str,
-    pub getter: &'static str,
-    pub releaser: &'static str,
 }
 
 impl ClosureRegistrationView {
@@ -132,62 +93,6 @@ impl ClosureRegistrationView {
                 .collect(),
             rust_arguments: ClosureArgument::rust_argument_list(arguments),
             has_rust_arguments: !arguments.is_empty(),
-        }
-    }
-}
-
-impl CallbackClosureHandleView {
-    pub fn from_registration(registration: &ClosureRegistration) -> Option<Self> {
-        registration.callback_handle().map(|handle| Self {
-            ty: handle.ty().clone(),
-            new: handle.new_function().clone(),
-            ref_: handle.ref_function().clone(),
-            release: handle.release_function().clone(),
-            call_symbol: handle.call_symbol().as_identifier().clone(),
-            release_symbol: handle.release_symbol().as_identifier().clone(),
-            call_field: handle.call_field().clone(),
-            jni_return_type: registration.callback_return_type(),
-            failure_value: registration
-                .callback_failure_value()
-                .unwrap_or_else(|| Expression::literal(Literal::integer_zero())),
-            closure: ClosureRegistrationView::from_registration(registration),
-        })
-    }
-}
-
-impl ClosureCParameterView {
-    fn from_parameter(parameter: ClosureCParameter) -> Self {
-        Self {
-            declaration: parameter.declaration().clone(),
-        }
-    }
-}
-
-impl ClosureBytesArgumentView {
-    fn from_argument(argument: &ClosureBytesArgument) -> Self {
-        Self {
-            name: argument.name().clone(),
-            pointer: argument.pointer().clone(),
-            length: argument.length().clone(),
-            buffer: argument.buffer().clone(),
-        }
-    }
-}
-
-impl ClosureDirectVectorArgumentView {
-    fn from_argument(argument: &ClosureDirectVectorArgument) -> Self {
-        Self {
-            name: argument.name().clone(),
-            pointer: argument.pointer().clone(),
-            length: argument.length().clone(),
-            pointer_local: argument.pointer_local().clone(),
-            length_local: argument.length_local().clone(),
-            array_type: argument.array_type(),
-            element_type: argument.element_type(),
-            new_array: argument.new_array(),
-            set_region: argument.set_region(),
-            getter: argument.getter(),
-            releaser: argument.releaser(),
         }
     }
 }
