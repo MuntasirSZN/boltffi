@@ -208,3 +208,167 @@ impl JniType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::bridge::c::Identifier;
+
+    use super::*;
+
+    #[test]
+    fn scalar_c_types_map_to_jni_primitives() {
+        [
+            (Type::Bool, JniType::Boolean),
+            (Type::Int8, JniType::Byte),
+            (Type::Uint8, JniType::Byte),
+            (Type::Int16, JniType::Short),
+            (Type::Uint16, JniType::Short),
+            (Type::Int32, JniType::Int),
+            (Type::Uint32, JniType::Int),
+            (Type::Int64, JniType::Long),
+            (Type::Uint64, JniType::Long),
+            (Type::SignedPointerWidth, JniType::Long),
+            (Type::PointerWidth, JniType::Long),
+            (Type::FutureHandle, JniType::Long),
+            (Type::Float32, JniType::Float),
+            (Type::Float64, JniType::Double),
+            (Type::StreamPollResult, JniType::Byte),
+            (Type::WaitResult, JniType::Int),
+        ]
+        .into_iter()
+        .for_each(|(c_type, jni_type)| {
+            assert_eq!(
+                JniType::from_c_type(&c_type).expect("scalar JNI type"),
+                jni_type
+            );
+        });
+    }
+
+    #[test]
+    fn c_style_enums_use_their_repr_jni_type() {
+        let enumeration = Type::CStyleEnum {
+            name: Identifier::parse("Mode").expect("C enum name"),
+            repr: Box::new(Type::Uint8),
+        };
+
+        assert_eq!(
+            JniType::from_c_type(&enumeration).expect("enum JNI type"),
+            JniType::Byte
+        );
+    }
+
+    #[test]
+    fn jni_type_owns_related_scalar_spellings() {
+        [
+            (
+                JniType::Boolean,
+                "jboolean",
+                "jbooleanArray",
+                "Z",
+                "[Z",
+                "GetBooleanArrayElements",
+                "ReleaseBooleanArrayElements",
+                "NewBooleanArray",
+                "SetBooleanArrayRegion",
+                "Boolean",
+            ),
+            (
+                JniType::Byte,
+                "jbyte",
+                "jbyteArray",
+                "B",
+                "[B",
+                "GetByteArrayElements",
+                "ReleaseByteArrayElements",
+                "NewByteArray",
+                "SetByteArrayRegion",
+                "Byte",
+            ),
+            (
+                JniType::Short,
+                "jshort",
+                "jshortArray",
+                "S",
+                "[S",
+                "GetShortArrayElements",
+                "ReleaseShortArrayElements",
+                "NewShortArray",
+                "SetShortArrayRegion",
+                "Short",
+            ),
+            (
+                JniType::Int,
+                "jint",
+                "jintArray",
+                "I",
+                "[I",
+                "GetIntArrayElements",
+                "ReleaseIntArrayElements",
+                "NewIntArray",
+                "SetIntArrayRegion",
+                "Int",
+            ),
+            (
+                JniType::Long,
+                "jlong",
+                "jlongArray",
+                "J",
+                "[J",
+                "GetLongArrayElements",
+                "ReleaseLongArrayElements",
+                "NewLongArray",
+                "SetLongArrayRegion",
+                "Long",
+            ),
+            (
+                JniType::Float,
+                "jfloat",
+                "jfloatArray",
+                "F",
+                "[F",
+                "GetFloatArrayElements",
+                "ReleaseFloatArrayElements",
+                "NewFloatArray",
+                "SetFloatArrayRegion",
+                "Float",
+            ),
+            (
+                JniType::Double,
+                "jdouble",
+                "jdoubleArray",
+                "D",
+                "[D",
+                "GetDoubleArrayElements",
+                "ReleaseDoubleArrayElements",
+                "NewDoubleArray",
+                "SetDoubleArrayRegion",
+                "Double",
+            ),
+        ]
+        .into_iter()
+        .for_each(
+            |(
+                jni_type,
+                scalar,
+                array,
+                signature,
+                array_signature,
+                getter,
+                releaser,
+                new_array,
+                set_array_region,
+                call_suffix,
+            )| {
+                assert_eq!(jni_type.as_type_fragment().to_string(), scalar);
+                assert_eq!(jni_type.as_array_type_fragment().to_string(), array);
+                assert_eq!(jni_type.signature(), signature);
+                assert_eq!(jni_type.array_signature(), array_signature);
+                assert_eq!(jni_type.array_elements_getter(), getter);
+                assert_eq!(jni_type.array_elements_releaser(), releaser);
+                assert_eq!(jni_type.new_array(), new_array);
+                assert_eq!(jni_type.set_array_region(), set_array_region);
+                assert_eq!(jni_type.call_method_suffix(), call_suffix);
+            },
+        );
+    }
+}
