@@ -1,4 +1,7 @@
-use crate::bridge::c::{ArgumentList, Identifier};
+use crate::bridge::{
+    c::{ArgumentList, Identifier},
+    jni::CallbackCompletionPayload,
+};
 
 /// Completion callback invoked when async JVM callback dispatch fails.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6,16 +9,19 @@ use crate::bridge::c::{ArgumentList, Identifier};
 pub struct CallbackCompletionArgument<'argument> {
     callback: &'argument Identifier,
     failure_arguments: ArgumentList,
+    payload: Option<CallbackCompletionPayload>,
 }
 
 impl<'argument> CallbackCompletionArgument<'argument> {
     pub(in crate::bridge::jni::contract::callback) fn new(
         callback: &'argument Identifier,
         failure_arguments: ArgumentList,
+        payload: Option<CallbackCompletionPayload>,
     ) -> Self {
         Self {
             callback,
             failure_arguments,
+            payload,
         }
     }
 
@@ -27,5 +33,10 @@ impl<'argument> CallbackCompletionArgument<'argument> {
     /// Returns arguments that complete the async callback with failure.
     pub fn failure_arguments(&self) -> &ArgumentList {
         &self.failure_arguments
+    }
+
+    /// Returns the payload carried by successful callback completion.
+    pub fn payload(&self) -> Option<&CallbackCompletionPayload> {
+        self.payload.as_ref()
     }
 }

@@ -380,6 +380,17 @@ fn jni_bridge_renders_async_callback_completion_shapes() {
         "GetStaticMethodID(env, g____ListenerVTable_class, \"point\", \"(J[BJJ)V\")",
         "GetStaticMethodID(env, g____ListenerVTable_class, \"values\", \"(JIJJ)V\")",
         "GetStaticMethodID(env, g____ListenerVTable_class, \"try_load\", \"(JIJJ)V\")",
+        "JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1U32(JNIEnv *env, jclass cls, jlong callback, jlong context, jint result)",
+        "void (*complete)(void *, FfiStatus, uint32_t) = (void (*)(void *, FfiStatus, uint32_t))callback;",
+        "complete((void *)context, (FfiStatus){.code = 0}, (uint32_t)result);",
+        "JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1Bytes(JNIEnv *env, jclass cls, jlong callback, jlong context, jbyteArray result)",
+        "void (*complete)(void *, FfiStatus, FfiBuf_u8) = (void (*)(void *, FfiStatus, FfiBuf_u8))callback;",
+        "FfiBuf_u8 payload = boltffi_jni_byte_array_to_buffer(env, result);",
+        "complete((void *)context, (FfiStatus){.code = 0}, payload);",
+        "JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1callback_1complete_1Record_1_1_1_1Point(JNIEnv *env, jclass cls, jlong callback, jlong context, jbyteArray result)",
+        "void (*complete)(void *, FfiStatus, ___Point) = (void (*)(void *, FfiStatus, ___Point))callback;",
+        "if (!boltffi_jni_read_record(env, result, (uintptr_t)sizeof(payload), &payload))",
+        "complete((void *)context, (FfiStatus){.code = 0}, payload);",
     ]
     .into_iter()
     .for_each(|expected| assert!(source.contains(expected), "{expected}"));

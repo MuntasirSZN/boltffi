@@ -148,6 +148,7 @@ impl CallbackMethod {
     pub(in crate::bridge::jni::contract::callback) fn from_slot(
         stem: &str,
         slot: &c::CallbackSlot,
+        callbacks: &[c::Callback],
         closures: &[ClosureRegistration],
     ) -> Result<Self> {
         let Some(c::Type::Uint64) = slot.parameters().first().map(c::Parameter::ty) else {
@@ -160,7 +161,7 @@ impl CallbackMethod {
         let arguments = slot
             .parameter_groups()
             .iter()
-            .map(|group| CallbackArgument::from_group(slot, group, closures))
+            .map(|group| CallbackArgument::from_group(slot, group, callbacks, closures))
             .collect::<Result<Vec<_>>>()?;
         let signature = format!(
             "({}){}",

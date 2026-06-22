@@ -29,6 +29,7 @@ impl CallbackRegistration {
     pub fn from_c_callback(
         class: &JvmClassPath,
         callback: &c::Callback,
+        callbacks: &[c::Callback],
         closures: &[ClosureRegistration],
     ) -> Result<Self> {
         let stem = callback.vtable().name();
@@ -47,7 +48,7 @@ impl CallbackRegistration {
             methods: callback
                 .methods()
                 .iter()
-                .map(|slot| CallbackMethod::from_slot(stem, slot, closures))
+                .map(|slot| CallbackMethod::from_slot(stem, slot, callbacks, closures))
                 .collect::<Result<Vec<_>>>()?,
         })
     }

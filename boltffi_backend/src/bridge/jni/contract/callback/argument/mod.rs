@@ -4,8 +4,8 @@ mod jvm;
 mod jvm_setup;
 
 use crate::bridge::{
-    c::{Identifier, TypeFragment},
-    jni::CallbackCParameter,
+    c::Identifier,
+    jni::{CallbackCParameter, CallbackCompletionPayload, JniType},
 };
 
 /// One callback vtable argument forwarded to a JVM callback method.
@@ -19,7 +19,7 @@ pub struct CallbackArgument {
 enum CallbackArgumentKind {
     Value {
         parameter: CallbackCParameter,
-        jni_type: crate::bridge::jni::JniType,
+        jni_type: JniType,
     },
     Bytes {
         name: Identifier,
@@ -30,7 +30,7 @@ enum CallbackArgumentKind {
         array: Identifier,
         pointer: CallbackCParameter,
         length: CallbackCParameter,
-        jni_type: crate::bridge::jni::JniType,
+        jni_type: JniType,
     },
     Record {
         array: Identifier,
@@ -51,6 +51,6 @@ enum CallbackArgumentKind {
     Completion {
         callback: CallbackCParameter,
         context: CallbackCParameter,
-        payload: Option<TypeFragment>,
+        payload: Option<CallbackCompletionPayload>,
     },
 }

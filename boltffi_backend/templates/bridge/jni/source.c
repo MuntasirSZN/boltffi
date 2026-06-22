@@ -55,6 +55,10 @@ static void boltffi_jni_throw_illegal_argument(JNIEnv *env, const char *message)
 {% include "bridge/jni/callback_registration.c" %}
 {%- endif %}
 
+{%- for invoker in callback_completions %}
+{% include "bridge/jni/callback_completion.c" %}
+{%- endfor %}
+
 {%- if uses_lifecycle %}
 {% include "bridge/jni/lifecycle.c" %}
 {%- endif %}

@@ -136,11 +136,12 @@ impl CallbackArgument {
                     .into_iter()
                     .chain(payload.iter().map(|payload| {
                         Expression::cast(
-                            payload.clone(),
+                            payload.c_type().clone(),
                             Expression::literal(Literal::compound_zero()),
                         )
                     })),
                 ),
+                payload.clone(),
             )),
         }
     }

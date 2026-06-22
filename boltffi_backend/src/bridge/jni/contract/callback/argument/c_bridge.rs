@@ -1,7 +1,7 @@
 use crate::{
     bridge::{
-        c::{self, Identifier, TypeFragment},
-        jni::{CallbackCParameter, ClosureRegistration, JniType},
+        c::{self, Identifier},
+        jni::{CallbackCParameter, CallbackCompletionPayload, ClosureRegistration, JniType},
     },
     core::{Error, Result},
 };
@@ -14,6 +14,7 @@ impl CallbackArgument {
     pub(in crate::bridge::jni::contract::callback) fn from_group(
         slot: &c::CallbackSlot,
         group: &c::ParameterGroup,
+        callbacks: &[c::Callback],
         closures: &[ClosureRegistration],
     ) -> Result<Self> {
         match group {
@@ -21,7 +22,7 @@ impl CallbackArgument {
             c::ParameterGroup::ByteSlice(bytes) => Self::from_bytes(slot, bytes),
             c::ParameterGroup::DirectVector(vector) => Self::from_direct_vector(slot, vector),
             c::ParameterGroup::CallbackCompletion(completion) => {
-                Self::from_completion(slot, completion)
+                Self::from_completion(slot, completion, callbacks)
             }
             c::ParameterGroup::Closure(closure) => Self::from_closure(slot, closure, closures),
             c::ParameterGroup::Continuation(_) => Err(Error::UnsupportedBridge {
@@ -88,6 +89,7 @@ impl CallbackArgument {
     fn from_completion(
         slot: &c::CallbackSlot,
         completion: &c::CallbackCompletionParameter,
+        callbacks: &[c::Callback],
     ) -> Result<Self> {
         let callback = slot.parameter(completion.callback());
         let payload = match callback.ty() {
@@ -100,7 +102,7 @@ impl CallbackArgument {
                 [c::Type::MutPointer(context), c::Type::Status, payload]
                     if matches!(context.as_ref(), c::Type::Void) =>
                 {
-                    Some(TypeFragment::anonymous(payload)?)
+                    Some(CallbackCompletionPayload::from_c_type(payload, callbacks)?)
                 }
                 _ => {
                     return Err(Error::BrokenBridgeContract {

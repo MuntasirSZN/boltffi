@@ -6,7 +6,7 @@ mod features;
 mod method;
 mod stream;
 
-use self::callback::CallbackRegistrationView;
+use self::callback::{CallbackCompletionInvokerView, CallbackRegistrationView};
 use self::closure::{CallbackClosureHandleView, ClosureRegistrationView};
 use self::features::SourceFeatures;
 use self::method::NativeMethodView;
@@ -38,6 +38,7 @@ struct SourceFileTemplate {
     callback_clone_symbol: Identifier,
     callback_release_symbol: Identifier,
     callbacks: Vec<CallbackRegistrationView>,
+    callback_completions: Vec<CallbackCompletionInvokerView>,
     closure_handles: Vec<CallbackClosureHandleView>,
     closures: Vec<ClosureRegistrationView>,
     methods: Vec<NativeMethodView>,
@@ -60,6 +61,11 @@ impl SourceFile {
             .iter()
             .map(CallbackRegistrationView::from_registration)
             .collect();
+        let callback_completions = contract
+            .callback_completions()
+            .iter()
+            .map(CallbackCompletionInvokerView::from_invoker)
+            .collect::<Vec<_>>();
         let closures: Vec<_> = contract
             .closures()
             .iter()
@@ -90,6 +96,7 @@ impl SourceFile {
             &methods,
             &direct_stream_batches,
             &callbacks,
+            &callback_completions,
             &closures,
             &closure_handles,
         );
@@ -119,6 +126,7 @@ impl SourceFile {
             .as_identifier()
             .clone(),
             callbacks,
+            callback_completions,
             closure_handles,
             closures,
             methods,

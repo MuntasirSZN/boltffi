@@ -1,5 +1,5 @@
 use super::{
-    callback::CallbackRegistrationView,
+    callback::{CallbackCompletionInvokerView, CallbackRegistrationView},
     closure::{CallbackClosureHandleView, ClosureRegistrationView},
     method::NativeMethodView,
     stream::DirectStreamBatchView,
@@ -22,6 +22,7 @@ impl SourceFeatures {
         methods: &[NativeMethodView],
         direct_stream_batches: &[DirectStreamBatchView],
         callbacks: &[CallbackRegistrationView],
+        callback_completions: &[CallbackCompletionInvokerView],
         closures: &[ClosureRegistrationView],
         closure_handles: &[CallbackClosureHandleView],
     ) -> Self {
@@ -33,6 +34,12 @@ impl SourceFeatures {
         let byte_array_returns = Self::byte_array_returns(callbacks, closures);
         let record_returns = Self::record_returns(callbacks, closures);
         let method_byte_array_returns = methods.iter().any(|method| method.returns_bytes);
+        let completion_byte_arrays = callback_completions
+            .iter()
+            .any(|completion| completion.payload_bytes || completion.payload_record);
+        let completion_record_arrays = callback_completions
+            .iter()
+            .any(|completion| completion.payload_record);
         let direct_stream_batch_returns = !direct_stream_batches.is_empty();
         let method_record_arrays = methods
             .iter()
@@ -49,8 +56,12 @@ impl SourceFeatures {
         let uses_byte_arrays = callback_byte_arrays
             || byte_array_returns
             || method_byte_array_returns
+            || completion_byte_arrays
             || direct_stream_batch_returns;
-        let uses_record_arrays = method_record_arrays || callback_record_arrays || record_returns;
+        let uses_record_arrays = method_record_arrays
+            || callback_record_arrays
+            || record_returns
+            || completion_record_arrays;
 
         Self {
             uses_limits: uses_byte_arrays || uses_record_arrays || callback_direct_vectors,
@@ -63,6 +74,7 @@ impl SourceFeatures {
                 || callback_handles
                 || uses_closure_handles
                 || byte_array_returns
+                || completion_byte_arrays
                 || direct_stream_batch_returns
                 || method_exceptions,
             uses_continuations,
