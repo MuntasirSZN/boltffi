@@ -2,10 +2,7 @@ use std::{borrow::Borrow, fmt};
 
 use crate::core::{LanguageSyntax, Result, syntax::sealed};
 
-use super::{
-    contract::{Function, Parameter, Type},
-    identifier::Identifier,
-};
+use super::{Function, Identifier, Parameter, Type};
 
 /// C syntax fragment family.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]

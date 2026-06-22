@@ -1,24 +1,22 @@
 use std::collections::BTreeMap;
 
 use boltffi_binding::{
-    Bindings, CStyleEnumDecl, CallableDecl, CallbackDecl, CallbackId, ClassDecl, ClassId,
-    ClosureReturn, ConstantDecl, ConstantValueDecl, Decl, DeclarationRef, DirectRecordDecl,
-    DirectValueType, DirectVectorElementType, Direction, EnumDecl, EnumId, ErrorDecl,
-    ExecutionDecl, ExportedCallable, ExportedMethodDecl, HandlePresence, HandleTarget,
-    ImportedCallable, ImportedMethodDecl, IncomingParam, InitializerDecl, IntoRust, Native,
-    NativeSymbol, OutOfRust, OutgoingParam, ParamDecl, ParamDirection, ParamPlan, ParamPlanRender,
-    Primitive, Receive, RecordDecl, RecordId, ReturnPlan, ReturnPlanRender, ReturnValueSlot,
-    RustBody, StreamDecl, StreamId, StreamItemPlan, TypeRef, VTableSlot, native,
+    Bindings, CStyleEnumDecl, CallableDecl, CallbackDecl, CallbackId, ClassDecl, ClosureReturn,
+    ConstantDecl, ConstantValueDecl, DeclarationRef, DirectRecordDecl, DirectValueType,
+    DirectVectorElementType, Direction, EnumDecl, EnumId, ErrorDecl, ExecutionDecl,
+    ExportedCallable, ExportedMethodDecl, HandlePresence, HandleTarget, ImportedCallable,
+    ImportedMethodDecl, IncomingParam, InitializerDecl, IntoRust, Native, NativeSymbol, OutOfRust,
+    OutgoingParam, ParamDecl, ParamDirection, ParamPlan, ParamPlanRender, Primitive, Receive,
+    RecordDecl, RecordId, ReturnPlan, ReturnPlanRender, ReturnValueSlot, RustBody, StreamDecl,
+    StreamItemPlan, TypeRef, VTableSlot, native,
 };
 
 use crate::core::{
     BridgeCapabilities, BridgeCapability, BridgeContract, Error, FilePath, Result, contract::sealed,
 };
 
-use super::{Identifier, name};
-
-const C_BRIDGE_LAYER: &str = "c bridge";
-const C_BRIDGE_CONTRACT: &str = "c";
+use super::names::Names;
+use super::{C_BRIDGE_LAYER, Identifier, Parameter, ParameterGroup, ParameterIndex, Type, name};
 
 /// C ABI contract produced for native bindings.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,146 +91,6 @@ pub struct Function {
     params: Vec<Parameter>,
     parameter_groups: Vec<ParameterGroup>,
     returns: Type,
-}
-
-/// A C function parameter.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Parameter {
-    name: Identifier,
-    ty: Type,
-    role: ParameterRole,
-}
-
-/// Position of a C ABI parameter in a function declaration.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-#[non_exhaustive]
-pub struct ParameterIndex {
-    index: usize,
-}
-
-/// Source-level parameter group represented by one or more C ABI parameters.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ParameterGroup {
-    /// One source parameter maps to one C ABI parameter.
-    Value(ParameterIndex),
-    /// One source parameter maps to a borrowed byte pointer and byte length.
-    ByteSlice(ByteSliceParameter),
-    /// One closure parameter maps to call, context, and release C ABI parameters.
-    Closure(ClosureParameter),
-}
-
-/// C ABI parameters that carry one borrowed byte slice argument.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct ByteSliceParameter {
-    name: Identifier,
-    pointer: ParameterIndex,
-    length: ParameterIndex,
-}
-
-/// C ABI parameters that carry one closure argument.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct ClosureParameter {
-    name: Identifier,
-    call: ParameterIndex,
-    context: ParameterIndex,
-    release: ParameterIndex,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ParameterRole {
-    Value,
-    BytePointer(Identifier),
-    ByteLength(Identifier),
-    ClosureCall(Identifier),
-    ClosureContext(Identifier),
-    ClosureRelease(Identifier),
-}
-
-/// A C ABI type.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Type {
-    /// `void`.
-    Void,
-    /// `bool`.
-    Bool,
-    /// `int8_t`.
-    Int8,
-    /// `uint8_t`.
-    Uint8,
-    /// `int16_t`.
-    Int16,
-    /// `uint16_t`.
-    Uint16,
-    /// `int32_t`.
-    Int32,
-    /// `uint32_t`.
-    Uint32,
-    /// `int64_t`.
-    Int64,
-    /// `uint64_t`.
-    Uint64,
-    /// `float`.
-    Float32,
-    /// `double`.
-    Float64,
-    /// `intptr_t`.
-    SignedPointerWidth,
-    /// `uintptr_t`.
-    PointerWidth,
-    /// `FfiStatus`.
-    Status,
-    /// `FfiBuf_u8`.
-    Buffer,
-    /// `FfiString`.
-    String,
-    /// `FfiSpan`.
-    Span,
-    /// `RustFutureHandle`.
-    FutureHandle,
-    /// `StreamPollResult`.
-    StreamPollResult,
-    /// `WaitResult`.
-    WaitResult,
-    /// `BoltFFICallbackHandle`.
-    CallbackHandle,
-    /// A generated named C type.
-    Named(Identifier),
-    /// A generated direct record typedef passed by value.
-    DirectRecord(Identifier),
-    /// A generated C-style enum typedef passed by value.
-    CStyleEnum {
-        /// Generated enum typedef name.
-        name: Identifier,
-        /// Integer representation used by the typedef.
-        repr: Box<Type>,
-    },
-    /// Pointer to const data.
-    ConstPointer(Box<Type>),
-    /// Pointer to mutable data.
-    MutPointer(Box<Type>),
-    /// C function pointer.
-    FunctionPointer {
-        /// Function pointer return type.
-        returns: Box<Type>,
-        /// Function pointer parameters.
-        params: Vec<Type>,
-    },
-}
-
-#[derive(Clone, Debug, Default)]
-struct Names {
-    direct_records: BTreeMap<RecordId, Identifier>,
-    enums: BTreeMap<EnumId, Identifier>,
-    c_style_enum_reprs: BTreeMap<EnumId, Type>,
-    classes: BTreeMap<ClassId, Identifier>,
-    class_handles: BTreeMap<ClassId, native::HandleCarrier>,
-    callbacks: BTreeMap<CallbackId, Identifier>,
-    streams: BTreeMap<StreamId, Identifier>,
 }
 
 #[derive(Clone, Debug)]
@@ -501,8 +359,16 @@ impl Field {
         let return_params = signature.callback_return_params(method.callable().returns().plan())?;
         let method_params = signature.imported_params(method.callable().params())?;
         let params = std::iter::once(Type::Uint64)
-            .chain(return_params.into_iter().map(|parameter| parameter.ty))
-            .chain(method_params.into_iter().map(|parameter| parameter.ty))
+            .chain(
+                return_params
+                    .into_iter()
+                    .map(|parameter| parameter.ty().clone()),
+            )
+            .chain(
+                method_params
+                    .into_iter()
+                    .map(|parameter| parameter.ty().clone()),
+            )
             .collect();
         Self::new(
             method.target().as_str(),
@@ -526,7 +392,11 @@ impl Field {
             method.callable().error(),
         )?;
         let params = std::iter::once(Type::Uint64)
-            .chain(method_params.into_iter().map(|parameter| parameter.ty))
+            .chain(
+                method_params
+                    .into_iter()
+                    .map(|parameter| parameter.ty().clone()),
+            )
             .chain([completion, Type::MutPointer(Box::new(Type::Void))])
             .collect();
         Self::new(
@@ -1008,417 +878,6 @@ impl Function {
             parameter_groups,
             returns,
         })
-    }
-}
-
-impl Parameter {
-    /// Returns the parameter name.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Returns the parameter type.
-    pub fn ty(&self) -> &Type {
-        &self.ty
-    }
-}
-
-impl Parameter {
-    fn new(name: impl Into<String>, ty: Type) -> Result<Self> {
-        Self::with_role(name, ty, ParameterRole::Value)
-    }
-
-    fn byte_pointer(name: &str) -> Result<Self> {
-        Self::with_role(
-            format!("{name}_ptr"),
-            Type::ConstPointer(Box::new(Type::Uint8)),
-            ParameterRole::BytePointer(Identifier::escape(name)?),
-        )
-    }
-
-    fn byte_length(name: &str) -> Result<Self> {
-        Self::with_role(
-            format!("{name}_len"),
-            Type::PointerWidth,
-            ParameterRole::ByteLength(Identifier::escape(name)?),
-        )
-    }
-
-    fn closure_call(name: &str, ty: Type) -> Result<Self> {
-        Self::with_role(
-            format!("{name}_call"),
-            ty,
-            ParameterRole::ClosureCall(Identifier::escape(name)?),
-        )
-    }
-
-    fn closure_context(name: &str) -> Result<Self> {
-        Self::with_role(
-            format!("{name}_context"),
-            Type::MutPointer(Box::new(Type::Void)),
-            ParameterRole::ClosureContext(Identifier::escape(name)?),
-        )
-    }
-
-    fn closure_release(name: &str) -> Result<Self> {
-        Self::with_role(
-            format!("{name}_release"),
-            Type::FunctionPointer {
-                returns: Box::new(Type::Void),
-                params: vec![Type::MutPointer(Box::new(Type::Void))],
-            },
-            ParameterRole::ClosureRelease(Identifier::escape(name)?),
-        )
-    }
-
-    fn with_role(name: impl Into<String>, ty: Type, role: ParameterRole) -> Result<Self> {
-        Ok(Self {
-            name: Identifier::escape(name)?,
-            ty,
-            role,
-        })
-    }
-}
-
-impl ParameterIndex {
-    /// Returns the zero-based C ABI parameter position.
-    pub const fn position(self) -> usize {
-        self.index
-    }
-
-    const fn new(index: usize) -> Self {
-        Self { index }
-    }
-}
-
-impl ParameterGroup {
-    fn from_params(params: &[Parameter]) -> Result<Vec<Self>> {
-        let mut index = 0;
-        std::iter::from_fn(|| {
-            (index < params.len()).then(|| {
-                let group = Self::from_param(params, index);
-                index += group.as_ref().map_or(1, Self::width);
-                group
-            })
-        })
-        .collect()
-    }
-
-    fn from_param(params: &[Parameter], index: usize) -> Result<Self> {
-        match &params[index].role {
-            ParameterRole::Value => Ok(Self::Value(ParameterIndex::new(index))),
-            ParameterRole::BytePointer(name) => {
-                ByteSliceParameter::from_params(params, index, name).map(Self::ByteSlice)
-            }
-            ParameterRole::ByteLength(_) => Err(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "byte slice parameter group does not start with pointer parameter",
-            }),
-            ParameterRole::ClosureCall(name) => {
-                ClosureParameter::from_params(params, index, name).map(Self::Closure)
-            }
-            ParameterRole::ClosureContext(_) | ParameterRole::ClosureRelease(_) => {
-                Err(Error::BrokenBridgeContract {
-                    bridge: C_BRIDGE_CONTRACT,
-                    invariant: "closure parameter group does not start with call parameter",
-                })
-            }
-        }
-    }
-
-    fn width(&self) -> usize {
-        match self {
-            Self::Value(_) => 1,
-            Self::ByteSlice(_) => 2,
-            Self::Closure(_) => 3,
-        }
-    }
-}
-
-impl ByteSliceParameter {
-    /// Returns the source parameter name.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Returns the byte pointer parameter position.
-    pub const fn pointer(&self) -> ParameterIndex {
-        self.pointer
-    }
-
-    /// Returns the byte length parameter position.
-    pub const fn length(&self) -> ParameterIndex {
-        self.length
-    }
-}
-
-impl ByteSliceParameter {
-    fn from_params(params: &[Parameter], pointer: usize, name: &Identifier) -> Result<Self> {
-        let length = pointer + 1;
-        let length_role = params.get(length).map(|parameter| &parameter.role).ok_or(
-            Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "byte slice parameter group is missing length parameter",
-            },
-        )?;
-
-        if !length_role.is_byte_length(name) {
-            return Err(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "byte slice parameter group has mismatched length parameter",
-            });
-        }
-
-        Ok(Self {
-            name: name.clone(),
-            pointer: ParameterIndex::new(pointer),
-            length: ParameterIndex::new(length),
-        })
-    }
-}
-
-impl ClosureParameter {
-    /// Returns the source parameter name.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Returns the call function pointer parameter position.
-    pub const fn call(&self) -> ParameterIndex {
-        self.call
-    }
-
-    /// Returns the callback context parameter position.
-    pub const fn context(&self) -> ParameterIndex {
-        self.context
-    }
-
-    /// Returns the callback release function parameter position.
-    pub const fn release(&self) -> ParameterIndex {
-        self.release
-    }
-}
-
-impl ClosureParameter {
-    fn from_params(params: &[Parameter], call: usize, name: &Identifier) -> Result<Self> {
-        let context = call + 1;
-        let release = call + 2;
-        let context_role = params.get(context).map(|parameter| &parameter.role).ok_or(
-            Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "closure parameter group is missing context parameter",
-            },
-        )?;
-        let release_role = params.get(release).map(|parameter| &parameter.role).ok_or(
-            Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "closure parameter group is missing release parameter",
-            },
-        )?;
-
-        if !context_role.is_closure_context(name) || !release_role.is_closure_release(name) {
-            return Err(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "closure parameter group has mismatched context or release parameter",
-            });
-        }
-
-        Ok(Self {
-            name: name.clone(),
-            call: ParameterIndex::new(call),
-            context: ParameterIndex::new(context),
-            release: ParameterIndex::new(release),
-        })
-    }
-}
-
-impl ParameterRole {
-    fn is_byte_length(&self, expected: &Identifier) -> bool {
-        matches!(self, Self::ByteLength(name) if name == expected)
-    }
-
-    fn is_closure_context(&self, expected: &Identifier) -> bool {
-        matches!(self, Self::ClosureContext(name) if name == expected)
-    }
-
-    fn is_closure_release(&self, expected: &Identifier) -> bool {
-        matches!(self, Self::ClosureRelease(name) if name == expected)
-    }
-}
-
-impl Type {
-    /// Creates a generated named C type.
-    pub fn named(name: impl Into<String>) -> Result<Self> {
-        Identifier::parse(name).map(Self::Named)
-    }
-
-    /// Creates the C ABI type for a primitive scalar.
-    pub fn primitive(primitive: Primitive) -> Result<Self> {
-        match primitive {
-            Primitive::Bool => Ok(Self::Bool),
-            Primitive::I8 => Ok(Self::Int8),
-            Primitive::U8 => Ok(Self::Uint8),
-            Primitive::I16 => Ok(Self::Int16),
-            Primitive::U16 => Ok(Self::Uint16),
-            Primitive::I32 => Ok(Self::Int32),
-            Primitive::U32 => Ok(Self::Uint32),
-            Primitive::I64 => Ok(Self::Int64),
-            Primitive::U64 => Ok(Self::Uint64),
-            Primitive::ISize => Ok(Self::SignedPointerWidth),
-            Primitive::USize => Ok(Self::PointerWidth),
-            Primitive::F32 => Ok(Self::Float32),
-            Primitive::F64 => Ok(Self::Float64),
-            _ => Err(Error::UnexpectedBindingShape {
-                layer: C_BRIDGE_LAYER,
-                shape: "unknown primitive",
-            }),
-        }
-    }
-
-    fn handle_carrier(carrier: native::HandleCarrier) -> Result<Self> {
-        match carrier {
-            native::HandleCarrier::U64 => Ok(Self::Uint64),
-            native::HandleCarrier::USize => Ok(Self::PointerWidth),
-            native::HandleCarrier::CallbackHandle => Ok(Self::CallbackHandle),
-            _ => Err(Error::UnexpectedBindingShape {
-                layer: C_BRIDGE_LAYER,
-                shape: "unknown native handle carrier",
-            }),
-        }
-    }
-}
-
-impl Names {
-    fn new(bindings: &Bindings<Native>) -> Result<Self> {
-        bindings
-            .decls()
-            .iter()
-            .try_fold(Self::default(), |mut names, decl| {
-                names.insert(decl)?;
-                Ok(names)
-            })
-    }
-
-    fn insert(&mut self, decl: &Decl<Native>) -> Result<()> {
-        match DeclarationRef::from(decl) {
-            DeclarationRef::Record(RecordDecl::Direct(record)) => {
-                self.direct_records.insert(
-                    record.id(),
-                    Identifier::parse(name::Spelling::new(record.name()).typedef())?,
-                );
-            }
-            DeclarationRef::Record(RecordDecl::Encoded(_)) => {}
-            DeclarationRef::Record(_) => {}
-            DeclarationRef::Enum(EnumDecl::CStyle(enumeration)) => {
-                self.enums.insert(
-                    enumeration.id(),
-                    Identifier::parse(name::Spelling::new(enumeration.name()).typedef())?,
-                );
-                self.c_style_enum_reprs.insert(
-                    enumeration.id(),
-                    Type::primitive(enumeration.repr().primitive())?,
-                );
-            }
-            DeclarationRef::Enum(EnumDecl::Data(enumeration)) => {
-                self.enums.insert(
-                    enumeration.id(),
-                    Identifier::parse(name::Spelling::new(enumeration.name()).typedef())?,
-                );
-            }
-            DeclarationRef::Enum(enumeration) => {
-                self.enums.insert(
-                    enumeration.id(),
-                    Identifier::parse(name::Spelling::new(enumeration.name()).typedef())?,
-                );
-            }
-            DeclarationRef::Class(class) => {
-                self.classes.insert(
-                    class.id(),
-                    Identifier::parse(name::Spelling::new(class.name()).typedef())?,
-                );
-                self.class_handles.insert(class.id(), class.handle());
-            }
-            DeclarationRef::Callback(callback) => {
-                self.callbacks.insert(
-                    callback.id(),
-                    Identifier::parse(name::Spelling::new(callback.name()).typedef())?,
-                );
-            }
-            DeclarationRef::Stream(stream) => {
-                self.streams.insert(
-                    stream.id(),
-                    Identifier::parse(name::Spelling::new(stream.name()).typedef())?,
-                );
-            }
-            DeclarationRef::CustomType(_) => {}
-            DeclarationRef::Function(_) | DeclarationRef::Constant(_) => {}
-        }
-        Ok(())
-    }
-
-    fn record(&self, id: RecordId) -> Result<Identifier> {
-        self.direct_records
-            .get(&id)
-            .cloned()
-            .ok_or(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "missing direct record type name",
-            })
-    }
-
-    fn enumeration(&self, id: EnumId) -> Result<Identifier> {
-        self.enums
-            .get(&id)
-            .cloned()
-            .ok_or(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "missing enum type name",
-            })
-    }
-
-    fn callback(&self, id: CallbackId) -> Result<Identifier> {
-        self.callbacks
-            .get(&id)
-            .cloned()
-            .ok_or(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "missing callback type name",
-            })
-    }
-
-    fn class_handle(&self, id: ClassId) -> Result<native::HandleCarrier> {
-        self.class_handles
-            .get(&id)
-            .copied()
-            .ok_or(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "missing class handle carrier",
-            })
-    }
-
-    fn direct_value(&self, ty: &DirectValueType) -> Result<Type> {
-        match ty {
-            DirectValueType::Primitive(primitive) => Type::primitive(*primitive),
-            DirectValueType::Record(record) => self.record(*record).map(Type::DirectRecord),
-            DirectValueType::Enum(enumeration) => Ok(Type::CStyleEnum {
-                name: self.enumeration(*enumeration)?,
-                repr: Box::new(self.c_style_enum_repr(*enumeration)?),
-            }),
-            _ => Err(Error::UnexpectedBindingShape {
-                layer: C_BRIDGE_LAYER,
-                shape: "direct value type",
-            }),
-        }
-    }
-
-    fn c_style_enum_repr(&self, id: EnumId) -> Result<Type> {
-        self.c_style_enum_reprs
-            .get(&id)
-            .cloned()
-            .ok_or(Error::BrokenBridgeContract {
-                bridge: C_BRIDGE_CONTRACT,
-                invariant: "missing C-style enum representation",
-            })
     }
 }
 
@@ -2185,11 +1644,11 @@ impl Signature {
                 Type::FunctionPointer {
                     returns: Box::new(self.callback_return_type(returns, error)?),
                     params: std::iter::once(Type::MutPointer(Box::new(Type::Void)))
-                        .chain(params.into_iter().map(|parameter| parameter.ty))
+                        .chain(params.into_iter().map(|parameter| parameter.ty().clone()))
                         .chain(
                             self.callback_return_params(returns)?
                                 .into_iter()
-                                .map(|parameter| parameter.ty),
+                                .map(|parameter| parameter.ty().clone()),
                         )
                         .collect(),
                 },

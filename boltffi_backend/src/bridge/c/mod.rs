@@ -8,16 +8,25 @@ mod contract;
 mod header;
 mod identifier;
 mod name;
+mod names;
+mod parameter;
 pub(crate) mod syntax;
 mod template;
+mod ty;
 
 pub use contract::{
-    ByteSliceParameter, CBridgeContract, Callback, ClosureParameter, Enum, EnumVariant, Field,
-    Function, Parameter, ParameterGroup, ParameterIndex, Record, SupportFunctions, Type,
+    CBridgeContract, Callback, Enum, EnumVariant, Field, Function, Record, SupportFunctions,
 };
 pub use header::{CBridge, HeaderInclude};
 pub use identifier::Identifier;
+pub use parameter::{
+    ByteSliceParameter, ClosureParameter, Parameter, ParameterGroup, ParameterIndex,
+};
 pub use syntax::{ArgumentList, Expression, Literal, Statement, Syntax, TypeFragment};
+pub use ty::Type;
+
+const C_BRIDGE_LAYER: &str = "c bridge";
+const C_BRIDGE_CONTRACT: &str = "c";
 
 #[cfg(test)]
 mod tests {
