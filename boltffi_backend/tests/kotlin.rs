@@ -322,3 +322,83 @@ fn kotlin_target_renders_direct_records_and_function_bridges() {
         "{kotlin}"
     );
 }
+
+#[test]
+fn kotlin_target_passes_signed_primitive_vectors_as_jni_arrays() {
+    let bindings = bindings(
+        r#"
+        #[export]
+        pub fn sum(values: Vec<i32>) -> i32 {
+            values.into_iter().sum()
+        }
+        "#,
+    );
+    let target = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .into_target()
+        .expect("Kotlin target");
+    let output = target.render(&bindings).expect("Kotlin target renders");
+    let kotlin = file(&output, "com/boltffi/demo/Demo.kt");
+
+    assert!(
+        kotlin.contains("@JvmStatic external fun boltffi_function_demo_sum(values: IntArray): Int"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("fun sum(values: IntArray): Int"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("return Native.boltffi_function_demo_sum(values)"),
+        "{kotlin}"
+    );
+}
+
+#[test]
+fn kotlin_target_encodes_nullable_primitives_as_compact_wire() {
+    let bindings = bindings(
+        r#"
+        #[export]
+        pub fn maybe_add(value: Option<i32>) -> Option<u32> {
+            value.map(|value| value as u32 + 1)
+        }
+        "#,
+    );
+    let target = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .into_target()
+        .expect("Kotlin target");
+    let output = target.render(&bindings).expect("Kotlin target renders");
+    let kotlin = file(&output, "com/boltffi/demo/Demo.kt");
+
+    assert!(
+        kotlin.contains(
+            "@JvmStatic external fun boltffi_function_demo_maybe_add(value: ByteArray): ByteArray?"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("fun maybeAdd(value: Int?): UInt?"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "val __boltffi_value_wire = WireWriterPool.acquire(if (value == null) 1 else 5)"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("__boltffi_value_writer.writeOptionalI32(value)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "val __boltffi_result = Native.boltffi_function_demo_maybe_add(__boltffi_value_wire.bytes()) ?: throw IllegalStateException(\"null buffer returned\")"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("return __boltffi_reader.readOptionalU32()"),
+        "{kotlin}"
+    );
+}

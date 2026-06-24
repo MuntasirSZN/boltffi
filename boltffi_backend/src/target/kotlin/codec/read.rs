@@ -5,7 +5,10 @@ use boltffi_binding::{
 
 use crate::{
     core::{Error, Result},
-    target::kotlin::syntax::{ArgumentList, Expression, Identifier},
+    target::kotlin::{
+        primitive::KotlinPrimitive,
+        syntax::{ArgumentList, Expression, Identifier},
+    },
 };
 
 pub struct Reader {
@@ -17,7 +20,7 @@ impl Reader {
         Self { reader }
     }
 
-    fn call(&self, method: &'static str) -> Result<Expression> {
+    fn call(&self, method: impl Into<String>) -> Result<Expression> {
         Ok(Expression::call(
             Expression::identifier(self.reader.clone()),
             Identifier::parse(method)?,
@@ -37,20 +40,9 @@ impl CodecRead for Reader {
     type Expr = Result<Expression>;
 
     fn primitive(&mut self, primitive: Primitive) -> Self::Expr {
-        match primitive {
-            Primitive::Bool => self.call("readBool"),
-            Primitive::I8 => self.call("readI8"),
-            Primitive::U8 => self.call("readU8"),
-            Primitive::I16 => self.call("readI16"),
-            Primitive::U16 => self.call("readU16"),
-            Primitive::I32 => self.call("readI32"),
-            Primitive::U32 => self.call("readU32"),
-            Primitive::I64 | Primitive::ISize => self.call("readI64"),
-            Primitive::U64 | Primitive::USize => self.call("readU64"),
-            Primitive::F32 => self.call("readF32"),
-            Primitive::F64 => self.call("readF64"),
-            _ => Self::unsupported("unknown primitive wire read"),
-        }
+        KotlinPrimitive::new(primitive)
+            .wire_method_suffix()
+            .and_then(|suffix| self.call(format!("read{suffix}")))
     }
 
     fn string(&mut self) -> Self::Expr {

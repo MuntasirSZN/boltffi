@@ -252,6 +252,10 @@ impl Expression {
         Self(value.into().to_string())
     }
 
+    pub fn null() -> Self {
+        Self("null".to_owned())
+    }
+
     pub fn call(receiver: impl fmt::Display, method: Identifier, arguments: ArgumentList) -> Self {
         Self(format!("{receiver}.{method}({arguments})"))
     }
@@ -270,6 +274,10 @@ impl Expression {
 
     pub fn not_equal(self, other: Self) -> Self {
         Self(format!("{self} != {other}"))
+    }
+
+    pub fn equal(self, other: Self) -> Self {
+        Self(format!("{self} == {other}"))
     }
 
     pub fn conditional(condition: Self, then_value: Self, else_value: Self) -> Self {

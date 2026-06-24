@@ -1,14 +1,16 @@
 use boltffi_binding::{
     BuiltinType, CallbackId, ClassId, CustomTypeId, DirectValueType, DirectVectorElementType,
-    Direction, EnumId, HandlePresence, HandleTarget, IntoRust, Native, ParamPlanRender, Primitive,
-    RecordId, Surface, TypeRef, TypeRefRender,
+    DirectVectorPrimitive, Direction, EnumId, HandlePresence, HandleTarget, IntoRust, Native,
+    ParamPlanRender, Primitive, RecordId, Surface, TypeRef, TypeRefRender,
 };
 
 use crate::{
     bridge::jni::{DirectVectorParameter, JniType, NativeParameterKind, NativeReturn},
     core::{Error, RenderContext, Result},
     target::kotlin::{
-        render::{enumeration::Enumeration, primitive::KotlinPrimitive, record::Record},
+        codec::ScalarOption,
+        primitive::KotlinPrimitive,
+        render::{enumeration::Enumeration, record::Record},
         syntax::TypeName,
     },
 };
@@ -74,6 +76,26 @@ impl KotlinType {
 
     fn direct_vector(parameter: &DirectVectorParameter) -> Result<TypeName> {
         Self::jni_array(parameter.jni_type())
+    }
+
+    pub fn direct_vector_element(element: &DirectVectorElementType) -> Result<TypeName> {
+        match element {
+            DirectVectorElementType::Primitive(primitive) => {
+                Self::direct_vector_primitive(*primitive)
+            }
+            DirectVectorElementType::Record(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "direct-record vector type",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown direct-vector type",
+            }),
+        }
+    }
+
+    fn direct_vector_primitive(primitive: DirectVectorPrimitive) -> Result<TypeName> {
+        KotlinPrimitive::new(primitive.primitive()).array_type()
     }
 }
 
@@ -222,17 +244,11 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
         })
     }
 
-    fn scalar_option(&mut self, _primitive: Primitive) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "optional scalar function parameter",
-        })
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
+        ScalarOption::new(primitive).ty()
     }
 
-    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "direct-vector function parameter",
-        })
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        KotlinType::direct_vector_element(element)
     }
 }

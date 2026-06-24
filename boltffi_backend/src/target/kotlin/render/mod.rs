@@ -2,7 +2,6 @@ mod enumeration;
 mod function;
 mod module;
 mod native;
-mod primitive;
 mod record;
 mod type_name;
 

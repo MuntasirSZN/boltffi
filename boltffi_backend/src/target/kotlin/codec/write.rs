@@ -8,6 +8,7 @@ use crate::{
     target::kotlin::{
         codec::{size::Sizer, value::ValueExpression},
         name_style::Name,
+        primitive::KotlinPrimitive,
         syntax::{ArgumentList, Expression, Identifier, Statement},
     },
 };
@@ -30,6 +31,14 @@ pub struct Writer {
 }
 
 impl EncodedWrite {
+    pub fn new(setup: Vec<Statement>, argument: Expression, cleanup: Vec<Statement>) -> Self {
+        Self {
+            setup,
+            argument,
+            cleanup,
+        }
+    }
+
     pub fn into_parts(self) -> (Vec<Statement>, Expression, Vec<Statement>) {
         (self.setup, self.argument, self.cleanup)
     }
@@ -43,12 +52,24 @@ impl WireBuffer {
         })
     }
 
+    pub fn writer(&self) -> &Identifier {
+        &self.writer
+    }
+
     pub fn write(self, plan: &WritePlan) -> Result<EncodedWrite> {
         let size = plan.size_with(&mut Sizer)?;
         let writes = plan
             .render_with(&mut Writer::new(self.writer.clone()))
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
+        self.write_statements(size, writes)
+    }
+
+    pub fn write_statements(
+        self,
+        size: Expression,
+        writes: Vec<Statement>,
+    ) -> Result<EncodedWrite> {
         let setup = std::iter::once(Statement::value(
             self.buffer.clone(),
             Expression::call(
@@ -76,11 +97,7 @@ impl WireBuffer {
             Identifier::parse("close")?,
             ArgumentList::default(),
         ))];
-        Ok(EncodedWrite {
-            setup,
-            argument,
-            cleanup,
-        })
+        Ok(EncodedWrite::new(setup, argument, cleanup))
     }
 }
 
@@ -93,32 +110,18 @@ impl Writer {
         ValueExpression::new(value).render()
     }
 
-    fn writer_call(&self, method: &'static str, value: &ValueRef) -> Result<Statement> {
+    fn writer_call(&self, method: Identifier, value: &ValueRef) -> Result<Statement> {
         Ok(Statement::expression(Expression::call(
             Expression::identifier(self.writer.clone()),
-            Identifier::parse(method)?,
+            method,
             [Self::value(value)?].into_iter().collect::<ArgumentList>(),
         )))
     }
 
-    fn primitive_method(primitive: Primitive) -> Result<&'static str> {
-        match primitive {
-            Primitive::Bool => Ok("writeBool"),
-            Primitive::I8 => Ok("writeI8"),
-            Primitive::U8 => Ok("writeU8"),
-            Primitive::I16 => Ok("writeI16"),
-            Primitive::U16 => Ok("writeU16"),
-            Primitive::I32 => Ok("writeI32"),
-            Primitive::U32 => Ok("writeU32"),
-            Primitive::I64 | Primitive::ISize => Ok("writeI64"),
-            Primitive::U64 | Primitive::USize => Ok("writeU64"),
-            Primitive::F32 => Ok("writeF32"),
-            Primitive::F64 => Ok("writeF64"),
-            _ => Err(Error::UnsupportedTarget {
-                target: "kotlin",
-                shape: "unknown primitive wire write",
-            }),
-        }
+    fn primitive_method(primitive: Primitive) -> Result<Identifier> {
+        KotlinPrimitive::new(primitive)
+            .wire_method_suffix()
+            .and_then(|suffix| Identifier::parse(format!("write{suffix}")))
     }
 
     fn unsupported(shape: &'static str) -> Vec<Result<Statement>> {
@@ -137,11 +140,11 @@ impl CodecWrite for Writer {
     }
 
     fn string(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
-        vec![self.writer_call("writeString", value)]
+        vec![Identifier::parse("writeString").and_then(|method| self.writer_call(method, value))]
     }
 
     fn bytes(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
-        vec![self.writer_call("writeBytes", value)]
+        vec![Identifier::parse("writeBytes").and_then(|method| self.writer_call(method, value))]
     }
 
     fn direct_record(&mut self, _id: RecordId, _value: &ValueRef) -> Vec<Self::Stmt> {

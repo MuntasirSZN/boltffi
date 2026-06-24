@@ -9,12 +9,12 @@ use boltffi_binding::{
 use crate::{
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
-        codec::{EncodedWrite, Reader, WireBuffer},
+        codec::{EncodedWrite, Reader, ScalarOption, WireBuffer},
         name_style::Name,
+        primitive::KotlinPrimitive,
         render::{
             enumeration::Enumeration,
             native::NativeCall,
-            primitive::KotlinPrimitive,
             record::Record,
             type_name::{KotlinType, ParameterType},
         },
@@ -66,6 +66,7 @@ enum ReturnConversion {
     DirectRecord(TypeName),
     DirectEnum { ty: TypeName, repr: Primitive },
     Encoded(<OutOfRust as Direction>::Codec),
+    ScalarOption(Primitive),
 }
 
 impl Function {
@@ -295,18 +296,15 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
         })
     }
 
-    fn scalar_option(&mut self, _primitive: Primitive) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "optional scalar function parameter",
-        })
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
+        ScalarOption::new(primitive)
+            .write(&self.source_name)
+            .map(NativeArgument::encoded)
     }
 
-    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "direct-vector function parameter",
-        })
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        KotlinType::direct_vector_element(element)
+            .map(|_| NativeArgument::direct(Expression::identifier(self.name.clone())))
     }
 }
 
@@ -382,11 +380,8 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
         })
     }
 
-    fn scalar_option(&mut self, _primitive: Primitive) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "optional scalar function return",
-        })
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
+        FunctionReturn::scalar_option(primitive)
     }
 
     fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
@@ -451,6 +446,13 @@ impl FunctionReturn {
         })
     }
 
+    fn scalar_option(primitive: Primitive) -> Result<Self> {
+        Ok(Self {
+            ty: Some(ScalarOption::new(primitive).ty()?),
+            conversion: ReturnConversion::ScalarOption(primitive),
+        })
+    }
+
     fn statements(&self, call: Expression) -> Result<Vec<Statement>> {
         match &self.conversion {
             ReturnConversion::Void => Ok(vec![Statement::expression(call)]),
@@ -501,6 +503,7 @@ impl FunctionReturn {
                     Statement::return_value(value),
                 ])
             }
+            ReturnConversion::ScalarOption(primitive) => ScalarOption::new(*primitive).read(call),
         }
     }
 }

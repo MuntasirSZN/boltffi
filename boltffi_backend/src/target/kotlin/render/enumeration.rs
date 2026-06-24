@@ -5,7 +5,7 @@ use crate::{
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
         name_style::Name,
-        render::primitive::KotlinPrimitive,
+        primitive::KotlinPrimitive,
         syntax::{Expression, Identifier, TypeName},
     },
 };

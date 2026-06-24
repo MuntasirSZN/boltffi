@@ -2,6 +2,7 @@
 
 mod codec;
 mod name_style;
+mod primitive;
 mod render;
 mod syntax;
 

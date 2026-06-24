@@ -49,6 +49,28 @@ private class WireReader(private val bytes: ByteArray) {
 
     fun readF64(): Double = java.lang.Double.longBitsToDouble(readI64())
 
+    fun readOptionalBool(): Boolean? = readOptional { it.readBool() }
+
+    fun readOptionalI8(): Byte? = readOptional { it.readI8() }
+
+    fun readOptionalU8(): UByte? = readOptional { it.readU8() }
+
+    fun readOptionalI16(): Short? = readOptional { it.readI16() }
+
+    fun readOptionalU16(): UShort? = readOptional { it.readU16() }
+
+    fun readOptionalI32(): Int? = readOptional { it.readI32() }
+
+    fun readOptionalU32(): UInt? = readOptional { it.readU32() }
+
+    fun readOptionalI64(): Long? = readOptional { it.readI64() }
+
+    fun readOptionalU64(): ULong? = readOptional { it.readU64() }
+
+    fun readOptionalF32(): Float? = readOptional { it.readF32() }
+
+    fun readOptionalF64(): Double? = readOptional { it.readF64() }
+
     fun readString(): String {
         val length = readU32().toInt()
         val value = String(bytes, position, length, Charsets.UTF_8)
@@ -61,6 +83,14 @@ private class WireReader(private val bytes: ByteArray) {
         val value = bytes.copyOfRange(position, position + length)
         position += length
         return value
+    }
+
+    private inline fun <T> readOptional(read: (WireReader) -> T): T? {
+        return when (readU8()) {
+            0.toUByte() -> null
+            1.toUByte() -> read(this)
+            else -> throw IllegalArgumentException("invalid optional wire tag")
+        }
     }
 }
 
@@ -141,6 +171,50 @@ private class WireWriter(initialCapacity: Int) {
         writeI64(java.lang.Double.doubleToRawLongBits(value))
     }
 
+    fun writeOptionalBool(value: Boolean?) = writeOptional(value) { writer, present ->
+        writer.writeBool(present)
+    }
+
+    fun writeOptionalI8(value: Byte?) = writeOptional(value) { writer, present ->
+        writer.writeI8(present)
+    }
+
+    fun writeOptionalU8(value: UByte?) = writeOptional(value) { writer, present ->
+        writer.writeU8(present)
+    }
+
+    fun writeOptionalI16(value: Short?) = writeOptional(value) { writer, present ->
+        writer.writeI16(present)
+    }
+
+    fun writeOptionalU16(value: UShort?) = writeOptional(value) { writer, present ->
+        writer.writeU16(present)
+    }
+
+    fun writeOptionalI32(value: Int?) = writeOptional(value) { writer, present ->
+        writer.writeI32(present)
+    }
+
+    fun writeOptionalU32(value: UInt?) = writeOptional(value) { writer, present ->
+        writer.writeU32(present)
+    }
+
+    fun writeOptionalI64(value: Long?) = writeOptional(value) { writer, present ->
+        writer.writeI64(present)
+    }
+
+    fun writeOptionalU64(value: ULong?) = writeOptional(value) { writer, present ->
+        writer.writeU64(present)
+    }
+
+    fun writeOptionalF32(value: Float?) = writeOptional(value) { writer, present ->
+        writer.writeF32(present)
+    }
+
+    fun writeOptionalF64(value: Double?) = writeOptional(value) { writer, present ->
+        writer.writeF64(present)
+    }
+
     fun writeString(value: String) {
         val bytes = value.toByteArray(Charsets.UTF_8)
         writeU32(bytes.size.toUInt())
@@ -174,6 +248,15 @@ private class WireWriter(initialCapacity: Int) {
         source.position(0)
         next.put(source)
         buffer = next
+    }
+
+    private inline fun <T> writeOptional(value: T?, write: (WireWriter, T) -> Unit) {
+        if (value == null) {
+            writeU8(0.toUByte())
+            return
+        }
+        writeU8(1.toUByte())
+        write(this, value)
     }
 }
 

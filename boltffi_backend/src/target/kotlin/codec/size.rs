@@ -7,6 +7,7 @@ use crate::{
     core::{Error, Result},
     target::kotlin::{
         codec::value::ValueExpression,
+        primitive::KotlinPrimitive,
         syntax::{ArgumentList, Expression, Identifier},
     },
 };
@@ -38,22 +39,9 @@ impl Sizer {
     }
 
     fn primitive_size(primitive: Primitive) -> Result<Expression> {
-        Ok(Expression::integer(match primitive {
-            Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
-            Primitive::I16 | Primitive::U16 => 2,
-            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
-            Primitive::I64
-            | Primitive::U64
-            | Primitive::ISize
-            | Primitive::USize
-            | Primitive::F64 => 8,
-            _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: "kotlin",
-                    shape: "unknown primitive wire size",
-                });
-            }
-        }))
+        KotlinPrimitive::new(primitive)
+            .wire_size()
+            .map(Expression::integer)
     }
 
     fn unsupported(shape: &'static str) -> Result<Expression> {

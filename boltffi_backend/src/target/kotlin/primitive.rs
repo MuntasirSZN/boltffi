@@ -36,6 +36,30 @@ impl KotlinPrimitive {
         })
     }
 
+    pub fn array_type(self) -> Result<TypeName> {
+        Ok(match self.primitive {
+            Primitive::Bool => TypeName::new("BooleanArray"),
+            Primitive::I8 => TypeName::new("ByteArray"),
+            Primitive::I16 => TypeName::new("ShortArray"),
+            Primitive::I32 => TypeName::new("IntArray"),
+            Primitive::I64 | Primitive::ISize => TypeName::new("LongArray"),
+            Primitive::F32 => TypeName::new("FloatArray"),
+            Primitive::F64 => TypeName::new("DoubleArray"),
+            Primitive::U8 | Primitive::U16 | Primitive::U32 | Primitive::U64 | Primitive::USize => {
+                return Err(Error::UnsupportedTarget {
+                    target: "kotlin",
+                    shape: "unsigned direct-vector primitive",
+                });
+            }
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: "kotlin",
+                    shape: "unknown direct-vector primitive",
+                });
+            }
+        })
+    }
+
     pub fn native_argument(self, value: Expression) -> Result<Expression> {
         Ok(
             match self.conversion("toByte", "toShort", "toInt", "toLong")? {
@@ -52,6 +76,43 @@ impl KotlinPrimitive {
                 None => value,
             },
         )
+    }
+
+    pub fn wire_size(self) -> Result<u64> {
+        match self.primitive {
+            Primitive::Bool | Primitive::I8 | Primitive::U8 => Ok(1),
+            Primitive::I16 | Primitive::U16 => Ok(2),
+            Primitive::I32 | Primitive::U32 | Primitive::F32 => Ok(4),
+            Primitive::I64
+            | Primitive::U64
+            | Primitive::ISize
+            | Primitive::USize
+            | Primitive::F64 => Ok(8),
+            _ => Err(Error::UnsupportedTarget {
+                target: "kotlin",
+                shape: "unknown primitive wire size",
+            }),
+        }
+    }
+
+    pub fn wire_method_suffix(self) -> Result<&'static str> {
+        match self.primitive {
+            Primitive::Bool => Ok("Bool"),
+            Primitive::I8 => Ok("I8"),
+            Primitive::U8 => Ok("U8"),
+            Primitive::I16 => Ok("I16"),
+            Primitive::U16 => Ok("U16"),
+            Primitive::I32 => Ok("I32"),
+            Primitive::U32 => Ok("U32"),
+            Primitive::I64 | Primitive::ISize => Ok("I64"),
+            Primitive::U64 | Primitive::USize => Ok("U64"),
+            Primitive::F32 => Ok("F32"),
+            Primitive::F64 => Ok("F64"),
+            _ => Err(Error::UnsupportedTarget {
+                target: "kotlin",
+                shape: "unknown primitive wire method",
+            }),
+        }
     }
 
     pub fn integer_literal(self, value: IntegerValue) -> Result<Expression> {
