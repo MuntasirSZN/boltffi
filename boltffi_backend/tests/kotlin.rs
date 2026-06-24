@@ -80,3 +80,139 @@ fn kotlin_target_preserves_unsigned_public_api_and_native_carriers() {
         "{kotlin}"
     );
 }
+
+#[test]
+fn kotlin_target_encodes_string_and_bytes_parameters_with_pooled_writers() {
+    let bindings = bindings(
+        r#"
+        #[export]
+        pub fn name_length(name: String) -> u32 {
+            name.len() as u32
+        }
+
+        #[export]
+        pub fn body_length(body: Vec<u8>) -> u32 {
+            body.len() as u32
+        }
+        "#,
+    );
+    let target = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .into_target()
+        .expect("Kotlin target");
+    let output = target.render(&bindings).expect("Kotlin target renders");
+    let kotlin = file(&output, "com/boltffi/demo/Demo.kt");
+
+    assert!(
+        kotlin.contains(
+            "@JvmStatic external fun boltffi_function_demo_name_length(name: ByteArray): Int"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("fun nameLength(name: String): UInt"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "val __boltffi_name_wire = WireWriterPool.acquire(4 + Utf8Codec.maxBytes(name))"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("__boltffi_name_writer.writeString(name)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "return Native.boltffi_function_demo_name_length(__boltffi_name_wire.bytes()).toUInt()"
+        ),
+        "{kotlin}"
+    );
+    assert!(kotlin.contains("__boltffi_name_wire.close()"), "{kotlin}");
+
+    assert!(
+        kotlin.contains(
+            "@JvmStatic external fun boltffi_function_demo_body_length(body: ByteArray): Int"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("fun bodyLength(body: ByteArray): UInt"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("val __boltffi_body_wire = WireWriterPool.acquire(4 + body.size)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("__boltffi_body_writer.writeBytes(body)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "return Native.boltffi_function_demo_body_length(__boltffi_body_wire.bytes()).toUInt()"
+        ),
+        "{kotlin}"
+    );
+    assert!(kotlin.contains("__boltffi_body_wire.close()"), "{kotlin}");
+}
+
+#[test]
+fn kotlin_target_decodes_string_and_bytes_returns_through_wire_reader() {
+    let bindings = bindings(
+        r#"
+        #[export]
+        pub fn greeting() -> String {
+            "hello".to_owned()
+        }
+
+        #[export]
+        pub fn payload() -> Vec<u8> {
+            vec![1, 2, 3]
+        }
+        "#,
+    );
+    let target = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .into_target()
+        .expect("Kotlin target");
+    let output = target.render(&bindings).expect("Kotlin target renders");
+    let kotlin = file(&output, "com/boltffi/demo/Demo.kt");
+
+    assert!(
+        kotlin.contains("@JvmStatic external fun boltffi_function_demo_greeting(): ByteArray?"),
+        "{kotlin}"
+    );
+    assert!(kotlin.contains("fun greeting(): String"), "{kotlin}");
+    assert!(
+        kotlin.contains(
+            "val __boltffi_result = Native.boltffi_function_demo_greeting() ?: throw IllegalStateException(\"null buffer returned\")"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("val __boltffi_reader = WireReader(__boltffi_result)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("return __boltffi_reader.readString()"),
+        "{kotlin}"
+    );
+
+    assert!(
+        kotlin.contains("@JvmStatic external fun boltffi_function_demo_payload(): ByteArray?"),
+        "{kotlin}"
+    );
+    assert!(kotlin.contains("fun payload(): ByteArray"), "{kotlin}");
+    assert!(
+        kotlin.contains(
+            "val __boltffi_result = Native.boltffi_function_demo_payload() ?: throw IllegalStateException(\"null buffer returned\")"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("return __boltffi_reader.readBytes()"),
+        "{kotlin}"
+    );
+}

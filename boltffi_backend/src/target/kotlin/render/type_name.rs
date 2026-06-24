@@ -1,6 +1,7 @@
 use boltffi_binding::{
-    DirectValueType, Direction, HandlePresence, HandleTarget, IntoRust, Native, ParamPlanRender,
-    Primitive, TypeRef,
+    BuiltinType, CallbackId, ClassId, CustomTypeId, DirectValueType, Direction, EnumId,
+    HandlePresence, HandleTarget, IntoRust, Native, ParamPlanRender, Primitive, RecordId, TypeRef,
+    TypeRefRender,
 };
 
 use crate::{
@@ -64,8 +65,101 @@ impl KotlinType {
         }
     }
 
+    pub fn type_ref(ty: &TypeRef) -> Result<TypeName> {
+        ty.render_with(&mut KotlinTypeRef)
+    }
+
     fn direct_vector(parameter: &DirectVectorParameter) -> Result<TypeName> {
         Self::jni_array(parameter.jni_type())
+    }
+}
+
+pub struct KotlinTypeRef;
+
+impl TypeRefRender for KotlinTypeRef {
+    type Output = Result<TypeName>;
+
+    fn primitive(&mut self, primitive: Primitive) -> Self::Output {
+        KotlinType::primitive(primitive)
+    }
+
+    fn string(&mut self) -> Self::Output {
+        Ok(TypeName::string())
+    }
+
+    fn bytes(&mut self) -> Self::Output {
+        Ok(TypeName::byte_array(false))
+    }
+
+    fn record(&mut self, _id: RecordId) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "record type",
+        })
+    }
+
+    fn enumeration(&mut self, _id: EnumId) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "enum type",
+        })
+    }
+
+    fn class(&mut self, _id: ClassId) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "class type",
+        })
+    }
+
+    fn callback(&mut self, _id: CallbackId) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "callback type",
+        })
+    }
+
+    fn custom(&mut self, _id: CustomTypeId) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "custom type",
+        })
+    }
+
+    fn builtin(&mut self, _kind: BuiltinType) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "builtin type",
+        })
+    }
+
+    fn optional(&mut self, inner: Self::Output) -> Self::Output {
+        inner.map(TypeName::nullable)
+    }
+
+    fn sequence(&mut self, element: Self::Output) -> Self::Output {
+        element.map(TypeName::list)
+    }
+
+    fn tuple(&mut self, _elements: Vec<Self::Output>) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "tuple type",
+        })
+    }
+
+    fn result(&mut self, _ok: Self::Output, _err: Self::Output) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "result type",
+        })
+    }
+
+    fn map(&mut self, _key: Self::Output, _value: Self::Output) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "map type",
+        })
     }
 }
 
@@ -98,15 +192,12 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType {
 
     fn encoded(
         &mut self,
-        _ty: &'plan TypeRef,
+        ty: &'plan TypeRef,
         _codec: &'plan <IntoRust as Direction>::Codec,
         _shape: <Native as boltffi_binding::Surface>::BufferShape,
         _receive: <IntoRust as Direction>::Receive,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "encoded function parameter",
-        })
+        KotlinType::type_ref(ty)
     }
 
     fn handle(

@@ -1,5 +1,6 @@
 //! Kotlin target rendered through the JNI bridge.
 
+mod codec;
 mod name_style;
 mod render;
 mod syntax;

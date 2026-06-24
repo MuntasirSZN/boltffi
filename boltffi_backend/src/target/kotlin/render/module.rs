@@ -14,9 +14,14 @@ use crate::{
 #[template(path = "target/kotlin/module.kt", escape = "none")]
 struct ModuleTemplate {
     package: KotlinPackage,
+    runtime: String,
     native_functions: Vec<NativeFunction>,
     functions: Vec<String>,
 }
+
+#[derive(AskamaTemplate)]
+#[template(path = "target/kotlin/runtime.kt", escape = "none")]
+struct RuntimeTemplate;
 
 pub struct Module<'host, 'bridge, 'decl> {
     host: &'host KotlinHost,
@@ -43,6 +48,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         let functions = self.functions();
         let contents = ModuleTemplate {
             package: self.host.package().clone(),
+            runtime: RuntimeTemplate.render()?,
             native_functions,
             functions,
         }

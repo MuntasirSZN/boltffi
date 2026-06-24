@@ -176,6 +176,10 @@ impl TypeName {
         Self::new("Boolean")
     }
 
+    pub fn string() -> Self {
+        Self::new("String")
+    }
+
     pub fn byte() -> Self {
         Self::new("Byte")
     }
@@ -222,6 +226,14 @@ impl TypeName {
             false => "ByteArray",
         })
     }
+
+    pub fn list(element: Self) -> Self {
+        Self::new(format!("List<{element}>"))
+    }
+
+    pub fn nullable(self) -> Self {
+        Self::new(format!("{self}?"))
+    }
 }
 
 impl sealed::SyntaxFragment for Expression {}
@@ -237,8 +249,32 @@ impl Expression {
         Self(identifier.to_string())
     }
 
+    pub fn integer(value: u64) -> Self {
+        Self(value.to_string())
+    }
+
     pub fn call(receiver: impl fmt::Display, method: Identifier, arguments: ArgumentList) -> Self {
         Self(format!("{receiver}.{method}({arguments})"))
+    }
+
+    pub fn construct(ty: TypeName, arguments: ArgumentList) -> Self {
+        Self(format!("{ty}({arguments})"))
+    }
+
+    pub fn property(receiver: impl fmt::Display, property: Identifier) -> Self {
+        Self(format!("{receiver}.{property}"))
+    }
+
+    pub fn add(self, other: Self) -> Self {
+        Self(format!("{self} + {other}"))
+    }
+
+    pub fn or_else(self, fallback: Self) -> Self {
+        Self(format!("{self} ?: {fallback}"))
+    }
+
+    pub fn throw_illegal_state(message: Literal) -> Self {
+        Self(format!("throw IllegalStateException({message})"))
     }
 
     pub fn convert(self, method: Identifier) -> Self {
@@ -255,6 +291,10 @@ impl fmt::Display for Statement {
 }
 
 impl Statement {
+    pub fn value(name: Identifier, value: Expression) -> Self {
+        Self(format!("val {name} = {value}"))
+    }
+
     pub fn return_value(value: Expression) -> Self {
         Self(format!("return {value}"))
     }
@@ -269,6 +309,12 @@ impl sealed::SyntaxFragment for Literal {}
 impl fmt::Display for Literal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
+    }
+}
+
+impl Literal {
+    pub fn string(value: &str) -> Self {
+        Self(format!("{value:?}"))
     }
 }
 

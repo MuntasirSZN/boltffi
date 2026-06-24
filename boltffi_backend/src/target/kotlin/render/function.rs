@@ -8,9 +8,14 @@ use boltffi_binding::{
 use crate::{
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
+        codec::{EncodedWrite, Reader, WireBuffer},
         name_style::Name,
-        render::{native::NativeCall, primitive::KotlinPrimitive, type_name::ParameterType},
-        syntax::{Expression, Identifier, Statement, TypeName},
+        render::{
+            native::NativeCall,
+            primitive::KotlinPrimitive,
+            type_name::{KotlinType, ParameterType},
+        },
+        syntax::{ArgumentList, Expression, Identifier, Literal, Statement, TypeName},
     },
 };
 
@@ -27,7 +32,9 @@ pub struct Function {
     name: Identifier,
     parameters: Vec<Parameter>,
     returns: Option<TypeName>,
-    body: Vec<Statement>,
+    setup: Vec<Statement>,
+    call: Vec<Statement>,
+    cleanup: Vec<Statement>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +42,14 @@ pub struct Parameter {
     name: Identifier,
     ty: TypeName,
     native_argument: Expression,
+    setup: Vec<Statement>,
+    cleanup: Vec<Statement>,
+}
+
+struct NativeArgument {
+    expression: Expression,
+    setup: Vec<Statement>,
+    cleanup: Vec<Statement>,
 }
 
 struct FunctionReturn {
@@ -45,6 +60,7 @@ struct FunctionReturn {
 enum ReturnConversion {
     Void,
     Direct(Primitive),
+    Encoded(<OutOfRust as Direction>::Codec),
 }
 
 impl Function {
@@ -77,12 +93,22 @@ impl Function {
                 .map(|parameter| parameter.native_argument().clone())
                 .collect(),
         );
-        let body = function_return.body(call.expression())?;
+        let call = function_return.statements(call.expression())?;
+        let setup = parameters
+            .iter()
+            .flat_map(|parameter| parameter.setup().iter().cloned())
+            .collect();
+        let cleanup = parameters
+            .iter()
+            .flat_map(|parameter| parameter.cleanup().iter().cloned())
+            .collect();
         Ok(Self {
             name: Name::new(decl.name()).function()?,
             parameters,
             returns: function_return.ty,
-            body,
+            setup,
+            call,
+            cleanup,
         })
     }
 
@@ -104,8 +130,20 @@ impl Function {
         self.returns.as_ref()
     }
 
-    pub fn body(&self) -> &[Statement] {
-        &self.body
+    pub fn setup(&self) -> &[Statement] {
+        &self.setup
+    }
+
+    pub fn call(&self) -> &[Statement] {
+        &self.call
+    }
+
+    pub fn cleanup(&self) -> &[Statement] {
+        &self.cleanup
+    }
+
+    pub fn has_cleanup(&self) -> bool {
+        !self.cleanup.is_empty()
     }
 }
 
@@ -119,11 +157,15 @@ impl Parameter {
                 shape: "closure function parameter",
             });
         };
-        let name = Name::new(parameter.name()).parameter()?;
+        let source_name = Name::new(parameter.name());
+        let name = source_name.parameter()?;
+        let native_argument = Self::native_argument_for(source_name, name.clone(), plan)?;
         Ok(Self {
-            native_argument: Self::native_argument_for(name.clone(), plan)?,
+            native_argument: native_argument.expression,
             name,
             ty: Self::type_name(plan)?,
+            setup: native_argument.setup,
+            cleanup: native_argument.cleanup,
         })
     }
 
@@ -139,6 +181,14 @@ impl Parameter {
         &self.native_argument
     }
 
+    fn setup(&self) -> &[Statement] {
+        &self.setup
+    }
+
+    fn cleanup(&self) -> &[Statement] {
+        &self.cleanup
+    }
+
     fn type_name(plan: &ParamPlan<Native, boltffi_binding::IntoRust>) -> Result<TypeName> {
         plan.render_with(&mut ParameterType)
     }
@@ -146,19 +196,40 @@ impl Parameter {
 
 impl Parameter {
     fn native_argument_for(
+        source_name: Name,
         name: Identifier,
         plan: &ParamPlan<Native, boltffi_binding::IntoRust>,
-    ) -> Result<Expression> {
-        plan.render_with(&mut NativeArgument { name })
+    ) -> Result<NativeArgument> {
+        plan.render_with(&mut NativeArgumentRender { source_name, name })
     }
 }
 
-struct NativeArgument {
+struct NativeArgumentRender {
+    source_name: Name,
     name: Identifier,
 }
 
-impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgument {
-    type Output = Result<Expression>;
+impl NativeArgument {
+    fn direct(expression: Expression) -> Self {
+        Self {
+            expression,
+            setup: Vec::new(),
+            cleanup: Vec::new(),
+        }
+    }
+
+    fn encoded(write: EncodedWrite) -> Self {
+        let (setup, expression, cleanup) = write.into_parts();
+        Self {
+            expression,
+            setup,
+            cleanup,
+        }
+    }
+}
+
+impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender {
+    type Output = Result<NativeArgument>;
 
     fn direct(
         &mut self,
@@ -167,9 +238,9 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgument {
     ) -> Self::Output {
         let value = Expression::identifier(self.name.clone());
         match ty {
-            DirectValueType::Primitive(primitive) => {
-                KotlinPrimitive::new(*primitive).native_argument(value)
-            }
+            DirectValueType::Primitive(primitive) => KotlinPrimitive::new(*primitive)
+                .native_argument(value)
+                .map(NativeArgument::direct),
             DirectValueType::Record(_) => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "direct record function parameter",
@@ -188,14 +259,13 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgument {
     fn encoded(
         &mut self,
         _ty: &'plan TypeRef,
-        _codec: &'plan <IntoRust as Direction>::Codec,
+        codec: &'plan <IntoRust as Direction>::Codec,
         _shape: <Native as boltffi_binding::Surface>::BufferShape,
         _receive: <IntoRust as Direction>::Receive,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "encoded function parameter",
-        })
+        WireBuffer::new(&self.source_name)
+            .and_then(|buffer| buffer.write(codec))
+            .map(NativeArgument::encoded)
     }
 
     fn handle(
@@ -268,15 +338,22 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan {
 
     fn encoded(
         &mut self,
-        _slot: ReturnValueSlot,
-        _ty: &'plan TypeRef,
-        _codec: &'plan <OutOfRust as Direction>::Codec,
+        slot: ReturnValueSlot,
+        ty: &'plan TypeRef,
+        codec: &'plan <OutOfRust as Direction>::Codec,
         _shape: <Native as boltffi_binding::Surface>::BufferShape,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "encoded function return",
-        })
+        match slot {
+            ReturnValueSlot::ReturnSlot => FunctionReturn::encoded(ty, codec.clone()),
+            ReturnValueSlot::OutPointer => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "out-pointer encoded function return",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown encoded function return",
+            }),
+        }
     }
 
     fn handle(
@@ -336,12 +413,42 @@ impl FunctionReturn {
         })
     }
 
-    fn body(&self, call: Expression) -> Result<Vec<Statement>> {
+    fn encoded(ty: &TypeRef, codec: <OutOfRust as Direction>::Codec) -> Result<Self> {
+        Ok(Self {
+            ty: Some(KotlinType::type_ref(ty)?),
+            conversion: ReturnConversion::Encoded(codec),
+        })
+    }
+
+    fn statements(&self, call: Expression) -> Result<Vec<Statement>> {
         match &self.conversion {
             ReturnConversion::Void => Ok(vec![Statement::expression(call)]),
-            ReturnConversion::Direct(primitive) => Ok(vec![Statement::return_value(
-                KotlinPrimitive::new(*primitive).public_return(call)?,
-            )]),
+            ReturnConversion::Direct(primitive) => Ok(vec![
+                KotlinPrimitive::new(*primitive)
+                    .public_return(call)
+                    .map(Statement::return_value)?,
+            ]),
+            ReturnConversion::Encoded(codec) => {
+                let result = Identifier::parse("__boltffi_result")?;
+                let reader = Identifier::parse("__boltffi_reader")?;
+                let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
+                    "null buffer returned",
+                )));
+                let value = codec.render_with(&mut Reader::new(reader.clone()))?;
+                Ok(vec![
+                    Statement::value(result.clone(), payload),
+                    Statement::value(
+                        reader,
+                        Expression::construct(
+                            TypeName::new("WireReader"),
+                            [Expression::identifier(result)]
+                                .into_iter()
+                                .collect::<ArgumentList>(),
+                        ),
+                    ),
+                    Statement::return_value(value),
+                ])
+            }
         }
     }
 }

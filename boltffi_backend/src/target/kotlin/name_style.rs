@@ -96,6 +96,10 @@ impl Name {
         Identifier::escape(self.lower_camel())
     }
 
+    pub fn generated(&self, suffix: &str) -> Result<Identifier> {
+        Identifier::parse(format!("__boltffi_{}_{}", self.lower_camel(), suffix))
+    }
+
     fn lower_camel(&self) -> String {
         self.parts
             .iter()

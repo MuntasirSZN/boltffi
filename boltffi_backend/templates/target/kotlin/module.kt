@@ -1,5 +1,7 @@
 package {{ package }}
 
+{{ runtime }}
+
 @Suppress("FunctionName")
 private object Native {
 {%- for function in native_functions %}
