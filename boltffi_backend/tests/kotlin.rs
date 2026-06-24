@@ -402,3 +402,113 @@ fn kotlin_target_encodes_nullable_primitives_as_compact_wire() {
         "{kotlin}"
     );
 }
+
+#[test]
+fn kotlin_target_renders_class_handles_and_associated_callables() {
+    let bindings = bindings(
+        r#"
+        pub struct Engine {
+            value: i32,
+        }
+
+        #[export]
+        impl Engine {
+            pub fn new(value: i32) -> Self {
+                Self { value }
+            }
+
+            pub fn version() -> u32 {
+                1
+            }
+
+            pub fn value(&self) -> i32 {
+                self.value
+            }
+
+            pub fn swap(&self, other: Engine) -> Engine {
+                other
+            }
+
+            pub fn maybe_swap(&self, other: Option<Engine>) -> Option<Engine> {
+                other
+            }
+        }
+        "#,
+    );
+    let target = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .into_target()
+        .expect("Kotlin target");
+    let output = target.render(&bindings).expect("Kotlin target renders");
+    let kotlin = file(&output, "com/boltffi/demo/Demo.kt");
+
+    assert!(
+        kotlin.contains(
+            "@JvmStatic external fun boltffi_release_class_demo_engine(handle: Long): Unit"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "@JvmStatic external fun boltffi_init_class_demo_engine_new(value: Int): Long"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "@JvmStatic external fun boltffi_method_class_demo_engine_value(`receiver`: Long): Int"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "@JvmStatic external fun boltffi_method_class_demo_engine_maybe_swap(`receiver`: Long, other: Long): Long"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("class Engine internal constructor(internal val handle: Long)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("Native.boltffi_release_class_demo_engine(handle)"),
+        "{kotlin}"
+    );
+    assert!(kotlin.contains("fun new(value: Int): Engine"), "{kotlin}");
+    assert!(
+        kotlin.contains("return Engine(Native.boltffi_init_class_demo_engine_new(value))"),
+        "{kotlin}"
+    );
+    assert!(kotlin.contains("fun version(): UInt"), "{kotlin}");
+    assert!(
+        kotlin.contains("return Native.boltffi_method_class_demo_engine_version().toUInt()"),
+        "{kotlin}"
+    );
+    assert!(kotlin.contains("fun value(): Int"), "{kotlin}");
+    assert!(
+        kotlin.contains("return Native.boltffi_method_class_demo_engine_value(this.handle)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("fun swap(other: Engine): Engine"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains(
+            "return Engine(Native.boltffi_method_class_demo_engine_swap(this.handle, other.handle))"
+        ),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("fun maybeSwap(other: Engine?): Engine?"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("val __boltffi_handle = Native.boltffi_method_class_demo_engine_maybe_swap(this.handle, other?.handle ?: 0L)"),
+        "{kotlin}"
+    );
+    assert!(
+        kotlin.contains("return if (__boltffi_handle == 0L) null else Engine(__boltffi_handle)"),
+        "{kotlin}"
+    );
+}

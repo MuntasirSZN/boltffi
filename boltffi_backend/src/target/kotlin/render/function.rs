@@ -1,9 +1,9 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    ClosureReturn, DirectValueType, DirectVectorElementType, Direction, EnumId, ExecutionDecl,
-    FunctionDecl, HandlePresence, HandleTarget, IncomingParam, IntoRust, Native, OutOfRust,
-    ParamDecl, ParamPlan, ParamPlanRender, Primitive, RecordId, ReturnPlanRender, ReturnValueSlot,
-    Surface, TypeRef,
+    ClassId, ClosureReturn, DirectValueType, DirectVectorElementType, Direction, EnumId,
+    ExecutionDecl, ExportedCallable, FunctionDecl, HandlePresence, HandleTarget, IncomingParam,
+    IntoRust, Native, NativeSymbol, OutOfRust, ParamDecl, ParamPlan, ParamPlanRender, Primitive,
+    RecordId, ReturnPlanRender, ReturnValueSlot, Surface, TypeRef,
 };
 
 use crate::{
@@ -13,6 +13,7 @@ use crate::{
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
+            class::ClassHandle,
             enumeration::Enumeration,
             native::NativeCall,
             record::Record,
@@ -32,6 +33,16 @@ struct FunctionTemplate {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Function {
+    name: Identifier,
+    parameters: Vec<Parameter>,
+    returns: Option<TypeName>,
+    setup: Vec<Statement>,
+    call: Vec<Statement>,
+    cleanup: Vec<Statement>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportedCall {
     name: Identifier,
     parameters: Vec<Parameter>,
     returns: Option<TypeName>,
@@ -66,6 +77,7 @@ enum ReturnConversion {
     DirectRecord(TypeName),
     DirectEnum { ty: TypeName, repr: Primitive },
     Encoded(<OutOfRust as Direction>::Codec),
+    ClassHandle(ClassHandle),
     ScalarOption(Primitive),
 }
 
@@ -74,32 +86,98 @@ impl Function {
         decl: &FunctionDecl<Native>,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        if !matches!(decl.callable().execution(), ExecutionDecl::Synchronous(_)) {
+        ExportedCall::new(
+            Name::new(decl.name()).function()?,
+            decl.symbol(),
+            decl.callable(),
+            Vec::new(),
+            context,
+        )
+        .map(Self::from_call)
+    }
+
+    pub fn render(self) -> Result<Emitted> {
+        Ok(Emitted::primary(
+            FunctionTemplate { function: self }.render()?,
+        ))
+    }
+
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    pub fn parameters(&self) -> &[Parameter] {
+        &self.parameters
+    }
+
+    pub fn returns(&self) -> Option<&TypeName> {
+        self.returns.as_ref()
+    }
+
+    pub fn setup(&self) -> &[Statement] {
+        &self.setup
+    }
+
+    pub fn call(&self) -> &[Statement] {
+        &self.call
+    }
+
+    pub fn cleanup(&self) -> &[Statement] {
+        &self.cleanup
+    }
+
+    pub fn has_cleanup(&self) -> bool {
+        !self.cleanup.is_empty()
+    }
+
+    fn from_call(call: ExportedCall) -> Self {
+        Self {
+            name: call.name,
+            parameters: call.parameters,
+            returns: call.returns,
+            setup: call.setup,
+            call: call.call,
+            cleanup: call.cleanup,
+        }
+    }
+}
+
+impl ExportedCall {
+    pub fn new(
+        name: Identifier,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        native_prefix: Vec<Expression>,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
             return Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "async function",
             });
         }
 
-        let parameters = decl
-            .callable()
+        let parameters = callable
             .params()
             .iter()
             .map(|parameter| Parameter::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
-        let function_return = decl
-            .callable()
+        let function_return = callable
             .returns()
             .plan()
             .render_with(&mut FunctionReturnPlan::new(context))?;
-        let call = NativeCall::new(
-            Identifier::escape(decl.symbol().name().as_str())?,
-            parameters
-                .iter()
-                .map(|parameter| parameter.native_argument().clone())
-                .collect(),
+        let native_arguments = native_prefix
+            .into_iter()
+            .chain(
+                parameters
+                    .iter()
+                    .map(|parameter| parameter.native_argument().clone()),
+            )
+            .collect();
+        let native_call = NativeCall::new(
+            Identifier::escape(symbol.name().as_str())?,
+            native_arguments,
         );
-        let call = function_return.statements(call.expression())?;
         let setup = parameters
             .iter()
             .flat_map(|parameter| parameter.setup().iter().cloned())
@@ -108,20 +186,16 @@ impl Function {
             .iter()
             .flat_map(|parameter| parameter.cleanup().iter().cloned())
             .collect();
+        let returns = function_return.ty.clone();
+        let call = function_return.statements(native_call.expression())?;
         Ok(Self {
-            name: Name::new(decl.name()).function()?,
+            name,
             parameters,
-            returns: function_return.ty,
+            returns,
             setup,
             call,
             cleanup,
         })
-    }
-
-    pub fn render(self) -> Result<Emitted> {
-        Ok(Emitted::primary(
-            FunctionTemplate { function: self }.render()?,
-        ))
     }
 
     pub fn name(&self) -> &Identifier {
@@ -285,15 +359,27 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
 
     fn handle(
         &mut self,
-        _target: &'plan HandleTarget,
+        target: &'plan HandleTarget,
         _carrier: <Native as Surface>::HandleCarrier,
-        _presence: HandlePresence,
+        presence: HandlePresence,
         _receive: <IntoRust as Direction>::Receive,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "handle function parameter",
-        })
+        match target {
+            HandleTarget::Class(class) => ClassHandle::new(*class, presence, self.context)
+                .and_then(|handle| {
+                    handle
+                        .parameter_argument(Expression::identifier(self.name.clone()))
+                        .map(NativeArgument::direct)
+                }),
+            HandleTarget::Callback(_) | HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "handle function parameter",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown handle function parameter",
+            }),
+        }
     }
 
     fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
@@ -369,15 +455,30 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
 
     fn handle(
         &mut self,
-        _slot: ReturnValueSlot,
-        _target: &'plan HandleTarget,
+        slot: ReturnValueSlot,
+        target: &'plan HandleTarget,
         _carrier: <Native as Surface>::HandleCarrier,
-        _presence: HandlePresence,
+        presence: HandlePresence,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "handle function return",
-        })
+        match (slot, target) {
+            (ReturnValueSlot::ReturnSlot, HandleTarget::Class(class)) => {
+                FunctionReturn::class_handle(*class, presence, self.context)
+            }
+            (ReturnValueSlot::OutPointer, _) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "out-pointer handle function return",
+            }),
+            (_, HandleTarget::Callback(_) | HandleTarget::Stream(_)) => {
+                Err(Error::UnsupportedTarget {
+                    target: KOTLIN_TARGET,
+                    shape: "handle function return",
+                })
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown handle function return",
+            }),
+        }
     }
 
     fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
@@ -446,6 +547,19 @@ impl FunctionReturn {
         })
     }
 
+    fn class_handle(
+        class: ClassId,
+        presence: HandlePresence,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let handle = ClassHandle::new(class, presence, context)?;
+        let ty = handle.ty()?;
+        Ok(Self {
+            ty: Some(ty),
+            conversion: ReturnConversion::ClassHandle(handle),
+        })
+    }
+
     fn scalar_option(primitive: Primitive) -> Result<Self> {
         Ok(Self {
             ty: Some(ScalarOption::new(primitive).ty()?),
@@ -503,6 +617,7 @@ impl FunctionReturn {
                     Statement::return_value(value),
                 ])
             }
+            ReturnConversion::ClassHandle(handle) => handle.return_statements(call),
             ReturnConversion::ScalarOption(primitive) => ScalarOption::new(*primitive).read(call),
         }
     }

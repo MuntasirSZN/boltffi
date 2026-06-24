@@ -96,6 +96,7 @@ impl host::HostBackend for KotlinHost {
         HostCapabilities::new()
             .stable(BindingCapability::Records)
             .stable(BindingCapability::Enums)
+            .stable(BindingCapability::Classes)
             .stable(BindingCapability::Functions)
     }
 
@@ -132,13 +133,11 @@ impl host::HostBackend for KotlinHost {
 
     fn class(
         &self,
-        _decl: &ClassDecl<Self::Surface>,
+        decl: &ClassDecl<Self::Surface>,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Ok(Emitted::diagnostic(crate::core::Diagnostic::new(
-            "kotlin target skipped class declaration",
-        )))
+        render::Class::from_declaration(decl, context)?.render()
     }
 
     fn callback(

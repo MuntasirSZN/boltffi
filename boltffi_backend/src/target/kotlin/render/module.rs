@@ -18,6 +18,7 @@ struct ModuleTemplate {
     native_functions: Vec<NativeFunction>,
     records: Vec<String>,
     enumerations: Vec<String>,
+    classes: Vec<String>,
     functions: Vec<String>,
 }
 
@@ -49,6 +50,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         let native_functions = self.native_functions()?;
         let records = self.records();
         let enumerations = self.enumerations();
+        let classes = self.classes();
         let functions = self.functions();
         let contents = ModuleTemplate {
             package: self.host.package().clone(),
@@ -56,6 +58,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
             native_functions,
             records,
             enumerations,
+            classes,
             functions,
         }
         .render()?;
@@ -70,16 +73,21 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
 
     fn native_functions(&self) -> Result<Vec<NativeFunction>> {
         let methods = NativeMethods::new(self.bridge);
-        self.declarations
+        Ok(self
+            .declarations
             .iter()
-            .filter_map(|declaration| {
-                let DeclarationRef::Function(function) = declaration.declaration() else {
-                    return None;
-                };
-                (!declaration.emitted().primary_chunk().is_empty())
-                    .then(|| methods.function(function))
+            .filter(|declaration| !declaration.emitted().primary_chunk().is_empty())
+            .map(|declaration| match declaration.declaration() {
+                DeclarationRef::Function(function) => {
+                    methods.function(function).map(|function| vec![function])
+                }
+                DeclarationRef::Class(class) => methods.class(class),
+                _ => Ok(Vec::new()),
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect())
     }
 
     fn functions(&self) -> Vec<String> {
@@ -97,6 +105,12 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
     fn enumerations(&self) -> Vec<String> {
         self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Enum(_))
+        })
+    }
+
+    fn classes(&self) -> Vec<String> {
+        self.primary_chunks(|declaration| {
+            matches!(declaration.declaration(), DeclarationRef::Class(_))
         })
     }
 

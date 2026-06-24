@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use boltffi_binding::{FunctionDecl, Native};
+use boltffi_binding::{ClassDecl, FunctionDecl, Native, NativeSymbol};
 
 use crate::{
     bridge::jni::{JniBridgeContract, NativeMethod, NativeParameter},
@@ -42,12 +42,28 @@ impl<'bridge> NativeMethods<'bridge> {
     }
 
     pub fn function(&self, decl: &FunctionDecl<Native>) -> Result<NativeFunction> {
+        self.symbol(decl.symbol())
+    }
+
+    pub fn class(&self, decl: &ClassDecl<Native>) -> Result<Vec<NativeFunction>> {
+        std::iter::once(decl.release())
+            .chain(
+                decl.initializers()
+                    .iter()
+                    .map(|initializer| initializer.symbol()),
+            )
+            .chain(decl.methods().iter().map(|method| method.target()))
+            .map(|symbol| self.symbol(symbol))
+            .collect()
+    }
+
+    fn symbol(&self, symbol: &NativeSymbol) -> Result<NativeFunction> {
         self.methods
-            .get(decl.symbol().name().as_str())
+            .get(symbol.name().as_str())
             .copied()
             .ok_or(Error::BrokenBridgeContract {
                 bridge: JNI_BRIDGE,
-                invariant: "function declaration has no JNI native method",
+                invariant: "declaration has no JNI native method",
             })
             .and_then(NativeFunction::from_method)
     }

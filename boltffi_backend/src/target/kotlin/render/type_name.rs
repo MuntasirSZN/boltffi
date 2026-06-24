@@ -10,7 +10,7 @@ use crate::{
     target::kotlin::{
         codec::ScalarOption,
         primitive::KotlinPrimitive,
-        render::{enumeration::Enumeration, record::Record},
+        render::{class::ClassHandle, enumeration::Enumeration, record::Record},
         syntax::TypeName,
     },
 };
@@ -233,15 +233,24 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
 
     fn handle(
         &mut self,
-        _target: &'plan HandleTarget,
+        target: &'plan HandleTarget,
         _carrier: <Native as Surface>::HandleCarrier,
-        _presence: HandlePresence,
+        presence: HandlePresence,
         _receive: <IntoRust as Direction>::Receive,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "handle function parameter",
-        })
+        match target {
+            HandleTarget::Class(class) => {
+                ClassHandle::new(*class, presence, self.context).and_then(|handle| handle.ty())
+            }
+            HandleTarget::Callback(_) | HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "handle function parameter",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown handle function parameter",
+            }),
+        }
     }
 
     fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {

@@ -19,6 +19,11 @@ private object Native {
 {{ enumeration }}
 {%- endfor %}
 
+{%- for class in classes %}
+
+{{ class }}
+{%- endfor %}
+
 {%- for function in functions %}
 
 {{ function }}

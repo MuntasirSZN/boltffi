@@ -252,6 +252,10 @@ impl Expression {
         Self(value.into().to_string())
     }
 
+    pub fn long(value: impl Into<i128>) -> Self {
+        Self(format!("{}L", value.into()))
+    }
+
     pub fn null() -> Self {
         Self("null".to_owned())
     }
@@ -266,6 +270,10 @@ impl Expression {
 
     pub fn property(receiver: impl fmt::Display, property: Identifier) -> Self {
         Self(format!("{receiver}.{property}"))
+    }
+
+    pub fn safe_property(receiver: impl fmt::Display, property: Identifier) -> Self {
+        Self(format!("{receiver}?.{property}"))
     }
 
     pub fn add(self, other: Self) -> Self {

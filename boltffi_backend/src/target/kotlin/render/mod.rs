@@ -1,3 +1,4 @@
+mod class;
 mod enumeration;
 mod function;
 mod module;
@@ -5,6 +6,7 @@ mod native;
 mod record;
 mod type_name;
 
+pub use class::Class;
 pub use enumeration::Enumeration;
 pub use function::Function;
 pub use module::Module;
