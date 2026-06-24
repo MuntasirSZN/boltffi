@@ -74,6 +74,14 @@ impl WritePlan {
     {
         CodecWalker::write(&self.root, &self.value, renderer)
     }
+
+    /// Renders the encoded byte count through the shared codec walker.
+    pub fn size_with<S>(&self, renderer: &mut S) -> S::Expr
+    where
+        S: CodecSize,
+    {
+        CodecWalker::size(&self.root, &self.value, renderer)
+    }
 }
 
 /// Bidirectional codec selected for one encoded value.
@@ -346,6 +354,90 @@ pub trait CodecWrite {
     ) -> Vec<Self::Stmt>;
 }
 
+/// Target-language rendering for encoded byte counts.
+///
+/// Mirrors [`CodecWrite`] but produces the expression used to pre-size an
+/// encoder before the value is written. Targets that allocate output buffers
+/// up front use this walker to keep sizing and writing aligned with the same
+/// codec tree.
+pub trait CodecSize {
+    /// Target expression produced by the sizer.
+    type Expr;
+
+    /// Returns the encoded size of a primitive scalar.
+    fn primitive(&mut self, primitive: Primitive, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a UTF-8 string.
+    fn string(&mut self, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a byte buffer.
+    fn bytes(&mut self, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a directly-carried record.
+    fn direct_record(&mut self, id: RecordId, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of an encoded record.
+    fn encoded_record(&mut self, id: RecordId, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a fieldless enum.
+    fn c_style_enum(&mut self, id: EnumId, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a payload-carrying enum.
+    fn data_enum(&mut self, id: EnumId, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a class handle.
+    fn class_handle(&mut self, id: ClassId, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a callback handle.
+    fn callback_handle(&mut self, id: CallbackId, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of a custom type representation.
+    fn custom(
+        &mut self,
+        id: CustomTypeId,
+        value: &ValueRef,
+        representation: Self::Expr,
+    ) -> Self::Expr;
+
+    /// Returns the encoded size of a builtin value.
+    fn builtin(&mut self, kind: BuiltinType, value: &ValueRef) -> Self::Expr;
+
+    /// Returns the encoded size of an optional value.
+    fn optional(&mut self, value: &ValueRef, binder: BinderId, inner: Self::Expr) -> Self::Expr;
+
+    /// Returns the encoded size of a sequence.
+    fn sequence(
+        &mut self,
+        value: &ValueRef,
+        len: &Op<ElementCount>,
+        binder: BinderId,
+        element: Self::Expr,
+    ) -> Self::Expr;
+
+    /// Returns the encoded size of a tuple.
+    fn tuple(&mut self, value: &ValueRef, elements: Vec<Self::Expr>) -> Self::Expr;
+
+    /// Returns the encoded size of a fallible value.
+    fn result(
+        &mut self,
+        value: &ValueRef,
+        binder: BinderId,
+        ok: Self::Expr,
+        err: Self::Expr,
+    ) -> Self::Expr;
+
+    /// Returns the encoded size of a map.
+    fn map(
+        &mut self,
+        kind: MapKind,
+        value: &ValueRef,
+        key_binder: BinderId,
+        key: Self::Expr,
+        value_binder: BinderId,
+        map_value: Self::Expr,
+    ) -> Self::Expr;
+}
+
 struct CodecWalker;
 
 impl CodecWalker {
@@ -402,6 +494,14 @@ impl CodecWalker {
     {
         let mut next_binder = 0;
         Self::write_node(node, value, renderer, &mut next_binder)
+    }
+
+    fn size<S>(node: &CodecNode, value: &ValueRef, renderer: &mut S) -> S::Expr
+    where
+        S: CodecSize,
+    {
+        let mut next_binder = 0;
+        Self::size_node(node, value, renderer, &mut next_binder)
     }
 
     fn write_node<W>(
@@ -489,13 +589,86 @@ impl CodecWalker {
             .expect("codec binder id fits in u32");
         binder
     }
+
+    fn size_node<S>(
+        node: &CodecNode,
+        value: &ValueRef,
+        renderer: &mut S,
+        next_binder: &mut u32,
+    ) -> S::Expr
+    where
+        S: CodecSize,
+    {
+        match node {
+            CodecNode::Primitive(primitive) => renderer.primitive(*primitive, value),
+            CodecNode::String => renderer.string(value),
+            CodecNode::Bytes => renderer.bytes(value),
+            CodecNode::DirectRecord(id) => renderer.direct_record(*id, value),
+            CodecNode::EncodedRecord(id) => renderer.encoded_record(*id, value),
+            CodecNode::CStyleEnum(id) => renderer.c_style_enum(*id, value),
+            CodecNode::DataEnum(id) => renderer.data_enum(*id, value),
+            CodecNode::ClassHandle(id) => renderer.class_handle(*id, value),
+            CodecNode::CallbackHandle(id) => renderer.callback_handle(*id, value),
+            CodecNode::Custom { id, representation } => {
+                let representation = Self::size_node(representation, value, renderer, next_binder);
+                renderer.custom(*id, value, representation)
+            }
+            CodecNode::Builtin(kind) => renderer.builtin(*kind, value),
+            CodecNode::Optional(inner) => {
+                let binder = Self::next_binder(next_binder);
+                let inner =
+                    Self::size_node(inner, &ValueRef::binder(binder), renderer, next_binder);
+                renderer.optional(value, binder, inner)
+            }
+            CodecNode::Sequence { len, element } => {
+                let binder = Self::next_binder(next_binder);
+                let element =
+                    Self::size_node(element, &ValueRef::binder(binder), renderer, next_binder);
+                renderer.sequence(value, len, binder, element)
+            }
+            CodecNode::Tuple(elements) => {
+                let elements = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        let field = FieldKey::position(index).expect("tuple index fits in u32");
+                        Self::size_node(element, &value.clone().field(field), renderer, next_binder)
+                    })
+                    .collect();
+                renderer.tuple(value, elements)
+            }
+            CodecNode::Result { ok, err } => {
+                let binder = Self::next_binder(next_binder);
+                let ok = Self::size_node(ok, &ValueRef::binder(binder), renderer, next_binder);
+                let err = Self::size_node(err, &ValueRef::binder(binder), renderer, next_binder);
+                renderer.result(value, binder, ok, err)
+            }
+            CodecNode::Map {
+                kind,
+                key,
+                value: map_value,
+            } => {
+                let key_binder = Self::next_binder(next_binder);
+                let value_binder = Self::next_binder(next_binder);
+                let key =
+                    Self::size_node(key, &ValueRef::binder(key_binder), renderer, next_binder);
+                let map_value = Self::size_node(
+                    map_value,
+                    &ValueRef::binder(value_binder),
+                    renderer,
+                    next_binder,
+                );
+                renderer.map(*kind, value, key_binder, key, value_binder, map_value)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use boltffi_ast::{BuiltinType, MapKind};
 
-    use super::{CodecNode, CodecRead, CodecWrite, ReadPlan, WritePlan};
+    use super::{CodecNode, CodecRead, CodecSize, CodecWrite, ReadPlan, WritePlan};
     use crate::{
         BinderId, CallbackId, ClassId, CustomTypeId, ElementCount, EnumId, FieldKey, Op, Primitive,
         RecordId, ValueRef, ValueRoot,
@@ -572,6 +745,8 @@ mod tests {
     }
 
     struct TextWrite;
+
+    struct TextSize;
 
     impl CodecWrite for TextWrite {
         type Stmt = String;
@@ -716,6 +891,129 @@ mod tests {
         }
     }
 
+    impl CodecSize for TextSize {
+        type Expr = String;
+
+        fn primitive(&mut self, primitive: Primitive, value: &ValueRef) -> Self::Expr {
+            format!("size_primitive({primitive:?}, {})", value_name(value))
+        }
+
+        fn string(&mut self, value: &ValueRef) -> Self::Expr {
+            format!("size_string({})", value_name(value))
+        }
+
+        fn bytes(&mut self, value: &ValueRef) -> Self::Expr {
+            format!("size_bytes({})", value_name(value))
+        }
+
+        fn direct_record(&mut self, id: RecordId, value: &ValueRef) -> Self::Expr {
+            format!("size_direct_record({}, {})", id.raw(), value_name(value))
+        }
+
+        fn encoded_record(&mut self, id: RecordId, value: &ValueRef) -> Self::Expr {
+            format!("size_encoded_record({}, {})", id.raw(), value_name(value))
+        }
+
+        fn c_style_enum(&mut self, id: EnumId, value: &ValueRef) -> Self::Expr {
+            format!("size_c_style_enum({}, {})", id.raw(), value_name(value))
+        }
+
+        fn data_enum(&mut self, id: EnumId, value: &ValueRef) -> Self::Expr {
+            format!("size_data_enum({}, {})", id.raw(), value_name(value))
+        }
+
+        fn class_handle(&mut self, id: ClassId, value: &ValueRef) -> Self::Expr {
+            format!("size_class_handle({}, {})", id.raw(), value_name(value))
+        }
+
+        fn callback_handle(&mut self, id: CallbackId, value: &ValueRef) -> Self::Expr {
+            format!("size_callback_handle({}, {})", id.raw(), value_name(value))
+        }
+
+        fn custom(
+            &mut self,
+            id: CustomTypeId,
+            value: &ValueRef,
+            representation: Self::Expr,
+        ) -> Self::Expr {
+            format!(
+                "size_custom({}, {}, {representation})",
+                id.raw(),
+                value_name(value)
+            )
+        }
+
+        fn builtin(&mut self, kind: BuiltinType, value: &ValueRef) -> Self::Expr {
+            format!("size_builtin({kind:?}, {})", value_name(value))
+        }
+
+        fn optional(
+            &mut self,
+            value: &ValueRef,
+            binder: BinderId,
+            inner: Self::Expr,
+        ) -> Self::Expr {
+            format!(
+                "size_optional({}, b{}, {inner})",
+                value_name(value),
+                binder.raw()
+            )
+        }
+
+        fn sequence(
+            &mut self,
+            value: &ValueRef,
+            _len: &Op<ElementCount>,
+            binder: BinderId,
+            element: Self::Expr,
+        ) -> Self::Expr {
+            format!(
+                "size_sequence({}, b{}, {element})",
+                value_name(value),
+                binder.raw()
+            )
+        }
+
+        fn tuple(&mut self, value: &ValueRef, elements: Vec<Self::Expr>) -> Self::Expr {
+            format!(
+                "size_tuple({}, [{}])",
+                value_name(value),
+                elements.join("|")
+            )
+        }
+
+        fn result(
+            &mut self,
+            value: &ValueRef,
+            binder: BinderId,
+            ok: Self::Expr,
+            err: Self::Expr,
+        ) -> Self::Expr {
+            format!(
+                "size_result({}, b{}, {ok}, {err})",
+                value_name(value),
+                binder.raw()
+            )
+        }
+
+        fn map(
+            &mut self,
+            kind: MapKind,
+            value: &ValueRef,
+            key_binder: BinderId,
+            key: Self::Expr,
+            value_binder: BinderId,
+            map_value: Self::Expr,
+        ) -> Self::Expr {
+            format!(
+                "size_map({kind:?}, {}, k{}, {key}, v{}, {map_value})",
+                value_name(value),
+                key_binder.raw(),
+                value_binder.raw()
+            )
+        }
+    }
+
     #[test]
     fn read_plan_renders_children_before_containers() {
         let plan = ReadPlan::new(CodecNode::Optional(Box::new(CodecNode::Sequence {
@@ -768,6 +1066,30 @@ mod tests {
         assert_eq!(
             plan.render_with(&mut renderer),
             vec!["optional(self, b0, [primitive(U32, b0)])".to_owned()]
+        );
+    }
+
+    #[test]
+    fn size_plan_allocates_unique_binders_for_nested_collections() {
+        let plan = WritePlan::new(
+            ValueRef::self_value(),
+            CodecNode::Sequence {
+                len: Op::sequence_len(ValueRef::self_value()),
+                element: Box::new(CodecNode::Map {
+                    kind: MapKind::Hash,
+                    key: Box::new(CodecNode::String),
+                    value: Box::new(CodecNode::Sequence {
+                        len: Op::sequence_len(ValueRef::self_value()),
+                        element: Box::new(CodecNode::Primitive(Primitive::U32)),
+                    }),
+                }),
+            },
+        );
+        let mut renderer = TextSize;
+
+        assert_eq!(
+            plan.size_with(&mut renderer),
+            "size_sequence(self, b0, size_map(Hash, b0, k1, size_string(b1), v2, size_sequence(b2, b3, size_primitive(U32, b3))))"
         );
     }
 

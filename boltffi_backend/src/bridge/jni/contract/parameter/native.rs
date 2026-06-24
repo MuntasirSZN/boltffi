@@ -45,6 +45,11 @@ impl NativeParameter {
         }
     }
 
+    /// Returns the parameter shape selected by the JNI bridge.
+    pub fn kind(&self) -> &NativeParameterKind {
+        &self.kind
+    }
+
     /// Returns the JNI parameter type.
     pub fn ty(&self) -> TypeFragment {
         match &self.kind {

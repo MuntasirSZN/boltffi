@@ -132,6 +132,12 @@ pub enum BackendError {
         /// Invalid module name text.
         name: String,
     },
+    /// A generated Kotlin identifier was invalid.
+    #[error("invalid Kotlin identifier `{identifier}`")]
+    InvalidKotlinIdentifier {
+        /// Invalid identifier text.
+        identifier: String,
+    },
     /// Two generated Python declarations require the same name in one scope.
     #[error("python name collision in {scope}: `{name}` is used by {existing} and {colliding}")]
     PythonNameCollision {
