@@ -14,6 +14,7 @@ use crate::{
         primitive::KotlinPrimitive,
         render::{
             class::ClassHandle,
+            direct_vector::DirectVector,
             enumeration::Enumeration,
             native::NativeCall,
             record::Record,
@@ -76,6 +77,7 @@ enum ReturnConversion {
     Direct(Primitive),
     DirectRecord(TypeName),
     DirectEnum { ty: TypeName, repr: Primitive },
+    DirectVector(DirectVector),
     Encoded(<OutOfRust as Direction>::Codec),
     ClassHandle(ClassHandle),
     ScalarOption(Primitive),
@@ -187,7 +189,7 @@ impl ExportedCall {
             .flat_map(|parameter| parameter.cleanup().iter().cloned())
             .collect();
         let returns = function_return.ty.clone();
-        let call = function_return.statements(native_call.expression())?;
+        let call = function_return.statements(native_call.expression(), context)?;
         Ok(Self {
             name,
             parameters,
@@ -353,7 +355,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
         _receive: <IntoRust as Direction>::Receive,
     ) -> Self::Output {
         WireBuffer::new(&self.source_name)
-            .and_then(|buffer| buffer.write(codec))
+            .and_then(|buffer| buffer.write(codec, self.context))
             .map(NativeArgument::encoded)
     }
 
@@ -389,8 +391,11 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        KotlinType::direct_vector_element(element)
-            .map(|_| NativeArgument::direct(Expression::identifier(self.name.clone())))
+        DirectVector::from_element(element).map(|vector| {
+            NativeArgument::direct(
+                vector.carrier_expression(Expression::identifier(self.name.clone())),
+            )
+        })
     }
 }
 
@@ -485,11 +490,8 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
         FunctionReturn::scalar_option(primitive)
     }
 
-    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "direct-vector function return",
-        })
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        FunctionReturn::direct_vector(element)
     }
 
     fn closure(&mut self, _closure: &'plan ClosureReturn<Native, OutOfRust>) -> Self::Output {
@@ -531,8 +533,16 @@ impl FunctionReturn {
             ty: Some(ty.clone()),
             conversion: ReturnConversion::DirectEnum {
                 ty,
-                repr: enumeration.repr(),
+                repr: enumeration.repr()?,
             },
+        })
+    }
+
+    fn direct_vector(element: &DirectVectorElementType) -> Result<Self> {
+        let vector = DirectVector::from_element(element)?;
+        Ok(Self {
+            ty: Some(vector.ty().clone()),
+            conversion: ReturnConversion::DirectVector(vector),
         })
     }
 
@@ -567,7 +577,11 @@ impl FunctionReturn {
         })
     }
 
-    fn statements(&self, call: Expression) -> Result<Vec<Statement>> {
+    fn statements(
+        &self,
+        call: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
         match &self.conversion {
             ReturnConversion::Void => Ok(vec![Statement::expression(call)]),
             ReturnConversion::Direct(primitive) => Ok(vec![
@@ -596,13 +610,14 @@ impl FunctionReturn {
                     [value].into_iter().collect::<ArgumentList>(),
                 ))])
             }
+            ReturnConversion::DirectVector(vector) => vector.return_statements(call),
             ReturnConversion::Encoded(codec) => {
                 let result = Identifier::parse("__boltffi_result")?;
                 let reader = Identifier::parse("__boltffi_reader")?;
                 let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
                     "null buffer returned",
                 )));
-                let value = codec.render_with(&mut Reader::new(reader.clone()))?;
+                let value = codec.render_with(&mut Reader::new(reader.clone(), context))?;
                 Ok(vec![
                     Statement::value(result.clone(), payload),
                     Statement::value(

@@ -1,3 +1,4 @@
+mod operation;
 mod read;
 mod scalar_option;
 mod size;
@@ -6,4 +7,5 @@ mod write;
 
 pub use read::Reader;
 pub use scalar_option::ScalarOption;
-pub use write::{EncodedWrite, WireBuffer};
+pub use size::Sizer;
+pub use write::{EncodedWrite, WireBuffer, Writer};

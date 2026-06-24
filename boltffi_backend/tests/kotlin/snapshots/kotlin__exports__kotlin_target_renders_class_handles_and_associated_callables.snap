@@ -1,3 +1,145 @@
+---
+source: boltffi_backend/tests/kotlin/exports.rs
+expression: "rendered_fixture(\"exports/kotlin_class_handles\")"
+---
+===== jni/boltffi.h =====
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    int32_t code;
+} FfiStatus;
+
+#define FFI_STATUS_OK ((FfiStatus){0})
+#define FFI_STATUS_NULL_POINTER ((FfiStatus){1})
+#define FFI_STATUS_BUFFER_TOO_SMALL ((FfiStatus){2})
+#define FFI_STATUS_INVALID_ARG ((FfiStatus){3})
+#define FFI_STATUS_CANCELLED ((FfiStatus){4})
+#define FFI_STATUS_INTERNAL_ERROR ((FfiStatus){100})
+
+typedef struct {
+    uint8_t *ptr;
+    uintptr_t len;
+    uintptr_t cap;
+    uintptr_t align;
+} FfiBuf_u8;
+
+typedef struct {
+    uint8_t *ptr;
+    uintptr_t len;
+    uintptr_t cap;
+} FfiString;
+
+typedef struct {
+    FfiString message;
+} FfiError;
+
+typedef struct {
+    const uint8_t *ptr;
+    uintptr_t len;
+} FfiSpan;
+
+typedef const void *RustFutureHandle;
+typedef int8_t StreamPollResult;
+typedef int32_t WaitResult;
+typedef void (*RustFutureContinuationCallback)(uint64_t callback_data, int8_t poll_result);
+typedef void (*StreamContinuationCallback)(uint64_t callback_data, StreamPollResult result);
+
+typedef struct {
+    uint64_t handle;
+    const void *vtable;
+} BoltFFICallbackHandle;
+
+void boltffi_free_string(FfiString string);
+void boltffi_free_buf(FfiBuf_u8 buf);
+FfiBuf_u8 boltffi_buf_from_bytes(const uint8_t *ptr, uintptr_t len);
+FfiStatus boltffi_last_error_message(FfiString *out);
+void boltffi_clear_last_error(void);
+void boltffi_release_class_demo_engine(uint64_t handle);
+uint64_t boltffi_init_class_demo_engine_new(int32_t value);
+uint32_t boltffi_method_class_demo_engine_version(void);
+int32_t boltffi_method_class_demo_engine_value(uint64_t receiver);
+uint64_t boltffi_method_class_demo_engine_swap(uint64_t receiver, uint64_t other);
+uint64_t boltffi_method_class_demo_engine_maybe_swap(uint64_t receiver, uint64_t other);
+
+#ifdef __cplusplus
+}
+#endif
+===== jni/jni_glue.c =====
+#include <jni.h>
+#include <stdint.h>
+#include <stdbool.h>
+#if defined(__ANDROID__)
+#include <pthread.h>
+#endif
+
+#include "boltffi.h"
+JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1release_1class_1demo_1engine(JNIEnv *env, jclass cls, jlong handle) {
+    (void)cls;
+
+    (void)env;
+    boltffi_release_class_demo_engine(handle);
+
+    return;
+}
+
+JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1init_1class_1demo_1engine_1new(JNIEnv *env, jclass cls, jint value) {
+    (void)cls;
+
+    (void)env;
+    uint64_t result = boltffi_init_class_demo_engine_new(value);
+
+    return (jlong)result;
+}
+
+JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1version(JNIEnv *env, jclass cls) {
+    (void)cls;
+
+    (void)env;
+    uint32_t result = boltffi_method_class_demo_engine_version();
+
+    return (jint)result;
+}
+
+JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1value(JNIEnv *env, jclass cls, jlong receiver) {
+    (void)cls;
+
+    (void)env;
+    int32_t result = boltffi_method_class_demo_engine_value(receiver);
+
+    return (jint)result;
+}
+
+JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1swap(JNIEnv *env, jclass cls, jlong receiver, jlong other) {
+    (void)cls;
+
+    (void)env;
+    uint64_t result = boltffi_method_class_demo_engine_swap(receiver, other);
+
+    return (jlong)result;
+}
+
+JNIEXPORT jlong JNICALL Java_com_boltffi_demo_Native_boltffi_1method_1class_1demo_1engine_1maybe_1swap(JNIEnv *env, jclass cls, jlong receiver, jlong other) {
+    (void)cls;
+
+    (void)env;
+    uint64_t result = boltffi_method_class_demo_engine_maybe_swap(receiver, other);
+
+    return (jlong)result;
+}
+
+===== com/boltffi/demo/Demo.kt =====
+@file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
+
+package com.boltffi.demo
+
 private object Utf8Codec {
     fun maxBytes(value: String): Int = value.length * 3
 }
@@ -375,5 +517,47 @@ private object WireWriterPool {
     fun acquire(requiredCapacity: Int): BorrowedWireWriter {
         val poolState = state.get() ?: WireWriterPoolState().also { state.set(it) }
         return poolState.acquire(requiredCapacity)
+    }
+}
+
+@Suppress("FunctionName")
+private object Native {
+    @JvmStatic external fun boltffi_release_class_demo_engine(handle: Long): Unit
+    @JvmStatic external fun boltffi_init_class_demo_engine_new(value: Int): Long
+    @JvmStatic external fun boltffi_method_class_demo_engine_version(): Int
+    @JvmStatic external fun boltffi_method_class_demo_engine_value(`receiver`: Long): Int
+    @JvmStatic external fun boltffi_method_class_demo_engine_swap(`receiver`: Long, other: Long): Long
+    @JvmStatic external fun boltffi_method_class_demo_engine_maybe_swap(`receiver`: Long, other: Long): Long
+}
+
+class Engine internal constructor(internal val handle: Long) : AutoCloseable {
+    private val __boltffi_closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun close() {
+        if (__boltffi_closed.compareAndSet(false, true)) {
+            Native.boltffi_release_class_demo_engine(handle)
+        }
+    }
+
+    companion object {
+        fun new(value: Int): Engine {
+            return Engine(Native.boltffi_init_class_demo_engine_new(value))
+        }
+        fun version(): UInt {
+            return Native.boltffi_method_class_demo_engine_version().toUInt()
+        }
+    }
+
+    fun value(): Int {
+        return Native.boltffi_method_class_demo_engine_value(this.handle)
+    }
+
+    fun swap(other: Engine): Engine {
+        return Engine(Native.boltffi_method_class_demo_engine_swap(this.handle, other.handle))
+    }
+
+    fun maybeSwap(other: Engine?): Engine? {
+        val __boltffi_handle = Native.boltffi_method_class_demo_engine_maybe_swap(this.handle, other?.handle ?: 0L)
+        return if (__boltffi_handle == 0L) null else Engine(__boltffi_handle)
     }
 }

@@ -10,22 +10,29 @@ use crate::{
 
 pub struct ValueExpression {
     value: ValueRef,
+    current: Expression,
 }
 
 impl ValueExpression {
-    pub fn new(value: &ValueRef) -> Self {
-        Self {
+    pub fn new(value: &ValueRef) -> Result<Self> {
+        Ok(Self {
             value: value.clone(),
-        }
+            current: Expression::identifier(Identifier::parse("value")?),
+        })
     }
 
     pub fn binder(binder: BinderId) -> Result<Identifier> {
         Identifier::parse(format!("__boltffi_value_{}", binder.raw()))
     }
 
+    pub fn current(mut self, current: Expression) -> Self {
+        self.current = current;
+        self
+    }
+
     pub fn render(self) -> Result<Expression> {
         let root = match self.value.root() {
-            ValueRoot::SelfValue => Identifier::parse("value").map(Expression::identifier)?,
+            ValueRoot::SelfValue => self.current,
             ValueRoot::Named(name) | ValueRoot::Local(name) => {
                 Name::new(name).parameter().map(Expression::identifier)?
             }
@@ -40,10 +47,12 @@ impl ValueExpression {
         self.value.path().iter().try_fold(root, Self::field)
     }
 
-    fn field(expression: Expression, field: &FieldKey) -> Result<Expression> {
+    pub fn field(expression: Expression, field: &FieldKey) -> Result<Expression> {
         match field {
             FieldKey::Named(name) => Name::new(name)
                 .parameter()
+                .map(|field| Expression::property(expression, field)),
+            FieldKey::Position(position) => Identifier::parse(format!("field{position}"))
                 .map(|field| Expression::property(expression, field)),
             _ => Err(Error::UnsupportedTarget {
                 target: "kotlin",

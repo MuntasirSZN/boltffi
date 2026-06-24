@@ -1,47 +1,81 @@
 use boltffi_binding::{
     BinderId, BuiltinType, CallbackId, ClassId, CodecSize, CustomTypeId, ElementCount, EnumId,
-    MapKind, Op, Primitive, RecordId, ValueRef,
+    MapKind, Native, Op, Primitive, RecordId, ValueRef,
 };
 
 use crate::{
-    core::{Error, Result},
+    core::{Error, RenderContext, Result},
     target::kotlin::{
         codec::value::ValueExpression,
         primitive::KotlinPrimitive,
+        render::Enumeration,
         syntax::{ArgumentList, Expression, Identifier},
     },
 };
 
-pub struct Sizer;
+pub struct Sizer<'context> {
+    current: Expression,
+    context: &'context RenderContext<'context, Native>,
+}
 
-impl Sizer {
-    fn value(value: &ValueRef) -> Result<Expression> {
-        ValueExpression::new(value).render()
+impl<'context> Sizer<'context> {
+    pub fn new(context: &'context RenderContext<'context, Native>) -> Result<Self> {
+        Ok(Self {
+            current: Expression::identifier(Identifier::parse("value")?),
+            context,
+        })
+    }
+
+    pub fn current(mut self, current: Expression) -> Self {
+        self.current = current;
+        self
+    }
+
+    fn value(&self, value: &ValueRef) -> Result<Expression> {
+        ValueExpression::new(value)?
+            .current(self.current.clone())
+            .render()
     }
 
     fn fixed(bytes: u64) -> Result<Expression> {
         Ok(Expression::integer(bytes))
     }
 
-    fn string_size(value: &ValueRef) -> Result<Expression> {
+    fn string_size(&self, value: &ValueRef) -> Result<Expression> {
         Ok(Self::fixed(4)?.add(Expression::call(
             "Utf8Codec",
             Identifier::parse("maxBytes")?,
-            [Self::value(value)?].into_iter().collect::<ArgumentList>(),
+            [self.value(value)?].into_iter().collect::<ArgumentList>(),
         )))
     }
 
-    fn bytes_size(value: &ValueRef) -> Result<Expression> {
+    fn bytes_size(&self, value: &ValueRef) -> Result<Expression> {
         Ok(Self::fixed(4)?.add(Expression::property(
-            Self::value(value)?,
+            self.value(value)?,
             Identifier::parse("size")?,
         )))
+    }
+
+    fn encoded_record_size(&self, value: &ValueRef) -> Result<Expression> {
+        Ok(Expression::call(
+            self.value(value)?,
+            Identifier::parse("wireSize")?,
+            ArgumentList::default(),
+        ))
     }
 
     fn primitive_size(primitive: Primitive) -> Result<Expression> {
         KotlinPrimitive::new(primitive)
             .wire_size()
             .map(Expression::integer)
+    }
+
+    fn enum_size(&self, id: EnumId) -> Result<Expression> {
+        Enumeration::from_id(id, self.context).and_then(|enumeration| {
+            KotlinPrimitive::new(enumeration.repr()?)
+                .wire_size()
+                .map(Expression::integer)
+        })
     }
 
     fn unsupported(shape: &'static str) -> Result<Expression> {
@@ -52,7 +86,7 @@ impl Sizer {
     }
 }
 
-impl CodecSize for Sizer {
+impl CodecSize for Sizer<'_> {
     type Expr = Result<Expression>;
 
     fn primitive(&mut self, primitive: Primitive, _value: &ValueRef) -> Self::Expr {
@@ -60,27 +94,27 @@ impl CodecSize for Sizer {
     }
 
     fn string(&mut self, value: &ValueRef) -> Self::Expr {
-        Self::string_size(value)
+        self.string_size(value)
     }
 
     fn bytes(&mut self, value: &ValueRef) -> Self::Expr {
-        Self::bytes_size(value)
+        self.bytes_size(value)
     }
 
     fn direct_record(&mut self, _id: RecordId, _value: &ValueRef) -> Self::Expr {
         Self::unsupported("direct-record wire size")
     }
 
-    fn encoded_record(&mut self, _id: RecordId, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("encoded-record wire size")
+    fn encoded_record(&mut self, _id: RecordId, value: &ValueRef) -> Self::Expr {
+        self.encoded_record_size(value)
     }
 
-    fn c_style_enum(&mut self, _id: EnumId, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("c-style enum wire size")
+    fn c_style_enum(&mut self, id: EnumId, _value: &ValueRef) -> Self::Expr {
+        self.enum_size(id)
     }
 
-    fn data_enum(&mut self, _id: EnumId, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("data enum wire size")
+    fn data_enum(&mut self, id: EnumId, value: &ValueRef) -> Self::Expr {
+        Enumeration::size_expression(id, self.value(value)?, self.context)
     }
 
     fn class_handle(&mut self, _id: ClassId, _value: &ValueRef) -> Self::Expr {
@@ -104,18 +138,22 @@ impl CodecSize for Sizer {
         Self::unsupported("builtin wire size")
     }
 
-    fn optional(&mut self, _value: &ValueRef, _binder: BinderId, _inner: Self::Expr) -> Self::Expr {
-        Self::unsupported("optional wire size")
+    fn optional(&mut self, value: &ValueRef, binder: BinderId, inner: Self::Expr) -> Self::Expr {
+        let value = self.value(value)?;
+        let binder = ValueExpression::binder(binder)?;
+        Ok(value.optional_size(binder, inner?))
     }
 
     fn sequence(
         &mut self,
-        _value: &ValueRef,
+        value: &ValueRef,
         _len: &Op<ElementCount>,
-        _binder: BinderId,
-        _element: Self::Expr,
+        binder: BinderId,
+        element: Self::Expr,
     ) -> Self::Expr {
-        Self::unsupported("sequence wire size")
+        let value = self.value(value)?;
+        let binder = ValueExpression::binder(binder)?;
+        Ok(Self::fixed(4)?.add(value.sum_of(binder, element?)))
     }
 
     fn tuple(&mut self, _value: &ValueRef, _elements: Vec<Self::Expr>) -> Self::Expr {

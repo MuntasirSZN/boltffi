@@ -1,5 +1,7 @@
 mod class;
+mod direct_vector;
 mod enumeration;
+mod field;
 mod function;
 mod module;
 mod native;

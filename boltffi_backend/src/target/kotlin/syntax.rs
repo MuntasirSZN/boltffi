@@ -260,6 +260,10 @@ impl Expression {
         Self("null".to_owned())
     }
 
+    pub fn this() -> Self {
+        Self("this".to_owned())
+    }
+
     pub fn call(receiver: impl fmt::Display, method: Identifier, arguments: ArgumentList) -> Self {
         Self(format!("{receiver}.{method}({arguments})"))
     }
@@ -280,6 +284,10 @@ impl Expression {
         Self(format!("{self} + {other}"))
     }
 
+    pub fn multiply(self, other: Self) -> Self {
+        Self(format!("{self} * {other}"))
+    }
+
     pub fn not_equal(self, other: Self) -> Self {
         Self(format!("{self} != {other}"))
     }
@@ -292,6 +300,24 @@ impl Expression {
         Self(format!("if ({condition}) {then_value} else {else_value}"))
     }
 
+    pub fn lambda_expression(parameters: Vec<Identifier>, body: Self) -> Self {
+        Self::lambda(parameters, body)
+    }
+
+    pub fn lambda_statement(parameters: Vec<Identifier>, body: Statement) -> Self {
+        Self::lambda(parameters, body)
+    }
+
+    pub fn sum_of(self, parameter: Identifier, body: Self) -> Self {
+        Self(format!("{self}.sumOf {{ {parameter} -> {body} }}"))
+    }
+
+    pub fn optional_size(self, parameter: Identifier, body: Self) -> Self {
+        Self(format!(
+            "1 + ({self}?.let {{ {parameter} -> {body} }} ?: 0)"
+        ))
+    }
+
     pub fn or_else(self, fallback: Self) -> Self {
         Self(format!("{self} ?: {fallback}"))
     }
@@ -300,8 +326,21 @@ impl Expression {
         Self(format!("throw IllegalStateException({message})"))
     }
 
+    pub fn throw_illegal_argument(message: Literal) -> Self {
+        Self(format!("throw IllegalArgumentException({message})"))
+    }
+
     pub fn convert(self, method: Identifier) -> Self {
         Self(format!("{self}.{method}()"))
+    }
+
+    fn lambda(parameters: Vec<Identifier>, body: impl fmt::Display) -> Self {
+        let parameters = parameters
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self(format!("{{ {parameters} -> {body} }}"))
     }
 }
 

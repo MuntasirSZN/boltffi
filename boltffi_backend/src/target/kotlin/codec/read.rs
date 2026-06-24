@@ -1,23 +1,25 @@
 use boltffi_binding::{
-    BuiltinType, CallbackId, ClassId, CodecRead, CustomTypeId, ElementCount, EnumId, MapKind, Op,
-    Primitive, RecordId,
+    BuiltinType, CallbackId, ClassId, CodecRead, CustomTypeId, ElementCount, EnumId, MapKind,
+    Native, Op, Primitive, RecordId,
 };
 
 use crate::{
-    core::{Error, Result},
+    core::{Error, RenderContext, Result},
     target::kotlin::{
         primitive::KotlinPrimitive,
+        render::{Enumeration, Record},
         syntax::{ArgumentList, Expression, Identifier},
     },
 };
 
-pub struct Reader {
+pub struct Reader<'context> {
     reader: Identifier,
+    context: &'context RenderContext<'context, Native>,
 }
 
-impl Reader {
-    pub fn new(reader: Identifier) -> Self {
-        Self { reader }
+impl<'context> Reader<'context> {
+    pub fn new(reader: Identifier, context: &'context RenderContext<'context, Native>) -> Self {
+        Self { reader, context }
     }
 
     fn call(&self, method: impl Into<String>) -> Result<Expression> {
@@ -36,7 +38,7 @@ impl Reader {
     }
 }
 
-impl CodecRead for Reader {
+impl CodecRead for Reader<'_> {
     type Expr = Result<Expression>;
 
     fn primitive(&mut self, primitive: Primitive) -> Self::Expr {
@@ -57,16 +59,36 @@ impl CodecRead for Reader {
         Self::unsupported("direct-record wire read")
     }
 
-    fn encoded_record(&mut self, _id: RecordId) -> Self::Expr {
-        Self::unsupported("encoded-record wire read")
+    fn encoded_record(&mut self, id: RecordId) -> Self::Expr {
+        Record::type_name_from_id(id, self.context).and_then(|record| {
+            Ok(Expression::call(
+                record,
+                Identifier::parse("fromReader")?,
+                [Expression::identifier(self.reader.clone())]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+            ))
+        })
     }
 
-    fn c_style_enum(&mut self, _id: EnumId) -> Self::Expr {
-        Self::unsupported("c-style enum wire read")
+    fn c_style_enum(&mut self, id: EnumId) -> Self::Expr {
+        Enumeration::from_id(id, self.context).and_then(|enumeration| {
+            KotlinPrimitive::new(enumeration.repr()?)
+                .wire_method_suffix()
+                .and_then(|suffix| {
+                    self.call(format!("read{suffix}")).and_then(|value| {
+                        Ok(Expression::call(
+                            enumeration.name().clone(),
+                            Identifier::parse("fromValue")?,
+                            [value].into_iter().collect::<ArgumentList>(),
+                        ))
+                    })
+                })
+        })
     }
 
-    fn data_enum(&mut self, _id: EnumId) -> Self::Expr {
-        Self::unsupported("data enum wire read")
+    fn data_enum(&mut self, id: EnumId) -> Self::Expr {
+        Enumeration::read_expression(id, self.reader.clone(), self.context)
     }
 
     fn class_handle(&mut self, _id: ClassId) -> Self::Expr {
@@ -85,12 +107,30 @@ impl CodecRead for Reader {
         Self::unsupported("builtin wire read")
     }
 
-    fn optional(&mut self, _inner: Self::Expr) -> Self::Expr {
-        Self::unsupported("optional wire read")
+    fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
+        Ok(Expression::call(
+            Expression::identifier(self.reader.clone()),
+            Identifier::parse("readOptionalValue")?,
+            [Expression::lambda_expression(
+                vec![self.reader.clone()],
+                inner?,
+            )]
+            .into_iter()
+            .collect::<ArgumentList>(),
+        ))
     }
 
-    fn sequence(&mut self, _len: &Op<ElementCount>, _element: Self::Expr) -> Self::Expr {
-        Self::unsupported("sequence wire read")
+    fn sequence(&mut self, _len: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {
+        Ok(Expression::call(
+            Expression::identifier(self.reader.clone()),
+            Identifier::parse("readSequence")?,
+            [Expression::lambda_expression(
+                vec![self.reader.clone()],
+                element?,
+            )]
+            .into_iter()
+            .collect::<ArgumentList>(),
+        ))
     }
 
     fn tuple(&mut self, _elements: Vec<Self::Expr>) -> Self::Expr {

@@ -16,10 +16,7 @@ struct ModuleTemplate {
     package: KotlinPackage,
     runtime: String,
     native_functions: Vec<NativeFunction>,
-    records: Vec<String>,
-    enumerations: Vec<String>,
-    classes: Vec<String>,
-    functions: Vec<String>,
+    declarations: String,
 }
 
 #[derive(AskamaTemplate)]
@@ -48,18 +45,12 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
     pub fn render(self) -> Result<GeneratedOutput> {
         let diagnostics = self.diagnostics();
         let native_functions = self.native_functions()?;
-        let records = self.records();
-        let enumerations = self.enumerations();
-        let classes = self.classes();
-        let functions = self.functions();
+        let declarations = self.declarations();
         let contents = ModuleTemplate {
             package: self.host.package().clone(),
             runtime: RuntimeTemplate.render()?,
             native_functions,
-            records,
-            enumerations,
-            classes,
-            functions,
+            declarations,
         }
         .render()?;
         Ok(GeneratedOutput::new(
@@ -114,6 +105,19 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         })
     }
 
+    fn declarations(&self) -> String {
+        [
+            self.records(),
+            self.enumerations(),
+            self.classes(),
+            self.functions(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
+    }
+
     fn primary_chunks(
         &self,
         include: impl Fn(&RenderedDeclaration<'decl, Native>) -> bool,
@@ -122,7 +126,8 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
             .iter()
             .filter_map(|declaration| {
                 let chunk = declaration.emitted().primary_chunk();
-                (include(declaration) && !chunk.is_empty()).then(|| chunk.as_str().to_owned())
+                (include(declaration) && !chunk.is_empty())
+                    .then(|| chunk.as_str().trim_end().to_owned())
             })
             .collect()
     }

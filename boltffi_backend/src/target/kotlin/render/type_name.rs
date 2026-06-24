@@ -1,7 +1,7 @@
 use boltffi_binding::{
     BuiltinType, CallbackId, ClassId, CustomTypeId, DirectValueType, DirectVectorElementType,
-    DirectVectorPrimitive, Direction, EnumId, HandlePresence, HandleTarget, IntoRust, Native,
-    ParamPlanRender, Primitive, RecordId, Surface, TypeRef, TypeRefRender,
+    Direction, EnumId, HandlePresence, HandleTarget, IntoRust, Native, ParamPlanRender, Primitive,
+    RecordId, Surface, TypeRef, TypeRefRender,
 };
 
 use crate::{
@@ -10,7 +10,10 @@ use crate::{
     target::kotlin::{
         codec::ScalarOption,
         primitive::KotlinPrimitive,
-        render::{class::ClassHandle, enumeration::Enumeration, record::Record},
+        render::{
+            class::ClassHandle, direct_vector::DirectVector, enumeration::Enumeration,
+            record::Record,
+        },
         syntax::TypeName,
     },
 };
@@ -79,23 +82,7 @@ impl KotlinType {
     }
 
     pub fn direct_vector_element(element: &DirectVectorElementType) -> Result<TypeName> {
-        match element {
-            DirectVectorElementType::Primitive(primitive) => {
-                Self::direct_vector_primitive(*primitive)
-            }
-            DirectVectorElementType::Record(_) => Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "direct-record vector type",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "unknown direct-vector type",
-            }),
-        }
-    }
-
-    fn direct_vector_primitive(primitive: DirectVectorPrimitive) -> Result<TypeName> {
-        KotlinPrimitive::new(primitive.primitive()).array_type()
+        DirectVector::from_element(element).map(|vector| vector.ty().clone())
     }
 }
 

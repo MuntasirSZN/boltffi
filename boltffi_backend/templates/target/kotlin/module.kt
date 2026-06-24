@@ -1,3 +1,5 @@
+@file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
+
 package {{ package }}
 
 {{ runtime }}
@@ -9,22 +11,4 @@ private object Native {
 {%- endfor %}
 }
 
-{%- for record in records %}
-
-{{ record }}
-{%- endfor %}
-
-{%- for enumeration in enumerations %}
-
-{{ enumeration }}
-{%- endfor %}
-
-{%- for class in classes %}
-
-{{ class }}
-{%- endfor %}
-
-{%- for function in functions %}
-
-{{ function }}
-{%- endfor %}
+{{ declarations }}

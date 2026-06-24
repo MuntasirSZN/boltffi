@@ -1,11 +1,16 @@
 use askama::Template as AskamaTemplate;
-use boltffi_binding::{DirectFieldDecl, DirectRecordDecl, FieldKey, Native, RecordDecl, RecordId};
+use boltffi_binding::{
+    DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, FieldKey, Native,
+    RecordDecl, RecordId,
+};
 
 use crate::{
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
+        codec::Sizer,
         name_style::Name,
         primitive::KotlinPrimitive,
+        render::field::EncodedField,
         syntax::{Expression, Identifier, Statement, TypeName},
     },
 };
@@ -21,8 +26,14 @@ struct RecordTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
     name: TypeName,
-    size: u64,
+    body: RecordBody,
     fields: Vec<Field>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RecordBody {
+    Direct { size: u64 },
+    Encoded { size: Expression },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,16 +42,17 @@ pub struct Field {
     ty: TypeName,
     read: Expression,
     write: Statement,
+    size: Option<Expression>,
 }
 
 impl Record {
-    pub fn from_declaration(declaration: &RecordDecl<Native>) -> Result<Self> {
+    pub fn from_declaration(
+        declaration: &RecordDecl<Native>,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         match declaration {
             RecordDecl::Direct(record) => Self::from_direct(record),
-            RecordDecl::Encoded(_) => Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "encoded record declaration",
-            }),
+            RecordDecl::Encoded(record) => Self::from_encoded(record, context),
             _ => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "unknown record declaration",
@@ -55,7 +67,7 @@ impl Record {
                 bridge: KOTLIN_TARGET,
                 invariant: "record type was not found in render context",
             })
-            .and_then(Self::from_declaration)
+            .and_then(|record| Self::from_declaration(record, context))
     }
 
     pub fn render(self) -> Result<Emitted> {
@@ -67,7 +79,21 @@ impl Record {
     }
 
     pub fn size(&self) -> u64 {
-        self.size
+        match self.body {
+            RecordBody::Direct { size } => size,
+            RecordBody::Encoded { .. } => 0,
+        }
+    }
+
+    pub fn wire_size(&self) -> Option<&Expression> {
+        match &self.body {
+            RecordBody::Encoded { size } => Some(size),
+            RecordBody::Direct { .. } => None,
+        }
+    }
+
+    pub fn encoded(&self) -> bool {
+        matches!(self.body, RecordBody::Encoded { .. })
     }
 
     pub fn fields(&self) -> &[Field] {
@@ -102,11 +128,43 @@ impl Record {
         let buffer = Identifier::parse("buffer")?;
         Ok(Self {
             name: Name::new(record.name()).type_name(),
-            size: record.layout().size().get(),
+            body: RecordBody::Direct {
+                size: record.layout().size().get(),
+            },
             fields: record
                 .fields()
                 .iter()
                 .map(|field| Field::from_direct(field, record, &buffer))
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
+
+    fn from_encoded(
+        record: &EncodedRecordDecl<Native>,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let reader = Identifier::parse("reader")?;
+        let writer = Identifier::parse("writer")?;
+        let current = Expression::this();
+        let size = record
+            .fields()
+            .iter()
+            .map(|field| {
+                field
+                    .write()
+                    .size_with(&mut Sizer::new(context)?.current(current.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .reduce(Expression::add)
+            .unwrap_or_else(|| Expression::integer(0));
+        Ok(Self {
+            name: Name::new(record.name()).type_name(),
+            body: RecordBody::Encoded { size },
+            fields: record
+                .fields()
+                .iter()
+                .map(|field| Field::from_encoded(field, context, &reader, &writer, current.clone()))
                 .collect::<Result<Vec<_>>>()?,
         })
     }
@@ -153,6 +211,25 @@ impl Field {
                 offset,
                 Expression::identifier(name.clone()),
             )?,
+            size: None,
+            name,
+        })
+    }
+
+    fn from_encoded(
+        field: &EncodedFieldDecl,
+        context: &RenderContext<Native>,
+        reader: &Identifier,
+        writer: &Identifier,
+        current: Expression,
+    ) -> Result<Self> {
+        let name = Self::identifier(field.key())?;
+        let field = EncodedField::from_declaration(field, context, reader, writer, current)?;
+        Ok(Self {
+            ty: field.ty().clone(),
+            read: field.read().clone(),
+            write: field.write().clone(),
+            size: Some(field.size().clone()),
             name,
         })
     }

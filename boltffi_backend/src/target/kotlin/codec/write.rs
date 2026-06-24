@@ -1,14 +1,15 @@
 use boltffi_binding::{
     BinderId, BuiltinType, CallbackId, ClassId, CodecWrite, CustomTypeId, ElementCount, EnumId,
-    MapKind, Op, Primitive, RecordId, ValueRef, WritePlan,
+    MapKind, Native, Op, Primitive, RecordId, ValueRef, WritePlan,
 };
 
 use crate::{
-    core::{Error, Result},
+    core::{Error, RenderContext, Result},
     target::kotlin::{
-        codec::{size::Sizer, value::ValueExpression},
+        codec::{operation::Operation, size::Sizer, value::ValueExpression},
         name_style::Name,
         primitive::KotlinPrimitive,
+        render::Enumeration,
         syntax::{ArgumentList, Expression, Identifier, Statement},
     },
 };
@@ -26,8 +27,10 @@ pub struct WireBuffer {
     writer: Identifier,
 }
 
-pub struct Writer {
+pub struct Writer<'context> {
     writer: Identifier,
+    current: Expression,
+    context: &'context RenderContext<'context, Native>,
 }
 
 impl EncodedWrite {
@@ -56,10 +59,11 @@ impl WireBuffer {
         &self.writer
     }
 
-    pub fn write(self, plan: &WritePlan) -> Result<EncodedWrite> {
-        let size = plan.size_with(&mut Sizer)?;
+    pub fn write(self, plan: &WritePlan, context: &RenderContext<Native>) -> Result<EncodedWrite> {
+        let size = plan.size_with(&mut Sizer::new(context)?)?;
+        let mut writer = Writer::new(self.writer.clone(), context)?;
         let writes = plan
-            .render_with(&mut Writer::new(self.writer.clone()))
+            .render_with(&mut writer)
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
         self.write_statements(size, writes)
@@ -101,20 +105,38 @@ impl WireBuffer {
     }
 }
 
-impl Writer {
-    pub fn new(writer: Identifier) -> Self {
-        Self { writer }
+impl<'context> Writer<'context> {
+    pub fn new(
+        writer: Identifier,
+        context: &'context RenderContext<'context, Native>,
+    ) -> Result<Self> {
+        Ok(Self {
+            writer,
+            current: Expression::identifier(Identifier::parse("value")?),
+            context,
+        })
     }
 
-    fn value(value: &ValueRef) -> Result<Expression> {
-        ValueExpression::new(value).render()
+    pub fn current(mut self, current: Expression) -> Self {
+        self.current = current;
+        self
+    }
+
+    fn value(&self, value: &ValueRef) -> Result<Expression> {
+        ValueExpression::new(value)?
+            .current(self.current.clone())
+            .render()
     }
 
     fn writer_call(&self, method: Identifier, value: &ValueRef) -> Result<Statement> {
+        self.writer_call_expression(method, self.value(value)?)
+    }
+
+    fn writer_call_expression(&self, method: Identifier, value: Expression) -> Result<Statement> {
         Ok(Statement::expression(Expression::call(
             Expression::identifier(self.writer.clone()),
             method,
-            [Self::value(value)?].into_iter().collect::<ArgumentList>(),
+            [value].into_iter().collect::<ArgumentList>(),
         )))
     }
 
@@ -130,9 +152,20 @@ impl Writer {
             shape,
         })]
     }
+
+    fn single_statement(statements: Vec<Result<Statement>>) -> Result<Statement> {
+        let mut statements = statements.into_iter().collect::<Result<Vec<_>>>()?;
+        match statements.len() {
+            1 => Ok(statements.remove(0)),
+            _ => Err(Error::UnsupportedTarget {
+                target: "kotlin",
+                shape: "multi-statement wire writer",
+            }),
+        }
+    }
 }
 
-impl CodecWrite for Writer {
+impl CodecWrite for Writer<'_> {
     type Stmt = Result<Statement>;
 
     fn primitive(&mut self, primitive: Primitive, value: &ValueRef) -> Vec<Self::Stmt> {
@@ -151,16 +184,35 @@ impl CodecWrite for Writer {
         Self::unsupported("direct-record wire write")
     }
 
-    fn encoded_record(&mut self, _id: RecordId, _value: &ValueRef) -> Vec<Self::Stmt> {
-        Self::unsupported("encoded-record wire write")
+    fn encoded_record(&mut self, _id: RecordId, value: &ValueRef) -> Vec<Self::Stmt> {
+        vec![self.value(value).and_then(|value| {
+            Ok(Statement::expression(Expression::call(
+                value,
+                Identifier::parse("writeTo")?,
+                [Expression::identifier(self.writer.clone())]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+            )))
+        })]
     }
 
-    fn c_style_enum(&mut self, _id: EnumId, _value: &ValueRef) -> Vec<Self::Stmt> {
-        Self::unsupported("c-style enum wire write")
+    fn c_style_enum(&mut self, id: EnumId, value: &ValueRef) -> Vec<Self::Stmt> {
+        vec![
+            Enumeration::from_id(id, self.context).and_then(|enumeration| {
+                Self::primitive_method(enumeration.repr()?).and_then(|method| {
+                    self.writer_call_expression(
+                        method,
+                        Expression::property(self.value(value)?, Identifier::parse("value")?),
+                    )
+                })
+            }),
+        ]
     }
 
-    fn data_enum(&mut self, _id: EnumId, _value: &ValueRef) -> Vec<Self::Stmt> {
-        Self::unsupported("data enum wire write")
+    fn data_enum(&mut self, id: EnumId, value: &ValueRef) -> Vec<Self::Stmt> {
+        vec![self.value(value).and_then(|value| {
+            Enumeration::write_statement(id, value, self.writer.clone(), self.context)
+        })]
     }
 
     fn class_handle(&mut self, _id: ClassId, _value: &ValueRef) -> Vec<Self::Stmt> {
@@ -186,21 +238,51 @@ impl CodecWrite for Writer {
 
     fn optional(
         &mut self,
-        _value: &ValueRef,
-        _binder: BinderId,
-        _inner: Vec<Self::Stmt>,
+        value: &ValueRef,
+        binder: BinderId,
+        inner: Vec<Self::Stmt>,
     ) -> Vec<Self::Stmt> {
-        Self::unsupported("optional wire write")
+        vec![self.value(value).and_then(|value| {
+            Ok(Statement::expression(Expression::call(
+                Expression::identifier(self.writer.clone()),
+                Identifier::parse("writeOptionalValue")?,
+                [
+                    value,
+                    Expression::lambda_statement(
+                        vec![self.writer.clone(), ValueExpression::binder(binder)?],
+                        Self::single_statement(inner)?,
+                    ),
+                ]
+                .into_iter()
+                .collect::<ArgumentList>(),
+            )))
+        })]
     }
 
     fn sequence(
         &mut self,
-        _value: &ValueRef,
-        _len: &Op<ElementCount>,
-        _binder: BinderId,
-        _element: Vec<Self::Stmt>,
+        value: &ValueRef,
+        len: &Op<ElementCount>,
+        binder: BinderId,
+        element: Vec<Self::Stmt>,
     ) -> Vec<Self::Stmt> {
-        Self::unsupported("sequence wire write")
+        vec![self.value(value).and_then(|sequence| {
+            let count = len.render_with(&mut Operation::new(value, self.current.clone()))?;
+            Ok(Statement::expression(Expression::call(
+                Expression::identifier(self.writer.clone()),
+                Identifier::parse("writeSequence")?,
+                [
+                    sequence,
+                    count,
+                    Expression::lambda_statement(
+                        vec![self.writer.clone(), ValueExpression::binder(binder)?],
+                        Self::single_statement(element)?,
+                    ),
+                ]
+                .into_iter()
+                .collect::<ArgumentList>(),
+            )))
+        })]
     }
 
     fn tuple(&mut self, _value: &ValueRef, _elements: Vec<Vec<Self::Stmt>>) -> Vec<Self::Stmt> {

@@ -40,17 +40,15 @@ impl KotlinPrimitive {
         Ok(match self.primitive {
             Primitive::Bool => TypeName::new("BooleanArray"),
             Primitive::I8 => TypeName::new("ByteArray"),
+            Primitive::U8 => TypeName::new("UByteArray"),
             Primitive::I16 => TypeName::new("ShortArray"),
+            Primitive::U16 => TypeName::new("UShortArray"),
             Primitive::I32 => TypeName::new("IntArray"),
+            Primitive::U32 => TypeName::new("UIntArray"),
             Primitive::I64 | Primitive::ISize => TypeName::new("LongArray"),
+            Primitive::U64 | Primitive::USize => TypeName::new("ULongArray"),
             Primitive::F32 => TypeName::new("FloatArray"),
             Primitive::F64 => TypeName::new("DoubleArray"),
-            Primitive::U8 | Primitive::U16 | Primitive::U32 | Primitive::U64 | Primitive::USize => {
-                return Err(Error::UnsupportedTarget {
-                    target: "kotlin",
-                    shape: "unsigned direct-vector primitive",
-                });
-            }
             _ => {
                 return Err(Error::UnsupportedTarget {
                     target: "kotlin",
