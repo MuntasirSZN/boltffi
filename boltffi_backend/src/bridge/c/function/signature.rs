@@ -792,7 +792,7 @@ impl Signature {
         D::InvokeScope: ClosureInvokeScope,
     {
         let call_params = params;
-        let return_params = self.callback_return_params(returns)?;
+        let return_params = self.callback_return_params(returns, error)?;
         Ok(vec![
             Parameter::closure_call(
                 name,
@@ -819,7 +819,7 @@ impl Signature {
     {
         let invoke = closure.invoke();
         let call_params = D::InvokeScope::parameters(self, invoke.params())?;
-        let return_params = self.callback_return_params(invoke.returns().plan())?;
+        let return_params = self.callback_return_params(invoke.returns().plan(), invoke.error())?;
         let call_type = Type::FunctionPointer {
             returns: Box::new(self.callback_return_type(invoke.returns().plan(), invoke.error())?),
             params: std::iter::once(Type::MutPointer(Box::new(Type::Void)))
@@ -997,13 +997,17 @@ impl Signature {
         }
     }
 
-    pub fn callback_return_params<D>(&self, plan: &ReturnPlan<Native, D>) -> Result<Vec<Parameter>>
+    pub fn callback_return_params<D>(
+        &self,
+        plan: &ReturnPlan<Native, D>,
+        error: &ErrorDecl<Native, D>,
+    ) -> Result<Vec<Parameter>>
     where
         D: Direction,
         D::Opposite: ParamDirection<Native>,
         D::InvokeScope: ClosureInvokeScope,
     {
-        self.return_params_with(plan, false)
+        self.return_params(plan, error)
     }
 
     pub fn callback_return_type<D>(

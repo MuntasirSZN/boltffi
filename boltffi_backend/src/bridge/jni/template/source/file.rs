@@ -18,6 +18,7 @@ use crate::{
         jni::{
             CallbackHandleLifecycle, JniBridgeContract,
             template::{
+                callback::CallbackSuccessOutWriterView,
                 callback::{CallbackCompletionInvokerView, CallbackRegistrationView},
                 closure::{CallbackClosureHandleView, ClosureRegistrationView},
                 method::NativeMethodView,
@@ -48,6 +49,7 @@ struct SourceFileTemplate {
     callback_release_symbol: Identifier,
     callbacks: Vec<CallbackRegistrationView>,
     callback_completions: Vec<CallbackCompletionInvokerView>,
+    callback_success_writers: Vec<CallbackSuccessOutWriterView>,
     closure_handles: Vec<CallbackClosureHandleView>,
     closures: Vec<ClosureRegistrationView>,
     methods: Vec<NativeMethodView>,
@@ -74,6 +76,11 @@ impl SourceFile {
             .callback_completions()
             .iter()
             .map(CallbackCompletionInvokerView::from_invoker)
+            .collect::<Vec<_>>();
+        let callback_success_writers = contract
+            .callback_success_writers()
+            .iter()
+            .map(CallbackSuccessOutWriterView::from_writer)
             .collect::<Vec<_>>();
         let closures = contract
             .closures()
@@ -109,6 +116,7 @@ impl SourceFile {
             &direct_stream_batches,
             &callbacks,
             &callback_completions,
+            &callback_success_writers,
             &closures,
             &closure_handles,
         );
@@ -134,6 +142,7 @@ impl SourceFile {
             callback_release_symbol: callback_handle_lifecycle.release_symbol().clone(),
             callbacks,
             callback_completions,
+            callback_success_writers,
             closure_handles,
             closures,
             methods,

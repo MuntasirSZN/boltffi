@@ -31,6 +31,12 @@ sealed class BoltFFIResult<out T, out E> {
     data class Err<E>(val error: E) : BoltFFIResult<Nothing, E>()
 }
 
+private inline fun <T, E, R> BoltFFIResult<T, E>.fold(ok: (T) -> R, err: (E) -> R): R =
+    when (this) {
+        is BoltFFIResult.Ok -> ok(value)
+        is BoltFFIResult.Err -> err(error)
+    }
+
 private inline fun <T, E> BoltFFIResult<T, E>.wireSize(
     okSize: (T) -> Int,
     errSize: (E) -> Int,

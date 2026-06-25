@@ -17,6 +17,7 @@ mod direct_vector;
 mod handle_method;
 mod method;
 mod registration;
+mod success_out;
 
 pub use argument::{
     CallbackBytesArgumentView, CallbackCParameterView, CallbackClosureArgumentView,
@@ -28,3 +29,4 @@ pub use direct_vector::CallbackDirectVectorArgumentView;
 pub use handle_method::CallbackHandleMethodView;
 pub use method::CallbackMethodView;
 pub use registration::CallbackRegistrationView;
+pub use success_out::CallbackSuccessOutWriterView;

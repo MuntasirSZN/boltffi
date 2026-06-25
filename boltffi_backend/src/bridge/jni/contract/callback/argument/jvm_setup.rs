@@ -17,13 +17,31 @@ use crate::bridge::{
     },
 };
 
-use super::{CallbackArgument, CallbackArgumentKind};
+use super::{CallbackArgument, CallbackArgumentKind, CallbackSuccessOutArgument};
 
 impl CallbackArgument {
+    /// Returns the fallible success pointer argument when this argument carries one.
+    pub fn success_out(&self) -> Option<CallbackSuccessOutArgument> {
+        match &self.kind {
+            CallbackArgumentKind::SuccessOut {
+                parameter,
+                jni_type,
+                writer,
+            } => Some(CallbackSuccessOutArgument {
+                name: parameter.name().clone(),
+                jni_type: *jni_type,
+                writer: writer.clone(),
+            }),
+            _ => None,
+        }
+    }
+
     /// Returns byte-array setup data when this argument carries borrowed bytes.
     pub fn bytes(&self) -> Option<CallbackBytesArgument<'_>> {
         match &self.kind {
-            CallbackArgumentKind::Value { .. } | CallbackArgumentKind::DirectVector { .. } => None,
+            CallbackArgumentKind::Value { .. }
+            | CallbackArgumentKind::SuccessOut { .. }
+            | CallbackArgumentKind::DirectVector { .. } => None,
             CallbackArgumentKind::Bytes {
                 name,
                 pointer,
@@ -45,6 +63,7 @@ impl CallbackArgument {
     pub fn direct_vector(&self) -> Option<CallbackDirectVectorArgument<'_>> {
         match &self.kind {
             CallbackArgumentKind::Value { .. }
+            | CallbackArgumentKind::SuccessOut { .. }
             | CallbackArgumentKind::Bytes { .. }
             | CallbackArgumentKind::Record { .. }
             | CallbackArgumentKind::CallbackHandle { .. }
@@ -68,6 +87,7 @@ impl CallbackArgument {
     pub fn record(&self) -> Option<CallbackRecordArgument<'_>> {
         match &self.kind {
             CallbackArgumentKind::Value { .. }
+            | CallbackArgumentKind::SuccessOut { .. }
             | CallbackArgumentKind::Bytes { .. }
             | CallbackArgumentKind::DirectVector { .. } => None,
             CallbackArgumentKind::CallbackHandle { .. } => None,
@@ -83,6 +103,7 @@ impl CallbackArgument {
     pub fn callback_handle(&self) -> Option<CallbackHandleArgument<'_>> {
         match &self.kind {
             CallbackArgumentKind::Value { .. }
+            | CallbackArgumentKind::SuccessOut { .. }
             | CallbackArgumentKind::Bytes { .. }
             | CallbackArgumentKind::DirectVector { .. }
             | CallbackArgumentKind::Record { .. }
@@ -98,6 +119,7 @@ impl CallbackArgument {
     pub fn closure_handle(&self) -> Option<CallbackClosureArgument<'_>> {
         match &self.kind {
             CallbackArgumentKind::Value { .. }
+            | CallbackArgumentKind::SuccessOut { .. }
             | CallbackArgumentKind::Bytes { .. }
             | CallbackArgumentKind::DirectVector { .. }
             | CallbackArgumentKind::Record { .. }
@@ -125,6 +147,7 @@ impl CallbackArgument {
     pub fn completion(&self) -> Option<CallbackCompletionArgument<'_>> {
         match &self.kind {
             CallbackArgumentKind::Value { .. }
+            | CallbackArgumentKind::SuccessOut { .. }
             | CallbackArgumentKind::Bytes { .. }
             | CallbackArgumentKind::DirectVector { .. }
             | CallbackArgumentKind::Record { .. }

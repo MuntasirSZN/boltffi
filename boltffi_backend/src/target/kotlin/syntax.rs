@@ -341,6 +341,32 @@ impl Expression {
         ))
     }
 
+    pub fn result_fold(
+        self,
+        ok: Identifier,
+        ok_body: Self,
+        err: Identifier,
+        err_body: Self,
+    ) -> Self {
+        Self(format!(
+            "{self}.fold({{ {ok} -> {ok_body} }}, {{ {err} -> {err_body} }})"
+        ))
+    }
+
+    pub fn run(statements: Vec<Statement>, result: Self) -> Self {
+        match statements.is_empty() {
+            true => result,
+            false => Self(format!(
+                "run {{ {}; {result} }}",
+                statements
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )),
+        }
+    }
+
     pub fn or_else(self, fallback: Self) -> Self {
         Self(format!("{self} ?: {fallback}"))
     }

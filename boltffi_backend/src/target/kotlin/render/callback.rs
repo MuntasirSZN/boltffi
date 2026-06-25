@@ -1,15 +1,16 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
     CallbackDecl, CallbackId, ClosureReturn, DirectValueType, DirectVectorElementType, Direction,
-    EnumId, ErrorChannel, ExecutionDecl, HandlePresence, HandleTarget, ImportedMethodDecl,
-    IntoRust, Native, OutOfRust, OutgoingParam, ParamDecl, ParamPlanRender, Primitive, ReadPlan,
-    ReturnPlanRender, ReturnValueSlot, Surface, TypeRef, VTableSlot,
+    EnumId, ErrorChannel, ErrorPlacement, ExecutionDecl, HandlePresence, HandleTarget,
+    ImportedMethodDecl, IntoRust, Native, OutOfRust, OutgoingParam, ParamDecl, ParamPlanRender,
+    Primitive, ReadPlan, ReturnPlanRender, ReturnValueSlot, Surface, TypeRef, VTableSlot,
+    WritePlan,
 };
 
 use crate::{
     bridge::jni::{
         CallbackHandleMethod as JniCallbackHandleMethod, CallbackMethod as JniCallbackMethod,
-        CallbackRegistration, JniBridgeContract,
+        CallbackRegistration, CallbackSuccessOutArgument, JniBridgeContract,
     },
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
@@ -92,6 +93,7 @@ struct ParameterRender<'context> {
 struct ReturnRender<'context> {
     source_name: Name,
     context: &'context RenderContext<'context, Native>,
+    fallible_success_out: bool,
 }
 
 struct HandleParameterRender<'context> {
@@ -113,6 +115,7 @@ struct ReturnValue {
 enum ReturnConversion {
     Void,
     Direct(DirectValueType),
+    DirectRecord,
     DirectEnum {
         repr: Primitive,
     },
@@ -125,6 +128,13 @@ enum ReturnConversion {
         source_name: Name,
     },
     DirectVector(DirectVector),
+}
+
+struct FallibleReturn<'error> {
+    source_name: Name,
+    success_out: Option<CallbackSuccessOutArgument>,
+    error_ty: &'error TypeRef,
+    error_codec: &'error WritePlan,
 }
 
 struct HandleParameter {
@@ -292,12 +302,6 @@ impl Method {
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let callable = source.callable();
-        if !matches!(callable.error().channel(), ErrorChannel::None) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "callback method error return",
-            });
-        }
         if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
             return Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
@@ -316,9 +320,12 @@ impl Method {
             .map(|parameter| MethodParameter::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
         let source_name = Name::new(source.name());
+        let fallible =
+            FallibleReturn::from_method(source_name.clone(), callable.error().channel(), method)?;
         let return_value = callable.returns().plan().render_with(&mut ReturnRender {
             source_name,
             context,
+            fallible_success_out: fallible.is_some(),
         })?;
         let implementation = Expression::identifier(Identifier::parse("impl")?);
         let interface_call = Expression::call(
@@ -329,6 +336,24 @@ impl Method {
                 .map(|parameter| parameter.call_argument.clone())
                 .collect::<ArgumentList>(),
         );
+        let public_return = match &fallible {
+            Some(fallible) => Some(TypeName::result(
+                return_value
+                    .public_ty
+                    .clone()
+                    .unwrap_or_else(TypeName::unit),
+                KotlinType::type_ref(fallible.error_ty, context)?,
+            )),
+            None => return_value.public_ty.clone(),
+        };
+        let jvm_parameters = fallible
+            .as_ref()
+            .map(FallibleReturn::parameter)
+            .transpose()?
+            .into_iter()
+            .flatten()
+            .chain(parameters.iter().map(|parameter| parameter.jvm.clone()))
+            .collect();
         Ok(Self {
             name: Name::new(source.name()).function()?,
             jvm_name: Identifier::escape(method.method().as_str())?,
@@ -340,14 +365,62 @@ impl Method {
                 .iter()
                 .flat_map(|parameter| parameter.setup.iter().cloned())
                 .collect(),
-            jvm_parameters: parameters
-                .into_iter()
-                .map(|parameter| parameter.jvm)
-                .collect(),
-            public_return: return_value.public_ty.clone(),
-            jvm_return: return_value.jvm_ty.clone(),
-            call_return: return_value.statements(interface_call, context)?,
+            jvm_parameters,
+            public_return,
+            jvm_return: fallible
+                .as_ref()
+                .map(|_| TypeName::byte_array(false))
+                .or_else(|| return_value.jvm_ty.clone()),
+            call_return: match fallible {
+                Some(fallible) => {
+                    return_value.fallible_statements(interface_call, fallible, context)?
+                }
+                None => return_value.statements(interface_call, context)?,
+            },
         })
+    }
+}
+
+impl<'error> FallibleReturn<'error> {
+    fn from_method(
+        source_name: Name,
+        channel: ErrorChannel<'error, Native, IntoRust>,
+        method: &JniCallbackMethod,
+    ) -> Result<Option<Self>> {
+        match channel {
+            ErrorChannel::None => Ok(None),
+            ErrorChannel::Encoded {
+                placement: ErrorPlacement::ReturnSlot,
+                ty,
+                codec,
+                ..
+            } => Ok(Some(Self {
+                source_name,
+                success_out: method.success_out(),
+                error_ty: ty,
+                error_codec: codec,
+            })),
+            ErrorChannel::Encoded { .. } | ErrorChannel::Status => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback method error return",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown callback method error return",
+            }),
+        }
+    }
+
+    fn parameter(&self) -> Result<Option<Parameter>> {
+        self.success_out
+            .as_ref()
+            .map(|success_out| {
+                Ok(Parameter {
+                    name: Identifier::escape(success_out.name().as_str())?,
+                    ty: KotlinType::jni(success_out.jni_type())?,
+                })
+            })
+            .transpose()
     }
 }
 
@@ -947,19 +1020,31 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 
     fn direct(&mut self, slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output {
-        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "callback method out-pointer return",
-            });
-        }
-        match ty {
-            DirectValueType::Primitive(primitive) => Ok(ReturnValue {
+        self.require_supported_slot(slot, "callback method out-pointer return")?;
+        match (slot, ty) {
+            (
+                ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
+                DirectValueType::Primitive(primitive),
+            ) => Ok(ReturnValue {
                 public_ty: Some(KotlinPrimitive::new(*primitive).api_type()?),
                 jvm_ty: Some(KotlinPrimitive::new(*primitive).native_type()?),
                 conversion: ReturnConversion::Direct(ty.clone()),
             }),
-            DirectValueType::Enum(enumeration) => Self::direct_enum(*enumeration, self.context),
+            (
+                ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
+                DirectValueType::Record(record),
+            ) => {
+                let ty = Record::type_name_from_id(*record, self.context)?;
+                Ok(ReturnValue {
+                    public_ty: Some(ty.clone()),
+                    jvm_ty: Some(TypeName::byte_array(false)),
+                    conversion: ReturnConversion::DirectRecord,
+                })
+            }
+            (
+                ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
+                DirectValueType::Enum(enumeration),
+            ) => Self::direct_enum(*enumeration, self.context),
             _ => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "callback method direct return",
@@ -974,12 +1059,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
         codec: &'plan <IntoRust as Direction>::Codec,
         _shape: <Native as Surface>::BufferShape,
     ) -> Self::Output {
-        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "callback method out-pointer encoded return",
-            });
-        }
+        self.require_supported_slot(slot, "callback method out-pointer encoded return")?;
         Ok(ReturnValue {
             public_ty: Some(KotlinType::type_ref(ty, self.context)?),
             jvm_ty: Some(TypeName::byte_array(false)),
@@ -1160,6 +1240,21 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
 }
 
 impl ReturnRender<'_> {
+    fn require_supported_slot(&self, slot: ReturnValueSlot, shape: &'static str) -> Result<()> {
+        match slot {
+            ReturnValueSlot::ReturnSlot => Ok(()),
+            ReturnValueSlot::OutPointer if self.fallible_success_out => Ok(()),
+            ReturnValueSlot::OutPointer => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape,
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown callback method return slot",
+            }),
+        }
+    }
+
     fn direct_enum(enumeration: EnumId, context: &RenderContext<Native>) -> Result<ReturnValue> {
         let enumeration = Enumeration::from_id(enumeration, context)?;
         let repr = enumeration.repr()?;
@@ -1172,6 +1267,30 @@ impl ReturnRender<'_> {
 }
 
 impl ReturnValue {
+    fn fallible_statements(
+        &self,
+        call: Expression,
+        fallible: FallibleReturn,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        let result = fallible.source_name.generated("result")?;
+        let success = fallible.source_name.generated("success")?;
+        let error = fallible.source_name.generated("error")?;
+        Ok(vec![
+            Statement::value(result.clone(), call),
+            Statement::return_value(Expression::identifier(result).result_fold(
+                success.clone(),
+                self.fallible_success_expression(
+                    Expression::identifier(success),
+                    &fallible,
+                    context,
+                )?,
+                error.clone(),
+                fallible.error_expression(Expression::identifier(error), context)?,
+            )),
+        ])
+    }
+
     fn statements(
         &self,
         call: Expression,
@@ -1189,6 +1308,9 @@ impl ReturnValue {
                 .native_argument(Expression::property(call, Identifier::parse("value")?))
                 .map(Statement::return_value)
                 .map(|statement| vec![statement]),
+            ReturnConversion::DirectRecord => Ok(vec![Statement::return_value(
+                Record::encode_expression(call)?,
+            )]),
             ReturnConversion::Encoded { codec, source_name } => {
                 let result = source_name.generated("result")?;
                 let bytes = source_name.generated("bytes")?;
@@ -1233,6 +1355,112 @@ impl ReturnValue {
                 shape: "callback method direct return",
             }),
         }
+    }
+
+    fn fallible_success_expression(
+        &self,
+        value: Expression,
+        fallible: &FallibleReturn,
+        context: &RenderContext<Native>,
+    ) -> Result<Expression> {
+        let ReturnConversion::Void = &self.conversion else {
+            let success_out = fallible
+                .success_out
+                .as_ref()
+                .ok_or(Error::BrokenBridgeContract {
+                    bridge: "jni",
+                    invariant: "fallible callback method has no success out-pointer",
+                })?;
+            let (setup, value, cleanup) = self.success_value(value, context)?;
+            let write = Statement::expression(Expression::call(
+                "Native",
+                Identifier::escape(success_out.writer().as_str())?,
+                [
+                    Expression::identifier(Identifier::escape(success_out.name().as_str())?),
+                    value,
+                ]
+                .into_iter()
+                .collect::<ArgumentList>(),
+            ));
+            return Ok(Expression::run(
+                setup
+                    .into_iter()
+                    .chain(std::iter::once(write))
+                    .chain(cleanup)
+                    .collect(),
+                Self::empty_error_payload(),
+            ));
+        };
+        Ok(Self::empty_error_payload())
+    }
+
+    fn success_value(
+        &self,
+        value: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<(Vec<Statement>, Expression, Vec<Statement>)> {
+        match &self.conversion {
+            ReturnConversion::Direct(DirectValueType::Primitive(primitive)) => Ok((
+                Vec::new(),
+                KotlinPrimitive::new(*primitive).native_argument(value)?,
+                Vec::new(),
+            )),
+            ReturnConversion::DirectEnum { repr } => Ok((
+                Vec::new(),
+                KotlinPrimitive::new(*repr)
+                    .native_argument(Expression::property(value, Identifier::parse("value")?))?,
+                Vec::new(),
+            )),
+            ReturnConversion::DirectRecord => {
+                Ok((Vec::new(), Record::encode_expression(value)?, Vec::new()))
+            }
+            ReturnConversion::Encoded { codec, source_name } => Ok(WireBuffer::new(source_name)?
+                .write_value(codec, value, context)?
+                .into_parts()),
+            ReturnConversion::ScalarOption {
+                primitive,
+                source_name,
+            } => Ok(ScalarOption::new(*primitive)
+                .write_value(source_name, value)?
+                .into_parts()),
+            ReturnConversion::DirectVector(vector) => {
+                Ok((Vec::new(), vector.byte_array_expression(value), Vec::new()))
+            }
+            ReturnConversion::Void | ReturnConversion::Direct(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "fallible callback method success return",
+            }),
+        }
+    }
+
+    fn empty_error_payload() -> Expression {
+        Expression::construct(
+            TypeName::byte_array(false),
+            [Expression::integer(0)]
+                .into_iter()
+                .collect::<ArgumentList>(),
+        )
+    }
+}
+
+impl FallibleReturn<'_> {
+    fn error_expression(
+        &self,
+        value: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<Expression> {
+        let bytes = self.source_name.generated("error_bytes")?;
+        let write =
+            WireBuffer::new(&self.source_name)?.write_value(self.error_codec, value, context)?;
+        let (setup, expression, cleanup) = write.into_parts();
+        Ok(Expression::run(
+            setup
+                .into_iter()
+                .chain(std::iter::once(Statement::value(bytes.clone(), expression)))
+                .chain(cleanup)
+                .collect(),
+            Expression::identifier(bytes),
+        ))
     }
 }
 

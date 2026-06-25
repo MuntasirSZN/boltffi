@@ -1,6 +1,6 @@
 ---
-source: boltffi_backend/tests/kotlin/exports.rs
-expression: "rendered_fixture(\"exports/result_values\")"
+source: boltffi_backend/tests/kotlin/callback.rs
+expression: "rendered_fixture(\"callback/callback_status_result\")"
 ---
 ===== com/boltffi/demo/Demo.kt =====
 @file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
@@ -422,119 +422,56 @@ private object WireWriterPool {
     }
 }
 
-private fun <T, E> WireReader.readResult(
-    readOk: (WireReader) -> T,
-    readErr: (WireReader) -> E,
-): BoltFFIResult<T, E> {
-    return when (readU8()) {
-        0.toUByte() -> BoltFFIResult.Ok(readOk(this))
-        1.toUByte() -> BoltFFIResult.Err(readErr(this))
-        else -> throw IllegalArgumentException("invalid result wire tag")
-    }
-}
-
-private fun <T, E> WireWriter.writeResult(
-    value: BoltFFIResult<T, E>,
-    writeOk: (WireWriter, T) -> Unit,
-    writeErr: (WireWriter, E) -> Unit,
-) {
-    when (value) {
-        is BoltFFIResult.Ok -> {
-            writeU8(0.toUByte())
-            writeOk(this, value.value)
-        }
-        is BoltFFIResult.Err -> {
-            writeU8(1.toUByte())
-            writeErr(this, value.error)
-        }
-    }
-}
-
-sealed class BoltFFIResult<out T, out E> {
-    data class Ok<T>(val value: T) : BoltFFIResult<T, Nothing>()
-    data class Err<E>(val error: E) : BoltFFIResult<Nothing, E>()
-}
-
-private inline fun <T, E, R> BoltFFIResult<T, E>.fold(ok: (T) -> R, err: (E) -> R): R =
-    when (this) {
-        is BoltFFIResult.Ok -> ok(value)
-        is BoltFFIResult.Err -> err(error)
-    }
-
-private inline fun <T, E> BoltFFIResult<T, E>.wireSize(
-    okSize: (T) -> Int,
-    errSize: (E) -> Int,
-): Int =
-    1 + when (this) {
-        is BoltFFIResult.Ok -> okSize(value)
-        is BoltFFIResult.Err -> errSize(error)
-    }
-
 @Suppress("FunctionName")
 private object Native {
-    @JvmStatic external fun boltffi_function_demo_result_to_string(value: ByteArray): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_echo_response(response: ByteArray): ByteArray?
+    @JvmStatic external fun boltffi_callback_success_i32(returnOut: Long, value: Int): Unit
 }
 
+interface StatusMapper {
+    fun mapStatus(status: Int): BoltFFIResult<Int, String>
+}
 
-data class Response(
-    val result: BoltFFIResult<Int, String>
-) {
-    internal fun wireSize(): Int {
-        return this.result.wireSize({ __boltffi_value_0 -> 4 }, { __boltffi_value_0 -> 4 + Utf8Codec.maxBytes(__boltffi_value_0) })
+private object StatusMapperMap {
+    private val map = java.util.concurrent.ConcurrentHashMap<Long, StatusMapper>()
+    private val counter = java.util.concurrent.atomic.AtomicLong(1L)
+
+    fun insert(value: StatusMapper): Long {
+        val handle = counter.getAndAdd(2L)
+        map[handle] = value
+        return handle
     }
 
-    internal fun writeTo(writer: WireWriter) {
-        writer.writeResult(this.result, { writer, __boltffi_value_0 -> writer.writeI32(__boltffi_value_0) }, { writer, __boltffi_value_0 -> writer.writeString(__boltffi_value_0) })
-    }
+    fun get(handle: Long): StatusMapper? = map[handle]
 
-    internal fun toByteArray(): ByteArray {
-        val buffer = WireWriterPool.acquire(wireSize())
-        val writer = buffer.writer
-        try {
-            writeTo(writer)
-            return buffer.bytes()
-        } finally {
-            buffer.close()
-        }
-    }
+    fun remove(handle: Long): StatusMapper? = map.remove(handle)
 
-    companion object {
-        internal fun fromReader(reader: WireReader): Response {
-            return Response(
-                reader.readResult({ reader -> reader.readI32() }, { reader -> reader.readString() })
-            )
-        }
-
-        internal fun fromByteArray(bytes: ByteArray): Response {
-            val reader = WireReader(bytes)
-            return fromReader(reader)
-        }
+    fun clone(handle: Long): Long {
+        val value = map[handle] ?: return 0L
+        return insert(value)
     }
 }
 
-fun resultToString(value: BoltFFIResult<Int, String>): String {
-    val __boltffi_value_wire = WireWriterPool.acquire(value.wireSize({ __boltffi_value_0 -> 4 }, { __boltffi_value_0 -> 4 + Utf8Codec.maxBytes(__boltffi_value_0) }))
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeResult(value, { __boltffi_value_writer, __boltffi_value_0 -> __boltffi_value_writer.writeI32(__boltffi_value_0) }, { __boltffi_value_writer, __boltffi_value_0 -> __boltffi_value_writer.writeString(__boltffi_value_0) })
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_result_to_string(__boltffi_value_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return __boltffi_reader.readString()
-    } finally {
-        __boltffi_value_wire.close()
+object StatusMapperCallbacks {
+    @JvmStatic
+    fun free(handle: Long) {
+        StatusMapperMap.remove(handle)
+    }
+
+    @JvmStatic
+    fun clone(handle: Long): Long {
+        return StatusMapperMap.clone(handle)
+    }
+
+    @JvmStatic
+    fun map_status(handle: Long, return_out: Long, status: Int): ByteArray {
+        val impl = StatusMapperMap.get(handle) ?: error("StatusMapperMap: invalid handle $handle")
+        val __boltffi_mapStatus_result = impl.mapStatus(status)
+        return __boltffi_mapStatus_result.fold({ __boltffi_mapStatus_success -> run { Native.boltffi_callback_success_i32(return_out, __boltffi_mapStatus_success); ByteArray(0) } }, { __boltffi_mapStatus_error -> run { val __boltffi_mapStatus_wire = WireWriterPool.acquire(4 + Utf8Codec.maxBytes(__boltffi_mapStatus_error)); val __boltffi_mapStatus_writer = __boltffi_mapStatus_wire.writer; __boltffi_mapStatus_writer.writeString(__boltffi_mapStatus_error); val __boltffi_mapStatus_error_bytes = __boltffi_mapStatus_wire.bytes(); __boltffi_mapStatus_wire.close(); __boltffi_mapStatus_error_bytes } })
     }
 }
 
-fun echoResponse(response: Response): Response {
-    val __boltffi_response_wire = WireWriterPool.acquire(response.wireSize())
-    val __boltffi_response_writer = __boltffi_response_wire.writer
-    response.writeTo(__boltffi_response_writer)
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_echo_response(__boltffi_response_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return Response.fromReader(__boltffi_reader)
-    } finally {
-        __boltffi_response_wire.close()
+object StatusMapperBridge {
+    fun create(value: StatusMapper): Long {
+        return StatusMapperMap.insert(value)
     }
 }

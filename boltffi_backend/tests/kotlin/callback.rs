@@ -38,6 +38,11 @@ fn kotlin_target_renders_callback_optional_scalar_returns() {
 }
 
 #[test]
+fn kotlin_target_renders_callback_result_returns() {
+    insta::assert_snapshot!(rendered_fixture("callback/callback_status_result"));
+}
+
+#[test]
 fn kotlin_target_renders_callback_handle_returns() {
     insta::assert_snapshot!(rendered_fixture("callback/callback_handle_return"));
 }
