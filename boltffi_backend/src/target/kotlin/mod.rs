@@ -52,6 +52,17 @@ pub enum KotlinApiStyle {
     ModuleObject,
 }
 
+/// Factory layout for generated Kotlin class initializers.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum KotlinFactoryStyle {
+    /// Render initializer overloads as Kotlin constructors when signatures allow it.
+    #[default]
+    Constructors,
+    /// Render initializers only as companion object methods.
+    CompanionMethods,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct NativeLibraries {
     android: KotlinLibrary,
@@ -70,6 +81,7 @@ pub struct KotlinHost {
     jni_source: PathBuf,
     native_libraries: NativeLibraries,
     api_style: KotlinApiStyle,
+    factory_style: KotlinFactoryStyle,
 }
 
 impl KotlinHost {
@@ -84,6 +96,7 @@ impl KotlinHost {
             jni_source: PathBuf::from("jni/jni_glue.c"),
             native_libraries: NativeLibraries::default()?,
             api_style: KotlinApiStyle::default(),
+            factory_style: KotlinFactoryStyle::default(),
         })
     }
 
@@ -129,6 +142,12 @@ impl KotlinHost {
         self
     }
 
+    /// Selects the generated Kotlin class factory layout.
+    pub fn factory_style(mut self, style: KotlinFactoryStyle) -> Self {
+        self.factory_style = style;
+        self
+    }
+
     /// Creates the backend target stack for this Kotlin host.
     pub fn into_target(self) -> Result<Target<Self, BridgeLayer<CBridge, JniBridge>>> {
         Ok(Target::new(
@@ -156,6 +175,10 @@ impl KotlinHost {
 
     fn api_layout(&self) -> KotlinApiStyle {
         self.api_style
+    }
+
+    fn factory_layout(&self) -> KotlinFactoryStyle {
+        self.factory_style
     }
 }
 
@@ -254,7 +277,7 @@ impl host::HostBackend for KotlinHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Class::from_declaration(decl, bridge, context)?.render()
+        render::Class::from_declaration(decl, self.factory_layout(), bridge, context)?.render()
     }
 
     fn callback(

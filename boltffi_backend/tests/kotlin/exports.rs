@@ -1,4 +1,4 @@
-use boltffi_backend::target::kotlin::{KotlinApiStyle, KotlinHost};
+use boltffi_backend::target::kotlin::{KotlinApiStyle, KotlinFactoryStyle, KotlinHost};
 
 use super::{rendered_fixture, rendered_fixture_with_host};
 
@@ -72,6 +72,18 @@ fn kotlin_target_encodes_nullable_primitives_as_compact_wire() {
 #[test]
 fn kotlin_target_renders_class_handles_and_associated_callables() {
     insta::assert_snapshot!(rendered_fixture("exports/kotlin_class_handles"));
+}
+
+#[test]
+fn kotlin_target_renders_companion_factory_style() {
+    let host = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .factory_style(KotlinFactoryStyle::CompanionMethods);
+
+    insta::assert_snapshot!(rendered_fixture_with_host(
+        "exports/kotlin_class_handles",
+        host
+    ));
 }
 
 #[test]

@@ -10,7 +10,7 @@ use crate::{
     bridge::jni::JniBridgeContract,
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
-        KotlinHost,
+        KotlinFactoryStyle, KotlinHost,
         name_style::Name,
         render::function::ExportedCall,
         syntax::{Expression, Identifier, Statement, TypeName},
@@ -44,6 +44,7 @@ struct ConstructorSignature(Vec<String>);
 impl Class {
     pub fn from_declaration(
         decl: &ClassDecl<Native>,
+        factory_style: KotlinFactoryStyle,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -55,7 +56,7 @@ impl Class {
         Ok(Self {
             name: Self::type_name(decl.name())?,
             release: Identifier::escape(decl.release().name().as_str())?,
-            initializers: Initializer::dedupe_constructors(initializers),
+            initializers: Initializer::apply_factory_style(initializers, factory_style),
             static_methods: Self::methods(decl.methods(), None, bridge, context)?,
             instance_methods: Self::methods(
                 decl.methods(),
@@ -167,6 +168,16 @@ impl Initializer {
         self.constructor
     }
 
+    fn apply_factory_style(initializers: Vec<Self>, style: KotlinFactoryStyle) -> Vec<Self> {
+        match style {
+            KotlinFactoryStyle::Constructors => Self::dedupe_constructors(initializers),
+            KotlinFactoryStyle::CompanionMethods => initializers
+                .into_iter()
+                .map(Self::companion_method)
+                .collect(),
+        }
+    }
+
     fn dedupe_constructors(initializers: Vec<Self>) -> Vec<Self> {
         let (_, initializers) = initializers.into_iter().fold(
             (BTreeSet::new(), Vec::new()),
@@ -180,6 +191,11 @@ impl Initializer {
             },
         );
         initializers
+    }
+
+    fn companion_method(mut self) -> Self {
+        self.constructor = false;
+        self
     }
 }
 

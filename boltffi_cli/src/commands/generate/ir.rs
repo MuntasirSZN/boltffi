@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use boltffi_backend::target::kotlin::{
     KotlinApiStyle as BackendKotlinApiStyle, KotlinDesktopLoader as BackendKotlinDesktopLoader,
+    KotlinFactoryStyle as BackendKotlinFactoryStyle,
 };
 use boltffi_backend::{CoverageMode, GeneratedOutput};
 use boltffi_bindgen::generate::{Generation, GenerationError};
@@ -10,7 +11,7 @@ use boltffi_bindgen::target::Target;
 use crate::cargo::Cargo;
 use crate::cli::{CliError, Result};
 use crate::config::{
-    Config,
+    Config, KotlinFactoryStyle,
     targets::kotlin::{KotlinApiStyle, KotlinDesktopLoader},
 };
 
@@ -54,7 +55,10 @@ fn generate_python(config: &Config, options: &GenerateOptions) -> Result<()> {
 }
 
 fn generate_kotlin(config: &Config, options: &GenerateOptions) -> Result<()> {
-    if !config.is_enabled(Target::Kotlin) {
+    let target = Target::Kotlin;
+    let target_name = target.name();
+
+    if !config.is_enabled(target) {
         return Err(CliError::CommandFailed {
             command: "targets.android.enabled = false".to_string(),
             status: None,
@@ -72,6 +76,7 @@ fn generate_kotlin(config: &Config, options: &GenerateOptions) -> Result<()> {
         .kotlin_package(config.android_kotlin_package())
         .kotlin_file(config.android_kotlin_module_name())
         .kotlin_api_style(kotlin_api_style(config.android_kotlin_api_style()))
+        .kotlin_factory_style(kotlin_factory_style(config.android_kotlin_factory_style()))
         .kotlin_android_library(config.resolved_android_kotlin_library_name())
         .kotlin_desktop_jni_library(format!(
             "{}_jni",
@@ -81,13 +86,13 @@ fn generate_kotlin(config: &Config, options: &GenerateOptions) -> Result<()> {
         .kotlin_desktop_loader(kotlin_desktop_loader(
             config.android_kotlin_desktop_loader(),
         ))
-        .render(Target::Kotlin)
+        .render(target)
         .and_then(|output| {
-            print_coverage("kotlin", &output);
+            print_coverage(target_name, &output);
             Generation::write_output(output, &output_directory)
         })
         .map(drop)
-        .map_err(|error| generation_error("kotlin", error))
+        .map_err(|error| generation_error(target_name, error))
 }
 
 fn kotlin_desktop_loader(loader: KotlinDesktopLoader) -> BackendKotlinDesktopLoader {
@@ -102,6 +107,13 @@ fn kotlin_api_style(style: KotlinApiStyle) -> BackendKotlinApiStyle {
     match style {
         KotlinApiStyle::TopLevel => BackendKotlinApiStyle::TopLevel,
         KotlinApiStyle::ModuleObject => BackendKotlinApiStyle::ModuleObject,
+    }
+}
+
+fn kotlin_factory_style(style: KotlinFactoryStyle) -> BackendKotlinFactoryStyle {
+    match style {
+        KotlinFactoryStyle::Constructors => BackendKotlinFactoryStyle::Constructors,
+        KotlinFactoryStyle::CompanionMethods => BackendKotlinFactoryStyle::CompanionMethods,
     }
 }
 
@@ -210,7 +222,7 @@ fn generation_error(target: &str, error: GenerationError) -> CliError {
 fn target_label(target: &GenerateTarget) -> &'static str {
     match target {
         GenerateTarget::Swift => "swift",
-        GenerateTarget::Kotlin => "kotlin",
+        GenerateTarget::Kotlin => Target::Kotlin.name(),
         GenerateTarget::KotlinMultiplatform => "kmp",
         GenerateTarget::Java => "java",
         GenerateTarget::Header => "header",
