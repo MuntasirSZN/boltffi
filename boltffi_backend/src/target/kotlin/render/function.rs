@@ -1,13 +1,14 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    ClassId, ClosureReturn, DirectValueType, DirectVectorElementType, Direction, EnumId,
-    ErrorChannel, ErrorPlacement, ExecutionDecl, ExportedCallable, FunctionDecl, HandlePresence,
-    HandleTarget, IncomingParam, IntoRust, Native, NativeSymbol, OutOfRust, ParamDecl, ParamPlan,
-    ParamPlanRender, Primitive, RecordId, ReturnPlanRender, ReturnValueSlot, Surface, TypeRef,
-    native,
+    CallbackId, ClassId, ClosureReturn, DirectValueType, DirectVectorElementType, Direction,
+    EnumId, ErrorChannel, ErrorPlacement, ExecutionDecl, ExportedCallable, FunctionDecl,
+    HandlePresence, HandleTarget, IncomingParam, IntoRust, Native, NativeSymbol, OutOfRust,
+    ParamDecl, ParamPlan, ParamPlanRender, Primitive, RecordId, ReturnPlanRender, ReturnValueSlot,
+    Surface, TypeRef, native,
 };
 
 use crate::{
+    bridge::jni::JniBridgeContract,
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
         codec::{EncodedWrite, Reader, ScalarOption, WireBuffer},
@@ -16,6 +17,7 @@ use crate::{
         render::{
             callback::CallbackHandle,
             class::ClassHandle,
+            closure::Closure,
             direct_vector::DirectVector,
             enumeration::Enumeration,
             native::NativeCall,
@@ -103,12 +105,14 @@ enum ReturnConversion {
     DirectVector(DirectVector),
     Encoded(<OutOfRust as Direction>::Codec),
     ClassHandle(ClassHandle),
+    CallbackHandle(CallbackHandle),
     ScalarOption(Primitive),
 }
 
 impl Function {
     pub fn from_declaration(
         decl: &FunctionDecl<Native>,
+        bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         ExportedCall::new(
@@ -116,6 +120,7 @@ impl Function {
             decl.symbol(),
             decl.callable(),
             Vec::new(),
+            bridge,
             context,
         )
         .map(Self::from_call)
@@ -178,12 +183,13 @@ impl ExportedCall {
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Native>,
         native_prefix: Vec<Expression>,
+        bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let parameters = callable
             .params()
             .iter()
-            .map(|parameter| Parameter::from_declaration(parameter, context))
+            .map(|parameter| Parameter::from_declaration(parameter, bridge, context))
             .collect::<Result<Vec<_>>>()?;
         let function_return = callable
             .returns()
@@ -289,21 +295,29 @@ impl ExportedCall {
 impl Parameter {
     pub fn from_declaration(
         parameter: &ParamDecl<Native, IntoRust>,
+        bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        let IncomingParam::Value(plan) = parameter.payload() else {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "closure function parameter",
-            });
-        };
         let source_name = Name::new(parameter.name());
         let name = source_name.parameter()?;
-        let native_argument = Self::native_argument_for(source_name, name.clone(), plan, context)?;
+        let (ty, native_argument) = match parameter.payload() {
+            IncomingParam::Value(plan) => (
+                Self::type_name(plan, context)?,
+                Self::native_argument_for(source_name, name.clone(), plan, context)?,
+            ),
+            IncomingParam::Closure(closure) => (
+                Closure::type_name(closure, context)?,
+                NativeArgument::direct(Closure::native_argument(
+                    closure,
+                    Expression::identifier(name.clone()),
+                    bridge,
+                )?),
+            ),
+        };
         Ok(Self {
             native_argument: native_argument.expression,
             name,
-            ty: Self::type_name(plan, context)?,
+            ty,
             setup: native_argument.setup,
             cleanup: native_argument.cleanup,
         })
@@ -640,12 +654,14 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
                 ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
                 HandleTarget::Class(class),
             ) => FunctionReturn::class_handle(*class, presence, self.context),
-            (_, HandleTarget::Callback(_) | HandleTarget::Stream(_)) => {
-                Err(Error::UnsupportedTarget {
-                    target: KOTLIN_TARGET,
-                    shape: "handle function return",
-                })
-            }
+            (
+                ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
+                HandleTarget::Callback(callback),
+            ) => FunctionReturn::callback_handle(*callback, presence, self.context),
+            (_, HandleTarget::Stream(_)) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "handle function return",
+            }),
             _ => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "unknown handle function return",
@@ -737,6 +753,19 @@ impl FunctionReturn {
         })
     }
 
+    fn callback_handle(
+        callback: CallbackId,
+        presence: HandlePresence,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let handle = CallbackHandle::new(callback, presence, context)?;
+        let ty = handle.ty()?;
+        Ok(Self {
+            ty: Some(ty),
+            conversion: ReturnConversion::CallbackHandle(handle),
+        })
+    }
+
     fn scalar_option(primitive: Primitive) -> Result<Self> {
         Ok(Self {
             ty: Some(ScalarOption::new(primitive).ty()?),
@@ -814,6 +843,7 @@ impl FunctionReturn {
                 ])
             }
             ReturnConversion::ClassHandle(handle) => handle.value_statements(call),
+            ReturnConversion::CallbackHandle(handle) => handle.value_statements(call),
             ReturnConversion::ScalarOption(primitive) => {
                 ScalarOption::new(*primitive).read_value(call)
             }

@@ -48,6 +48,49 @@ object {{ callback.callbacks_name() }} {
     }
 {%- endfor %}
 }
+{%- if !callback.handle_methods().is_empty() %}
+
+private class {{ callback.handle_name() }}(private val handle: Long) : {{ callback.name() }}, AutoCloseable {
+    private var closed = false
+
+    override fun close() {
+{%- if let Some(release) = callback.handle_release() %}
+        if (!closed) {
+            Native.{{ release }}(handle)
+            closed = true
+        }
+{%- endif %}
+    }
+
+    private fun requireOpen(): Long {
+        check(!closed) { "callback handle is closed" }
+        return handle
+    }
+{%- for method in callback.handle_methods() %}
+
+    override fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{%- for statement in method.setup() %}
+        {{ statement }}
+{%- endfor %}
+{%- if method.has_cleanup() %}
+        try {
+{%- for statement in method.call() %}
+            {{ statement }}
+{%- endfor %}
+        } finally {
+{%- for statement in method.cleanup() %}
+            {{ statement }}
+{%- endfor %}
+        }
+{%- else %}
+{%- for statement in method.call() %}
+        {{ statement }}
+{%- endfor %}
+{%- endif %}
+    }
+{%- endfor %}
+}
+{%- endif %}
 
 object {{ callback.bridge_name() }} {
     fun create(value: {{ callback.name() }}): Long {

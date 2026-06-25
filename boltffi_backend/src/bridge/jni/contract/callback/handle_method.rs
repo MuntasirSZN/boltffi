@@ -40,6 +40,7 @@ const JNI_BRIDGE: &str = "jni";
 #[non_exhaustive]
 pub struct CallbackHandleMethod {
     symbol: JniSymbolName,
+    method: Identifier,
     vtable_type: Identifier,
     slot: Identifier,
     call: CallbackHandleMethodCall,
@@ -105,6 +106,11 @@ impl CallbackHandleMethod {
         &self.symbol
     }
 
+    /// Returns the JVM native method name.
+    pub fn method(&self) -> &Identifier {
+        &self.method
+    }
+
     /// Returns the C callback vtable type.
     pub fn vtable_type(&self) -> &Identifier {
         &self.vtable_type
@@ -118,6 +124,15 @@ impl CallbackHandleMethod {
     /// Returns parameters after `JNIEnv*`, `jclass`, and callback handle.
     pub fn parameters(&self) -> &[NativeParameter] {
         &self.parameters
+    }
+
+    /// Returns the synchronous JNI return contract.
+    pub fn synchronous_return(&self) -> Option<&NativeReturn> {
+        match &self.call {
+            CallbackHandleMethodCall::Synchronous(returns) => Some(returns),
+            CallbackHandleMethodCall::Asynchronous(_)
+            | CallbackHandleMethodCall::ClosureReturn(_) => None,
+        }
     }
 
     /// Returns whether this method returns no value.
@@ -214,8 +229,9 @@ impl CallbackHandleMethod {
                 invariant: "callback handle method has completion and closure return groups",
             });
         }
+        let method = Identifier::parse(Self::method_name(callback, slot.name()))?;
         let function = c::Function::new(
-            Self::method_name(callback, slot.name()),
+            method.as_str(),
             Self::method_parameters(slot, completion, closure_return),
             match completion {
                 Some(_) => c::Type::Void,
@@ -242,6 +258,7 @@ impl CallbackHandleMethod {
         };
         Ok(Self {
             symbol: JniSymbolName::native_method(class, function.name())?,
+            method,
             vtable_type: Identifier::parse(callback.vtable().name())?,
             slot: slot.name().clone(),
             call,

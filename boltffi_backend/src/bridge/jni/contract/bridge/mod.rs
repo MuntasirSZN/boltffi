@@ -25,8 +25,8 @@ use crate::{
 };
 
 use super::{
-    CallbackCompletionInvoker, CallbackRegistration, ClosureRegistration, NativeMethod,
-    StreamProtocolMethods,
+    CallbackCompletionInvoker, CallbackHandleLifecycle, CallbackRegistration, ClosureRegistration,
+    NativeMethod, StreamProtocolMethods,
 };
 
 /// A complete JNI bridge contract for one generated C source file.
@@ -43,6 +43,7 @@ pub struct JniBridgeContract {
     source_path: FilePath,
     c_header: HeaderInclude,
     free_buffer: Identifier,
+    callback_handle_lifecycle: Option<CallbackHandleLifecycle>,
     callbacks: Vec<CallbackRegistration>,
     callback_completions: Vec<CallbackCompletionInvoker>,
     closures: Vec<ClosureRegistration>,
@@ -69,6 +70,11 @@ impl JniBridgeContract {
     /// Returns the C support function that releases owned BoltFFI byte buffers.
     pub fn free_buffer(&self) -> &Identifier {
         &self.free_buffer
+    }
+
+    /// Returns callback handle lifecycle methods when Rust-owned callback handles are exposed.
+    pub fn callback_handle_lifecycle(&self) -> Option<&CallbackHandleLifecycle> {
+        self.callback_handle_lifecycle.as_ref()
     }
 
     /// Returns generated callback registrations.

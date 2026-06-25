@@ -16,5 +16,9 @@ private object Native {
     }
 {%- endif %}
 }
+{%- if !closures.is_empty() %}
+
+{{ closures }}
+{%- endif %}
 
 {{ declarations }}

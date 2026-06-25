@@ -1,9 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
-use boltffi_binding::{ClassDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol};
+use boltffi_binding::{
+    CallbackDecl, ClassDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol,
+};
 
 use crate::{
-    bridge::jni::{JniBridgeContract, NativeMethod, NativeParameter},
+    bridge::{
+        c::Identifier as CIdentifier,
+        jni::{
+            CallbackHandleLifecycle, CallbackHandleMethod, CallbackRegistration, JniBridgeContract,
+            NativeMethod, NativeParameter,
+        },
+    },
     core::{Error, Result},
     target::kotlin::{
         render::type_name::KotlinType,
@@ -15,6 +23,8 @@ const JNI_BRIDGE: &str = "jni";
 
 pub struct NativeMethods<'bridge> {
     methods: HashMap<&'bridge str, &'bridge NativeMethod>,
+    callbacks: HashMap<&'bridge str, &'bridge CallbackRegistration>,
+    callback_handle_lifecycle: Option<&'bridge CallbackHandleLifecycle>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,6 +48,12 @@ impl<'bridge> NativeMethods<'bridge> {
                 .iter()
                 .map(|method| (method.c_function().name(), method))
                 .collect(),
+            callbacks: bridge
+                .callbacks()
+                .iter()
+                .map(|callback| (callback.register().as_str(), callback))
+                .collect(),
+            callback_handle_lifecycle: bridge.callback_handle_lifecycle(),
         }
     }
 
@@ -65,6 +81,27 @@ impl<'bridge> NativeMethods<'bridge> {
                     .flatten()
                     .collect::<Vec<NativeFunction>>()
             })
+    }
+
+    pub fn callback(&self, decl: &CallbackDecl<Native>) -> Result<Vec<NativeFunction>> {
+        self.callbacks
+            .get(decl.protocol().register().name().as_str())
+            .copied()
+            .ok_or(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback declaration has no JNI registration",
+            })?
+            .handle_methods()
+            .iter()
+            .map(NativeFunction::from_callback_handle_method)
+            .collect()
+    }
+
+    pub fn callback_handle_lifecycle(&self) -> Result<Vec<NativeFunction>> {
+        self.callback_handle_lifecycle
+            .map(NativeFunction::from_callback_handle_lifecycle)
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 
     fn exported(
@@ -105,6 +142,33 @@ impl NativeFunction {
         })
     }
 
+    pub fn from_callback_handle_method(method: &CallbackHandleMethod) -> Result<Self> {
+        Ok(Self {
+            name: Identifier::escape(method.method().as_str())?,
+            parameters: std::iter::once(NativeFunctionParameter::callback_handle()?)
+                .chain(
+                    method
+                        .parameters()
+                        .iter()
+                        .map(NativeFunctionParameter::from_parameter)
+                        .collect::<Result<Vec<_>>>()?,
+                )
+                .collect(),
+            returns: KotlinType::callback_handle_return(method)?,
+        })
+    }
+
+    pub fn from_callback_handle_lifecycle(
+        lifecycle: &CallbackHandleLifecycle,
+    ) -> Result<Vec<Self>> {
+        vec![
+            Self::callback_handle_lifecycle_function(lifecycle.clone_method(), TypeName::long()),
+            Self::callback_handle_lifecycle_function(lifecycle.release_method(), TypeName::unit()),
+        ]
+        .into_iter()
+        .collect()
+    }
+
     pub fn name(&self) -> &Identifier {
         &self.name
     }
@@ -116,6 +180,14 @@ impl NativeFunction {
     pub fn returns(&self) -> &TypeName {
         &self.returns
     }
+
+    fn callback_handle_lifecycle_function(method: &CIdentifier, returns: TypeName) -> Result<Self> {
+        Ok(Self {
+            name: Identifier::escape(method.as_str())?,
+            parameters: vec![NativeFunctionParameter::callback_handle()?],
+            returns,
+        })
+    }
 }
 
 impl NativeFunctionParameter {
@@ -123,6 +195,13 @@ impl NativeFunctionParameter {
         Ok(Self {
             name: Identifier::escape(parameter.name().as_str())?,
             ty: KotlinType::native_parameter(parameter.kind())?,
+        })
+    }
+
+    pub fn callback_handle() -> Result<Self> {
+        Ok(Self {
+            name: Identifier::parse("handle")?,
+            ty: TypeName::long(),
         })
     }
 

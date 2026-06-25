@@ -1,6 +1,6 @@
 ---
 source: boltffi_backend/tests/kotlin/exports.rs
-expression: "rendered_fixture(\"exports/builtin_functions\")"
+expression: "rendered_fixture(\"exports/encoded_closure_parameter\")"
 ---
 ===== com/boltffi/demo/Demo.kt =====
 @file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
@@ -422,179 +422,41 @@ private object WireWriterPool {
     }
 }
 
-private fun WireReader.readDuration(): java.time.Duration {
-    val seconds = readI64()
-    val nanos = readI32().toLong()
-    require(seconds >= 0L) { "Duration out of range" }
-    require(nanos >= 0L) { "Duration nanos out of range" }
-    return java.time.Duration.ofSeconds(seconds, nanos)
-}
-
-private fun WireReader.readInstant(): java.time.Instant {
-    val seconds = readI64()
-    val nanos = readI32().toLong()
-    require(nanos >= 0L) { "Instant nanos out of range" }
-    if (seconds >= 0L) {
-        return java.time.Instant.EPOCH.plus(java.time.Duration.ofSeconds(seconds, nanos))
-    }
-    require(seconds != Long.MIN_VALUE) { "Instant out of range" }
-    return java.time.Instant.EPOCH.minus(java.time.Duration.ofSeconds(-seconds, nanos))
-}
-
-private fun WireReader.readUuid(): java.util.UUID = java.util.UUID(readI64(), readI64())
-
-private fun WireReader.readUri(): java.net.URI = java.net.URI.create(readString())
-
-private fun WireWriter.writeDuration(value: java.time.Duration) {
-    require(value.seconds >= 0L) { "Invalid duration, must be non-negative" }
-    require(value.nano >= 0) { "Invalid duration nanos" }
-    writeI64(value.seconds)
-    writeI32(value.nano)
-}
-
-private fun WireWriter.writeInstant(value: java.time.Instant) {
-    var epochOffset = java.time.Duration.between(java.time.Instant.EPOCH, value)
-    var sign = 1L
-    if (epochOffset.isNegative) {
-        sign = -1L
-        epochOffset = epochOffset.negated()
-    }
-    require(epochOffset.nano >= 0) { "Invalid instant nanos" }
-    writeI64(sign * epochOffset.seconds)
-    writeI32(epochOffset.nano)
-}
-
-private fun WireWriter.writeUuid(value: java.util.UUID) {
-    writeI64(value.mostSignificantBits)
-    writeI64(value.leastSignificantBits)
-}
-
-private fun WireWriter.writeUri(value: java.net.URI) {
-    writeString(value.toString())
-}
-
 @Suppress("FunctionName")
 private object Native {
-    @JvmStatic external fun boltffi_function_demo_echo_duration(value: ByteArray): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_make_duration(seconds: Long, nanos: Int): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_duration_as_millis(value: ByteArray): Long
-    @JvmStatic external fun boltffi_function_demo_echo_system_time(value: ByteArray): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_system_time_to_millis(value: ByteArray): Long
-    @JvmStatic external fun boltffi_function_demo_millis_to_system_time(value: Long): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_echo_uuid(value: ByteArray): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_uuid_to_string(value: ByteArray): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_echo_url(value: ByteArray): ByteArray?
-    @JvmStatic external fun boltffi_function_demo_url_to_string(value: ByteArray): ByteArray?
+    @JvmStatic external fun boltffi_function_demo_install(callback: Long): Unit
 }
 
-fun echoDuration(value: java.time.Duration): java.time.Duration {
-    val __boltffi_value_wire = WireWriterPool.acquire(12)
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeDuration(value)
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_echo_duration(__boltffi_value_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return __boltffi_reader.readDuration()
-    } finally {
-        __boltffi_value_wire.close()
+private object ClosureStringToStringCallbacks {
+    private val map = java.util.concurrent.ConcurrentHashMap<Long, ((String) -> String)>()
+    private val counter = java.util.concurrent.atomic.AtomicLong(1L)
+
+    fun insert(value: ((String) -> String)): Long {
+        val handle = counter.getAndAdd(2L)
+        map[handle] = value
+        return handle
+    }
+
+    @JvmStatic
+    fun free(handle: Long) {
+        map.remove(handle)
+    }
+
+    @JvmStatic
+    fun call(handle: Long, arg0: ByteArray): ByteArray {
+        val impl = map[handle] ?: error("ClosureStringToStringCallbacks: invalid handle $handle")
+        val __boltffi_arg0_reader = WireReader(arg0)
+        val __boltffi_arg0_value = __boltffi_arg0_reader.readString()
+        val __boltffi_closure_result = impl(__boltffi_arg0_value)
+        val __boltffi_closure_wire = WireWriterPool.acquire(4 + Utf8Codec.maxBytes(__boltffi_closure_result))
+        val __boltffi_closure_writer = __boltffi_closure_wire.writer
+        __boltffi_closure_writer.writeString(__boltffi_closure_result)
+        val __boltffi_closure_bytes = __boltffi_closure_wire.bytes()
+        __boltffi_closure_wire.close()
+        return __boltffi_closure_bytes
     }
 }
 
-fun makeDuration(seconds: ULong, nanos: UInt): java.time.Duration {
-    val __boltffi_result = Native.boltffi_function_demo_make_duration(seconds.toLong(), nanos.toInt()) ?: throw IllegalStateException("null buffer returned")
-    val __boltffi_reader = WireReader(__boltffi_result)
-    return __boltffi_reader.readDuration()
-}
-
-fun durationAsMillis(value: java.time.Duration): ULong {
-    val __boltffi_value_wire = WireWriterPool.acquire(12)
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeDuration(value)
-    try {
-        return Native.boltffi_function_demo_duration_as_millis(__boltffi_value_wire.bytes()).toULong()
-    } finally {
-        __boltffi_value_wire.close()
-    }
-}
-
-fun echoSystemTime(value: java.time.Instant): java.time.Instant {
-    val __boltffi_value_wire = WireWriterPool.acquire(12)
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeInstant(value)
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_echo_system_time(__boltffi_value_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return __boltffi_reader.readInstant()
-    } finally {
-        __boltffi_value_wire.close()
-    }
-}
-
-fun systemTimeToMillis(value: java.time.Instant): ULong {
-    val __boltffi_value_wire = WireWriterPool.acquire(12)
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeInstant(value)
-    try {
-        return Native.boltffi_function_demo_system_time_to_millis(__boltffi_value_wire.bytes()).toULong()
-    } finally {
-        __boltffi_value_wire.close()
-    }
-}
-
-fun millisToSystemTime(value: ULong): java.time.Instant {
-    val __boltffi_result = Native.boltffi_function_demo_millis_to_system_time(value.toLong()) ?: throw IllegalStateException("null buffer returned")
-    val __boltffi_reader = WireReader(__boltffi_result)
-    return __boltffi_reader.readInstant()
-}
-
-fun echoUuid(value: java.util.UUID): java.util.UUID {
-    val __boltffi_value_wire = WireWriterPool.acquire(16)
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeUuid(value)
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_echo_uuid(__boltffi_value_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return __boltffi_reader.readUuid()
-    } finally {
-        __boltffi_value_wire.close()
-    }
-}
-
-fun uuidToString(value: java.util.UUID): String {
-    val __boltffi_value_wire = WireWriterPool.acquire(16)
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeUuid(value)
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_uuid_to_string(__boltffi_value_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return __boltffi_reader.readString()
-    } finally {
-        __boltffi_value_wire.close()
-    }
-}
-
-fun echoUrl(value: java.net.URI): java.net.URI {
-    val __boltffi_value_wire = WireWriterPool.acquire(4 + Utf8Codec.maxBytes(value.toString()))
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeUri(value)
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_echo_url(__boltffi_value_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return __boltffi_reader.readUri()
-    } finally {
-        __boltffi_value_wire.close()
-    }
-}
-
-fun urlToString(value: java.net.URI): String {
-    val __boltffi_value_wire = WireWriterPool.acquire(4 + Utf8Codec.maxBytes(value.toString()))
-    val __boltffi_value_writer = __boltffi_value_wire.writer
-    __boltffi_value_writer.writeUri(value)
-    try {
-        val __boltffi_result = Native.boltffi_function_demo_url_to_string(__boltffi_value_wire.bytes()) ?: throw IllegalStateException("null buffer returned")
-        val __boltffi_reader = WireReader(__boltffi_result)
-        return __boltffi_reader.readString()
-    } finally {
-        __boltffi_value_wire.close()
-    }
+fun install(callback: ((String) -> String)) {
+    Native.boltffi_function_demo_install(ClosureStringToStringCallbacks.insert(callback))
 }

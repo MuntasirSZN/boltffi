@@ -3,10 +3,16 @@ use boltffi_binding::{BuiltinType, DeclarationRef, Native};
 
 use crate::{
     bridge::jni::JniBridgeContract,
-    core::{Diagnostic, FilePath, GeneratedFile, GeneratedOutput, RenderedDeclaration, Result},
+    core::{
+        Diagnostic, Error, FilePath, GeneratedFile, GeneratedOutput, RenderContext,
+        RenderedDeclaration, Result,
+    },
     target::kotlin::{
         KotlinHost, KotlinPackage,
-        render::native::{NativeFunction, NativeMethods},
+        render::{
+            closure::Closures,
+            native::{NativeFunction, NativeMethods},
+        },
     },
 };
 
@@ -15,6 +21,7 @@ use crate::{
 struct ModuleTemplate {
     package: KotlinPackage,
     runtime: String,
+    closures: String,
     native_functions: Vec<NativeFunction>,
     declarations: String,
     async_runtime: bool,
@@ -46,6 +53,7 @@ struct RuntimeFeatures {
 pub struct Module<'host, 'bridge, 'decl> {
     host: &'host KotlinHost,
     bridge: &'bridge JniBridgeContract,
+    context: &'decl RenderContext<'decl, Native>,
     declarations: Vec<RenderedDeclaration<'decl, Native>>,
 }
 
@@ -53,11 +61,13 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
     pub fn new(
         host: &'host KotlinHost,
         bridge: &'bridge JniBridgeContract,
+        context: &'decl RenderContext<'decl, Native>,
         declarations: Vec<RenderedDeclaration<'decl, Native>>,
     ) -> Self {
         Self {
             host,
             bridge,
+            context,
             declarations,
         }
     }
@@ -65,11 +75,13 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
     pub fn render(self) -> Result<GeneratedOutput> {
         let diagnostics = self.diagnostics();
         let native_functions = self.native_functions()?;
+        let closures = self.closures()?;
         let declarations = self.declarations();
         let features = RuntimeFeatures::from_declarations(&self.declarations);
         let contents = ModuleTemplate {
             package: self.host.package().clone(),
             runtime: Runtime::new(features).render()?,
+            closures,
             native_functions,
             declarations,
             async_runtime: features.asynchronous,
@@ -86,19 +98,51 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
 
     fn native_functions(&self) -> Result<Vec<NativeFunction>> {
         let methods = NativeMethods::new(self.bridge);
-        Ok(self
+        let functions = self
             .declarations
             .iter()
             .filter(|declaration| !declaration.emitted().primary_chunk().is_empty())
             .map(|declaration| match declaration.declaration() {
                 DeclarationRef::Function(function) => methods.function(function),
                 DeclarationRef::Class(class) => methods.class(class),
+                DeclarationRef::Callback(callback) => methods.callback(callback),
                 _ => Ok(Vec::new()),
             })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
-            .collect())
+            .chain(methods.callback_handle_lifecycle()?)
+            .collect::<Vec<_>>();
+        Self::unique_native_functions(functions)
+    }
+
+    fn closures(&self) -> Result<String> {
+        Ok(
+            Closures::from_declarations(&self.declarations, self.bridge, self.context)?
+                .render()?
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        )
+    }
+
+    fn unique_native_functions(functions: Vec<NativeFunction>) -> Result<Vec<NativeFunction>> {
+        functions
+            .into_iter()
+            .try_fold(Vec::new(), |mut unique, function| {
+                if unique
+                    .iter()
+                    .any(|existing: &NativeFunction| existing.name() == function.name())
+                {
+                    Err(Error::KotlinNameCollision {
+                        scope: "Native".to_owned(),
+                        name: function.name().to_string(),
+                    })
+                } else {
+                    unique.push(function);
+                    Ok(unique)
+                }
+            })
     }
 
     fn functions(&self) -> Vec<String> {

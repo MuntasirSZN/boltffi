@@ -23,8 +23,8 @@ use crate::{
 };
 
 use super::{
-    CallbackCompletionInvoker, CallbackRegistration, ClosureRegistration, JniBridgeContract,
-    NativeMethod, StreamProtocolMethods,
+    CallbackCompletionInvoker, CallbackHandleLifecycle, CallbackRegistration, ClosureRegistration,
+    JniBridgeContract, NativeMethod, StreamProtocolMethods,
 };
 
 impl JniBridgeContract {
@@ -54,6 +54,9 @@ impl JniBridgeContract {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let callback_handle_lifecycle = (!handle_method_callbacks.is_empty())
+            .then(|| CallbackHandleLifecycle::new(&class))
+            .transpose()?;
         let callback_completions = CallbackCompletionInvoker::from_callbacks(&class, &callbacks)?;
         let stream_function_names = c_bridge
             .streams()
@@ -86,6 +89,7 @@ impl JniBridgeContract {
                 .stable(BridgeCapability::Jni),
             c_header: HeaderInclude::from_files(&source_path, c_bridge.header_path())?,
             free_buffer: Identifier::parse(c_bridge.support().buffer_free()?.name())?,
+            callback_handle_lifecycle,
             callbacks,
             callback_completions,
             methods,

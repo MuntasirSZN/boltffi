@@ -69,3 +69,33 @@ fn kotlin_target_renders_async_complete_return_shapes() {
 fn kotlin_target_renders_async_class_methods() {
     insta::assert_snapshot!(rendered_fixture("exports/async_class_methods"));
 }
+
+#[test]
+fn kotlin_target_renders_closure_parameters() {
+    insta::assert_snapshot!(rendered_fixture("exports/closure_parameter"));
+}
+
+#[test]
+fn kotlin_target_renders_multi_argument_closure_parameters() {
+    insta::assert_snapshot!(rendered_fixture("exports/multi_argument_closure_parameter"));
+}
+
+#[test]
+fn kotlin_target_renders_encoded_closure_parameters() {
+    insta::assert_snapshot!(rendered_fixture("exports/encoded_closure_parameter"));
+}
+
+#[test]
+fn kotlin_target_renders_direct_vector_closure_parameters() {
+    insta::assert_snapshot!(rendered_fixture("exports/direct_vector_closure_parameter"));
+}
+
+#[test]
+fn kotlin_target_renders_closure_record_returns() {
+    insta::assert_snapshot!(rendered_fixture("exports/closure_direct_record_return"));
+}
+
+#[test]
+fn kotlin_target_renders_closure_handle_returns() {
+    insta::assert_snapshot!(rendered_fixture("exports/closure_callback_handle_return"));
+}

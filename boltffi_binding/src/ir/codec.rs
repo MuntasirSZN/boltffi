@@ -27,6 +27,14 @@ impl ReadPlan {
         Self { root }
     }
 
+    /// Creates a write plan for the same lowered codec tree.
+    ///
+    /// The returned plan binds the tree to `ValueRef::self_value()`. The
+    /// transport shape stays fixed; only the boundary direction changes.
+    pub fn write_self_value(&self) -> WritePlan {
+        WritePlan::new(ValueRef::self_value(), self.root.clone())
+    }
+
     /// Returns the root codec node.
     pub fn root(&self) -> &CodecNode {
         &self.root
@@ -65,6 +73,11 @@ pub struct WritePlan {
 impl WritePlan {
     pub(crate) fn new(value: ValueRef, root: CodecNode) -> Self {
         Self { value, root }
+    }
+
+    /// Creates a read plan for the same lowered codec tree.
+    pub fn read_plan(&self) -> ReadPlan {
+        ReadPlan::new(self.root.clone())
     }
 
     /// Returns the value the plan consumes.

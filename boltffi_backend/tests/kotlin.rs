@@ -19,7 +19,11 @@ fn bindings(source: &str) -> boltffi_binding::Bindings<Native> {
 }
 
 pub fn rendered_fixture(name: &str) -> String {
-    rendered_files(&files(&fixture(name)))
+    let kotlin_file = files(&fixture(name))
+        .into_iter()
+        .find(|(path, _)| path.ends_with(".kt"))
+        .expect("Kotlin target should render a Kotlin source file");
+    rendered_files(&[kotlin_file])
 }
 
 pub fn files(source: &str) -> Vec<(String, String)> {

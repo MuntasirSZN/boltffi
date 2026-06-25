@@ -16,7 +16,7 @@ use crate::{
     bridge::{
         c::{Identifier, Literal},
         jni::{
-            JniBridgeContract, JniSymbolName,
+            CallbackHandleLifecycle, JniBridgeContract,
             template::{
                 callback::{CallbackCompletionInvokerView, CallbackRegistrationView},
                 closure::{CallbackClosureHandleView, ClosureRegistrationView},
@@ -112,6 +112,10 @@ impl SourceFile {
             &closures,
             &closure_handles,
         );
+        let callback_handle_lifecycle = match contract.callback_handle_lifecycle() {
+            Some(lifecycle) => lifecycle.clone(),
+            None => CallbackHandleLifecycle::new(contract.class())?,
+        };
         let rendered = SourceFileTemplate {
             c_header: Literal::string(contract.c_header().as_str()),
             class_name: Literal::string(&contract.class().as_jni_class_name()),
@@ -126,18 +130,8 @@ impl SourceFile {
             uses_continuations: features.uses_continuations,
             uses_callback_handles: features.uses_callback_handles,
             uses_closure_handles: features.uses_closure_handles,
-            callback_clone_symbol: JniSymbolName::native_method(
-                contract.class(),
-                "boltffi_callback_handle_clone",
-            )?
-            .as_identifier()
-            .clone(),
-            callback_release_symbol: JniSymbolName::native_method(
-                contract.class(),
-                "boltffi_callback_handle_release",
-            )?
-            .as_identifier()
-            .clone(),
+            callback_clone_symbol: callback_handle_lifecycle.clone_symbol().clone(),
+            callback_release_symbol: callback_handle_lifecycle.release_symbol().clone(),
             callbacks,
             callback_completions,
             closure_handles,

@@ -5,7 +5,9 @@ use boltffi_binding::{
 };
 
 use crate::{
-    bridge::jni::{DirectVectorParameter, JniType, NativeParameterKind, NativeReturn},
+    bridge::jni::{
+        CallbackHandleMethod, DirectVectorParameter, JniType, NativeParameterKind, NativeReturn,
+    },
     core::{Error, RenderContext, Result},
     target::kotlin::{
         codec::ScalarOption,
@@ -81,6 +83,14 @@ impl KotlinType {
             NativeReturn::Callback(_) => Ok(TypeName::long()),
             NativeReturn::StatusValue(value) => Self::native_return(value.value()),
             NativeReturn::EncodedErrorValue(value) => Self::native_return(value.success().value()),
+        }
+    }
+
+    pub fn callback_handle_return(method: &CallbackHandleMethod) -> Result<TypeName> {
+        match method.synchronous_return() {
+            Some(return_value) => Self::native_return(return_value),
+            None if method.returns_closure() => Ok(TypeName::long()),
+            None => Ok(TypeName::unit()),
         }
     }
 

@@ -36,3 +36,13 @@ fn kotlin_target_renders_callback_vectors() {
 fn kotlin_target_renders_callback_optional_scalar_returns() {
     insta::assert_snapshot!(rendered_fixture("callback/callback_optional_scalar_return"));
 }
+
+#[test]
+fn kotlin_target_renders_callback_handle_returns() {
+    insta::assert_snapshot!(rendered_fixture("callback/callback_handle_return"));
+}
+
+#[test]
+fn kotlin_target_renders_nullable_callback_handle_returns() {
+    insta::assert_snapshot!(rendered_fixture("callback/nullable_callback_handle_return"));
+}

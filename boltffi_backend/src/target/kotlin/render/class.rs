@@ -5,6 +5,7 @@ use boltffi_binding::{
 };
 
 use crate::{
+    bridge::jni::JniBridgeContract,
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
         name_style::Name,
@@ -38,6 +39,7 @@ pub struct Initializer {
 impl Class {
     pub fn from_declaration(
         decl: &ClassDecl<Native>,
+        bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         Ok(Self {
@@ -46,12 +48,13 @@ impl Class {
             initializers: decl
                 .initializers()
                 .iter()
-                .map(|initializer| Initializer::from_declaration(initializer, context))
+                .map(|initializer| Initializer::from_declaration(initializer, bridge, context))
                 .collect::<Result<Vec<_>>>()?,
-            static_methods: Self::methods(decl.methods(), None, context)?,
+            static_methods: Self::methods(decl.methods(), None, bridge, context)?,
             instance_methods: Self::methods(
                 decl.methods(),
                 Some(Expression::property("this", Identifier::parse("handle")?)),
+                bridge,
                 context,
             )?,
         })
@@ -98,6 +101,7 @@ impl Class {
     fn methods(
         methods: &[ExportedMethodDecl<Native, NativeSymbol>],
         receiver: Option<Expression>,
+        bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Vec<ExportedCall>> {
         methods
@@ -121,6 +125,7 @@ impl Class {
                     method.target(),
                     method.callable(),
                     native_prefix,
+                    bridge,
                     context,
                 )
             })
@@ -131,6 +136,7 @@ impl Class {
 impl Initializer {
     pub fn from_declaration(
         initializer: &InitializerDecl<Native>,
+        bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         ExportedCall::new(
@@ -138,6 +144,7 @@ impl Initializer {
             initializer.symbol(),
             initializer.callable(),
             Vec::new(),
+            bridge,
             context,
         )
         .map(|call| Self { call })
@@ -190,22 +197,37 @@ impl ClassHandle {
         }
     }
 
-    pub fn value_statements(&self, value: Expression) -> Result<Vec<Statement>> {
+    pub fn value_expression(&self, value: Expression) -> Result<Expression> {
         match self.presence {
-            HandlePresence::Required => Ok(vec![Statement::expression(Expression::construct(
+            HandlePresence::Required => Ok(Expression::construct(
                 self.ty.clone(),
                 [value].into_iter().collect(),
-            ))]),
+            )),
+            HandlePresence::Nullable => Ok(Expression::conditional(
+                value.clone().equal(Expression::long(0)),
+                Expression::null(),
+                Expression::construct(self.ty.clone(), [value].into_iter().collect()),
+            )),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown class handle presence",
+            }),
+        }
+    }
+
+    pub fn value_statements(&self, value: Expression) -> Result<Vec<Statement>> {
+        match self.presence {
+            HandlePresence::Required => self
+                .value_expression(value)
+                .map(Statement::expression)
+                .map(|statement| vec![statement]),
             HandlePresence::Nullable => {
                 let raw_handle = Identifier::parse("__boltffi_handle")?;
-                let raw_value = Expression::identifier(raw_handle.clone());
                 Ok(vec![
                     Statement::value(raw_handle, value),
-                    Statement::expression(Expression::conditional(
-                        raw_value.clone().equal(Expression::long(0)),
-                        Expression::null(),
-                        Expression::construct(self.ty.clone(), [raw_value].into_iter().collect()),
-                    )),
+                    Statement::expression(self.value_expression(Expression::identifier(
+                        Identifier::parse("__boltffi_handle")?,
+                    ))?),
                 ])
             }
             _ => Err(Error::UnsupportedTarget {

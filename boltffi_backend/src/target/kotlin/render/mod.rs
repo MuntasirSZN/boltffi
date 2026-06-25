@@ -1,5 +1,6 @@
 mod callback;
 mod class;
+mod closure;
 mod direct_vector;
 mod enumeration;
 mod field;

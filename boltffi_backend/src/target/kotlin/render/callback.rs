@@ -2,22 +2,25 @@ use askama::Template as AskamaTemplate;
 use boltffi_binding::{
     CallbackDecl, CallbackId, ClosureReturn, DirectValueType, DirectVectorElementType, Direction,
     EnumId, ErrorChannel, ExecutionDecl, HandlePresence, HandleTarget, ImportedMethodDecl,
-    IntoRust, Native, OutOfRust, OutgoingParam, ParamDecl, ParamPlanRender, Primitive,
+    IntoRust, Native, OutOfRust, OutgoingParam, ParamDecl, ParamPlanRender, Primitive, ReadPlan,
     ReturnPlanRender, ReturnValueSlot, Surface, TypeRef, VTableSlot,
 };
 
 use crate::{
-    bridge::jni::{CallbackMethod as JniCallbackMethod, CallbackRegistration, JniBridgeContract},
+    bridge::jni::{
+        CallbackHandleMethod as JniCallbackHandleMethod, CallbackMethod as JniCallbackMethod,
+        CallbackRegistration, JniBridgeContract,
+    },
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
         codec::{Reader, ScalarOption, WireBuffer},
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
-            direct_vector::DirectVector, enumeration::Enumeration, record::Record,
-            type_name::KotlinType,
+            class::ClassHandle, direct_vector::DirectVector, enumeration::Enumeration,
+            native::NativeCall, record::Record, type_name::KotlinType,
         },
-        syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
+        syntax::{ArgumentList, Expression, Identifier, Literal, Statement, TypeName},
     },
 };
 
@@ -35,7 +38,10 @@ pub struct Callback {
     map_name: TypeName,
     callbacks_name: TypeName,
     bridge_name: TypeName,
+    handle_name: TypeName,
+    handle_release: Option<Identifier>,
     methods: Vec<Method>,
+    handle_methods: Vec<HandleMethod>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,9 +62,20 @@ pub struct Parameter {
     ty: TypeName,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HandleMethod {
+    name: Identifier,
+    parameters: Vec<Parameter>,
+    returns: Option<TypeName>,
+    setup: Vec<Statement>,
+    call: Vec<Statement>,
+    cleanup: Vec<Statement>,
+}
+
 pub struct CallbackHandle {
     ty: TypeName,
     bridge: TypeName,
+    handle: TypeName,
     presence: HandlePresence,
 }
 
@@ -74,6 +91,16 @@ struct ParameterRender<'context> {
 
 struct ReturnRender<'context> {
     source_name: Name,
+    context: &'context RenderContext<'context, Native>,
+}
+
+struct HandleParameterRender<'context> {
+    source_name: Name,
+    name: Identifier,
+    context: &'context RenderContext<'context, Native>,
+}
+
+struct HandleReturnRender<'context> {
     context: &'context RenderContext<'context, Native>,
 }
 
@@ -100,6 +127,30 @@ enum ReturnConversion {
     DirectVector(DirectVector),
 }
 
+struct HandleParameter {
+    public: Parameter,
+    native_argument: Expression,
+    setup: Vec<Statement>,
+    cleanup: Vec<Statement>,
+}
+
+struct HandleReturn {
+    ty: Option<TypeName>,
+    conversion: HandleReturnConversion,
+}
+
+enum HandleReturnConversion {
+    Void,
+    Direct(Primitive),
+    DirectRecord(TypeName),
+    DirectEnum { ty: TypeName, repr: Primitive },
+    DirectVector(DirectVector),
+    Encoded(ReadPlan),
+    ClassHandle(ClassHandle),
+    CallbackHandle(CallbackHandle),
+    ScalarOption(Primitive),
+}
+
 impl Callback {
     pub fn from_declaration(
         decl: &CallbackDecl<Native>,
@@ -122,12 +173,42 @@ impl Callback {
             .zip(registration.methods())
             .map(|(source, method)| Method::from_declaration(source, method, context))
             .collect::<Result<Vec<_>>>()?;
+        if !registration.handle_methods().is_empty()
+            && decl.protocol().vtable().methods().len() != registration.handle_methods().len()
+        {
+            return Err(Error::BrokenBridgeContract {
+                bridge: "jni",
+                invariant: "callback declaration method count does not match JNI handle methods",
+            });
+        }
+        let handle_methods = decl
+            .protocol()
+            .vtable()
+            .methods()
+            .iter()
+            .zip(registration.handle_methods())
+            .map(|(source, method)| HandleMethod::from_declaration(source, method, context))
+            .collect::<Result<Vec<_>>>()?;
+        let handle_name = TypeName::new(format!("{name}Handle"));
+        let handle_release = bridge
+            .callback_handle_lifecycle()
+            .map(|lifecycle| Identifier::escape(lifecycle.release_method().as_str()))
+            .transpose()?;
+        if !handle_methods.is_empty() && handle_release.is_none() {
+            return Err(Error::BrokenBridgeContract {
+                bridge: "jni",
+                invariant: "callback handle methods have no lifecycle methods",
+            });
+        }
         Ok(Self {
             map_name: TypeName::new(format!("{name}Map")),
             callbacks_name: TypeName::new(format!("{name}Callbacks")),
             bridge_name: TypeName::new(format!("{name}Bridge")),
+            handle_name,
+            handle_release,
             name,
             methods,
+            handle_methods,
         })
     }
 
@@ -153,8 +234,20 @@ impl Callback {
         &self.bridge_name
     }
 
+    pub fn handle_name(&self) -> &TypeName {
+        &self.handle_name
+    }
+
+    pub fn handle_release(&self) -> Option<&Identifier> {
+        self.handle_release.as_ref()
+    }
+
     pub fn methods(&self) -> &[Method] {
         &self.methods
+    }
+
+    pub fn handle_methods(&self) -> &[HandleMethod] {
+        &self.handle_methods
     }
 }
 
@@ -258,6 +351,105 @@ impl Method {
     }
 }
 
+impl HandleMethod {
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    pub fn parameters(&self) -> &[Parameter] {
+        &self.parameters
+    }
+
+    pub fn returns(&self) -> Option<&TypeName> {
+        self.returns.as_ref()
+    }
+
+    pub fn setup(&self) -> &[Statement] {
+        &self.setup
+    }
+
+    pub fn call(&self) -> &[Statement] {
+        &self.call
+    }
+
+    pub fn cleanup(&self) -> &[Statement] {
+        &self.cleanup
+    }
+
+    pub fn has_cleanup(&self) -> bool {
+        !self.cleanup.is_empty()
+    }
+}
+
+impl HandleMethod {
+    fn from_declaration(
+        source: &ImportedMethodDecl<Native, VTableSlot>,
+        method: &JniCallbackHandleMethod,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let callable = source.callable();
+        if !matches!(callable.error().channel(), ErrorChannel::None) {
+            return Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback method error return",
+            });
+        }
+        if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
+            return Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "async callback method",
+            });
+        }
+        if source.target().as_str() != method.slot().as_str() {
+            return Err(Error::BrokenBridgeContract {
+                bridge: "jni",
+                invariant: "callback declaration method does not match JNI handle method",
+            });
+        }
+        let parameters = callable
+            .params()
+            .iter()
+            .map(|parameter| HandleParameter::from_declaration(parameter, context))
+            .collect::<Result<Vec<_>>>()?;
+        let returned = callable
+            .returns()
+            .plan()
+            .render_with(&mut HandleReturnRender { context })?;
+        let native_arguments = std::iter::once(Expression::call(
+            Expression::this(),
+            Identifier::parse("requireOpen")?,
+            ArgumentList::default(),
+        ))
+        .chain(
+            parameters
+                .iter()
+                .map(|parameter| parameter.native_argument.clone()),
+        )
+        .collect::<Vec<_>>();
+        let native_call = NativeCall::new(
+            Identifier::escape(method.method().as_str())?,
+            native_arguments,
+        );
+        Ok(Self {
+            name: Name::new(source.name()).function()?,
+            parameters: parameters
+                .iter()
+                .map(|parameter| parameter.public.clone())
+                .collect(),
+            returns: returned.ty.clone(),
+            setup: parameters
+                .iter()
+                .flat_map(|parameter| parameter.setup.iter().cloned())
+                .collect(),
+            call: returned.statements(native_call.expression(), context)?,
+            cleanup: parameters
+                .into_iter()
+                .flat_map(|parameter| parameter.cleanup)
+                .collect(),
+        })
+    }
+}
+
 impl Parameter {
     pub fn name(&self) -> &Identifier {
         &self.name
@@ -281,6 +473,7 @@ impl CallbackHandle {
         let ty = Name::new(callback.name()).type_name();
         Ok(Self {
             bridge: TypeName::new(format!("{ty}Bridge")),
+            handle: TypeName::new(format!("{ty}Handle")),
             ty,
             presence,
         })
@@ -327,6 +520,37 @@ impl CallbackHandle {
             }
         })
     }
+
+    pub fn value_expression(&self, value: Expression) -> Result<Expression> {
+        let handle = Expression::construct(
+            self.handle.clone(),
+            [value.clone()].into_iter().collect::<ArgumentList>(),
+        );
+        Ok(match self.presence {
+            HandlePresence::Required => handle,
+            HandlePresence::Nullable => Expression::conditional(
+                value.equal(Expression::long(0)),
+                Expression::null(),
+                handle,
+            ),
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: KOTLIN_TARGET,
+                    shape: "unknown callback handle presence",
+                });
+            }
+        })
+    }
+
+    pub fn value_statements(&self, call: Expression) -> Result<Vec<Statement>> {
+        let result = Identifier::parse("__boltffi_result")?;
+        let value = Expression::identifier(result.clone());
+        let returned = self.value_expression(value)?;
+        Ok(vec![
+            Statement::value(result, call),
+            Statement::expression(returned),
+        ])
+    }
 }
 
 impl<'bridge> CallbackRegistrationSet<'bridge> {
@@ -371,6 +595,175 @@ impl MethodParameter {
             source_name,
             name,
             context,
+        })
+    }
+}
+
+impl HandleParameter {
+    fn from_declaration(
+        parameter: &ParamDecl<Native, OutOfRust>,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let OutgoingParam::Value(plan) = parameter.payload() else {
+            return Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method closure parameter",
+            });
+        };
+        let source_name = Name::new(parameter.name());
+        let name = source_name.parameter()?;
+        plan.render_with(&mut HandleParameterRender {
+            source_name,
+            name,
+            context,
+        })
+    }
+}
+
+impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<'_> {
+    type Output = Result<HandleParameter>;
+
+    fn direct(
+        &mut self,
+        ty: &'plan DirectValueType,
+        _receive: <OutOfRust as Direction>::Receive,
+    ) -> Self::Output {
+        let value = Expression::identifier(self.name.clone());
+        match ty {
+            DirectValueType::Primitive(primitive) => Ok(HandleParameter {
+                public: Parameter {
+                    name: self.name.clone(),
+                    ty: KotlinPrimitive::new(*primitive).api_type()?,
+                },
+                native_argument: KotlinPrimitive::new(*primitive).native_argument(value)?,
+                setup: Vec::new(),
+                cleanup: Vec::new(),
+            }),
+            DirectValueType::Record(record) => {
+                let ty = Record::type_name_from_id(*record, self.context)?;
+                Ok(HandleParameter {
+                    public: Parameter {
+                        name: self.name.clone(),
+                        ty,
+                    },
+                    native_argument: Record::encode_expression(value)?,
+                    setup: Vec::new(),
+                    cleanup: Vec::new(),
+                })
+            }
+            DirectValueType::Enum(enumeration) => {
+                let enumeration = Enumeration::from_id(*enumeration, self.context)?;
+                Ok(HandleParameter {
+                    public: Parameter {
+                        name: self.name.clone(),
+                        ty: enumeration.name().clone(),
+                    },
+                    native_argument: KotlinPrimitive::new(enumeration.repr()?).native_argument(
+                        Expression::property(value, Identifier::parse("value")?),
+                    )?,
+                    setup: Vec::new(),
+                    cleanup: Vec::new(),
+                })
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method direct parameter",
+            }),
+        }
+    }
+
+    fn encoded(
+        &mut self,
+        ty: &'plan TypeRef,
+        codec: &'plan <OutOfRust as Direction>::Codec,
+        _shape: <Native as Surface>::BufferShape,
+        _receive: <OutOfRust as Direction>::Receive,
+    ) -> Self::Output {
+        let write = WireBuffer::new(&self.source_name)?.write_value(
+            &codec.write_self_value(),
+            Expression::identifier(self.name.clone()),
+            self.context,
+        )?;
+        let (setup, native_argument, cleanup) = write.into_parts();
+        Ok(HandleParameter {
+            public: Parameter {
+                name: self.name.clone(),
+                ty: KotlinType::type_ref(ty, self.context)?,
+            },
+            native_argument,
+            setup,
+            cleanup,
+        })
+    }
+
+    fn handle(
+        &mut self,
+        target: &'plan HandleTarget,
+        _carrier: <Native as Surface>::HandleCarrier,
+        presence: HandlePresence,
+        _receive: <OutOfRust as Direction>::Receive,
+    ) -> Self::Output {
+        let value = Expression::identifier(self.name.clone());
+        match target {
+            HandleTarget::Class(class) => {
+                let handle = ClassHandle::new(*class, presence, self.context)?;
+                Ok(HandleParameter {
+                    public: Parameter {
+                        name: self.name.clone(),
+                        ty: handle.ty()?,
+                    },
+                    native_argument: handle.parameter_argument(value)?,
+                    setup: Vec::new(),
+                    cleanup: Vec::new(),
+                })
+            }
+            HandleTarget::Callback(callback) => {
+                let handle = CallbackHandle::new(*callback, presence, self.context)?;
+                Ok(HandleParameter {
+                    public: Parameter {
+                        name: self.name.clone(),
+                        ty: handle.ty()?,
+                    },
+                    native_argument: handle.parameter_argument(value)?,
+                    setup: Vec::new(),
+                    cleanup: Vec::new(),
+                })
+            }
+            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method stream parameter",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown callback handle method handle parameter",
+            }),
+        }
+    }
+
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
+        let write = ScalarOption::new(primitive).write(&self.source_name)?;
+        let (setup, native_argument, cleanup) = write.into_parts();
+        Ok(HandleParameter {
+            public: Parameter {
+                name: self.name.clone(),
+                ty: ScalarOption::new(primitive).ty()?,
+            },
+            native_argument,
+            setup,
+            cleanup,
+        })
+    }
+
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        let vector = DirectVector::from_element(element)?;
+        Ok(HandleParameter {
+            public: Parameter {
+                name: self.name.clone(),
+                ty: vector.ty().clone(),
+            },
+            native_argument: vector.carrier_expression(Expression::identifier(self.name.clone())),
+            setup: Vec::new(),
+            cleanup: Vec::new(),
         })
     }
 }
@@ -638,6 +1031,134 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 }
 
+impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_> {
+    type Output = Result<HandleReturn>;
+
+    fn void(&mut self) -> Self::Output {
+        Ok(HandleReturn {
+            ty: None,
+            conversion: HandleReturnConversion::Void,
+        })
+    }
+
+    fn direct(&mut self, slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output {
+        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
+            return Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method out-pointer return",
+            });
+        }
+        match ty {
+            DirectValueType::Primitive(primitive) => Ok(HandleReturn {
+                ty: Some(KotlinPrimitive::new(*primitive).api_type()?),
+                conversion: HandleReturnConversion::Direct(*primitive),
+            }),
+            DirectValueType::Record(record) => {
+                let ty = Record::type_name_from_id(*record, self.context)?;
+                Ok(HandleReturn {
+                    ty: Some(ty.clone()),
+                    conversion: HandleReturnConversion::DirectRecord(ty),
+                })
+            }
+            DirectValueType::Enum(enumeration) => {
+                let enumeration = Enumeration::from_id(*enumeration, self.context)?;
+                let ty = enumeration.name().clone();
+                Ok(HandleReturn {
+                    ty: Some(ty.clone()),
+                    conversion: HandleReturnConversion::DirectEnum {
+                        ty,
+                        repr: enumeration.repr()?,
+                    },
+                })
+            }
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method direct return",
+            }),
+        }
+    }
+
+    fn encoded(
+        &mut self,
+        slot: ReturnValueSlot,
+        ty: &'plan TypeRef,
+        codec: &'plan <IntoRust as Direction>::Codec,
+        _shape: <Native as Surface>::BufferShape,
+    ) -> Self::Output {
+        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
+            return Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method out-pointer encoded return",
+            });
+        }
+        Ok(HandleReturn {
+            ty: Some(KotlinType::type_ref(ty, self.context)?),
+            conversion: HandleReturnConversion::Encoded(codec.read_plan()),
+        })
+    }
+
+    fn handle(
+        &mut self,
+        slot: ReturnValueSlot,
+        target: &'plan HandleTarget,
+        _carrier: <Native as Surface>::HandleCarrier,
+        presence: HandlePresence,
+    ) -> Self::Output {
+        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
+            return Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method out-pointer handle return",
+            });
+        }
+        match target {
+            HandleTarget::Class(class) => {
+                let handle = ClassHandle::new(*class, presence, self.context)?;
+                Ok(HandleReturn {
+                    ty: Some(handle.ty()?),
+                    conversion: HandleReturnConversion::ClassHandle(handle),
+                })
+            }
+            HandleTarget::Callback(callback) => {
+                let handle = CallbackHandle::new(*callback, presence, self.context)?;
+                Ok(HandleReturn {
+                    ty: Some(handle.ty()?),
+                    conversion: HandleReturnConversion::CallbackHandle(handle),
+                })
+            }
+            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback handle method stream return",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown callback handle method handle return",
+            }),
+        }
+    }
+
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
+        Ok(HandleReturn {
+            ty: Some(ScalarOption::new(primitive).ty()?),
+            conversion: HandleReturnConversion::ScalarOption(primitive),
+        })
+    }
+
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        let vector = DirectVector::from_element(element)?;
+        Ok(HandleReturn {
+            ty: Some(vector.ty().clone()),
+            conversion: HandleReturnConversion::DirectVector(vector),
+        })
+    }
+
+    fn closure(&mut self, _closure: &'plan ClosureReturn<Native, IntoRust>) -> Self::Output {
+        Err(Error::UnsupportedTarget {
+            target: KOTLIN_TARGET,
+            shape: "callback handle method closure return",
+        })
+    }
+}
+
 impl ReturnRender<'_> {
     fn direct_enum(enumeration: EnumId, context: &RenderContext<Native>) -> Result<ReturnValue> {
         let enumeration = Enumeration::from_id(enumeration, context)?;
@@ -711,6 +1232,85 @@ impl ReturnValue {
                 target: KOTLIN_TARGET,
                 shape: "callback method direct return",
             }),
+        }
+    }
+}
+
+impl HandleReturn {
+    fn statements(
+        &self,
+        call: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        self.value_statements(call, context).map(|body| {
+            if self.ty.is_some() {
+                Statement::with_return_value(body)
+            } else {
+                body
+            }
+        })
+    }
+
+    fn value_statements(
+        &self,
+        call: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        match &self.conversion {
+            HandleReturnConversion::Void => Ok(vec![Statement::expression(call)]),
+            HandleReturnConversion::Direct(primitive) => Ok(vec![
+                KotlinPrimitive::new(*primitive)
+                    .public_return(call)
+                    .map(Statement::expression)?,
+            ]),
+            HandleReturnConversion::DirectRecord(record) => {
+                let result = Identifier::parse("__boltffi_result")?;
+                let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
+                    "null buffer returned",
+                )));
+                Ok(vec![
+                    Statement::value(result.clone(), payload),
+                    Statement::expression(Record::decode_expression(
+                        record.clone(),
+                        Expression::identifier(result),
+                    )?),
+                ])
+            }
+            HandleReturnConversion::DirectEnum { ty, repr } => {
+                let value = KotlinPrimitive::new(*repr).public_return(call)?;
+                Ok(vec![Statement::expression(Expression::call(
+                    ty.clone(),
+                    Identifier::parse("fromValue")?,
+                    [value].into_iter().collect::<ArgumentList>(),
+                ))])
+            }
+            HandleReturnConversion::DirectVector(vector) => vector.value_statements(call),
+            HandleReturnConversion::Encoded(codec) => {
+                let result = Identifier::parse("__boltffi_result")?;
+                let reader = Identifier::parse("__boltffi_reader")?;
+                let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
+                    "null buffer returned",
+                )));
+                let value = codec.render_with(&mut Reader::new(reader.clone(), context))?;
+                Ok(vec![
+                    Statement::value(result.clone(), payload),
+                    Statement::value(
+                        reader,
+                        Expression::construct(
+                            TypeName::new("WireReader"),
+                            [Expression::identifier(result)]
+                                .into_iter()
+                                .collect::<ArgumentList>(),
+                        ),
+                    ),
+                    Statement::expression(value),
+                ])
+            }
+            HandleReturnConversion::ClassHandle(handle) => handle.value_statements(call),
+            HandleReturnConversion::CallbackHandle(handle) => handle.value_statements(call),
+            HandleReturnConversion::ScalarOption(primitive) => {
+                ScalarOption::new(*primitive).read_value(call)
+            }
         }
     }
 }

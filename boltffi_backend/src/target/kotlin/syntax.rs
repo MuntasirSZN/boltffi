@@ -234,6 +234,15 @@ impl TypeName {
         Self::new(format!("BoltFFIResult<{ok}, {err}>"))
     }
 
+    pub fn function(parameters: Vec<Self>, returns: Self) -> Self {
+        let parameters = parameters
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self::new(format!("(({parameters}) -> {returns})"))
+    }
+
     pub fn nullable(self) -> Self {
         Self::new(format!("{self}?"))
     }
@@ -270,6 +279,10 @@ impl Expression {
 
     pub fn call(receiver: impl fmt::Display, method: Identifier, arguments: ArgumentList) -> Self {
         Self(format!("{receiver}.{method}({arguments})"))
+    }
+
+    pub fn invoke(function: impl fmt::Display, arguments: ArgumentList) -> Self {
+        Self(format!("{function}({arguments})"))
     }
 
     pub fn construct(ty: TypeName, arguments: ArgumentList) -> Self {

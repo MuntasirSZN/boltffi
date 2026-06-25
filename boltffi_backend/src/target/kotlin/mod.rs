@@ -127,19 +127,19 @@ impl host::HostBackend for KotlinHost {
     fn function(
         &self,
         decl: &FunctionDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
+        bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Function::from_declaration(decl, context)?.render()
+        render::Function::from_declaration(decl, bridge, context)?.render()
     }
 
     fn class(
         &self,
         decl: &ClassDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
+        bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Class::from_declaration(decl, context)?.render()
+        render::Class::from_declaration(decl, bridge, context)?.render()
     }
 
     fn callback(
@@ -186,10 +186,10 @@ impl host::HostBackend for KotlinHost {
         &self,
         _bindings: &Bindings<Self::Surface>,
         bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
-        render::Module::new(self, bridge, declarations).render()
+        render::Module::new(self, bridge, context, declarations).render()
     }
 }
 
