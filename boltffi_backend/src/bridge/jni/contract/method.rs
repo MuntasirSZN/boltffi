@@ -94,7 +94,7 @@ impl NativeMethod {
     pub fn checks_status(&self) -> bool {
         matches!(
             &self.returns,
-            NativeReturn::Status | NativeReturn::StatusValue(_)
+            NativeReturn::Status | NativeReturn::StatusWriteback(_) | NativeReturn::StatusValue(_)
         )
     }
 
@@ -133,7 +133,7 @@ impl NativeMethod {
                 }
                 c::ParameterGroup::CompletionStatusOut(_) => {
                     Ok(vec![Expression::address_of(Expression::identifier(
-                        Identifier::parse("status")?,
+                        Identifier::parse("__boltffi_status")?,
                     ))])
                 }
                 c::ParameterGroup::CallbackCompletion(_)

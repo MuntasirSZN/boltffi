@@ -111,19 +111,25 @@ impl host::HostBackend for KotlinHost {
     fn record(
         &self,
         decl: &RecordDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
+        bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Record::from_declaration(decl, context)?.render()
+        render::Record::from_declaration(decl, bridge, context)?.render()
     }
 
     fn enumeration(
         &self,
         decl: &EnumDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
+        bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Enumeration::from_declaration(decl, context)?.render()
+        render::Enumeration::from_declaration_with_package(
+            decl,
+            bridge,
+            context,
+            Some(self.package()),
+        )?
+        .render()
     }
 
     fn function(

@@ -12,7 +12,7 @@ use crate::{
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
         codec::{EncodedWrite, Reader, ScalarOption, WireBuffer},
-        name_style::Name,
+        name_style::{KotlinPackage, Name},
         primitive::KotlinPrimitive,
         render::{
             callback::CallbackHandle,
@@ -100,10 +100,16 @@ struct AsyncProtocolFunctions {
 enum ReturnConversion {
     Void,
     Direct(Primitive),
-    DirectRecord(TypeName),
-    DirectEnum { ty: TypeName, repr: Primitive },
+    ByteArrayValue(TypeName),
+    DirectEnum {
+        ty: TypeName,
+        repr: Primitive,
+    },
     DirectVector(DirectVector),
-    Encoded(<OutOfRust as Direction>::Codec),
+    Encoded {
+        codec: <OutOfRust as Direction>::Codec,
+        record_package: Option<KotlinPackage>,
+    },
     ClassHandle(ClassHandle),
     CallbackHandle(CallbackHandle),
     ScalarOption(Primitive),
@@ -186,15 +192,111 @@ impl ExportedCall {
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
+        Self::build(
+            name,
+            symbol,
+            callable,
+            native_prefix,
+            None,
+            None,
+            bridge,
+            context,
+        )
+    }
+
+    pub fn new_with_record_package(
+        name: Identifier,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        native_prefix: Vec<Expression>,
+        record_package: &KotlinPackage,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        Self::build(
+            name,
+            symbol,
+            callable,
+            native_prefix,
+            None,
+            Some(record_package),
+            bridge,
+            context,
+        )
+    }
+
+    pub fn new_byte_array_receiver_writeback(
+        name: Identifier,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        native_prefix: Vec<Expression>,
+        receiver_type: TypeName,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        Self::build(
+            name,
+            symbol,
+            callable,
+            native_prefix,
+            Some(receiver_type),
+            None,
+            bridge,
+            context,
+        )
+    }
+
+    pub fn new_byte_array_receiver_writeback_with_record_package(
+        name: Identifier,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        native_prefix: Vec<Expression>,
+        receiver_type: TypeName,
+        record_package: &KotlinPackage,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        Self::build(
+            name,
+            symbol,
+            callable,
+            native_prefix,
+            Some(receiver_type),
+            Some(record_package),
+            bridge,
+            context,
+        )
+    }
+
+    fn build(
+        name: Identifier,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        native_prefix: Vec<Expression>,
+        receiver_writeback: Option<TypeName>,
+        record_package: Option<&KotlinPackage>,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         let parameters = callable
             .params()
             .iter()
-            .map(|parameter| Parameter::from_declaration(parameter, bridge, context))
+            .map(|parameter| {
+                Parameter::from_declaration(parameter, record_package, bridge, context)
+            })
             .collect::<Result<Vec<_>>>()?;
-        let function_return = callable
-            .returns()
-            .plan()
-            .render_with(&mut FunctionReturnPlan::new(context, callable))?;
+        let mut function_return =
+            callable
+                .returns()
+                .plan()
+                .render_with(&mut FunctionReturnPlan::new(
+                    context,
+                    record_package,
+                    callable,
+                ))?;
+        if let Some(receiver_type) = receiver_writeback {
+            function_return = function_return.with_byte_array_receiver_writeback(receiver_type)?;
+        }
         let native_arguments = native_prefix
             .into_iter()
             .chain(
@@ -295,6 +397,7 @@ impl ExportedCall {
 impl Parameter {
     pub fn from_declaration(
         parameter: &ParamDecl<Native, IntoRust>,
+        record_package: Option<&KotlinPackage>,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -302,7 +405,7 @@ impl Parameter {
         let name = source_name.parameter()?;
         let (ty, native_argument) = match parameter.payload() {
             IncomingParam::Value(plan) => (
-                Self::type_name(plan, context)?,
+                Self::type_name(plan, record_package, context)?,
                 Self::native_argument_for(source_name, name.clone(), plan, context)?,
             ),
             IncomingParam::Closure(closure) => (
@@ -345,9 +448,10 @@ impl Parameter {
 
     fn type_name(
         plan: &ParamPlan<Native, IntoRust>,
+        record_package: Option<&KotlinPackage>,
         context: &RenderContext<Native>,
     ) -> Result<TypeName> {
-        plan.render_with(&mut ParameterType::new(context))
+        plan.render_with(&mut ParameterType::new(context).record_package(record_package))
     }
 }
 
@@ -555,17 +659,20 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
 
 struct FunctionReturnPlan<'context> {
     context: &'context RenderContext<'context, Native>,
+    record_package: Option<KotlinPackage>,
     fallible_success_out: bool,
 }
 
 impl<'context> FunctionReturnPlan<'context> {
     fn new(
         context: &'context RenderContext<'context, Native>,
+        record_package: Option<&KotlinPackage>,
         callable: &ExportedCallable<Native>,
     ) -> Self {
         let error_channel = callable.error().channel();
         Self {
             context,
+            record_package: record_package.cloned(),
             fallible_success_out: matches!(
                 error_channel,
                 ErrorChannel::Status
@@ -610,7 +717,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
             (
                 ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
                 DirectValueType::Record(record),
-            ) => FunctionReturn::direct_record(*record, self.context),
+            ) => FunctionReturn::direct_record(*record, self.context, self.record_package.as_ref()),
             (
                 ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
                 DirectValueType::Enum(enumeration),
@@ -631,9 +738,12 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
     ) -> Self::Output {
         self.require_supported_slot(slot, "out-pointer encoded function return")?;
         match slot {
-            ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer => {
-                FunctionReturn::encoded(ty, codec.clone(), self.context)
-            }
+            ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer => FunctionReturn::encoded(
+                ty,
+                codec.clone(),
+                self.context,
+                self.record_package.as_ref(),
+            ),
             _ => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "unknown encoded function return",
@@ -701,12 +811,24 @@ impl FunctionReturn {
         })
     }
 
-    fn direct_record(record: RecordId, context: &RenderContext<Native>) -> Result<Self> {
-        let ty = Record::type_name_from_id(record, context)?;
-        Ok(Self {
+    fn direct_record(
+        record: RecordId,
+        context: &RenderContext<Native>,
+        record_package: Option<&KotlinPackage>,
+    ) -> Result<Self> {
+        let ty = Record::type_name_from_id(record, context).map(|record| {
+            record_package.map_or(record.clone(), |package| {
+                TypeName::qualified(package, record)
+            })
+        })?;
+        Ok(Self::byte_array_value(ty))
+    }
+
+    fn byte_array_value(ty: TypeName) -> Self {
+        Self {
             ty: Some(ty.clone()),
-            conversion: ReturnConversion::DirectRecord(ty),
-        })
+            conversion: ReturnConversion::ByteArrayValue(ty),
+        }
     }
 
     fn direct_enum(enumeration: EnumId, context: &RenderContext<Native>) -> Result<Self> {
@@ -733,10 +855,17 @@ impl FunctionReturn {
         ty: &TypeRef,
         codec: <OutOfRust as Direction>::Codec,
         context: &RenderContext<Native>,
+        record_package: Option<&KotlinPackage>,
     ) -> Result<Self> {
         Ok(Self {
-            ty: Some(KotlinType::type_ref(ty, context)?),
-            conversion: ReturnConversion::Encoded(codec),
+            ty: Some(match record_package {
+                Some(package) => KotlinType::type_ref_with_record_package(ty, context, package)?,
+                None => KotlinType::type_ref(ty, context)?,
+            }),
+            conversion: ReturnConversion::Encoded {
+                codec,
+                record_package: record_package.cloned(),
+            },
         })
     }
 
@@ -773,6 +902,16 @@ impl FunctionReturn {
         })
     }
 
+    fn with_byte_array_receiver_writeback(self, receiver_type: TypeName) -> Result<Self> {
+        match self.ty {
+            None => Ok(Self::byte_array_value(receiver_type)),
+            Some(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "mutable receiver with explicit return",
+            }),
+        }
+    }
+
     fn return_statements(
         &self,
         call: Expression,
@@ -799,17 +938,20 @@ impl FunctionReturn {
                     .public_return(call)
                     .map(Statement::expression)?,
             ]),
-            ReturnConversion::DirectRecord(record) => {
+            ReturnConversion::ByteArrayValue(ty) => {
                 let result = Identifier::parse("__boltffi_result")?;
                 let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
                     "null buffer returned",
                 )));
                 Ok(vec![
                     Statement::value(result.clone(), payload),
-                    Statement::expression(Record::decode_expression(
-                        record.clone(),
-                        Expression::identifier(result),
-                    )?),
+                    Statement::expression(Expression::call(
+                        ty.clone(),
+                        Identifier::parse("fromByteArray")?,
+                        [Expression::identifier(result)]
+                            .into_iter()
+                            .collect::<ArgumentList>(),
+                    )),
                 ])
             }
             ReturnConversion::DirectEnum { ty, repr } => {
@@ -821,13 +963,20 @@ impl FunctionReturn {
                 ))])
             }
             ReturnConversion::DirectVector(vector) => vector.value_statements(call),
-            ReturnConversion::Encoded(codec) => {
+            ReturnConversion::Encoded {
+                codec,
+                record_package,
+            } => {
                 let result = Identifier::parse("__boltffi_result")?;
                 let reader = Identifier::parse("__boltffi_reader")?;
                 let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
                     "null buffer returned",
                 )));
-                let value = codec.render_with(&mut Reader::new(reader.clone(), context))?;
+                let mut codec_reader = Reader::new(reader.clone(), context);
+                if let Some(package) = record_package {
+                    codec_reader = codec_reader.record_package(package);
+                }
+                let value = codec.render_with(&mut codec_reader)?;
                 Ok(vec![
                     Statement::value(result.clone(), payload),
                     Statement::value(

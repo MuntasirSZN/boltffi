@@ -79,9 +79,9 @@ impl NativeMethodView {
             returns_bytes: method.returns_bytes(),
             returns_record: method.returns_record(),
             returns_callback: method.returns_callback(),
-            return_value: method
-                .returns()
-                .return_expression(Expression::identifier(Identifier::parse("result")?))?,
+            return_value: method.returns().return_expression(Expression::identifier(
+                Identifier::parse("__boltffi_result")?,
+            ))?,
             checks_status: method.checks_status(),
             checks_completion_status: method.checks_completion_status(),
             checks_error_buffer: method.checks_error_buffer(),

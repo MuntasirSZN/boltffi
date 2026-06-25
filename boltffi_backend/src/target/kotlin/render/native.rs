@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_binding::{
-    CallbackDecl, ClassDecl, ConstantDecl, ConstantValueDecl, ExportedCallable, FunctionDecl,
-    Native, NativeSymbol, StreamDecl,
+    CallbackDecl, ClassDecl, ConstantDecl, ConstantValueDecl, EnumDecl, ExportedCallable,
+    ExportedMethodDecl, FunctionDecl, InitializerDecl, Native, NativeSymbol, RecordDecl,
+    StreamDecl,
 };
 
 use crate::{
@@ -81,19 +82,38 @@ impl<'bridge> NativeMethods<'bridge> {
         self.exported(decl.symbol(), decl.callable())
     }
 
+    pub fn record(&self, decl: &RecordDecl<Native>) -> Result<Vec<NativeFunction>> {
+        match decl {
+            RecordDecl::Direct(record) => self.associated(record.initializers(), record.methods()),
+            RecordDecl::Encoded(record) => self.associated(record.initializers(), record.methods()),
+            _ => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "unknown record declaration",
+            }),
+        }
+    }
+
+    pub fn enumeration(&self, decl: &EnumDecl<Native>) -> Result<Vec<NativeFunction>> {
+        match decl {
+            EnumDecl::CStyle(enumeration) => {
+                self.associated(enumeration.initializers(), enumeration.methods())
+            }
+            EnumDecl::Data(enumeration) => {
+                self.associated(enumeration.initializers(), enumeration.methods())
+            }
+            _ => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "unknown enum declaration",
+            }),
+        }
+    }
+
     pub fn class(&self, decl: &ClassDecl<Native>) -> Result<Vec<NativeFunction>> {
         std::iter::once(decl.release())
             .map(|symbol| self.symbol(symbol).map(|function| vec![function]))
-            .chain(
-                decl.initializers()
-                    .iter()
-                    .map(|initializer| self.exported(initializer.symbol(), initializer.callable())),
-            )
-            .chain(
-                decl.methods()
-                    .iter()
-                    .map(|method| self.exported(method.target(), method.callable())),
-            )
+            .chain(std::iter::once(
+                self.associated(decl.initializers(), decl.methods()),
+            ))
             .collect::<Result<Vec<_>>>()
             .map(|functions| {
                 functions
@@ -178,6 +198,23 @@ impl<'bridge> NativeMethods<'bridge> {
             .filter(|symbol| seen.insert(symbol.name().as_str()))
             .map(|symbol| self.symbol(symbol))
             .collect()
+    }
+
+    fn associated(
+        &self,
+        initializers: &[InitializerDecl<Native>],
+        methods: &[ExportedMethodDecl<Native, NativeSymbol>],
+    ) -> Result<Vec<NativeFunction>> {
+        initializers
+            .iter()
+            .map(|initializer| self.exported(initializer.symbol(), initializer.callable()))
+            .chain(
+                methods
+                    .iter()
+                    .map(|method| self.exported(method.target(), method.callable())),
+            )
+            .collect::<Result<Vec<_>>>()
+            .map(|functions| functions.into_iter().flatten().collect())
     }
 
     fn symbol(&self, symbol: &NativeSymbol) -> Result<NativeFunction> {

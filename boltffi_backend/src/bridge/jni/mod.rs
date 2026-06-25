@@ -26,7 +26,7 @@ mod template;
 
 pub use bridge::JniBridge;
 pub use contract::{
-    BytesParameter, CallbackArgument, CallbackBytesArgument, CallbackCParameter,
+    BytesParameter, BytesWriteback, CallbackArgument, CallbackBytesArgument, CallbackCParameter,
     CallbackClosureArgument, CallbackClosureHandle, CallbackClosureReturn,
     CallbackCompletionArgument, CallbackCompletionInvoker, CallbackCompletionPayload,
     CallbackCompletionPayloadValue, CallbackDirectVectorArgument, CallbackHandleArgument,

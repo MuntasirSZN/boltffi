@@ -25,6 +25,7 @@ struct ModuleTemplate {
     native_functions: Vec<NativeFunction>,
     declarations: String,
     async_runtime: bool,
+    stream_runtime: bool,
 }
 
 #[derive(AskamaTemplate)]
@@ -90,6 +91,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
             native_functions,
             declarations,
             async_runtime: features.asynchronous,
+            stream_runtime: features.streaming,
         }
         .render()?;
         Ok(GeneratedOutput::new(
@@ -109,6 +111,8 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
             .filter(|declaration| !declaration.emitted().primary_chunk().is_empty())
             .map(|declaration| match declaration.declaration() {
                 DeclarationRef::Function(function) => methods.function(function),
+                DeclarationRef::Record(record) => methods.record(record),
+                DeclarationRef::Enum(enumeration) => methods.enumeration(enumeration),
                 DeclarationRef::Class(class) => methods.class(class),
                 DeclarationRef::Callback(callback) => methods.callback(callback),
                 DeclarationRef::Stream(stream) => methods.stream(stream),

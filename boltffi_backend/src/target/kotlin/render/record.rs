@@ -1,17 +1,19 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, FieldKey, Native,
-    RecordDecl, RecordId,
+    CanonicalName, DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl,
+    ExportedMethodDecl, FieldKey, InitializerDecl, Native, NativeSymbol, Receive, RecordDecl,
+    RecordId,
 };
 
 use crate::{
+    bridge::jni::JniBridgeContract,
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
         codec::Sizer,
         name_style::Name,
         primitive::KotlinPrimitive,
-        render::field::EncodedField,
-        syntax::{Expression, Identifier, Statement, TypeName},
+        render::{field::EncodedField, function::ExportedCall},
+        syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
     },
 };
 
@@ -28,12 +30,21 @@ pub struct Record {
     name: TypeName,
     body: RecordBody,
     fields: Vec<Field>,
+    initializers: Vec<ExportedCall>,
+    static_methods: Vec<ExportedCall>,
+    instance_methods: Vec<ExportedCall>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RecordBody {
     Direct { size: u64 },
     Encoded { size: Expression },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Receiver {
+    argument: Expression,
+    writeback: TypeName,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,11 +60,12 @@ pub struct Field {
 impl Record {
     pub fn from_declaration(
         declaration: &RecordDecl<Native>,
+        bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            RecordDecl::Direct(record) => Self::from_direct(record),
-            RecordDecl::Encoded(record) => Self::from_encoded(record, context),
+            RecordDecl::Direct(record) => Self::from_direct(record, bridge, context),
+            RecordDecl::Encoded(record) => Self::from_encoded(record, bridge, context),
             _ => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "unknown record declaration",
@@ -68,7 +80,7 @@ impl Record {
                 bridge: KOTLIN_TARGET,
                 invariant: "record type was not found in render context",
             })
-            .and_then(|record| Self::from_declaration(record, context))
+            .and_then(|record| Self::shape_from_declaration(record, context))
     }
 
     pub fn render(self) -> Result<Emitted> {
@@ -101,6 +113,18 @@ impl Record {
         &self.fields
     }
 
+    pub fn initializers(&self) -> &[ExportedCall] {
+        &self.initializers
+    }
+
+    pub fn static_methods(&self) -> &[ExportedCall] {
+        &self.static_methods
+    }
+
+    pub fn instance_methods(&self) -> &[ExportedCall] {
+        &self.instance_methods
+    }
+
     pub fn direct_fields(&self) -> &[Field] {
         match self.body {
             RecordBody::Direct { .. } => &self.fields,
@@ -113,7 +137,13 @@ impl Record {
     }
 
     pub fn type_name_from_id(id: RecordId, context: &RenderContext<Native>) -> Result<TypeName> {
-        Self::from_id(id, context).map(|record| record.name)
+        context
+            .record(id)
+            .ok_or(Error::BrokenBridgeContract {
+                bridge: KOTLIN_TARGET,
+                invariant: "record type was not found in render context",
+            })
+            .map(Self::name_from_declaration)
     }
 
     pub fn encode_expression(value: Expression) -> Result<Expression> {
@@ -132,7 +162,11 @@ impl Record {
         ))
     }
 
-    fn from_direct(record: &DirectRecordDecl<Native>) -> Result<Self> {
+    fn from_direct(
+        record: &DirectRecordDecl<Native>,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         let buffer = Identifier::parse("buffer")?;
         Ok(Self {
             name: Name::new(record.name()).type_name(),
@@ -144,10 +178,89 @@ impl Record {
                 .iter()
                 .map(|field| Field::from_direct(field, record, &buffer))
                 .collect::<Result<Vec<_>>>()?,
+            initializers: Self::initializer_calls(record.initializers(), bridge, context)?,
+            static_methods: Self::methods(record.methods(), None, bridge, context)?,
+            instance_methods: Self::methods(
+                record.methods(),
+                Some(Self::receiver(record.name())?),
+                bridge,
+                context,
+            )?,
         })
     }
 
     fn from_encoded(
+        record: &EncodedRecordDecl<Native>,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let reader = Identifier::parse("reader")?;
+        let writer = Identifier::parse("writer")?;
+        let current = Expression::this();
+        let size = record
+            .fields()
+            .iter()
+            .map(|field| {
+                field
+                    .write()
+                    .size_with(&mut Sizer::new(context)?.current(current.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .reduce(Expression::add)
+            .unwrap_or_else(|| Expression::integer(0));
+        Ok(Self {
+            name: Name::new(record.name()).type_name(),
+            body: RecordBody::Encoded { size },
+            fields: record
+                .fields()
+                .iter()
+                .map(|field| Field::from_encoded(field, context, &reader, &writer, current.clone()))
+                .collect::<Result<Vec<_>>>()?,
+            initializers: Self::initializer_calls(record.initializers(), bridge, context)?,
+            static_methods: Self::methods(record.methods(), None, bridge, context)?,
+            instance_methods: Self::methods(
+                record.methods(),
+                Some(Self::receiver(record.name())?),
+                bridge,
+                context,
+            )?,
+        })
+    }
+
+    fn shape_from_declaration(
+        declaration: &RecordDecl<Native>,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        match declaration {
+            RecordDecl::Direct(record) => Self::shape_from_direct(record),
+            RecordDecl::Encoded(record) => Self::shape_from_encoded(record, context),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown record declaration",
+            }),
+        }
+    }
+
+    fn shape_from_direct(record: &DirectRecordDecl<Native>) -> Result<Self> {
+        let buffer = Identifier::parse("buffer")?;
+        Ok(Self {
+            name: Name::new(record.name()).type_name(),
+            body: RecordBody::Direct {
+                size: record.layout().size().get(),
+            },
+            fields: record
+                .fields()
+                .iter()
+                .map(|field| Field::from_direct(field, record, &buffer))
+                .collect::<Result<Vec<_>>>()?,
+            initializers: Vec::new(),
+            static_methods: Vec::new(),
+            instance_methods: Vec::new(),
+        })
+    }
+
+    fn shape_from_encoded(
         record: &EncodedRecordDecl<Native>,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -174,6 +287,91 @@ impl Record {
                 .iter()
                 .map(|field| Field::from_encoded(field, context, &reader, &writer, current.clone()))
                 .collect::<Result<Vec<_>>>()?,
+            initializers: Vec::new(),
+            static_methods: Vec::new(),
+            instance_methods: Vec::new(),
+        })
+    }
+
+    fn name_from_declaration(record: &RecordDecl<Native>) -> TypeName {
+        Name::new(record.name()).type_name()
+    }
+
+    fn initializer_calls(
+        initializers: &[InitializerDecl<Native>],
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<ExportedCall>> {
+        initializers
+            .iter()
+            .map(|initializer| {
+                ExportedCall::new(
+                    Name::new(initializer.name()).function()?,
+                    initializer.symbol(),
+                    initializer.callable(),
+                    Vec::new(),
+                    bridge,
+                    context,
+                )
+            })
+            .collect()
+    }
+
+    fn methods(
+        methods: &[ExportedMethodDecl<Native, NativeSymbol>],
+        receiver: Option<Receiver>,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<ExportedCall>> {
+        methods
+            .iter()
+            .filter(|method| method.callable().receiver().is_some() == receiver.is_some())
+            .map(
+                |method| match (method.callable().receiver(), receiver.clone()) {
+                    (Some(Receive::ByMutRef), Some(receiver)) => {
+                        ExportedCall::new_byte_array_receiver_writeback(
+                            Name::new(method.name()).function()?,
+                            method.target(),
+                            method.callable(),
+                            vec![receiver.argument],
+                            receiver.writeback,
+                            bridge,
+                            context,
+                        )
+                    }
+                    (Some(Receive::ByRef | Receive::ByValue), Some(receiver)) => ExportedCall::new(
+                        Name::new(method.name()).function()?,
+                        method.target(),
+                        method.callable(),
+                        vec![receiver.argument],
+                        bridge,
+                        context,
+                    ),
+                    (None, None) => ExportedCall::new(
+                        Name::new(method.name()).function()?,
+                        method.target(),
+                        method.callable(),
+                        Vec::new(),
+                        bridge,
+                        context,
+                    ),
+                    _ => Err(Error::UnsupportedTarget {
+                        target: KOTLIN_TARGET,
+                        shape: "record method receiver",
+                    }),
+                },
+            )
+            .collect()
+    }
+
+    fn receiver(name: &CanonicalName) -> Result<Receiver> {
+        Ok(Receiver {
+            argument: Expression::call(
+                Expression::this(),
+                Identifier::parse("toByteArray")?,
+                ArgumentList::default(),
+            ),
+            writeback: Name::new(name).type_name(),
         })
     }
 }

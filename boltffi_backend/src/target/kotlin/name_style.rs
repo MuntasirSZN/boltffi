@@ -104,6 +104,10 @@ impl Name {
         Identifier::escape(self.upper_camel())
     }
 
+    pub fn enum_entry(&self) -> Result<Identifier> {
+        Identifier::escape(self.screaming_snake())
+    }
+
     pub fn generated(&self, suffix: &str) -> Result<Identifier> {
         Identifier::parse(format!("__boltffi_{}_{}", self.lower_camel(), suffix))
     }
@@ -131,5 +135,14 @@ impl Name {
             .iter()
             .map(|part| Self::capitalized(part.as_str()))
             .collect()
+    }
+
+    fn screaming_snake(&self) -> String {
+        self.parts
+            .iter()
+            .map(NamePart::as_str)
+            .map(str::to_ascii_uppercase)
+            .collect::<Vec<_>>()
+            .join("_")
     }
 }

@@ -51,6 +51,10 @@ impl NativeParameter {
             }
             c::ParameterGroup::ByteSlice(bytes) => BytesParameter::from_c_group(bytes)
                 .map(|bytes| Some(Self::new(NativeParameterKind::Bytes(bytes)))),
+            c::ParameterGroup::EncodedWriteback(writeback) => {
+                BytesParameter::from_c_writeback(writeback)
+                    .map(|bytes| Some(Self::new(NativeParameterKind::Bytes(bytes))))
+            }
             c::ParameterGroup::DirectVector(vector) => {
                 DirectVectorParameter::from_c_group(vector, function)
                     .map(|vector| Some(Self::new(NativeParameterKind::DirectVector(vector))))

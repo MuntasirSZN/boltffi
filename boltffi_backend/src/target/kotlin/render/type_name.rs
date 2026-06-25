@@ -11,6 +11,7 @@ use crate::{
     core::{Error, RenderContext, Result},
     target::kotlin::{
         codec::ScalarOption,
+        name_style::KotlinPackage,
         primitive::KotlinPrimitive,
         render::{
             callback::CallbackHandle, class::ClassHandle, direct_vector::DirectVector,
@@ -79,7 +80,9 @@ impl KotlinType {
         match return_value {
             NativeReturn::Void | NativeReturn::Status => Ok(TypeName::unit()),
             NativeReturn::Value(scalar) => Self::jni(scalar.jni_type()),
-            NativeReturn::Bytes | NativeReturn::Record(_) => Ok(TypeName::byte_array(true)),
+            NativeReturn::Bytes | NativeReturn::Record(_) | NativeReturn::StatusWriteback(_) => {
+                Ok(TypeName::byte_array(true))
+            }
             NativeReturn::Callback(_) => Ok(TypeName::long()),
             NativeReturn::StatusValue(value) => Self::native_return(value.value()),
             NativeReturn::EncodedErrorValue(value) => Self::native_return(value.success().value()),
@@ -98,6 +101,14 @@ impl KotlinType {
         ty.render_with(&mut KotlinTypeRef::new(context))
     }
 
+    pub fn type_ref_with_record_package(
+        ty: &TypeRef,
+        context: &RenderContext<Native>,
+        package: &KotlinPackage,
+    ) -> Result<TypeName> {
+        ty.render_with(&mut KotlinTypeRef::new(context).record_package(package))
+    }
+
     fn direct_vector(parameter: &DirectVectorParameter) -> Result<TypeName> {
         Self::jni_array(parameter.jni_type())
     }
@@ -109,11 +120,20 @@ impl KotlinType {
 
 pub struct KotlinTypeRef<'context> {
     context: &'context RenderContext<'context, Native>,
+    record_package: Option<KotlinPackage>,
 }
 
 impl<'context> KotlinTypeRef<'context> {
     pub fn new(context: &'context RenderContext<Native>) -> Self {
-        Self { context }
+        Self {
+            context,
+            record_package: None,
+        }
+    }
+
+    pub fn record_package(mut self, package: &KotlinPackage) -> Self {
+        self.record_package = Some(package.clone());
+        self
     }
 }
 
@@ -133,7 +153,13 @@ impl TypeRefRender for KotlinTypeRef<'_> {
     }
 
     fn record(&mut self, id: RecordId) -> Self::Output {
-        Record::type_name_from_id(id, self.context)
+        Record::type_name_from_id(id, self.context).map(|record| {
+            self.record_package
+                .as_ref()
+                .map_or(record.clone(), |package| {
+                    TypeName::qualified(package, record)
+                })
+        })
     }
 
     fn enumeration(&mut self, id: EnumId) -> Self::Output {
@@ -198,11 +224,20 @@ impl TypeRefRender for KotlinTypeRef<'_> {
 
 pub struct ParameterType<'context> {
     context: &'context RenderContext<'context, Native>,
+    record_package: Option<KotlinPackage>,
 }
 
 impl<'context> ParameterType<'context> {
     pub fn new(context: &'context RenderContext<'context, Native>) -> Self {
-        Self { context }
+        Self {
+            context,
+            record_package: None,
+        }
+    }
+
+    pub fn record_package(mut self, package: Option<&KotlinPackage>) -> Self {
+        self.record_package = package.cloned();
+        self
     }
 }
 
@@ -216,7 +251,14 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
     ) -> Self::Output {
         match ty {
             DirectValueType::Primitive(primitive) => KotlinType::primitive(*primitive),
-            DirectValueType::Record(record) => Record::type_name_from_id(*record, self.context),
+            DirectValueType::Record(record) => Record::type_name_from_id(*record, self.context)
+                .map(|record| {
+                    self.record_package
+                        .as_ref()
+                        .map_or(record.clone(), |package| {
+                            TypeName::qualified(package, record)
+                        })
+                }),
             DirectValueType::Enum(enumeration) => {
                 Enumeration::type_name_from_id(*enumeration, self.context)
             }
@@ -234,7 +276,10 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
         _shape: <Native as Surface>::BufferShape,
         _receive: <IntoRust as Direction>::Receive,
     ) -> Self::Output {
-        KotlinType::type_ref(ty, self.context)
+        match &self.record_package {
+            Some(package) => KotlinType::type_ref_with_record_package(ty, self.context, package),
+            None => KotlinType::type_ref(ty, self.context),
+        }
     }
 
     fn handle(

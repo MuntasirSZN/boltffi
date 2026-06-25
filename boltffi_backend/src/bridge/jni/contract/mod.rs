@@ -38,7 +38,7 @@ mod stream;
 mod success_out;
 
 pub use bridge::JniBridgeContract;
-pub use bytes::BytesParameter;
+pub use bytes::{BytesParameter, BytesWriteback};
 pub use callback::{
     CallbackArgument, CallbackBytesArgument, CallbackCParameter, CallbackClosureArgument,
     CallbackClosureReturn, CallbackCompletionArgument, CallbackCompletionInvoker,

@@ -40,6 +40,10 @@ impl CallbackArgument {
                 bridge: JNI_BRIDGE,
                 invariant: "callback method argument cannot be a direct-record writeback",
             }),
+            c::ParameterGroup::EncodedWriteback(_) => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback method argument cannot be an encoded writeback",
+            }),
             c::ParameterGroup::SuccessOut(index) => {
                 success_out::from_parameter(slot.parameter(*index))
             }

@@ -67,6 +67,10 @@ impl ClosureArgument {
                 bridge: JNI_BRIDGE,
                 invariant: "closure call argument cannot be a direct-record writeback",
             }),
+            c::ParameterGroup::EncodedWriteback(_) => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "closure call argument cannot be an encoded writeback",
+            }),
             c::ParameterGroup::SuccessOut(index) => Ok(Self {
                 kind: ClosureArgumentKind::SuccessOut(success_out::from_parameter(
                     call.parameter(*index),

@@ -1,15 +1,18 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
     CStyleEnumDecl, CStyleVariantDecl, DataEnumDecl, DataVariantDecl, DataVariantPayload, EnumDecl,
-    EnumId, Native, Primitive, VariantTag,
+    EnumId, ExportedMethodDecl, InitializerDecl, Native, NativeSymbol, Primitive, Receive,
+    VariantTag,
 };
 
 use crate::{
+    bridge::jni::JniBridgeContract,
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
+        name_style::KotlinPackage,
         name_style::Name,
         primitive::KotlinPrimitive,
-        render::field::EncodedField,
+        render::{field::EncodedField, function::ExportedCall},
         syntax::{ArgumentList, Expression, Identifier, Literal, Statement, TypeName},
     },
 };
@@ -26,6 +29,9 @@ struct EnumerationTemplate {
 pub struct Enumeration {
     name: TypeName,
     body: Body,
+    initializers: Vec<ExportedCall>,
+    static_methods: Vec<ExportedCall>,
+    instance_methods: Vec<ExportedCall>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,14 +62,38 @@ pub struct DataVariant {
     tag_write: Statement,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Receiver {
+    argument: Expression,
+    writeback: Option<TypeName>,
+}
+
 impl Enumeration {
     pub fn from_declaration(
         declaration: &EnumDecl<Native>,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            EnumDecl::CStyle(enumeration) => Self::from_c_style(enumeration),
-            EnumDecl::Data(enumeration) => Self::from_data(enumeration, context),
+            EnumDecl::CStyle(enumeration) => Self::from_c_style(enumeration, None, context),
+            EnumDecl::Data(enumeration) => Self::from_data(enumeration, None, context, None),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown enum declaration",
+            }),
+        }
+    }
+
+    pub fn from_declaration_with_package(
+        declaration: &EnumDecl<Native>,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+        package: Option<&KotlinPackage>,
+    ) -> Result<Self> {
+        match declaration {
+            EnumDecl::CStyle(enumeration) => Self::from_c_style(enumeration, Some(bridge), context),
+            EnumDecl::Data(enumeration) => {
+                Self::from_data(enumeration, Some(bridge), context, package)
+            }
             _ => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "unknown enum declaration",
@@ -128,6 +158,18 @@ impl Enumeration {
             Body::Data { variants } => variants,
             Body::CStyle { .. } => &[],
         }
+    }
+
+    pub fn initializers(&self) -> &[ExportedCall] {
+        &self.initializers
+    }
+
+    pub fn static_methods(&self) -> &[ExportedCall] {
+        &self.static_methods
+    }
+
+    pub fn instance_methods(&self) -> &[ExportedCall] {
+        &self.instance_methods
     }
 
     pub fn unknown_tag(&self) -> Expression {
@@ -195,36 +237,223 @@ impl Enumeration {
         })
     }
 
-    fn from_c_style(enumeration: &CStyleEnumDecl<Native>) -> Result<Self> {
-        let primitive = KotlinPrimitive::new(enumeration.repr().primitive());
+    fn from_c_style(
+        enumeration: &CStyleEnumDecl<Native>,
+        bridge: Option<&JniBridgeContract>,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let primitive = enumeration.repr().primitive();
+        let name = Name::new(enumeration.name()).type_name();
+        let receiver = Receiver {
+            argument: KotlinPrimitive::new(primitive).native_argument(Expression::property(
+                Expression::this(),
+                Identifier::parse("value")?,
+            ))?,
+            writeback: None,
+        };
         Ok(Self {
-            name: Name::new(enumeration.name()).type_name(),
+            name,
             body: Body::CStyle {
-                value_type: primitive.api_type()?,
-                repr: enumeration.repr().primitive(),
+                value_type: KotlinPrimitive::new(primitive).api_type()?,
+                repr: primitive,
                 variants: enumeration
                     .variants()
                     .iter()
                     .map(|variant| CStyleVariant::from_c_style(variant, enumeration))
                     .collect::<Result<Vec<_>>>()?,
             },
+            initializers: Self::initializer_calls(
+                enumeration.initializers(),
+                bridge,
+                context,
+                None,
+            )?,
+            static_methods: Self::methods(enumeration.methods(), None, bridge, context, None)?,
+            instance_methods: Self::methods(
+                enumeration.methods(),
+                Some(receiver),
+                bridge,
+                context,
+                None,
+            )?,
         })
     }
 
     fn from_data(
         enumeration: &DataEnumDecl<Native>,
+        bridge: Option<&JniBridgeContract>,
         context: &RenderContext<Native>,
+        package: Option<&KotlinPackage>,
     ) -> Result<Self> {
+        let name = Name::new(enumeration.name()).type_name();
+        let receiver = Receiver {
+            argument: Self::encode_expression(Expression::this())?,
+            writeback: Some(name.clone()),
+        };
         Ok(Self {
-            name: Name::new(enumeration.name()).type_name(),
+            name,
             body: Body::Data {
                 variants: enumeration
                     .variants()
                     .iter()
-                    .map(|variant| DataVariant::from_declaration(variant, context))
+                    .map(|variant| DataVariant::from_declaration(variant, context, package))
                     .collect::<Result<Vec<_>>>()?,
             },
+            initializers: Self::initializer_calls(
+                enumeration.initializers(),
+                bridge,
+                context,
+                package,
+            )?,
+            static_methods: Self::methods(enumeration.methods(), None, bridge, context, package)?,
+            instance_methods: Self::methods(
+                enumeration.methods(),
+                Some(receiver),
+                bridge,
+                context,
+                package,
+            )?,
         })
+    }
+
+    fn encode_expression(value: Expression) -> Result<Expression> {
+        Ok(Expression::call(
+            value,
+            Identifier::parse("toByteArray")?,
+            Default::default(),
+        ))
+    }
+
+    fn initializer_calls(
+        initializers: &[InitializerDecl<Native>],
+        bridge: Option<&JniBridgeContract>,
+        context: &RenderContext<Native>,
+        package: Option<&KotlinPackage>,
+    ) -> Result<Vec<ExportedCall>> {
+        bridge.map_or_else(
+            || Ok(Vec::new()),
+            |bridge| {
+                initializers
+                    .iter()
+                    .map(|initializer| match package {
+                        Some(package) => ExportedCall::new_with_record_package(
+                            Name::new(initializer.name()).function()?,
+                            initializer.symbol(),
+                            initializer.callable(),
+                            Vec::new(),
+                            package,
+                            bridge,
+                            context,
+                        ),
+                        None => ExportedCall::new(
+                            Name::new(initializer.name()).function()?,
+                            initializer.symbol(),
+                            initializer.callable(),
+                            Vec::new(),
+                            bridge,
+                            context,
+                        ),
+                    })
+                    .collect()
+            },
+        )
+    }
+
+    fn methods(
+        methods: &[ExportedMethodDecl<Native, NativeSymbol>],
+        receiver: Option<Receiver>,
+        bridge: Option<&JniBridgeContract>,
+        context: &RenderContext<Native>,
+        package: Option<&KotlinPackage>,
+    ) -> Result<Vec<ExportedCall>> {
+        bridge.map_or_else(
+            || Ok(Vec::new()),
+            |bridge| {
+                methods
+                    .iter()
+                    .filter(|method| method.callable().receiver().is_some() == receiver.is_some())
+                    .map(
+                        |method| match (method.callable().receiver(), receiver.clone()) {
+                        (Some(Receive::ByMutRef), Some(receiver)) => receiver
+                            .writeback
+                            .ok_or(Error::UnsupportedTarget {
+                                target: KOTLIN_TARGET,
+                                shape: "mutable c-style enum receiver",
+                            })
+                            .and_then(|writeback| {
+                                match package {
+                                    Some(package) => {
+                                        ExportedCall::new_byte_array_receiver_writeback_with_record_package(
+                                            Name::new(method.name()).function()?,
+                                            method.target(),
+                                            method.callable(),
+                                            vec![receiver.argument],
+                                            writeback,
+                                            package,
+                                            bridge,
+                                            context,
+                                        )
+                                    }
+                                    None => ExportedCall::new_byte_array_receiver_writeback(
+                                        Name::new(method.name()).function()?,
+                                        method.target(),
+                                        method.callable(),
+                                        vec![receiver.argument],
+                                        writeback,
+                                        bridge,
+                                        context,
+                                    ),
+                                }
+                            }),
+                        (Some(Receive::ByRef | Receive::ByValue), Some(receiver)) => {
+                            match package {
+                                Some(package) => ExportedCall::new_with_record_package(
+                                    Name::new(method.name()).function()?,
+                                    method.target(),
+                                    method.callable(),
+                                    vec![receiver.argument],
+                                    package,
+                                    bridge,
+                                    context,
+                                ),
+                                None => ExportedCall::new(
+                                    Name::new(method.name()).function()?,
+                                    method.target(),
+                                    method.callable(),
+                                    vec![receiver.argument],
+                                    bridge,
+                                    context,
+                                ),
+                            }
+                        }
+                        (None, None) => match package {
+                            Some(package) => ExportedCall::new_with_record_package(
+                                Name::new(method.name()).function()?,
+                                method.target(),
+                                method.callable(),
+                                Vec::new(),
+                                package,
+                                bridge,
+                                context,
+                            ),
+                            None => ExportedCall::new(
+                                Name::new(method.name()).function()?,
+                                method.target(),
+                                method.callable(),
+                                Vec::new(),
+                                bridge,
+                                context,
+                            ),
+                        },
+                            _ => Err(Error::UnsupportedTarget {
+                                target: KOTLIN_TARGET,
+                                shape: "enum method receiver",
+                            }),
+                        },
+                    )
+                    .collect()
+            },
+        )
     }
 }
 
@@ -248,7 +477,7 @@ impl CStyleVariant {
         enumeration: &CStyleEnumDecl<Native>,
     ) -> Result<Self> {
         Ok(Self {
-            name: Name::new(variant.name()).variant()?,
+            name: Name::new(variant.name()).enum_entry()?,
             value: KotlinPrimitive::new(enumeration.repr().primitive())
                 .integer_literal(variant.discriminant())?,
         })
@@ -287,10 +516,11 @@ impl DataVariant {
     fn from_declaration(
         variant: &DataVariantDecl,
         context: &RenderContext<Native>,
+        package: Option<&KotlinPackage>,
     ) -> Result<Self> {
         let name = Name::new(variant.name()).variant()?;
         let tag = Self::tag_expression(variant.tag())?;
-        let fields = Self::payload_fields(variant.payload(), context)?;
+        let fields = Self::payload_fields(variant.payload(), context, package)?;
         let read = Self::read_expression(name.clone(), &fields);
         let size = fields
             .iter()
@@ -314,6 +544,7 @@ impl DataVariant {
     fn payload_fields(
         payload: &DataVariantPayload,
         context: &RenderContext<Native>,
+        package: Option<&KotlinPackage>,
     ) -> Result<Vec<EncodedField>> {
         let reader = Identifier::parse("reader")?;
         let writer = Identifier::parse("writer")?;
@@ -322,14 +553,22 @@ impl DataVariant {
             DataVariantPayload::Unit => Ok(Vec::new()),
             DataVariantPayload::Tuple(fields) | DataVariantPayload::Struct(fields) => fields
                 .iter()
-                .map(|field| {
-                    EncodedField::from_declaration(
+                .map(|field| match package {
+                    Some(package) => EncodedField::from_enum_payload(
                         field,
                         context,
                         &reader,
                         &writer,
                         current.clone(),
-                    )
+                        package,
+                    ),
+                    None => EncodedField::from_declaration(
+                        field,
+                        context,
+                        &reader,
+                        &writer,
+                        current.clone(),
+                    ),
                 })
                 .collect(),
             _ => Err(Error::UnsupportedTarget {

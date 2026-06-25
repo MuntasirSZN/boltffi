@@ -14,7 +14,7 @@
 use crate::{
     bridge::{
         c::{self, Expression, Identifier, TypeFragment},
-        jni::{CallbackReturn, RecordValue, ScalarReturn},
+        jni::{BytesWriteback, CallbackReturn, RecordValue, ScalarReturn},
     },
     core::{Error, Result},
 };
@@ -37,6 +37,8 @@ pub enum NativeReturn {
     Callback(CallbackReturn),
     /// The C function returns `FfiStatus` and the JNI method returns `void`.
     Status,
+    /// The C function returns `FfiStatus` and writes an encoded mutation buffer.
+    StatusWriteback(BytesWriteback),
     /// The C function returns `FfiStatus` and writes the success value to `return_out`.
     StatusValue(SuccessOutReturn),
     /// The C function returns an encoded error buffer and writes success to `return_out`.
@@ -48,6 +50,7 @@ impl NativeReturn {
     pub fn jni_type(&self) -> TypeFragment {
         match self {
             Self::Void | Self::Status => TypeFragment::new("void"),
+            Self::StatusWriteback(_) => TypeFragment::new("jbyteArray"),
             Self::Value(scalar) => scalar.jni_type().as_type_fragment(),
             Self::Callback(callback) => callback.jni_type(),
             Self::Bytes | Self::Record(_) => TypeFragment::new("jbyteArray"),
@@ -60,7 +63,7 @@ impl NativeReturn {
     pub fn c_result_type(&self) -> Result<TypeFragment> {
         match self {
             Self::Void => Ok(TypeFragment::new("void")),
-            Self::Status => TypeFragment::anonymous(&c::Type::Status),
+            Self::Status | Self::StatusWriteback(_) => TypeFragment::anonymous(&c::Type::Status),
             Self::Value(scalar) => scalar.c_result_type(),
             Self::Bytes => TypeFragment::anonymous(&c::Type::Buffer),
             Self::Record(record) => Ok(record.c_type_fragment()),
@@ -75,6 +78,9 @@ impl NativeReturn {
         match self {
             Self::Value(scalar) => Ok(scalar.return_expression(value)),
             Self::Callback(callback) => callback.return_expression(value),
+            Self::StatusWriteback(writeback) => {
+                Ok(Expression::identifier(writeback.local().clone()))
+            }
             Self::Void | Self::Bytes | Self::Record(_) | Self::Status => Ok(value),
             Self::StatusValue(value) => value.return_expression(),
             Self::EncodedErrorValue(value) => value.return_expression(),
@@ -84,7 +90,12 @@ impl NativeReturn {
     /// Returns direct-record return details when this return carries a record.
     pub fn record(&self) -> Option<&RecordValue> {
         match self {
-            Self::Void | Self::Value(_) | Self::Bytes | Self::Callback(_) | Self::Status => None,
+            Self::Void
+            | Self::Value(_)
+            | Self::Bytes
+            | Self::Callback(_)
+            | Self::Status
+            | Self::StatusWriteback(_) => None,
             Self::Record(record) => Some(record),
             Self::StatusValue(value) => value.record(),
             Self::EncodedErrorValue(value) => value.record(),
@@ -94,7 +105,7 @@ impl NativeReturn {
     /// Returns whether the JVM method returns an owned byte array.
     pub fn is_bytes(&self) -> bool {
         match self {
-            Self::Bytes => true,
+            Self::Bytes | Self::StatusWriteback(_) => true,
             Self::StatusValue(value) => value.is_bytes(),
             Self::EncodedErrorValue(value) => value.is_bytes(),
             Self::Void | Self::Value(_) | Self::Record(_) | Self::Callback(_) | Self::Status => {
@@ -114,7 +125,12 @@ impl NativeReturn {
             Self::Value(scalar) => scalar.jni_type().is_boolean(),
             Self::StatusValue(value) => value.is_boolean(),
             Self::EncodedErrorValue(value) => value.is_boolean(),
-            Self::Void | Self::Bytes | Self::Record(_) | Self::Callback(_) | Self::Status => false,
+            Self::Void
+            | Self::Bytes
+            | Self::Record(_)
+            | Self::Callback(_)
+            | Self::Status
+            | Self::StatusWriteback(_) => false,
         }
     }
 
@@ -124,7 +140,12 @@ impl NativeReturn {
             Self::Callback(_) => true,
             Self::StatusValue(value) => value.is_callback(),
             Self::EncodedErrorValue(value) => value.is_callback(),
-            Self::Void | Self::Value(_) | Self::Bytes | Self::Record(_) | Self::Status => false,
+            Self::Void
+            | Self::Value(_)
+            | Self::Bytes
+            | Self::Record(_)
+            | Self::Status
+            | Self::StatusWriteback(_) => false,
         }
     }
 
@@ -136,7 +157,8 @@ impl NativeReturn {
             | Self::Bytes
             | Self::Record(_)
             | Self::Callback(_)
-            | Self::Status => None,
+            | Self::Status
+            | Self::StatusWriteback(_) => None,
             Self::StatusValue(value) => Some(value),
             Self::EncodedErrorValue(value) => Some(value.success()),
         }
@@ -195,6 +217,15 @@ impl NativeReturn {
     /// Creates the JNI return behavior for a complete C ABI function.
     pub fn from_c_function(function: &c::Function) -> Result<Self> {
         let status = Self::from_c_type(function.returns())?;
+        let writeback = function
+            .parameter_groups()
+            .iter()
+            .filter_map(|group| match group {
+                c::ParameterGroup::EncodedWriteback(writeback) => Some(writeback),
+                _ => None,
+            })
+            .map(BytesWriteback::from_c_writeback)
+            .collect::<Result<Vec<_>>>()?;
         let return_out = function
             .parameter_groups()
             .iter()
@@ -204,6 +235,36 @@ impl NativeReturn {
             })
             .map(SuccessOutReturn::from_parameter)
             .collect::<Result<Vec<_>>>()?;
+
+        if !writeback.is_empty() && !return_out.is_empty() {
+            return Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "encoded writeback cannot share the JNI return slot",
+            });
+        }
+
+        if !writeback.is_empty() {
+            if writeback.len() != 1 {
+                return Err(Error::BrokenBridgeContract {
+                    bridge: JNI_BRIDGE,
+                    invariant: "encoded writeback must be the only hidden mutation return",
+                });
+            }
+            let [writeback]: [BytesWriteback; 1] =
+                writeback
+                    .try_into()
+                    .map_err(|_| Error::BrokenBridgeContract {
+                        bridge: JNI_BRIDGE,
+                        invariant: "encoded writeback must be the only hidden mutation return",
+                    })?;
+            return match status {
+                Self::Status => Ok(Self::StatusWriteback(writeback)),
+                _ => Err(Error::BrokenBridgeContract {
+                    bridge: JNI_BRIDGE,
+                    invariant: "encoded writeback must pair with FfiStatus",
+                }),
+            };
+        }
 
         if return_out.is_empty() {
             return Ok(status);

@@ -164,10 +164,7 @@ where
                     Parameter::byte_length(&self.name)?,
                 ];
                 if receive.needs_encoded_writeback() {
-                    parameters.push(Parameter::new(
-                        format!("{}_out", self.name),
-                        Type::MutPointer(Box::new(Type::Buffer)),
-                    )?);
+                    parameters.push(Parameter::encoded_writeback(&self.name)?);
                 }
                 Ok(parameters)
             }
