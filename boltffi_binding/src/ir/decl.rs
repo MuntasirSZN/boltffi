@@ -178,6 +178,20 @@ impl<'a, S: Surface> DeclarationRef<'a, S> {
         }
     }
 
+    /// Returns whether any value crossing in this declaration uses a direct record vector.
+    pub fn uses_direct_record_vector(self) -> bool {
+        match self {
+            Self::Record(record) => record.uses_direct_record_vector(),
+            Self::Enum(enumeration) => enumeration.uses_direct_record_vector(),
+            Self::Function(function) => function.uses_direct_record_vector(),
+            Self::Class(class) => class.uses_direct_record_vector(),
+            Self::Callback(callback) => callback.uses_direct_record_vector(),
+            Self::Stream(stream) => stream.uses_direct_record_vector(),
+            Self::Constant(constant) => constant.uses_direct_record_vector(),
+            Self::CustomType(_) => false,
+        }
+    }
+
     /// Returns whether any callable in this declaration uses an asynchronous execution protocol.
     pub fn uses_async_execution(self) -> bool {
         match self {
@@ -436,6 +450,13 @@ impl<S: Surface> RecordDecl<S> {
         }
     }
 
+    fn uses_direct_record_vector(&self) -> bool {
+        match self {
+            Self::Direct(record) => record.uses_direct_record_vector(),
+            Self::Encoded(record) => record.uses_direct_record_vector(),
+        }
+    }
+
     fn uses_async_execution(&self) -> bool {
         match self {
             Self::Direct(record) => record.uses_async_execution(),
@@ -535,6 +556,16 @@ impl<S: Surface> DirectRecordDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_direct_record_vector)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::uses_direct_record_vector)
     }
 
     fn uses_async_execution(&self) -> bool {
@@ -652,6 +683,16 @@ impl<S: Surface> EncodedRecordDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_direct_record_vector)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::uses_direct_record_vector)
     }
 
     fn uses_async_execution(&self) -> bool {
@@ -814,6 +855,13 @@ impl<S: Surface> EnumDecl<S> {
         }
     }
 
+    fn uses_direct_record_vector(&self) -> bool {
+        match self {
+            Self::CStyle(enumeration) => enumeration.uses_direct_record_vector(),
+            Self::Data(enumeration) => enumeration.uses_direct_record_vector(),
+        }
+    }
+
     fn uses_async_execution(&self) -> bool {
         match self {
             Self::CStyle(enumeration) => enumeration.uses_async_execution(),
@@ -909,6 +957,16 @@ impl<S: Surface> CStyleEnumDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_direct_record_vector)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::uses_direct_record_vector)
     }
 
     fn uses_async_execution(&self) -> bool {
@@ -1055,6 +1113,16 @@ impl<S: Surface> DataEnumDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_direct_record_vector)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::uses_direct_record_vector)
     }
 
     fn uses_async_execution(&self) -> bool {
@@ -1236,6 +1304,10 @@ impl<S: Surface> FunctionDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.callable.uses_direct_record_vector()
     }
 
     fn uses_async_execution(&self) -> bool {
@@ -1424,6 +1496,16 @@ impl<S: Surface> ClassDecl<S> {
                 .any(|method| method.uses_builtin_codec(kind))
     }
 
+    fn uses_direct_record_vector(&self) -> bool {
+        self.initializers()
+            .iter()
+            .any(InitializerDecl::uses_direct_record_vector)
+            || self
+                .methods()
+                .iter()
+                .any(MethodDecl::uses_direct_record_vector)
+    }
+
     fn uses_async_execution(&self) -> bool {
         self.initializers()
             .iter()
@@ -1529,6 +1611,15 @@ impl<S: Surface> CallbackDecl<S> {
                 .is_some_and(|protocol| protocol.uses_builtin_codec(kind))
     }
 
+    fn uses_direct_record_vector(&self) -> bool {
+        self.protocol()
+            .method_callables()
+            .any(ImportedCallable::uses_direct_record_vector)
+            || self
+                .local_protocol()
+                .is_some_and(CallbackLocalProtocol::uses_direct_record_vector)
+    }
+
     fn uses_async_execution(&self) -> bool {
         self.protocol()
             .method_callables()
@@ -1597,6 +1688,12 @@ impl<S: Surface> CallbackLocalProtocol<S> {
         self.methods
             .iter()
             .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.methods
+            .iter()
+            .any(CallbackLocalMethodDecl::uses_direct_record_vector)
     }
 
     fn uses_async_execution(&self) -> bool {
@@ -1668,6 +1765,10 @@ impl<S: Surface> CallbackLocalMethodDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.callable.uses_direct_record_vector()
     }
 
     fn uses_async_execution(&self) -> bool {
@@ -1786,6 +1887,10 @@ impl<S: Surface> StreamDecl<S> {
         self.item.uses_builtin_codec(kind)
     }
 
+    fn uses_direct_record_vector(&self) -> bool {
+        self.item.uses_direct_record_vector()
+    }
+
     /// Returns the consumer-side protocol.
     pub fn protocol(&self) -> &StreamProtocol {
         &self.protocol
@@ -1871,6 +1976,16 @@ impl<S: Surface> StreamItemPlan<S> {
             Self::Encoded { read, .. } => read.uses_builtin(kind),
             Self::Direct { .. } => false,
         }
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        matches!(
+            self,
+            Self::Direct {
+                ty: DirectValueType::Record(_),
+                ..
+            }
+        )
     }
 }
 
@@ -2016,6 +2131,10 @@ impl<S: Surface> ConstantDecl<S> {
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.value.uses_builtin_codec(kind)
     }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.value.uses_direct_record_vector()
+    }
 }
 
 /// How a constant's value is delivered to foreign code.
@@ -2077,6 +2196,13 @@ impl<S: Surface> ConstantValueDecl<S> {
         match self {
             Self::Accessor { callable, .. } => callable.uses_builtin_codec(kind),
             Self::Inline { ty, .. } => ty.uses_builtin(kind),
+        }
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        match self {
+            Self::Accessor { callable, .. } => callable.uses_direct_record_vector(),
+            Self::Inline { .. } => false,
         }
     }
 }
@@ -2220,6 +2346,10 @@ where
         self.callable.uses_builtin_codec(kind)
     }
 
+    fn uses_direct_record_vector(&self) -> bool {
+        self.callable.uses_direct_record_vector()
+    }
+
     fn uses_async_execution(&self) -> bool {
         self.callable.uses_async_execution()
     }
@@ -2312,6 +2442,10 @@ impl<S: Surface> InitializerDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.callable.uses_direct_record_vector()
     }
 
     fn uses_async_execution(&self) -> bool {

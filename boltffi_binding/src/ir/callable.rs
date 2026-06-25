@@ -163,6 +163,12 @@ where
             || self.error.uses_builtin_codec(kind)
     }
 
+    /// Returns whether any value crossing in this callable uses a direct record vector.
+    pub fn uses_direct_record_vector(&self) -> bool {
+        self.params.iter().any(ParamDecl::uses_direct_record_vector)
+            || self.returns.uses_direct_record_vector()
+    }
+
     /// Returns whether this callable uses an asynchronous execution protocol.
     pub fn uses_async_execution(&self) -> bool {
         self.execution.uses_async_execution()
@@ -198,6 +204,9 @@ pub trait ParamDirection<S: Surface>: Direction {
 
     /// Returns whether the payload carries the given builtin codec.
     fn uses_builtin_codec(payload: &Self::Payload, kind: BuiltinType) -> bool;
+
+    /// Returns whether the payload carries a direct record vector.
+    fn uses_direct_record_vector(payload: &Self::Payload) -> bool;
 }
 
 /// One incoming parameter crossing.
@@ -303,6 +312,13 @@ impl<S: Surface> ParamDirection<S> for IntoRust {
             IncomingParam::Closure(closure) => closure.uses_builtin_codec(kind),
         }
     }
+
+    fn uses_direct_record_vector(payload: &Self::Payload) -> bool {
+        match payload {
+            IncomingParam::Value(plan) => plan.uses_direct_record_vector(),
+            IncomingParam::Closure(closure) => closure.uses_direct_record_vector(),
+        }
+    }
 }
 
 impl<S: Surface> ParamDirection<S> for OutOfRust {
@@ -337,6 +353,13 @@ impl<S: Surface> ParamDirection<S> for OutOfRust {
         match payload {
             OutgoingParam::Value(plan) => plan.uses_builtin_codec(kind),
             OutgoingParam::Closure(closure) => closure.uses_builtin_codec(kind),
+        }
+    }
+
+    fn uses_direct_record_vector(payload: &Self::Payload) -> bool {
+        match payload {
+            OutgoingParam::Value(plan) => plan.uses_direct_record_vector(),
+            OutgoingParam::Closure(closure) => closure.uses_direct_record_vector(),
         }
     }
 }
@@ -391,6 +414,10 @@ impl<S: Surface, D: ParamDirection<S>> ParamDecl<S, D> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         D::uses_builtin_codec(&self.payload, kind)
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        D::uses_direct_record_vector(&self.payload)
     }
 }
 
@@ -503,6 +530,10 @@ where
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.crossing.uses_builtin_codec(kind)
     }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.crossing.uses_direct_record_vector()
+    }
 }
 
 /// Closure payload at a return slot.
@@ -569,6 +600,10 @@ where
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.crossing.uses_builtin_codec(kind)
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.crossing.uses_direct_record_vector()
     }
 }
 
@@ -642,6 +677,10 @@ where
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.invoke.uses_builtin_codec(kind)
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.invoke.uses_direct_record_vector()
     }
 }
 
@@ -813,6 +852,15 @@ impl<S: Surface, D: Direction> ParamPlan<S, D> {
             _ => false,
         }
     }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        matches!(
+            self,
+            Self::DirectVec {
+                element: DirectVectorElementType::Record(_)
+            }
+        )
+    }
 }
 
 /// Target-language rendering for parameter plans.
@@ -900,6 +948,10 @@ where
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.plan.uses_builtin_codec(kind)
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        self.plan.uses_direct_record_vector()
     }
 }
 
@@ -1137,6 +1189,16 @@ where
                 D::codec_uses_builtin(codec, kind)
             }
             Self::ClosureViaOutPointer(closure) => closure.uses_builtin_codec(kind),
+            _ => false,
+        }
+    }
+
+    fn uses_direct_record_vector(&self) -> bool {
+        match self {
+            Self::DirectVecViaReturnSlot {
+                element: DirectVectorElementType::Record(_),
+            } => true,
+            Self::ClosureViaOutPointer(closure) => closure.uses_direct_record_vector(),
             _ => false,
         }
     }

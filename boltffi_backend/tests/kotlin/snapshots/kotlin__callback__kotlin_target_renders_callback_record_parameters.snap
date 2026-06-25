@@ -729,9 +729,13 @@ data class Point(
         val buffer = java.nio.ByteBuffer
             .allocate(STRUCT_SIZE)
             .order(java.nio.ByteOrder.nativeOrder())
-        buffer.putInt(0, x)
-        buffer.putInt(4, y)
+        writeTo(buffer, 0)
         return buffer.array()
+    }
+
+    internal fun writeTo(buffer: java.nio.ByteBuffer, offset: Int) {
+        buffer.putInt(offset, x)
+        buffer.putInt(offset + 4, y)
     }
 
     companion object {

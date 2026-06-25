@@ -260,10 +260,14 @@ data class {{ record.name() }}(
         val buffer = java.nio.ByteBuffer
             .allocate(STRUCT_SIZE)
             .order(java.nio.ByteOrder.nativeOrder())
-{%- for field in record.fields() %}
-        {{ field.write() }}
-{%- endfor %}
+        writeTo(buffer, 0)
         return buffer.array()
+    }
+
+    internal fun writeTo(buffer: java.nio.ByteBuffer, offset: Int) {
+{%- for field in record.fields() %}
+        {{ field.write_from_base() }}
+{%- endfor %}
     }
 
     companion object {

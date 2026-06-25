@@ -17,6 +17,30 @@ private object DirectVectorCodec {
 
     fun writeByteArray(values: ByteArray): ByteArray = values
 
+{%- if record_vectors %}
+
+    fun <T> readRecordList(
+        bytes: ByteArray,
+        width: Int,
+        read: (java.nio.ByteBuffer, Int) -> T
+    ): List<T> {
+        val count = elementCount(bytes, width)
+        val buffer = nativeBuffer(bytes)
+        return List(count) { index -> read(buffer, index * width) }
+    }
+
+    fun <T> writeRecordList(
+        values: List<T>,
+        width: Int,
+        write: (T, java.nio.ByteBuffer, Int) -> Unit
+    ): ByteArray {
+        val bytes = ByteArray(values.size * width)
+        val buffer = nativeBuffer(bytes)
+        values.forEachIndexed { index, value -> write(value, buffer, index * width) }
+        return bytes
+    }
+{%- endif %}
+
     fun readShortArray(bytes: ByteArray): ShortArray {
         val values = ShortArray(elementCount(bytes, 2))
         nativeBuffer(bytes).asShortBuffer().get(values)

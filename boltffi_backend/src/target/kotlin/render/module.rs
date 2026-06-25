@@ -39,7 +39,9 @@ struct ModuleTemplate {
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/kotlin/runtime.kt", escape = "none")]
-struct RuntimeTemplate;
+struct RuntimeTemplate {
+    record_vectors: bool,
+}
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/kotlin/runtime/result.kt", escape = "none")]
@@ -63,6 +65,7 @@ struct RuntimeFeatures {
     streaming: bool,
     builtin: bool,
     result: bool,
+    record_vectors: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -344,7 +347,12 @@ impl Runtime {
     }
 
     fn render(self) -> Result<String> {
-        let mut blocks = vec![RuntimeTemplate.render()?];
+        let mut blocks = vec![
+            RuntimeTemplate {
+                record_vectors: self.features.record_vectors,
+            }
+            .render()?,
+        ];
         if self.features.asynchronous {
             blocks.push(AsyncRuntimeTemplate.render()?);
         }
@@ -377,6 +385,9 @@ impl RuntimeFeatures {
             result: declarations
                 .iter()
                 .any(|declaration| declaration.declaration().uses_result_codec()),
+            record_vectors: declarations
+                .iter()
+                .any(|declaration| declaration.declaration().uses_direct_record_vector()),
         }
     }
 

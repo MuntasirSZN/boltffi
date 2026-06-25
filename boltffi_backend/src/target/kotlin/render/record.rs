@@ -58,6 +58,7 @@ pub struct Field {
     read: Expression,
     read_from_base: Option<Expression>,
     write: Statement,
+    write_from_base: Option<Statement>,
     size: Option<Expression>,
     default: Option<Expression>,
 }
@@ -93,19 +94,6 @@ impl Record {
             RecordDecl::Encoded(record) => Self::from_encoded(record, host, bridge, context, error),
             _ => Err(KotlinHost::unsupported("unknown record declaration")),
         }
-    }
-
-    pub fn from_id(
-        id: RecordId,
-        host: &KotlinHost,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        context
-            .record(id)
-            .ok_or(KotlinHost::broken_bridge_contract(
-                "record type was not found in render context",
-            ))
-            .and_then(|record| Self::shape_from_declaration(record, host, context))
     }
 
     pub fn render(self) -> Result<Emitted> {
@@ -179,6 +167,21 @@ impl Record {
                 "record type was not found in render context",
             ))
             .map(Self::name_from_declaration)
+    }
+
+    pub fn direct_size_from_id(id: RecordId, context: &RenderContext<Native>) -> Result<u64> {
+        context
+            .record(id)
+            .ok_or(KotlinHost::broken_bridge_contract(
+                "record type was not found in render context",
+            ))
+            .and_then(|record| match record {
+                RecordDecl::Direct(record) => Ok(record.layout().size().get()),
+                RecordDecl::Encoded(_) => Err(KotlinHost::broken_bridge_contract(
+                    "direct-vector record was not lowered as a direct record",
+                )),
+                _ => Err(KotlinHost::unsupported("unknown record declaration")),
+            })
     }
 
     pub fn encode_expression(value: Expression) -> Result<Expression> {
@@ -271,75 +274,6 @@ impl Record {
                 bridge,
                 context,
             )?,
-        })
-    }
-
-    fn shape_from_declaration(
-        declaration: &RecordDecl<Native>,
-        host: &KotlinHost,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        match declaration {
-            RecordDecl::Direct(record) => Self::shape_from_direct(record),
-            RecordDecl::Encoded(record) => Self::shape_from_encoded(record, host, context),
-            _ => Err(KotlinHost::unsupported("unknown record declaration")),
-        }
-    }
-
-    fn shape_from_direct(record: &DirectRecordDecl<Native>) -> Result<Self> {
-        let buffer = Identifier::parse("buffer")?;
-        Ok(Self {
-            name: Name::new(record.name()).type_name(),
-            body: RecordBody::Direct {
-                size: record.layout().size().get(),
-            },
-            error: false,
-            fields: record
-                .fields()
-                .iter()
-                .map(|field| Field::from_direct(field, record, &buffer))
-                .collect::<Result<Vec<_>>>()?,
-            initializers: Vec::new(),
-            static_methods: Vec::new(),
-            instance_methods: Vec::new(),
-        })
-    }
-
-    fn shape_from_encoded(
-        record: &EncodedRecordDecl<Native>,
-        host: &KotlinHost,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        let reader = Identifier::parse("reader")?;
-        let writer = Identifier::parse("writer")?;
-        let current = Expression::this();
-        let size = record
-            .fields()
-            .iter()
-            .map(|field| {
-                field
-                    .write()
-                    .size_with(&mut Sizer::new(host, context)?.current(current.clone()))
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .map(|size| size.into_expression())
-            .reduce(Expression::add)
-            .unwrap_or_else(|| Expression::integer(0));
-        Ok(Self {
-            name: Name::new(record.name()).type_name(),
-            body: RecordBody::Encoded { size },
-            error: false,
-            fields: record
-                .fields()
-                .iter()
-                .map(|field| {
-                    Field::from_encoded(field, host, context, &reader, &writer, current.clone())
-                })
-                .collect::<Result<Vec<_>>>()?,
-            initializers: Vec::new(),
-            static_methods: Vec::new(),
-            instance_methods: Vec::new(),
         })
     }
 
@@ -445,6 +379,12 @@ impl Field {
         &self.write
     }
 
+    pub fn write_from_base(&self) -> &Statement {
+        self.write_from_base
+            .as_ref()
+            .expect("direct field has offset-based write expression")
+    }
+
     pub fn default(&self) -> Option<&Expression> {
         self.default.as_ref()
     }
@@ -477,12 +417,19 @@ impl Field {
         Ok(Self {
             ty: KotlinPrimitive::new(primitive).api_type()?,
             read: KotlinPrimitive::new(primitive).buffer_read(buffer, offset)?,
-            read_from_base: Some(KotlinPrimitive::new(primitive).buffer_read_at(buffer, position)?),
+            read_from_base: Some(
+                KotlinPrimitive::new(primitive).buffer_read_at(buffer, position.clone())?,
+            ),
             write: KotlinPrimitive::new(primitive).buffer_write(
                 buffer,
                 offset,
                 Expression::identifier(name.clone()),
             )?,
+            write_from_base: Some(KotlinPrimitive::new(primitive).buffer_write_at(
+                buffer,
+                position,
+                Expression::identifier(name.clone()),
+            )?),
             size: None,
             default,
             name,
@@ -509,6 +456,7 @@ impl Field {
             read: field.read().clone(),
             read_from_base: None,
             write: field.write().clone(),
+            write_from_base: None,
             size: Some(field.size().clone()),
             default,
             name,

@@ -121,8 +121,11 @@ impl KotlinType {
         Self::jni_array(parameter.jni_type())
     }
 
-    pub fn direct_vector_element(element: &DirectVectorElementType) -> Result<TypeName> {
-        DirectVector::from_element(element).map(|vector| vector.ty().clone())
+    pub fn direct_vector_element(
+        element: &DirectVectorElementType,
+        context: &RenderContext<Native>,
+    ) -> Result<TypeName> {
+        DirectVector::from_element(element, context).map(|vector| vector.ty().clone())
     }
 }
 
@@ -340,6 +343,6 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        KotlinType::direct_vector_element(element)
+        KotlinType::direct_vector_element(element, self.context)
     }
 }

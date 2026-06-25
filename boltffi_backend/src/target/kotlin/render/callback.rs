@@ -995,13 +995,13 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element)?;
+        let vector = DirectVector::from_element(element, self.context)?;
         Ok(HandleParameter {
             public: Parameter {
                 name: self.name.clone(),
                 ty: vector.ty().clone(),
             },
-            native_argument: Expression::identifier(self.name.clone()),
+            native_argument: vector.native_argument(Expression::identifier(self.name.clone()))?,
             setup: Vec::new(),
             cleanup: Vec::new(),
         })
@@ -1155,7 +1155,8 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element)?;
+        let vector = DirectVector::from_element(element, self.context)?;
+        let decoded = vector.decoded_argument(&self.source_name, self.name.clone())?;
         Ok(MethodParameter {
             public: Parameter {
                 name: self.name.clone(),
@@ -1163,10 +1164,10 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
             },
             jvm: Parameter {
                 name: self.name.clone(),
-                ty: vector.ty().clone(),
+                ty: decoded.jvm_ty().clone(),
             },
-            setup: Vec::new(),
-            call_argument: Expression::identifier(self.name.clone()),
+            setup: decoded.setup().to_vec(),
+            call_argument: decoded.call_argument().clone(),
         })
     }
 }
@@ -1276,7 +1277,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element)?;
+        let vector = DirectVector::from_element(element, self.context)?;
         Ok(ReturnValue {
             public_ty: Some(vector.ty().clone()),
             jvm_ty: Some(TypeName::byte_array(false)),
@@ -1393,7 +1394,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element)?;
+        let vector = DirectVector::from_element(element, self.context)?;
         Ok(HandleReturn {
             ty: Some(vector.ty().clone()),
             conversion: HandleReturnConversion::DirectVector(vector),
@@ -1572,7 +1573,7 @@ impl ReturnValue {
                     .collect())
             }
             ReturnConversion::DirectVector(vector) => Ok(vec![Statement::return_value(
-                vector.byte_array_expression(call),
+                vector.byte_array_expression(call)?,
             )]),
             ReturnConversion::ClassHandle(handle) => handle
                 .parameter_argument(call)
@@ -1703,7 +1704,7 @@ impl ReturnValue {
                 .write_value(source_name, value)?
                 .into_parts()),
             ReturnConversion::DirectVector(vector) => {
-                Ok((Vec::new(), vector.byte_array_expression(value), Vec::new()))
+                Ok((Vec::new(), vector.byte_array_expression(value)?, Vec::new()))
             }
             ReturnConversion::ClassHandle(handle) => {
                 Ok((Vec::new(), handle.parameter_argument(value)?, Vec::new()))

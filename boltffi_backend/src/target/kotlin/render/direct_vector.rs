@@ -1,10 +1,14 @@
-use boltffi_binding::{DirectVectorElementType, DirectVectorPrimitive, Primitive};
+use boltffi_binding::{
+    DirectVectorElementType, DirectVectorPrimitive, Native, Primitive, RecordId,
+};
 
 use crate::{
-    core::Result,
+    core::{RenderContext, Result},
     target::kotlin::{
         KotlinHost,
+        name_style::Name,
         primitive::KotlinPrimitive,
+        render::record::Record,
         syntax::{ArgumentList, Expression, Identifier, Literal, Statement, TypeName},
     },
 };
@@ -12,17 +16,36 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectVector {
     ty: TypeName,
-    decoder: Identifier,
-    encoder: Identifier,
+    codec: DirectVectorCodec,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedArgument {
+    jvm_ty: TypeName,
+    setup: Vec<Statement>,
+    call_argument: Expression,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DirectVectorCodec {
+    Primitive {
+        decoder: Identifier,
+        encoder: Identifier,
+    },
+    Record {
+        name: TypeName,
+        size: u64,
+    },
 }
 
 impl DirectVector {
-    pub fn from_element(element: &DirectVectorElementType) -> Result<Self> {
+    pub fn from_element(
+        element: &DirectVectorElementType,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         match element {
             DirectVectorElementType::Primitive(primitive) => Self::from_primitive(*primitive),
-            DirectVectorElementType::Record(_) => {
-                Err(KotlinHost::unsupported("direct-record vector type"))
-            }
+            DirectVectorElementType::Record(record) => Self::from_record(*record, context),
             _ => Err(KotlinHost::unsupported("unknown direct-vector type")),
         }
     }
@@ -31,39 +54,145 @@ impl DirectVector {
         &self.ty
     }
 
+    pub fn decoded_argument(
+        &self,
+        source_name: &Name,
+        name: Identifier,
+    ) -> Result<DecodedArgument> {
+        match &self.codec {
+            DirectVectorCodec::Primitive { .. } => Ok(DecodedArgument {
+                jvm_ty: self.ty.clone(),
+                setup: Vec::new(),
+                call_argument: Expression::identifier(name),
+            }),
+            DirectVectorCodec::Record { .. } => {
+                let value = source_name.generated("values")?;
+                Ok(DecodedArgument {
+                    jvm_ty: TypeName::byte_array(false),
+                    setup: vec![Statement::value(
+                        value.clone(),
+                        self.decode_byte_array(Expression::identifier(name))?,
+                    )],
+                    call_argument: Expression::identifier(value),
+                })
+            }
+        }
+    }
+
+    pub fn native_argument(&self, value: Expression) -> Result<Expression> {
+        match &self.codec {
+            DirectVectorCodec::Primitive { .. } => Ok(value),
+            DirectVectorCodec::Record { .. } => self.byte_array_expression(value),
+        }
+    }
+
     pub fn value_statements(&self, call: Expression) -> Result<Vec<Statement>> {
         let result = Identifier::parse("__boltffi_result")?;
         let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
             "null buffer returned",
         )));
-        let decoded = Expression::call(
-            "DirectVectorCodec",
-            self.decoder.clone(),
-            [Expression::identifier(result.clone())]
-                .into_iter()
-                .collect::<ArgumentList>(),
-        );
+        let decoded = self.decode_byte_array(Expression::identifier(result.clone()))?;
         Ok(vec![
             Statement::value(result, payload),
             Statement::expression(decoded),
         ])
     }
 
-    pub fn byte_array_expression(&self, value: Expression) -> Expression {
-        Expression::call(
-            "DirectVectorCodec",
-            self.encoder.clone(),
-            [value].into_iter().collect::<ArgumentList>(),
-        )
+    pub fn byte_array_expression(&self, value: Expression) -> Result<Expression> {
+        match &self.codec {
+            DirectVectorCodec::Primitive { encoder, .. } => Ok(Expression::call(
+                "DirectVectorCodec",
+                encoder.clone(),
+                [value].into_iter().collect::<ArgumentList>(),
+            )),
+            DirectVectorCodec::Record { size, .. } => {
+                let item = Identifier::parse("item")?;
+                let buffer = Identifier::parse("buffer")?;
+                let offset = Identifier::parse("offset")?;
+                Ok(Expression::call(
+                    "DirectVectorCodec",
+                    Identifier::parse("writeRecordList")?,
+                    [
+                        value,
+                        Expression::integer(*size),
+                        Expression::lambda_statement(
+                            vec![item.clone(), buffer.clone(), offset.clone()],
+                            Statement::expression(Expression::call(
+                                Expression::identifier(item),
+                                Identifier::parse("writeTo")?,
+                                [
+                                    Expression::identifier(buffer),
+                                    Expression::identifier(offset),
+                                ]
+                                .into_iter()
+                                .collect::<ArgumentList>(),
+                            )),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+                ))
+            }
+        }
     }
 
     fn from_primitive(primitive: DirectVectorPrimitive) -> Result<Self> {
         let primitive = primitive.primitive();
         Ok(Self {
             ty: KotlinPrimitive::new(primitive).direct_vector_type()?,
-            decoder: Identifier::parse(Self::decoder_name(primitive)?)?,
-            encoder: Identifier::parse(Self::encoder_name(primitive)?)?,
+            codec: DirectVectorCodec::Primitive {
+                decoder: Identifier::parse(Self::decoder_name(primitive)?)?,
+                encoder: Identifier::parse(Self::encoder_name(primitive)?)?,
+            },
         })
+    }
+
+    fn from_record(record: RecordId, context: &RenderContext<Native>) -> Result<Self> {
+        let name = Record::type_name_from_id(record, context)?;
+        Ok(Self {
+            ty: TypeName::list(name.clone()),
+            codec: DirectVectorCodec::Record {
+                name,
+                size: Record::direct_size_from_id(record, context)?,
+            },
+        })
+    }
+
+    pub fn decode_byte_array(&self, value: Expression) -> Result<Expression> {
+        match &self.codec {
+            DirectVectorCodec::Primitive { decoder, .. } => Ok(Expression::call(
+                "DirectVectorCodec",
+                decoder.clone(),
+                [value].into_iter().collect::<ArgumentList>(),
+            )),
+            DirectVectorCodec::Record { name, size } => {
+                let buffer = Identifier::parse("buffer")?;
+                let offset = Identifier::parse("offset")?;
+                Ok(Expression::call(
+                    "DirectVectorCodec",
+                    Identifier::parse("readRecordList")?,
+                    [
+                        value,
+                        Expression::integer(*size),
+                        Expression::lambda_expression(
+                            vec![buffer.clone(), offset.clone()],
+                            Expression::call(
+                                name.clone(),
+                                Identifier::parse("fromBuffer")?,
+                                [
+                                    Expression::identifier(buffer),
+                                    Expression::identifier(offset),
+                                ]
+                                .into_iter()
+                                .collect::<ArgumentList>(),
+                            ),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+                ))
+            }
+        }
     }
 
     fn decoder_name(primitive: Primitive) -> Result<&'static str> {
@@ -97,5 +226,19 @@ impl DirectVector {
             Primitive::U8 => Ok("writeByteArray"),
             _ => Err(KotlinHost::unsupported("unknown direct-vector primitive")),
         }
+    }
+}
+
+impl DecodedArgument {
+    pub fn jvm_ty(&self) -> &TypeName {
+        &self.jvm_ty
+    }
+
+    pub fn setup(&self) -> &[Statement] {
+        &self.setup
+    }
+
+    pub fn call_argument(&self) -> &Expression {
+        &self.call_argument
     }
 }

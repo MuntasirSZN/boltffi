@@ -228,7 +228,15 @@ impl KotlinPrimitive {
         offset: u64,
         value: Expression,
     ) -> Result<Statement> {
-        let offset = Expression::integer(offset);
+        self.buffer_write_at(buffer, Expression::integer(offset), value)
+    }
+
+    pub fn buffer_write_at(
+        self,
+        buffer: &Identifier,
+        offset: Expression,
+        value: Expression,
+    ) -> Result<Statement> {
         let (method, value) = match self.primitive {
             Primitive::Bool => (
                 "put",

@@ -1,7 +1,8 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    ByteSize, CanonicalName, DirectValueType, EnumId, Native, Primitive, ReadPlan, RecordId,
-    StreamDecl, StreamItemPlan, StreamItemPlanRender, StreamMode, TypeRef, native,
+    ByteSize, CanonicalName, DirectValueType, DirectVectorElementType, EnumId, Native, Primitive,
+    ReadPlan, RecordId, StreamDecl, StreamItemPlan, StreamItemPlanRender, StreamMode, TypeRef,
+    native,
 };
 
 use crate::{
@@ -11,7 +12,10 @@ use crate::{
         codec::Reader,
         name_style::Name,
         primitive::KotlinPrimitive,
-        render::{class::Class, enumeration::Enumeration, record::Record, type_name::KotlinType},
+        render::{
+            class::Class, direct_vector::DirectVector, enumeration::Enumeration, record::Record,
+            type_name::KotlinType,
+        },
         syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
     },
 };
@@ -221,51 +225,8 @@ impl StreamItemRenderer<'_> {
     }
 
     fn direct_record_items(&self, record: RecordId) -> Result<Expression> {
-        let record = Record::from_id(record, self.host, self.context)?;
-        let bytes = Identifier::parse("bytes")?;
-        let buffer = Identifier::parse("buffer")?;
-        let index = Identifier::parse("index")?;
-        let count = Expression::property(
-            Expression::identifier(bytes.clone()),
-            Identifier::parse("size")?,
-        )
-        .divide(Expression::integer(record.size()));
-        let item = Expression::call(
-            record.name().clone(),
-            Identifier::parse("fromBuffer")?,
-            [
-                Expression::identifier(buffer.clone()),
-                Expression::identifier(index.clone()).multiply(Expression::integer(record.size())),
-            ]
-            .into_iter()
-            .collect::<ArgumentList>(),
-        );
-        Ok(Expression::indexed_list(count, index, item))
-    }
-
-    fn direct_record_setup(&self) -> Result<Vec<Statement>> {
-        let bytes = Identifier::parse("bytes")?;
-        let buffer = Identifier::parse("buffer")?;
-        let native_order = Expression::call(
-            "java.nio.ByteOrder",
-            Identifier::parse("nativeOrder")?,
-            ArgumentList::default(),
-        );
-        let byte_buffer = Expression::call(
-            "java.nio.ByteBuffer",
-            Identifier::parse("wrap")?,
-            [Expression::identifier(bytes)]
-                .into_iter()
-                .collect::<ArgumentList>(),
-        );
-        Ok(vec![Statement::value(
-            buffer,
-            Expression::call(
-                byte_buffer,
-                Identifier::parse("order")?,
-                [native_order].into_iter().collect::<ArgumentList>(),
-            ),
-        )])
+        DirectVector::from_element(&DirectVectorElementType::record(record), self.context)?
+            .decode_byte_array(Expression::identifier(Identifier::parse("bytes")?))
     }
 
     fn direct_enum_items(&self, enumeration: EnumId) -> Result<Expression> {
@@ -334,7 +295,7 @@ impl<'plan> StreamItemPlanRender<'plan, Native> for StreamItemRenderer<'_> {
             }),
             DirectValueType::Record(record) => Ok(StreamItem {
                 ty: Record::type_name_from_id(*record, self.context)?,
-                setup: self.direct_record_setup()?,
+                setup: Vec::new(),
                 items: self.direct_record_items(*record)?,
             }),
             DirectValueType::Enum(enumeration) => Ok(StreamItem {

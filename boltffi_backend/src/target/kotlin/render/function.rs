@@ -915,8 +915,11 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        DirectVector::from_element(element)
-            .map(|_| NativeArgument::direct(Expression::identifier(self.name.clone())))
+        DirectVector::from_element(element, self.context).and_then(|vector| {
+            vector
+                .native_argument(Expression::identifier(self.name.clone()))
+                .map(NativeArgument::direct)
+        })
     }
 }
 
@@ -1033,7 +1036,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        FunctionReturn::direct_vector(element)
+        FunctionReturn::direct_vector(element, self.context)
     }
 
     fn closure(&mut self, _closure: &'plan ClosureReturn<Native, OutOfRust>) -> Self::Output {
@@ -1085,8 +1088,11 @@ impl FunctionReturn {
         })
     }
 
-    fn direct_vector(element: &DirectVectorElementType) -> Result<Self> {
-        let vector = DirectVector::from_element(element)?;
+    fn direct_vector(
+        element: &DirectVectorElementType,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let vector = DirectVector::from_element(element, context)?;
         Ok(Self {
             ty: Some(vector.ty().clone()),
             conversion: ReturnConversion::DirectVector(vector),

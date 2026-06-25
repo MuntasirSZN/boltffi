@@ -875,7 +875,8 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element)?;
+        let vector = DirectVector::from_element(element, self.context)?;
+        let decoded = vector.decoded_argument(&self.source_name, self.name.clone())?;
         Ok(ClosureParameterView {
             public: Parameter {
                 name: self.name.clone(),
@@ -883,10 +884,10 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
             },
             jvm: Parameter {
                 name: self.name.clone(),
-                ty: vector.ty().clone(),
+                ty: decoded.jvm_ty().clone(),
             },
-            setup: Vec::new(),
-            call_argument: Expression::identifier(self.name.clone()),
+            setup: decoded.setup().to_vec(),
+            call_argument: decoded.call_argument().clone(),
         })
     }
 }
@@ -991,7 +992,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element)?;
+        let vector = DirectVector::from_element(element, self.context)?;
         Ok(ClosureReturnValue {
             public_ty: Some(vector.ty().clone()),
             jvm_ty: Some(TypeName::byte_array(false)),
@@ -1116,7 +1117,7 @@ impl ClosureReturnValue {
                     .collect())
             }
             ReturnConversion::DirectVector(vector) => Ok(vec![Statement::return_value(
-                vector.byte_array_expression(call),
+                vector.byte_array_expression(call)?,
             )]),
         }
     }
@@ -1190,7 +1191,7 @@ impl ClosureReturnValue {
                 .write_value(source_name, value)?
                 .into_parts()),
             ReturnConversion::DirectVector(vector) => {
-                Ok((Vec::new(), vector.byte_array_expression(value), Vec::new()))
+                Ok((Vec::new(), vector.byte_array_expression(value)?, Vec::new()))
             }
             ReturnConversion::ClassHandle(_)
             | ReturnConversion::CallbackHandle(_)
