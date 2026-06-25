@@ -268,6 +268,19 @@ internal class WireReader(private val bytes: ByteArray) {
         return List(length) { read(this) }
     }
 
+    fun <K, V> readMap(readKey: (WireReader) -> K, readValue: (WireReader) -> V): Map<K, V> {
+        val length = readU32().toInt()
+        val values = LinkedHashMap<K, V>(length)
+        repeat(length) {
+            val key = readKey(this)
+            if (values.containsKey(key)) {
+                throw IllegalArgumentException("duplicate map key")
+            }
+            values[key] = readValue(this)
+        }
+        return values
+    }
+
     private inline fun <T> readOptional(read: (WireReader) -> T): T? {
         return when (readU8()) {
             0.toUByte() -> null
@@ -475,6 +488,18 @@ internal class WireWriter(initialCapacity: Int) {
         value.forEach { item -> write(this, item) }
     }
 
+    fun <K, V> writeMap(
+        value: Map<K, V>,
+        writeKey: (WireWriter, K) -> Unit,
+        writeValue: (WireWriter, V) -> Unit,
+    ) {
+        writeU32(value.size.toUInt())
+        value.entries.forEach { entry ->
+            writeKey(this, entry.key)
+            writeValue(this, entry.value)
+        }
+    }
+
     private fun writeBytesRaw(bytes: ByteArray) {
         ensureCapacity(bytes.size)
         val view = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -554,6 +579,11 @@ private object WireWriterPool {
         return poolState.acquire(requiredCapacity)
     }
 }
+
+private inline fun <K, V> Map<K, V>.wireSize(
+    keySize: (K) -> Int,
+    valueSize: (V) -> Int,
+): Int = 4 + entries.sumOf { entry -> keySize(entry.key) + valueSize(entry.value) }
 
 @Suppress("FunctionName")
 private object Native {

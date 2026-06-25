@@ -74,6 +74,11 @@ fn kotlin_target_renders_result_values_through_shared_codec() {
 }
 
 #[test]
+fn kotlin_target_renders_map_values_through_shared_codec() {
+    insta::assert_snapshot!(rendered_fixture("exports/map_functions"));
+}
+
+#[test]
 fn kotlin_target_renders_builtin_values_through_shared_codec() {
     insta::assert_snapshot!(rendered_fixture("exports/builtin_functions"));
 }

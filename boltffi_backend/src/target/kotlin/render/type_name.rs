@@ -233,8 +233,8 @@ impl TypeRefRender for KotlinTypeRef<'_> {
         Ok(ApiType::new(TypeName::result(ok?.ty, err?.ty)))
     }
 
-    fn map(&mut self, _key: Self::Output, _value: Self::Output) -> Self::Output {
-        Err(KotlinHost::unsupported("map type"))
+    fn map(&mut self, key: Self::Output, value: Self::Output) -> Self::Output {
+        Ok(ApiType::new(TypeName::map(key?.ty, value?.ty)))
     }
 }
 

@@ -234,6 +234,10 @@ impl TypeName {
         Self::new(format!("List<{element}>"))
     }
 
+    pub fn map(key: Self, value: Self) -> Self {
+        Self::new(format!("Map<{key}, {value}>"))
+    }
+
     pub fn result(ok: Self, err: Self) -> Self {
         Self::new(format!("BoltFFIResult<{ok}, {err}>"))
     }
@@ -397,6 +401,18 @@ impl Expression {
     pub fn result_size(self, parameter: Identifier, ok: Self, err: Self) -> Self {
         Self(format!(
             "{self}.wireSize({{ {parameter} -> {ok} }}, {{ {parameter} -> {err} }})"
+        ))
+    }
+
+    pub fn map_size(
+        self,
+        key: Identifier,
+        key_body: Self,
+        value: Identifier,
+        value_body: Self,
+    ) -> Self {
+        Self(format!(
+            "{self}.wireSize({{ {key} -> {key_body} }}, {{ {value} -> {value_body} }})"
         ))
     }
 
