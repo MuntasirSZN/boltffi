@@ -101,6 +101,11 @@ fn jni_bridge_renders_direct_vector_closure_parameters_from_contract_group() {
 }
 
 #[test]
+fn jni_bridge_renders_closure_result_returns_from_contract_group() {
+    insta::assert_snapshot!(rendered_fixture("exports/closure_result_return"));
+}
+
+#[test]
 fn jni_bridge_renders_nested_closure_parameters_from_contract_group() {
     insta::assert_snapshot!(rendered_fixture("exports/nested_closure_parameter"));
 }

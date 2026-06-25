@@ -1,6 +1,6 @@
 ---
-source: boltffi_backend/tests/jni/callback.rs
-expression: "rendered_fixture(\"callback/callback_status_result\")"
+source: boltffi_backend/tests/jni/native_methods.rs
+expression: "rendered_fixture(\"exports/closure_result_return\")"
 ---
 ===== jni/demo.h =====
 #pragma once
@@ -62,13 +62,9 @@ void boltffi_free_buf(FfiBuf_u8 buf);
 FfiBuf_u8 boltffi_buf_from_bytes(const uint8_t *ptr, uintptr_t len);
 FfiStatus boltffi_last_error_message(FfiString *out);
 void boltffi_clear_last_error(void);
-typedef struct {
-    void (*free)(uint64_t);
-    uint64_t (*clone)(uint64_t);
-    FfiBuf_u8 (*map_status)(uint64_t, int32_t *, int32_t);
-} ___StatusMapperVTable;
-void boltffi_register_callback_demo_status_mapper(const ___StatusMapperVTable *vtable);
-BoltFFICallbackHandle boltffi_create_callback_demo_status_mapper(uint64_t handle);
+typedef int32_t ___MathError;
+#define MATH_ERROR_INVALID_INPUT ((___MathError)0)
+FfiBuf_u8 boltffi_function_demo_apply(FfiBuf_u8 (*callback_call)(void *, int32_t, int32_t *), void *callback_context, void (*callback_release)(void *), int32_t value, int32_t *return_out);
 
 #ifdef __cplusplus
 }
@@ -216,6 +212,11 @@ static void boltffi_jni_throw_illegal_argument(JNIEnv *env, const char *message)
     (*env)->DeleteLocalRef(env, exception_class);
 }
 
+static void boltffi_jni_throw_error_buffer(JNIEnv *env, FfiBuf_u8 buffer) {
+    boltffi_free_buf(buffer);
+    boltffi_jni_throw_runtime(env, "BoltFFI call failed");
+}
+
 static jbyteArray boltffi_jni_buffer_to_byte_array(JNIEnv *env, FfiBuf_u8 buffer) {
     if (buffer.ptr == NULL) {
         if (buffer.len != 0) {
@@ -295,110 +296,81 @@ static FfiBuf_u8 boltffi_jni_byte_array_to_buffer(JNIEnv *env, jbyteArray array)
     return buffer;
 }
 
-static jclass g____StatusMapperVTable_class = NULL;
-static jmethodID g____StatusMapperVTable_free_method = NULL;
-static jmethodID g____StatusMapperVTable_clone_method = NULL;
-static jmethodID g____StatusMapperVTable_map_status_method = NULL;
+static FfiBuf_u8 boltffi_jni____closure__i32_to_result_i32_err_demo_math_error_call(void *user_data, int32_t arg0, int32_t *return_out);
+static void boltffi_jni____closure__i32_to_result_i32_err_demo_math_error_release(void *user_data);
 
-static void ___StatusMapperVTable_free(uint64_t handle) {
+static jclass g____closure__i32_to_result_i32_err_demo_math_error_class = NULL;
+static jmethodID g____closure__i32_to_result_i32_err_demo_math_error_call_method = NULL;
+static jmethodID g____closure__i32_to_result_i32_err_demo_math_error_free_method = NULL;
+static FfiBuf_u8 boltffi_jni____closure__i32_to_result_i32_err_demo_math_error_call(void *user_data, int32_t arg0, int32_t *return_out) {
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if (!boltffi_jni_enter(&env, &attached)) {
+        return (FfiBuf_u8){0};
+    }
+    jlong handle = (jlong)(uintptr_t)user_data;
+
+    jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, g____closure__i32_to_result_i32_err_demo_math_error_class, g____closure__i32_to_result_i32_err_demo_math_error_call_method, handle, (jint)arg0, (jlong)return_out);
+    if (boltffi_jni_clear_exception(env)) {
+
+        boltffi_jni_exit(env, attached);
+        return (FfiBuf_u8){0};
+    }
+    FfiBuf_u8 result = boltffi_jni_byte_array_to_buffer(env, __boltffi_return_array);
+    (*env)->DeleteLocalRef(env, __boltffi_return_array);
+    if (boltffi_jni_clear_exception(env)) {
+
+        boltffi_jni_exit(env, attached);
+        return (FfiBuf_u8){0};
+    }
+
+    boltffi_jni_exit(env, attached);
+    return result;
+}
+
+static void boltffi_jni____closure__i32_to_result_i32_err_demo_math_error_release(void *user_data) {
     JNIEnv *env = NULL;
     int attached = 0;
     if (!boltffi_jni_enter(&env, &attached)) {
         return;
     }
-    (*env)->CallStaticVoidMethod(env, g____StatusMapperVTable_class, g____StatusMapperVTable_free_method, (jlong)handle);
+    (*env)->CallStaticVoidMethod(env, g____closure__i32_to_result_i32_err_demo_math_error_class, g____closure__i32_to_result_i32_err_demo_math_error_free_method, (jlong)(uintptr_t)user_data);
     boltffi_jni_clear_exception(env);
     boltffi_jni_exit(env, attached);
 }
 
-static uint64_t ___StatusMapperVTable_clone(uint64_t handle) {
-    JNIEnv *env = NULL;
-    int attached = 0;
-    if (!boltffi_jni_enter(&env, &attached)) {
-        return 0;
-    }
-    jlong result = (*env)->CallStaticLongMethod(env, g____StatusMapperVTable_class, g____StatusMapperVTable_clone_method, (jlong)handle);
-    if (boltffi_jni_clear_exception(env)) {
-        boltffi_jni_exit(env, attached);
-        return 0;
-    }
-    boltffi_jni_exit(env, attached);
-    return (uint64_t)result;
-}
-
-static FfiBuf_u8 ___StatusMapperVTable_map_status(uint64_t handle, int32_t *return_out, int32_t status) {
-    JNIEnv *env = NULL;
-    int attached = 0;
-
-    if (!boltffi_jni_enter(&env, &attached)) {
-        return (FfiBuf_u8){0};
-    }
-
-    jbyteArray __boltffi_return_array = (jbyteArray)(*env)->CallStaticObjectMethod(env, g____StatusMapperVTable_class, g____StatusMapperVTable_map_status_method, (jlong)handle, (jlong)return_out, (jint)status);
-    if (boltffi_jni_clear_exception(env)) {
-        goto __boltffi_fail;
-    }
-
-    FfiBuf_u8 result = boltffi_jni_byte_array_to_buffer(env, __boltffi_return_array);
-    (*env)->DeleteLocalRef(env, __boltffi_return_array);
-    if (boltffi_jni_clear_exception(env)) {
-        goto __boltffi_fail;
-    }
-
-    boltffi_jni_exit(env, attached);
-    return result;
-__boltffi_fail:
-
-    boltffi_jni_clear_exception(env);
-    boltffi_jni_exit(env, attached);
-
-    return (FfiBuf_u8){0};
-}
-
-static ___StatusMapperVTable g____StatusMapperVTable_vtable = {
-    .free = ___StatusMapperVTable_free,
-    .clone = ___StatusMapperVTable_clone,
-    .map_status = ___StatusMapperVTable_map_status,
-};
-
-static bool boltffi_jni_load____StatusMapperVTable_callbacks(JNIEnv *env) {
-    jclass local_class = (*env)->FindClass(env, "com/boltffi/demo/StatusMapperCallbacks");
+static bool boltffi_jni_load____closure__i32_to_result_i32_err_demo_math_error(JNIEnv *env) {
+    jclass local_class = (*env)->FindClass(env, "com/boltffi/demo/ClosureI32ToResultI32ErrDemoMathErrorCallbacks");
     if (local_class == NULL) {
         return false;
     }
-    g____StatusMapperVTable_class = (*env)->NewGlobalRef(env, local_class);
+    g____closure__i32_to_result_i32_err_demo_math_error_class = (*env)->NewGlobalRef(env, local_class);
     (*env)->DeleteLocalRef(env, local_class);
-    if (g____StatusMapperVTable_class == NULL) {
+    if (g____closure__i32_to_result_i32_err_demo_math_error_class == NULL) {
         return false;
     }
-    g____StatusMapperVTable_free_method = (*env)->GetStaticMethodID(env, g____StatusMapperVTable_class, "free", "(J)V");
-    if (g____StatusMapperVTable_free_method == NULL) {
+    g____closure__i32_to_result_i32_err_demo_math_error_call_method = (*env)->GetStaticMethodID(env, g____closure__i32_to_result_i32_err_demo_math_error_class, "call", "(JIJ)[B");
+    if (g____closure__i32_to_result_i32_err_demo_math_error_call_method == NULL) {
         goto fail;
     }
-    g____StatusMapperVTable_clone_method = (*env)->GetStaticMethodID(env, g____StatusMapperVTable_class, "clone", "(J)J");
-    if (g____StatusMapperVTable_clone_method == NULL) {
+    g____closure__i32_to_result_i32_err_demo_math_error_free_method = (*env)->GetStaticMethodID(env, g____closure__i32_to_result_i32_err_demo_math_error_class, "free", "(J)V");
+    if (g____closure__i32_to_result_i32_err_demo_math_error_free_method == NULL) {
         goto fail;
     }
-    g____StatusMapperVTable_map_status_method = (*env)->GetStaticMethodID(env, g____StatusMapperVTable_class, "map_status", "(JJI)[B");
-    if (g____StatusMapperVTable_map_status_method == NULL) {
-        goto fail;
-    }
-    boltffi_register_callback_demo_status_mapper(&g____StatusMapperVTable_vtable);
     return true;
 fail:
-    (*env)->DeleteGlobalRef(env, g____StatusMapperVTable_class);
-    g____StatusMapperVTable_class = NULL;
+    (*env)->DeleteGlobalRef(env, g____closure__i32_to_result_i32_err_demo_math_error_class);
+    g____closure__i32_to_result_i32_err_demo_math_error_class = NULL;
     return false;
 }
 
-static void boltffi_jni_unload____StatusMapperVTable_callbacks(JNIEnv *env) {
-    if (g____StatusMapperVTable_class != NULL) {
-        (*env)->DeleteGlobalRef(env, g____StatusMapperVTable_class);
+static void boltffi_jni_unload____closure__i32_to_result_i32_err_demo_math_error(JNIEnv *env) {
+    if (g____closure__i32_to_result_i32_err_demo_math_error_class != NULL) {
+        (*env)->DeleteGlobalRef(env, g____closure__i32_to_result_i32_err_demo_math_error_class);
     }
-    g____StatusMapperVTable_class = NULL;
-    g____StatusMapperVTable_free_method = NULL;
-    g____StatusMapperVTable_clone_method = NULL;
-    g____StatusMapperVTable_map_status_method = NULL;
+    g____closure__i32_to_result_i32_err_demo_math_error_class = NULL;
+    g____closure__i32_to_result_i32_err_demo_math_error_call_method = NULL;
+    g____closure__i32_to_result_i32_err_demo_math_error_free_method = NULL;
 }
 
 JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1success_1i32(JNIEnv *env, jclass cls, jlong return_out, jint value) {
@@ -425,8 +397,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     if (boltffi_jni_native_class == NULL) {
         return JNI_ERR;
     }
-    if (!boltffi_jni_load____StatusMapperVTable_callbacks(env)) {
-        boltffi_jni_unload____StatusMapperVTable_callbacks(env);
+    if (!boltffi_jni_load____closure__i32_to_result_i32_err_demo_math_error(env)) {
+        boltffi_jni_unload____closure__i32_to_result_i32_err_demo_math_error(env);
         (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);
         boltffi_jni_native_class = NULL;
         return JNI_ERR;
@@ -439,11 +411,26 @@ JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
     (void)reserved;
     JNIEnv *env = NULL;
     if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK) {
-        boltffi_jni_unload____StatusMapperVTable_callbacks(env);
+        boltffi_jni_unload____closure__i32_to_result_i32_err_demo_math_error(env);
         if (boltffi_jni_native_class != NULL) {
             (*env)->DeleteGlobalRef(env, boltffi_jni_native_class);
         }
     }
     boltffi_jni_vm = NULL;
     boltffi_jni_native_class = NULL;
+}
+
+JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1apply(JNIEnv *env, jclass cls, jlong callback, jint value) {
+    (void)cls;
+
+    int32_t __boltffi_return = (int32_t){0};
+
+    FfiBuf_u8 error = boltffi_function_demo_apply(boltffi_jni____closure__i32_to_result_i32_err_demo_math_error_call, (void *)callback, boltffi_jni____closure__i32_to_result_i32_err_demo_math_error_release, value, &__boltffi_return);
+
+    if (error.ptr != NULL || error.len != 0) {
+        boltffi_jni_throw_error_buffer(env, error);
+        return 0;
+    }
+
+    return (jint)__boltffi_return;
 }

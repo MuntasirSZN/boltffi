@@ -8,9 +8,8 @@ use crate::{
     bridge::{
         c::Identifier as CIdentifier,
         jni::{
-            CallbackHandleLifecycle, CallbackHandleMethod, CallbackRegistration,
-            CallbackSuccessOutValue, CallbackSuccessOutWriter, JniBridgeContract, NativeMethod,
-            NativeParameter,
+            CallbackHandleLifecycle, CallbackHandleMethod, CallbackRegistration, JniBridgeContract,
+            NativeMethod, NativeParameter, SuccessOutValue, SuccessOutWriter,
         },
     },
     core::{Error, Result},
@@ -25,7 +24,7 @@ const JNI_BRIDGE: &str = "jni";
 pub struct NativeMethods<'bridge> {
     methods: HashMap<&'bridge str, &'bridge NativeMethod>,
     callbacks: HashMap<&'bridge str, &'bridge CallbackRegistration>,
-    callback_success_writers: &'bridge [CallbackSuccessOutWriter],
+    success_out_writers: &'bridge [SuccessOutWriter],
     callback_handle_lifecycle: Option<&'bridge CallbackHandleLifecycle>,
 }
 
@@ -55,7 +54,7 @@ impl<'bridge> NativeMethods<'bridge> {
                 .iter()
                 .map(|callback| (callback.register().as_str(), callback))
                 .collect(),
-            callback_success_writers: bridge.callback_success_writers(),
+            success_out_writers: bridge.success_out_writers(),
             callback_handle_lifecycle: bridge.callback_handle_lifecycle(),
         }
     }
@@ -107,10 +106,10 @@ impl<'bridge> NativeMethods<'bridge> {
             .map(Option::unwrap_or_default)
     }
 
-    pub fn callback_success_writers(&self) -> Result<Vec<NativeFunction>> {
-        self.callback_success_writers
+    pub fn success_out_writers(&self) -> Result<Vec<NativeFunction>> {
+        self.success_out_writers
             .iter()
-            .map(NativeFunction::from_callback_success_writer)
+            .map(NativeFunction::from_success_out_writer)
             .collect()
     }
 
@@ -179,7 +178,7 @@ impl NativeFunction {
         .collect()
     }
 
-    pub fn from_callback_success_writer(writer: &CallbackSuccessOutWriter) -> Result<Self> {
+    pub fn from_success_out_writer(writer: &SuccessOutWriter) -> Result<Self> {
         Ok(Self {
             name: Identifier::escape(writer.method().as_str())?,
             parameters: vec![
@@ -189,7 +188,7 @@ impl NativeFunction {
                 },
                 NativeFunctionParameter {
                     name: Identifier::parse("value")?,
-                    ty: Self::callback_success_value_type(writer.value())?,
+                    ty: Self::success_out_value_type(writer.value())?,
                 },
             ],
             returns: TypeName::unit(),
@@ -216,10 +215,10 @@ impl NativeFunction {
         })
     }
 
-    fn callback_success_value_type(value: &CallbackSuccessOutValue) -> Result<TypeName> {
+    fn success_out_value_type(value: &SuccessOutValue) -> Result<TypeName> {
         match value {
-            CallbackSuccessOutValue::Scalar { jni_type, .. } => KotlinType::jni(*jni_type),
-            CallbackSuccessOutValue::Bytes | CallbackSuccessOutValue::Record { .. } => {
+            SuccessOutValue::Scalar { jni_type, .. } => KotlinType::jni(*jni_type),
+            SuccessOutValue::Bytes | SuccessOutValue::Record { .. } => {
                 Ok(TypeName::byte_array(false))
             }
         }

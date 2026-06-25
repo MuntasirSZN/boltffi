@@ -3,13 +3,13 @@ use std::collections::{BTreeMap, btree_map::Entry};
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
     CallableDecl, ClosureParameter, DirectValueType, DirectVectorElementType, Direction,
-    ErrorChannel, ExportedCallable, ForeignBody, HandlePresence, HandleTarget, IncomingParam,
-    IntoRust, Native, OutOfRust, ParamDecl, ParamPlanRender, Primitive, ReturnPlanRender,
-    ReturnValueSlot, Surface, TypeRef,
+    ErrorChannel, ErrorPlacement, ExportedCallable, ForeignBody, HandlePresence, HandleTarget,
+    IncomingParam, IntoRust, Native, OutOfRust, ParamDecl, ParamPlanRender, Primitive,
+    ReturnPlanRender, ReturnValueSlot, Surface, TypeRef, WritePlan,
 };
 
 use crate::{
-    bridge::jni::{ClosureRegistration, JniBridgeContract},
+    bridge::jni::{ClosureRegistration, JniBridgeContract, SuccessOutArgument},
     core::{Error, RenderContext, RenderedDeclaration, Result},
     target::kotlin::{
         codec::{Reader, ScalarOption, WireBuffer},
@@ -89,6 +89,13 @@ struct ParameterRender<'context> {
 struct ReturnRender<'context> {
     source_name: Name,
     context: &'context RenderContext<'context, Native>,
+    fallible_success_out: bool,
+}
+
+struct FallibleReturn<'error> {
+    source_name: Name,
+    success_out: Option<SuccessOutArgument>,
+    error_codec: &'error WritePlan,
 }
 
 pub struct Closures {
@@ -211,21 +218,21 @@ impl Closure {
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let callable = closure.invoke();
-        if !matches!(callable.error().channel(), ErrorChannel::None) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "closure error return",
-            });
-        }
         let parameters = callable
             .params()
             .iter()
             .map(|parameter| ClosureParameterView::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
         let source_name = Name::new(&boltffi_binding::CanonicalName::single("closure"));
+        let fallible = FallibleReturn::from_registration(
+            source_name.clone(),
+            callable.error().channel(),
+            registration,
+        )?;
         let returned = callable.returns().plan().render_with(&mut ReturnRender {
             source_name,
             context,
+            fallible_success_out: fallible.is_some(),
         })?;
         let implementation = Expression::identifier(Identifier::parse("impl")?);
         let call = Expression::invoke(
@@ -235,19 +242,34 @@ impl Closure {
                 .map(|parameter| parameter.call_argument.clone())
                 .collect::<ArgumentList>(),
         );
+        let jvm_parameters = fallible
+            .as_ref()
+            .map(FallibleReturn::parameter)
+            .transpose()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let jvm_parameters = parameters
+            .iter()
+            .map(|parameter| parameter.jvm.clone())
+            .chain(jvm_parameters)
+            .collect();
         Ok(Self {
             name: TypeName::new(registration.class().class_name()),
             function_type: Self::invoke_type(callable, context)?,
-            parameters: parameters
-                .iter()
-                .map(|parameter| parameter.jvm.clone())
-                .collect(),
-            returns: returned.jvm_ty.clone(),
+            parameters: jvm_parameters,
+            returns: fallible
+                .as_ref()
+                .map(|_| TypeName::byte_array(false))
+                .or_else(|| returned.jvm_ty.clone()),
             setup: parameters
                 .iter()
                 .flat_map(|parameter| parameter.setup.iter().cloned())
                 .collect(),
-            call: returned.statements(call, context)?,
+            call: match fallible {
+                Some(fallible) => returned.fallible_statements(call, fallible, context)?,
+                None => returned.statements(call, context)?,
+            },
         })
     }
 
@@ -267,9 +289,36 @@ impl Closure {
             .render_with(&mut ReturnRender {
                 source_name: Name::new(&boltffi_binding::CanonicalName::single("closure")),
                 context,
+                fallible_success_out: matches!(
+                    callable.error().channel(),
+                    ErrorChannel::Encoded {
+                        placement: ErrorPlacement::ReturnSlot,
+                        ..
+                    }
+                ),
             })?
             .public_ty
             .unwrap_or_else(TypeName::unit);
+        let returns = match callable.error().channel() {
+            ErrorChannel::None => returns,
+            ErrorChannel::Encoded {
+                placement: ErrorPlacement::ReturnSlot,
+                ty,
+                ..
+            } => TypeName::result(returns, KotlinType::type_ref(ty, context)?),
+            ErrorChannel::Encoded { .. } | ErrorChannel::Status => {
+                return Err(Error::UnsupportedTarget {
+                    target: KOTLIN_TARGET,
+                    shape: "closure error return",
+                });
+            }
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: KOTLIN_TARGET,
+                    shape: "unknown closure error return",
+                });
+            }
+        };
         Ok(TypeName::function(parameters, returns))
     }
 }
@@ -302,6 +351,47 @@ impl ClosureParameterView {
             name,
             context,
         })
+    }
+}
+
+impl<'error> FallibleReturn<'error> {
+    fn from_registration(
+        source_name: Name,
+        channel: ErrorChannel<'error, Native, IntoRust>,
+        registration: &ClosureRegistration,
+    ) -> Result<Option<Self>> {
+        match channel {
+            ErrorChannel::None => Ok(None),
+            ErrorChannel::Encoded {
+                placement: ErrorPlacement::ReturnSlot,
+                codec,
+                ..
+            } => Ok(Some(Self {
+                source_name,
+                success_out: registration.success_out(),
+                error_codec: codec,
+            })),
+            ErrorChannel::Encoded { .. } | ErrorChannel::Status => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "closure error return",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown closure error return",
+            }),
+        }
+    }
+
+    fn parameter(&self) -> Result<Option<Parameter>> {
+        self.success_out
+            .as_ref()
+            .map(|success_out| {
+                Ok(Parameter {
+                    name: Identifier::escape(success_out.name().as_str())?,
+                    ty: KotlinType::jni(success_out.jni_type())?,
+                })
+            })
+            .transpose()
     }
 }
 
@@ -521,12 +611,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 
     fn direct(&mut self, slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output {
-        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "closure out-pointer return",
-            });
-        }
+        self.require_supported_slot(slot, "closure out-pointer return")?;
         match ty {
             DirectValueType::Primitive(primitive) => Ok(ClosureReturn {
                 public_ty: Some(KotlinPrimitive::new(*primitive).api_type()?),
@@ -564,12 +649,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
         codec: &'plan <IntoRust as Direction>::Codec,
         _shape: <Native as Surface>::BufferShape,
     ) -> Self::Output {
-        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "closure out-pointer encoded return",
-            });
-        }
+        self.require_supported_slot(slot, "closure out-pointer encoded return")?;
         Ok(ClosureReturn {
             public_ty: Some(KotlinType::type_ref(ty, self.context)?),
             jvm_ty: Some(TypeName::byte_array(false)),
@@ -587,12 +667,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
         _carrier: <Native as Surface>::HandleCarrier,
         presence: HandlePresence,
     ) -> Self::Output {
-        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "closure out-pointer handle return",
-            });
-        }
+        self.require_supported_slot(slot, "closure out-pointer handle return")?;
         match target {
             HandleTarget::Class(class) => {
                 let handle = ClassHandle::new(*class, presence, self.context)?;
@@ -652,7 +727,48 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 }
 
+impl ReturnRender<'_> {
+    fn require_supported_slot(&self, slot: ReturnValueSlot, shape: &'static str) -> Result<()> {
+        match slot {
+            ReturnValueSlot::ReturnSlot => Ok(()),
+            ReturnValueSlot::OutPointer if self.fallible_success_out => Ok(()),
+            ReturnValueSlot::OutPointer => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape,
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown closure return slot",
+            }),
+        }
+    }
+}
+
 impl ClosureReturn {
+    fn fallible_statements(
+        &self,
+        call: Expression,
+        fallible: FallibleReturn,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        let result = fallible.source_name.generated("result")?;
+        let success = fallible.source_name.generated("success")?;
+        let error = fallible.source_name.generated("error")?;
+        Ok(vec![
+            Statement::value(result.clone(), call),
+            Statement::return_value(Expression::identifier(result).result_fold(
+                success.clone(),
+                self.fallible_success_expression(
+                    Expression::identifier(success),
+                    &fallible,
+                    context,
+                )?,
+                error.clone(),
+                fallible.error_expression(Expression::identifier(error), context)?,
+            )),
+        ])
+    }
+
     fn statements(
         &self,
         call: Expression,
@@ -719,6 +835,114 @@ impl ClosureReturn {
                 vector.byte_array_expression(call),
             )]),
         }
+    }
+
+    fn fallible_success_expression(
+        &self,
+        value: Expression,
+        fallible: &FallibleReturn,
+        context: &RenderContext<Native>,
+    ) -> Result<Expression> {
+        let ReturnConversion::Void = &self.conversion else {
+            let success_out = fallible
+                .success_out
+                .as_ref()
+                .ok_or(Error::BrokenBridgeContract {
+                    bridge: "jni",
+                    invariant: "fallible closure has no success out-pointer",
+                })?;
+            let (setup, value, cleanup) = self.success_value(value, context)?;
+            let write = Statement::expression(Expression::call(
+                "Native",
+                Identifier::escape(success_out.writer().as_str())?,
+                [
+                    Expression::identifier(Identifier::escape(success_out.name().as_str())?),
+                    value,
+                ]
+                .into_iter()
+                .collect::<ArgumentList>(),
+            ));
+            return Ok(Expression::run(
+                setup
+                    .into_iter()
+                    .chain(std::iter::once(write))
+                    .chain(cleanup)
+                    .collect(),
+                Self::empty_error_payload(),
+            ));
+        };
+        Ok(Self::empty_error_payload())
+    }
+
+    fn success_value(
+        &self,
+        value: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<(Vec<Statement>, Expression, Vec<Statement>)> {
+        match &self.conversion {
+            ReturnConversion::DirectPrimitive(primitive) => Ok((
+                Vec::new(),
+                KotlinPrimitive::new(*primitive).native_argument(value)?,
+                Vec::new(),
+            )),
+            ReturnConversion::DirectEnum { repr } => Ok((
+                Vec::new(),
+                KotlinPrimitive::new(*repr)
+                    .native_argument(Expression::property(value, Identifier::parse("value")?))?,
+                Vec::new(),
+            )),
+            ReturnConversion::DirectRecord => {
+                Ok((Vec::new(), Record::encode_expression(value)?, Vec::new()))
+            }
+            ReturnConversion::Encoded { codec, source_name } => Ok(WireBuffer::new(source_name)?
+                .write_value(codec, value, context)?
+                .into_parts()),
+            ReturnConversion::ScalarOption {
+                primitive,
+                source_name,
+            } => Ok(ScalarOption::new(*primitive)
+                .write_value(source_name, value)?
+                .into_parts()),
+            ReturnConversion::DirectVector(vector) => {
+                Ok((Vec::new(), vector.byte_array_expression(value), Vec::new()))
+            }
+            ReturnConversion::ClassHandle(_)
+            | ReturnConversion::CallbackHandle(_)
+            | ReturnConversion::Void => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "fallible closure success return",
+            }),
+        }
+    }
+
+    fn empty_error_payload() -> Expression {
+        Expression::construct(
+            TypeName::byte_array(false),
+            [Expression::integer(0)]
+                .into_iter()
+                .collect::<ArgumentList>(),
+        )
+    }
+}
+
+impl FallibleReturn<'_> {
+    fn error_expression(
+        &self,
+        value: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<Expression> {
+        let bytes = self.source_name.generated("error_bytes")?;
+        let write =
+            WireBuffer::new(&self.source_name)?.write_value(self.error_codec, value, context)?;
+        let (setup, expression, cleanup) = write.into_parts();
+        Ok(Expression::run(
+            setup
+                .into_iter()
+                .chain(std::iter::once(Statement::value(bytes.clone(), expression)))
+                .chain(cleanup)
+                .collect(),
+            Expression::identifier(bytes),
+        ))
     }
 }
 

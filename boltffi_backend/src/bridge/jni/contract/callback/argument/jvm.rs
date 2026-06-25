@@ -17,8 +17,8 @@ impl CallbackArgument {
     /// Returns the JNI method descriptor segment for this argument.
     pub fn jni_signature(&self) -> &'static str {
         match &self.kind {
-            CallbackArgumentKind::Value { jni_type, .. }
-            | CallbackArgumentKind::SuccessOut { jni_type, .. } => jni_type.signature(),
+            CallbackArgumentKind::Value { jni_type, .. } => jni_type.signature(),
+            CallbackArgumentKind::SuccessOut { argument, .. } => argument.jni_type().signature(),
             CallbackArgumentKind::Bytes { .. } | CallbackArgumentKind::Record { .. } => "[B",
             CallbackArgumentKind::DirectVector { jni_type, .. } => jni_type.array_signature(),
             CallbackArgumentKind::CallbackHandle { .. } | CallbackArgumentKind::Closure { .. } => {
@@ -34,13 +34,15 @@ impl CallbackArgument {
             CallbackArgumentKind::Value {
                 parameter,
                 jni_type,
-            }
-            | CallbackArgumentKind::SuccessOut {
-                parameter,
-                jni_type,
-                ..
             } => vec![Expression::cast(
                 jni_type.as_type_fragment(),
+                Expression::identifier(parameter.name().clone()),
+            )],
+            CallbackArgumentKind::SuccessOut {
+                parameter,
+                argument,
+            } => vec![Expression::cast(
+                argument.jni_type().as_type_fragment(),
                 Expression::identifier(parameter.name().clone()),
             )],
             CallbackArgumentKind::Bytes { name, .. } => {

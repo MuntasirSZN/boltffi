@@ -8,23 +8,24 @@ use crate::{
 
 const JNI_BRIDGE: &str = "jni";
 
-/// JNI helper that writes one fallible callback success value.
+/// JNI helper that writes one fallible success value.
 ///
-/// Fallible callback methods return their error payload through the JVM method
-/// return slot. When the callback succeeds with a value, generated JVM target code calls
-/// this helper to write that value into the C success out-pointer.
+/// Fallible callback and closure calls return their error payload through the
+/// JVM method return slot. When the call succeeds with a value, generated JVM
+/// target code calls this helper to write that value into the C success
+/// out-pointer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct CallbackSuccessOutWriter {
+pub struct SuccessOutWriter {
     method: Identifier,
     symbol: JniSymbolName,
-    value: CallbackSuccessOutValue,
+    value: SuccessOutValue,
 }
 
-/// Success value shape accepted by a callback success writer.
+/// Success value shape accepted by a success writer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum CallbackSuccessOutValue {
+pub enum SuccessOutValue {
     /// Scalar value written directly into the C out-pointer.
     Scalar {
         /// C storage type behind the success pointer.
@@ -41,29 +42,21 @@ pub enum CallbackSuccessOutValue {
     },
 }
 
-impl CallbackSuccessOutWriter {
-    /// Builds all success writers needed by the callback vtable set.
-    pub fn from_callbacks(class: &JvmClassPath, callbacks: &[c::Callback]) -> Result<Vec<Self>> {
-        callbacks
+impl SuccessOutWriter {
+    /// Builds all success writers needed by callback vtables and closure calls.
+    pub fn from_c_bridge(class: &JvmClassPath, c_bridge: &c::CBridgeContract) -> Result<Vec<Self>> {
+        let mut types = Vec::new();
+        c_bridge
+            .callbacks()
             .iter()
             .flat_map(c::Callback::methods)
-            .flat_map(|method| {
-                method
-                    .parameter_groups()
-                    .iter()
-                    .filter_map(|group| match group {
-                        c::ParameterGroup::SuccessOut(index) => Some(method.parameter(*index)),
-                        _ => None,
-                    })
-            })
-            .map(Self::from_parameter)
-            .try_fold(Vec::new(), |mut types, ty| {
-                let ty = ty?;
-                if !types.contains(&ty) {
-                    types.push(ty);
-                }
-                Ok::<Vec<c::Type>, Error>(types)
-            })?
+            .try_for_each(|method| {
+                Self::collect_success_types(&mut types, SuccessOutSource::Callback(method), true)
+            })?;
+        c_bridge.functions().iter().try_for_each(|function| {
+            Self::collect_success_types(&mut types, SuccessOutSource::Function(function), false)
+        })?;
+        types
             .into_iter()
             .map(|ty| Self::from_type(class, ty))
             .collect()
@@ -80,7 +73,7 @@ impl CallbackSuccessOutWriter {
     }
 
     /// Returns the value shape accepted by this writer.
-    pub fn value(&self) -> &CallbackSuccessOutValue {
+    pub fn value(&self) -> &SuccessOutValue {
         &self.value
     }
 
@@ -88,7 +81,7 @@ impl CallbackSuccessOutWriter {
         let c::Type::MutPointer(inner) = parameter.ty() else {
             return Err(Error::BrokenBridgeContract {
                 bridge: JNI_BRIDGE,
-                invariant: "callback success out parameter is not a mutable pointer",
+                invariant: "success out parameter is not a mutable pointer",
             });
         };
         Ok(inner.as_ref().clone())
@@ -99,7 +92,7 @@ impl CallbackSuccessOutWriter {
         Ok(Self {
             symbol: JniSymbolName::native_method(class, method.as_str())?,
             method,
-            value: CallbackSuccessOutValue::from_type(&ty)?,
+            value: SuccessOutValue::from_type(&ty)?,
         })
     }
 
@@ -109,7 +102,7 @@ impl CallbackSuccessOutWriter {
     }
 
     fn method_for_type(ty: &c::Type) -> Result<Identifier> {
-        Identifier::parse(format!("boltffi_callback_success_{}", Self::suffix(ty)?))
+        Identifier::parse(format!("boltffi_success_{}", Self::suffix(ty)?))
     }
 
     fn suffix(ty: &c::Type) -> Result<String> {
@@ -133,14 +126,108 @@ impl CallbackSuccessOutWriter {
             _ => {
                 return Err(Error::UnsupportedBridge {
                     bridge: JNI_BRIDGE,
-                    shape: "callback success out value",
+                    shape: "success out value",
                 });
             }
         })
     }
+
+    fn collect_success_types(
+        types: &mut Vec<c::Type>,
+        source: SuccessOutSource<'_>,
+        include_source_success: bool,
+    ) -> Result<()> {
+        source
+            .parameter_groups()
+            .iter()
+            .try_for_each(|group| match group {
+                c::ParameterGroup::SuccessOut(index) if include_source_success => {
+                    let ty = Self::from_parameter(source.parameter(*index))?;
+                    if !types.contains(&ty) {
+                        types.push(ty);
+                    }
+                    Ok(())
+                }
+                c::ParameterGroup::Closure(closure) => {
+                    Self::collect_success_types(types, SuccessOutSource::Closure(closure), true)
+                }
+                c::ParameterGroup::ClosureReturn(returned) => Self::collect_success_types(
+                    types,
+                    SuccessOutSource::ClosureReturn(returned),
+                    true,
+                ),
+                _ => Ok(()),
+            })
+    }
 }
 
-impl CallbackSuccessOutValue {
+#[derive(Clone, Copy)]
+enum SuccessOutSource<'source> {
+    Function(&'source c::Function),
+    Callback(&'source c::CallbackSlot),
+    Closure(&'source c::ClosureParameter),
+    ClosureReturn(&'source c::ClosureReturnParameter),
+}
+
+impl<'source> SuccessOutSource<'source> {
+    fn parameter_groups(self) -> &'source [c::ParameterGroup] {
+        match self {
+            Self::Function(function) => function.parameter_groups(),
+            Self::Callback(callback) => callback.parameter_groups(),
+            Self::Closure(closure) => closure.parameter_groups(),
+            Self::ClosureReturn(returned) => returned.parameter_groups(),
+        }
+    }
+
+    fn parameter(self, index: c::ParameterIndex) -> &'source c::Parameter {
+        match self {
+            Self::Function(function) => function.parameter(index),
+            Self::Callback(callback) => callback.parameter(index),
+            Self::Closure(closure) => closure.parameter(index),
+            Self::ClosureReturn(returned) => returned.parameter(index),
+        }
+    }
+}
+
+/// Hidden JVM argument that points at fallible success storage.
+///
+/// The JVM method returns the encoded error payload. A non-error success value
+/// is written through this pointer by a generated helper method.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct SuccessOutArgument {
+    name: Identifier,
+    jni_type: JniType,
+    writer: Identifier,
+}
+
+impl SuccessOutArgument {
+    /// Creates a success out argument from its C out-pointer parameter.
+    pub fn from_parameter(parameter: &c::Parameter) -> Result<Self> {
+        Ok(Self {
+            name: Identifier::parse(parameter.name())?,
+            jni_type: JniType::from_c_type(parameter.ty())?,
+            writer: SuccessOutWriter::method_for_parameter(parameter)?,
+        })
+    }
+
+    /// Returns the JVM parameter name.
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    /// Returns the JNI type used to carry the success pointer.
+    pub fn jni_type(&self) -> JniType {
+        self.jni_type
+    }
+
+    /// Returns the generated native helper that writes the success value.
+    pub fn writer(&self) -> &Identifier {
+        &self.writer
+    }
+}
+
+impl SuccessOutValue {
     fn from_type(ty: &c::Type) -> Result<Self> {
         Ok(match ty {
             c::Type::Buffer => Self::Bytes,

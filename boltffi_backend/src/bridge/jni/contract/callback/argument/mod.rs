@@ -15,7 +15,7 @@ mod jvm_setup;
 
 use crate::bridge::{
     c::Identifier,
-    jni::{CallbackCParameter, CallbackCompletionPayload, JniType},
+    jni::{CallbackCParameter, CallbackCompletionPayload, JniType, SuccessOutArgument},
 };
 
 /// One callback vtable argument forwarded to a JVM callback method.
@@ -23,35 +23,6 @@ use crate::bridge::{
 #[non_exhaustive]
 pub struct CallbackArgument {
     kind: CallbackArgumentKind,
-}
-
-/// Hidden JVM argument that points at fallible callback success storage.
-///
-/// The callback method still returns the encoded error payload. A non-error
-/// success value is written through this pointer by a generated helper method.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct CallbackSuccessOutArgument {
-    name: Identifier,
-    jni_type: JniType,
-    writer: Identifier,
-}
-
-impl CallbackSuccessOutArgument {
-    /// Returns the JVM parameter name.
-    pub fn name(&self) -> &Identifier {
-        &self.name
-    }
-
-    /// Returns the JNI type used to carry the success pointer.
-    pub fn jni_type(&self) -> JniType {
-        self.jni_type
-    }
-
-    /// Returns the generated native helper that writes the success value.
-    pub fn writer(&self) -> &Identifier {
-        &self.writer
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,8 +33,7 @@ enum CallbackArgumentKind {
     },
     SuccessOut {
         parameter: CallbackCParameter,
-        jni_type: JniType,
-        writer: Identifier,
+        argument: SuccessOutArgument,
     },
     Bytes {
         name: Identifier,

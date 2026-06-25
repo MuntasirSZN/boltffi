@@ -52,8 +52,8 @@
 {% include "bridge/jni/callback_completion.c" %}
 {%- endfor %}
 
-{%- for writer in callback_success_writers %}
-{% include "bridge/jni/callback/success_out.c" %}
+{%- for writer in success_out_writers %}
+{% include "bridge/jni/success_out.c" %}
 {%- endfor %}
 
 {%- if uses_lifecycle %}

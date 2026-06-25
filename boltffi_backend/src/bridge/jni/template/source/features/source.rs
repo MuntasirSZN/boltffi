@@ -10,11 +10,10 @@
 //! contract that will be printed, not from raw binding IR.
 
 use crate::bridge::jni::template::{
-    callback::{
-        CallbackCompletionInvokerView, CallbackRegistrationView, CallbackSuccessOutWriterView,
-    },
+    callback::{CallbackCompletionInvokerView, CallbackRegistrationView},
     closure::{CallbackClosureHandleView, ClosureRegistrationView},
     method::NativeMethodView,
+    source::SuccessOutWriterView,
     stream::DirectStreamBatchView,
 };
 
@@ -42,17 +41,17 @@ impl SourceFeatures {
         direct_stream_batches: &[DirectStreamBatchView],
         callbacks: &[CallbackRegistrationView],
         callback_completions: &[CallbackCompletionInvokerView],
-        callback_success_writers: &[CallbackSuccessOutWriterView],
+        success_out_writers: &[SuccessOutWriterView],
         closures: &[ClosureRegistrationView],
         closure_handles: &[CallbackClosureHandleView],
     ) -> Self {
         let methods = MethodFeatures::from_methods(methods);
         let callbacks = CallbackFeatures::from_registrations(callbacks);
         let completions = CompletionFeatures::from_invokers(callback_completions);
-        let success_writers_use_byte_arrays = callback_success_writers
+        let success_writers_use_byte_arrays = success_out_writers
             .iter()
             .any(|writer| writer.writes_bytes || writer.writes_record);
-        let success_writers_use_record_arrays = callback_success_writers
+        let success_writers_use_record_arrays = success_out_writers
             .iter()
             .any(|writer| writer.writes_record);
         let closures = ClosureFeatures::from_registrations(closures);
@@ -96,7 +95,7 @@ impl SourceFeatures {
                 || callbacks.returns_callback_handles
                 || closures.returns_callback_handles
                 || completions.uses_byte_arrays
-                || !callback_success_writers.is_empty()
+                || !success_out_writers.is_empty()
                 || streams.returns_direct_batches
                 || methods.uses_exceptions,
             uses_continuations: methods.uses_continuations,

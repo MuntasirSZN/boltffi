@@ -18,10 +18,10 @@ use crate::{
         jni::{
             CallbackHandleLifecycle, JniBridgeContract,
             template::{
-                callback::CallbackSuccessOutWriterView,
                 callback::{CallbackCompletionInvokerView, CallbackRegistrationView},
                 closure::{CallbackClosureHandleView, ClosureRegistrationView},
                 method::NativeMethodView,
+                source::SuccessOutWriterView,
                 stream::DirectStreamBatchView,
             },
         },
@@ -49,7 +49,7 @@ struct SourceFileTemplate {
     callback_release_symbol: Identifier,
     callbacks: Vec<CallbackRegistrationView>,
     callback_completions: Vec<CallbackCompletionInvokerView>,
-    callback_success_writers: Vec<CallbackSuccessOutWriterView>,
+    success_out_writers: Vec<SuccessOutWriterView>,
     closure_handles: Vec<CallbackClosureHandleView>,
     closures: Vec<ClosureRegistrationView>,
     methods: Vec<NativeMethodView>,
@@ -77,10 +77,10 @@ impl SourceFile {
             .iter()
             .map(CallbackCompletionInvokerView::from_invoker)
             .collect::<Vec<_>>();
-        let callback_success_writers = contract
-            .callback_success_writers()
+        let success_out_writers = contract
+            .success_out_writers()
             .iter()
-            .map(CallbackSuccessOutWriterView::from_writer)
+            .map(SuccessOutWriterView::from_writer)
             .collect::<Vec<_>>();
         let closures = contract
             .closures()
@@ -116,7 +116,7 @@ impl SourceFile {
             &direct_stream_batches,
             &callbacks,
             &callback_completions,
-            &callback_success_writers,
+            &success_out_writers,
             &closures,
             &closure_handles,
         );
@@ -142,7 +142,7 @@ impl SourceFile {
             callback_release_symbol: callback_handle_lifecycle.release_symbol().clone(),
             callbacks,
             callback_completions,
-            callback_success_writers,
+            success_out_writers,
             closure_handles,
             closures,
             methods,

@@ -793,6 +793,11 @@ impl Signature {
     {
         let call_params = params;
         let return_params = self.callback_return_params(returns, error)?;
+        let closure_params = call_params
+            .iter()
+            .chain(return_params.iter())
+            .cloned()
+            .collect::<Vec<_>>();
         Ok(vec![
             Parameter::closure_call(
                 name,
@@ -804,7 +809,7 @@ impl Signature {
                         .chain(return_params.iter().map(|parameter| parameter.ty().clone()))
                         .collect(),
                 },
-                call_params,
+                closure_params,
             )?,
             Parameter::closure_context(name)?,
             Parameter::closure_release(name)?,
@@ -820,6 +825,11 @@ impl Signature {
         let invoke = closure.invoke();
         let call_params = D::InvokeScope::parameters(self, invoke.params())?;
         let return_params = self.callback_return_params(invoke.returns().plan(), invoke.error())?;
+        let closure_params = call_params
+            .iter()
+            .chain(return_params.iter())
+            .cloned()
+            .collect::<Vec<_>>();
         let call_type = Type::FunctionPointer {
             returns: Box::new(self.callback_return_type(invoke.returns().plan(), invoke.error())?),
             params: std::iter::once(Type::MutPointer(Box::new(Type::Void)))
@@ -827,7 +837,7 @@ impl Signature {
                 .chain(return_params.iter().map(|parameter| parameter.ty().clone()))
                 .collect(),
         };
-        Parameter::closure_return("return_out", closure.signature(), call_type, call_params)
+        Parameter::closure_return("return_out", closure.signature(), call_type, closure_params)
     }
 
     fn return_params<D>(

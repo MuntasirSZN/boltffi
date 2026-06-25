@@ -10,7 +10,7 @@ use boltffi_binding::{
 use crate::{
     bridge::jni::{
         CallbackHandleMethod as JniCallbackHandleMethod, CallbackMethod as JniCallbackMethod,
-        CallbackRegistration, CallbackSuccessOutArgument, JniBridgeContract,
+        CallbackRegistration, JniBridgeContract, SuccessOutArgument,
     },
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
@@ -132,7 +132,7 @@ enum ReturnConversion {
 
 struct FallibleReturn<'error> {
     source_name: Name,
-    success_out: Option<CallbackSuccessOutArgument>,
+    success_out: Option<SuccessOutArgument>,
     error_ty: &'error TypeRef,
     error_codec: &'error WritePlan,
 }

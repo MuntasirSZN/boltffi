@@ -14,24 +14,17 @@ use crate::bridge::{
     jni::{
         CallbackBytesArgument, CallbackClosureArgument, CallbackCompletionArgument,
         CallbackDirectVectorArgument, CallbackHandleArgument, CallbackRecordArgument,
+        SuccessOutArgument,
     },
 };
 
-use super::{CallbackArgument, CallbackArgumentKind, CallbackSuccessOutArgument};
+use super::{CallbackArgument, CallbackArgumentKind};
 
 impl CallbackArgument {
     /// Returns the fallible success pointer argument when this argument carries one.
-    pub fn success_out(&self) -> Option<CallbackSuccessOutArgument> {
+    pub fn success_out(&self) -> Option<SuccessOutArgument> {
         match &self.kind {
-            CallbackArgumentKind::SuccessOut {
-                parameter,
-                jni_type,
-                writer,
-            } => Some(CallbackSuccessOutArgument {
-                name: parameter.name().clone(),
-                jni_type: *jni_type,
-                writer: writer.clone(),
-            }),
+            CallbackArgumentKind::SuccessOut { argument, .. } => Some(argument.clone()),
             _ => None,
         }
     }

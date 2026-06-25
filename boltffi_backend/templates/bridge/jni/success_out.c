@@ -1,7 +1,7 @@
 JNIEXPORT void JNICALL {{ writer.symbol }}(JNIEnv *env, jclass cls, jlong return_out, {{ writer.value_jni_type }} value) {
     (void)cls;
     if (return_out == 0) {
-        boltffi_jni_throw_runtime(env, "BoltFFI callback success out pointer was null");
+        boltffi_jni_throw_runtime(env, "BoltFFI success out pointer was null");
         return;
     }
 {%- if writer.writes_scalar %}

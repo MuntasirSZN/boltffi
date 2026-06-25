@@ -23,9 +23,8 @@ use crate::{
 };
 
 use super::{
-    CallbackCompletionInvoker, CallbackHandleLifecycle, CallbackRegistration,
-    CallbackSuccessOutWriter, ClosureRegistration, JniBridgeContract, NativeMethod,
-    StreamProtocolMethods,
+    CallbackCompletionInvoker, CallbackHandleLifecycle, CallbackRegistration, ClosureRegistration,
+    JniBridgeContract, NativeMethod, StreamProtocolMethods, SuccessOutWriter,
 };
 
 impl JniBridgeContract {
@@ -59,8 +58,7 @@ impl JniBridgeContract {
             .then(|| CallbackHandleLifecycle::new(&class))
             .transpose()?;
         let callback_completions = CallbackCompletionInvoker::from_callbacks(&class, &callbacks)?;
-        let callback_success_writers =
-            CallbackSuccessOutWriter::from_callbacks(&class, c_bridge.callbacks())?;
+        let success_out_writers = SuccessOutWriter::from_c_bridge(&class, c_bridge)?;
         let stream_function_names = c_bridge
             .streams()
             .iter()
@@ -95,7 +93,7 @@ impl JniBridgeContract {
             callback_handle_lifecycle,
             callbacks,
             callback_completions,
-            callback_success_writers,
+            success_out_writers,
             methods,
             streams,
             closures,

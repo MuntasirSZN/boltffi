@@ -91,6 +91,11 @@ fn kotlin_target_renders_direct_vector_closure_parameters() {
 }
 
 #[test]
+fn kotlin_target_renders_closure_result_returns() {
+    insta::assert_snapshot!(rendered_fixture("exports/closure_result_return"));
+}
+
+#[test]
 fn kotlin_target_renders_closure_record_returns() {
     insta::assert_snapshot!(rendered_fixture("exports/closure_direct_record_return"));
 }

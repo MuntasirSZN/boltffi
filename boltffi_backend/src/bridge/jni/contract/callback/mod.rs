@@ -27,9 +27,8 @@ mod parameter;
 mod record;
 mod registration;
 mod return_value;
-mod success_out;
 
-pub use argument::{CallbackArgument, CallbackSuccessOutArgument};
+pub use argument::CallbackArgument;
 pub use bytes::CallbackBytesArgument;
 pub use c_parameter::CallbackCParameter;
 pub use closure::CallbackClosureArgument;
@@ -47,4 +46,3 @@ pub use parameter::CallbackParameter;
 pub use record::CallbackRecordArgument;
 pub use registration::CallbackRegistration;
 pub use return_value::CallbackReturn;
-pub use success_out::{CallbackSuccessOutValue, CallbackSuccessOutWriter};

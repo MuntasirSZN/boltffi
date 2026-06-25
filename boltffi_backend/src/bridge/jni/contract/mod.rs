@@ -35,6 +35,7 @@ mod record;
 mod return_value;
 mod scalar;
 mod stream;
+mod success_out;
 
 pub use bridge::JniBridgeContract;
 pub use bytes::BytesParameter;
@@ -44,8 +45,7 @@ pub use callback::{
     CallbackCompletionPayload, CallbackDirectVectorArgument, CallbackHandleArgument,
     CallbackHandleClosureReturn, CallbackHandleCompletion, CallbackHandleLifecycle,
     CallbackHandleMethod, CallbackMethod, CallbackParameter, CallbackRecordArgument,
-    CallbackRegistration, CallbackReturn, CallbackSuccessOutArgument, CallbackSuccessOutValue,
-    CallbackSuccessOutWriter,
+    CallbackRegistration, CallbackReturn,
 };
 pub use closure::{
     CallbackClosureHandle, ClosureArgument, ClosureBytesArgument, ClosureCParameter,
@@ -61,3 +61,4 @@ pub use record::{RecordParameter, RecordValue};
 pub use return_value::{EncodedErrorReturn, NativeReturn, SuccessOutReturn};
 pub use scalar::{ScalarParameter, ScalarReturn};
 pub use stream::{DirectStreamBatchMethod, StreamProtocolMethods};
+pub use success_out::{SuccessOutArgument, SuccessOutValue, SuccessOutWriter};

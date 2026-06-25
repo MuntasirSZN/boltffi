@@ -1,6 +1,6 @@
 ---
-source: boltffi_backend/tests/kotlin/callback.rs
-expression: "rendered_fixture(\"callback/callback_status_result\")"
+source: boltffi_backend/tests/kotlin/exports.rs
+expression: "rendered_fixture(\"exports/closure_result_return\")"
 ---
 ===== com/boltffi/demo/Demo.kt =====
 @file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
@@ -424,54 +424,43 @@ private object WireWriterPool {
 
 @Suppress("FunctionName")
 private object Native {
+    @JvmStatic external fun boltffi_function_demo_apply(callback: Long, value: Int): Int
     @JvmStatic external fun boltffi_success_i32(returnOut: Long, value: Int): Unit
 }
 
-interface StatusMapper {
-    fun mapStatus(status: Int): BoltFFIResult<Int, String>
-}
-
-private object StatusMapperMap {
-    private val map = java.util.concurrent.ConcurrentHashMap<Long, StatusMapper>()
+private object ClosureI32ToResultI32ErrDemoMathErrorCallbacks {
+    private val map = java.util.concurrent.ConcurrentHashMap<Long, ((Int) -> BoltFFIResult<Int, MathError>)>()
     private val counter = java.util.concurrent.atomic.AtomicLong(1L)
 
-    fun insert(value: StatusMapper): Long {
+    fun insert(value: ((Int) -> BoltFFIResult<Int, MathError>)): Long {
         val handle = counter.getAndAdd(2L)
         map[handle] = value
         return handle
     }
 
-    fun get(handle: Long): StatusMapper? = map[handle]
-
-    fun remove(handle: Long): StatusMapper? = map.remove(handle)
-
-    fun clone(handle: Long): Long {
-        val value = map[handle] ?: return 0L
-        return insert(value)
-    }
-}
-
-object StatusMapperCallbacks {
     @JvmStatic
     fun free(handle: Long) {
-        StatusMapperMap.remove(handle)
+        map.remove(handle)
     }
 
     @JvmStatic
-    fun clone(handle: Long): Long {
-        return StatusMapperMap.clone(handle)
-    }
-
-    @JvmStatic
-    fun map_status(handle: Long, return_out: Long, status: Int): ByteArray {
-        val impl = StatusMapperMap.get(handle) ?: error("StatusMapperMap: invalid handle $handle")
-        val __boltffi_mapStatus_result = impl.mapStatus(status)
-        return __boltffi_mapStatus_result.fold({ __boltffi_mapStatus_success -> run { Native.boltffi_success_i32(return_out, __boltffi_mapStatus_success); ByteArray(0) } }, { __boltffi_mapStatus_error -> run { val __boltffi_mapStatus_wire = WireWriterPool.acquire(4 + Utf8Codec.maxBytes(__boltffi_mapStatus_error)); val __boltffi_mapStatus_writer = __boltffi_mapStatus_wire.writer; __boltffi_mapStatus_writer.writeString(__boltffi_mapStatus_error); val __boltffi_mapStatus_error_bytes = __boltffi_mapStatus_wire.bytes(); __boltffi_mapStatus_wire.close(); __boltffi_mapStatus_error_bytes } })
+    fun call(handle: Long, arg0: Int, return_out: Long): ByteArray {
+        val impl = map[handle] ?: error("ClosureI32ToResultI32ErrDemoMathErrorCallbacks: invalid handle $handle")
+        val __boltffi_closure_result = impl(arg0)
+        return __boltffi_closure_result.fold({ __boltffi_closure_success -> run { Native.boltffi_success_i32(return_out, __boltffi_closure_success); ByteArray(0) } }, { __boltffi_closure_error -> run { val __boltffi_closure_wire = WireWriterPool.acquire(4); val __boltffi_closure_writer = __boltffi_closure_wire.writer; __boltffi_closure_writer.writeI32(__boltffi_closure_error.value); val __boltffi_closure_error_bytes = __boltffi_closure_wire.bytes(); __boltffi_closure_wire.close(); __boltffi_closure_error_bytes } })
     }
 }
 
-object StatusMapperBridge {
-    fun create(value: StatusMapper): Long {
-        return StatusMapperMap.insert(value)
+
+enum class MathError(val value: Int) {
+    InvalidInput(0);
+
+    companion object {
+        fun fromValue(value: Int): MathError =
+            entries.first { it.value == value }
     }
+}
+
+fun apply(callback: ((Int) -> BoltFFIResult<Int, MathError>), value: Int): Int {
+    return Native.boltffi_function_demo_apply(ClosureI32ToResultI32ErrDemoMathErrorCallbacks.insert(callback), value)
 }

@@ -1,9 +1,9 @@
 use crate::bridge::{
     c::TypeFragment,
-    jni::{CallbackSuccessOutValue, CallbackSuccessOutWriter},
+    jni::{SuccessOutValue, SuccessOutWriter},
 };
 
-pub struct CallbackSuccessOutWriterView {
+pub struct SuccessOutWriterView {
     pub symbol: String,
     pub value_jni_type: TypeFragment,
     pub value_c_type: TypeFragment,
@@ -12,8 +12,8 @@ pub struct CallbackSuccessOutWriterView {
     pub writes_record: bool,
 }
 
-impl CallbackSuccessOutWriterView {
-    pub fn from_writer(writer: &CallbackSuccessOutWriter) -> Self {
+impl SuccessOutWriterView {
+    pub fn from_writer(writer: &SuccessOutWriter) -> Self {
         let value = writer.value();
         Self {
             symbol: writer.symbol().to_string(),
@@ -25,9 +25,9 @@ impl CallbackSuccessOutWriterView {
                 .c_type()
                 .cloned()
                 .unwrap_or_else(|| TypeFragment::new("FfiBuf_u8")),
-            writes_scalar: matches!(value, CallbackSuccessOutValue::Scalar { .. }),
-            writes_bytes: matches!(value, CallbackSuccessOutValue::Bytes),
-            writes_record: matches!(value, CallbackSuccessOutValue::Record { .. }),
+            writes_scalar: matches!(value, SuccessOutValue::Scalar { .. }),
+            writes_bytes: matches!(value, SuccessOutValue::Bytes),
+            writes_record: matches!(value, SuccessOutValue::Record { .. }),
         }
     }
 }

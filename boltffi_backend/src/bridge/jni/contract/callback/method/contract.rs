@@ -16,8 +16,8 @@ mod slot;
 use crate::bridge::{
     c::{self, Identifier, TypeFragment},
     jni::{
-        CallbackArgument, CallbackCParameter, CallbackClosureReturn, CallbackSuccessOutArgument,
-        JvmMethodReturn,
+        CallbackArgument, CallbackCParameter, CallbackClosureReturn, JvmMethodReturn,
+        SuccessOutArgument,
     },
 };
 
@@ -112,7 +112,7 @@ impl CallbackMethod {
     }
 
     /// Returns the hidden success pointer argument for fallible callback methods.
-    pub fn success_out(&self) -> Option<CallbackSuccessOutArgument> {
+    pub fn success_out(&self) -> Option<SuccessOutArgument> {
         self.arguments
             .iter()
             .find_map(CallbackArgument::success_out)
