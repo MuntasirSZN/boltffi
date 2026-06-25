@@ -41,6 +41,7 @@ pub struct Field {
     name: Identifier,
     ty: TypeName,
     read: Expression,
+    read_from_base: Option<Expression>,
     write: Statement,
     size: Option<Expression>,
 }
@@ -98,6 +99,13 @@ impl Record {
 
     pub fn fields(&self) -> &[Field] {
         &self.fields
+    }
+
+    pub fn direct_fields(&self) -> &[Field] {
+        match self.body {
+            RecordBody::Direct { .. } => &self.fields,
+            RecordBody::Encoded { .. } => &[],
+        }
     }
 
     pub fn empty(&self) -> bool {
@@ -183,6 +191,12 @@ impl Field {
         &self.read
     }
 
+    pub fn read_from_base(&self) -> &Expression {
+        self.read_from_base
+            .as_ref()
+            .expect("direct field has offset-based read expression")
+    }
+
     pub fn write(&self) -> &Statement {
         &self.write
     }
@@ -202,10 +216,16 @@ impl Field {
             })?
             .offset()
             .get();
+        let base = Identifier::parse("offset")?;
+        let position = match offset {
+            0 => Expression::identifier(base),
+            _ => Expression::identifier(base).add(Expression::integer(offset)),
+        };
         let primitive = field.ty().primitive();
         Ok(Self {
             ty: KotlinPrimitive::new(primitive).api_type()?,
             read: KotlinPrimitive::new(primitive).buffer_read(buffer, offset)?,
+            read_from_base: Some(KotlinPrimitive::new(primitive).buffer_read_at(buffer, position)?),
             write: KotlinPrimitive::new(primitive).buffer_write(
                 buffer,
                 offset,
@@ -228,6 +248,7 @@ impl Field {
         Ok(Self {
             ty: field.ty().clone(),
             read: field.read().clone(),
+            read_from_base: None,
             write: field.write().clone(),
             size: Some(field.size().clone()),
             name,

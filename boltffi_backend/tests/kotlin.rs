@@ -10,6 +10,8 @@ mod callback;
 mod direct_vector;
 #[path = "kotlin/exports.rs"]
 mod exports;
+#[path = "kotlin/stream.rs"]
+mod stream;
 
 fn bindings(source: &str) -> boltffi_binding::Bindings<Native> {
     let file = syn::parse_str(source).expect("valid source fixture");

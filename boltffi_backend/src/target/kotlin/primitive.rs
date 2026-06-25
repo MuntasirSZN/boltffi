@@ -153,7 +153,10 @@ impl KotlinPrimitive {
     }
 
     pub fn buffer_read(self, buffer: &Identifier, offset: u64) -> Result<Expression> {
-        let offset = Expression::integer(offset);
+        self.buffer_read_at(buffer, Expression::integer(offset))
+    }
+
+    pub fn buffer_read_at(self, buffer: &Identifier, offset: Expression) -> Result<Expression> {
         match self.primitive {
             Primitive::Bool => Ok(Self::buffer_call(buffer, "get", [offset])?
                 .not_equal(Expression::integer(0).convert(Identifier::parse("toByte")?))),

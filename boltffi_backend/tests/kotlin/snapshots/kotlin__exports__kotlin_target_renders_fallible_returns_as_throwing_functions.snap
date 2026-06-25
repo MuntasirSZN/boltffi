@@ -436,7 +436,7 @@ data class Point(
 ) {
     internal fun toByteArray(): ByteArray {
         val buffer = java.nio.ByteBuffer
-            .allocate(8)
+            .allocate(STRUCT_SIZE)
             .order(java.nio.ByteOrder.nativeOrder())
         buffer.putInt(0, x)
         buffer.putInt(4, y)
@@ -444,14 +444,20 @@ data class Point(
     }
 
     companion object {
+        internal const val STRUCT_SIZE: Int = 8
+
         internal fun fromByteArray(bytes: ByteArray): Point {
-            require(bytes.size == 8)
+            require(bytes.size == STRUCT_SIZE)
             val buffer = java.nio.ByteBuffer
                 .wrap(bytes)
                 .order(java.nio.ByteOrder.nativeOrder())
+            return fromBuffer(buffer, 0)
+        }
+
+        internal fun fromBuffer(buffer: java.nio.ByteBuffer, offset: Int): Point {
             return Point(
-                buffer.getInt(0),
-                buffer.getInt(4)
+                buffer.getInt(offset),
+                buffer.getInt(offset + 4)
             )
         }
     }

@@ -99,6 +99,7 @@ impl host::HostBackend for KotlinHost {
             .stable(BindingCapability::Classes)
             .stable(BindingCapability::Functions)
             .stable(BindingCapability::Callbacks)
+            .stable(BindingCapability::Streams)
             .stable(BindingCapability::CustomTypes)
     }
 
@@ -153,13 +154,11 @@ impl host::HostBackend for KotlinHost {
 
     fn stream(
         &self,
-        _decl: &StreamDecl<Self::Surface>,
+        decl: &StreamDecl<Self::Surface>,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Ok(Emitted::diagnostic(crate::core::Diagnostic::new(
-            "kotlin target skipped stream declaration",
-        )))
+        render::Stream::from_declaration(decl, context)?.render()
     }
 
     fn constant(

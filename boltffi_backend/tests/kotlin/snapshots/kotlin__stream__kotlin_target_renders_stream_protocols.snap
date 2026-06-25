@@ -1,6 +1,6 @@
 ---
-source: boltffi_backend/tests/kotlin/exports.rs
-expression: "rendered_fixture(\"exports/closure_direct_record_return\")"
+source: boltffi_backend/tests/kotlin/stream.rs
+expression: "rendered_fixture(\"stream/protocol_functions\")"
 ---
 ===== com/boltffi/demo/Demo.kt =====
 @file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
@@ -422,49 +422,185 @@ private object WireWriterPool {
     }
 }
 
-@Suppress("FunctionName")
-private object Native {
-    @JvmStatic external fun boltffi_function_demo_install(callback: Long): Unit
-}
+private const val BOLTFFI_FUTURE_POLL_READY: Byte = 0
 
-private object ClosureToDemoPointCallbacks {
-    private val map = java.util.concurrent.ConcurrentHashMap<Long, (() -> Point)>()
-    private val counter = java.util.concurrent.atomic.AtomicLong(1L)
+private class BoltFfiHandleMap<T> {
+    private val next = java.util.concurrent.atomic.AtomicLong(1)
+    private val values = java.util.concurrent.ConcurrentHashMap<Long, T>()
 
-    fun insert(value: (() -> Point)): Long {
-        val handle = counter.getAndAdd(2L)
-        map[handle] = value
+    fun insert(value: T): Long {
+        val handle = next.getAndIncrement()
+        values[handle] = value
         return handle
     }
 
-    @JvmStatic
-    fun free(handle: Long) {
-        map.remove(handle)
+    fun remove(handle: Long): T? = values.remove(handle)
+}
+
+private val boltffiContinuationMap =
+    BoltFfiHandleMap<kotlinx.coroutines.CancellableContinuation<Byte>>()
+
+private val boltffiCallbackScope =
+    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob())
+
+private object BoltFfiAsync {
+    fun resume(handle: Long, pollResult: Byte) {
+        val continuation = boltffiContinuationMap.remove(handle) ?: return
+        continuation.resumeWith(Result.success(pollResult))
+    }
+}
+
+internal fun boltffiLaunchCallback(block: suspend () -> Unit) {
+    kotlinx.coroutines.launch(boltffiCallbackScope) {
+        block()
+    }
+}
+
+internal suspend inline fun <T> boltffiCallAsync(
+    crossinline createFuture: () -> Long,
+    crossinline poll: (Long, Long) -> Unit,
+    crossinline complete: (Long) -> T,
+    crossinline free: (Long) -> Unit,
+    crossinline cancel: (Long) -> Unit,
+): T {
+    val rustFuture = createFuture()
+    try {
+        var pollResult: Byte
+        do {
+            pollResult = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+                val continuationHandle = boltffiContinuationMap.insert(continuation)
+                continuation.invokeOnCancellation {
+                    if (boltffiContinuationMap.remove(continuationHandle) != null) {
+                        cancel(rustFuture)
+                    }
+                }
+                poll(rustFuture, continuationHandle)
+            }
+        } while (pollResult != BOLTFFI_FUTURE_POLL_READY)
+        return complete(rustFuture)
+    } finally {
+        free(rustFuture)
+    }
+}
+
+private const val BOLTFFI_STREAM_POLL_CLOSED: Byte = 1
+
+internal class BoltFfiStreamContext(
+    private val scope: kotlinx.coroutines.CoroutineScope,
+    private val subscription: Long,
+    private val batchSize: Long,
+    private val popBatch: (Long, Long) -> ByteArray?,
+    private val poll: (Long, Long) -> Unit,
+    private val unsubscribe: (Long) -> Unit,
+    private val free: (Long) -> Unit,
+    private val processItems: (ByteArray) -> Unit,
+    private val finish: () -> Unit
+) {
+    private val lifecycle = java.util.concurrent.atomic.AtomicInteger(0)
+    private val processing = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun start() {
+        registerPoll()
     }
 
-    @JvmStatic
-    fun call(handle: Long): ByteArray {
-        val impl = map[handle] ?: error("ClosureToDemoPointCallbacks: invalid handle $handle")
-        return impl().toByteArray()
+    fun requestTermination() {
+        if (lifecycle.compareAndSet(0, 1)) {
+            unsubscribe(subscription)
+            lifecycle.compareAndSet(1, 2)
+        }
+        finalizeIfIdle()
+    }
+
+    private fun registerPoll() {
+        if (!lifecycle.compareAndSet(0, 0)) {
+            finalizeIfIdle()
+            return
+        }
+        kotlinx.coroutines.launch(scope) {
+            val pollResult = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+                poll(subscription, boltffiContinuationMap.insert(continuation))
+            }
+            handlePoll(pollResult)
+        }
+    }
+
+    private fun handlePoll(pollResult: Byte) {
+        val closed = pollResult == BOLTFFI_STREAM_POLL_CLOSED
+        if (!processing.compareAndSet(0, 1)) {
+            finalizeIfIdle()
+            return
+        }
+        try {
+            if (lifecycle.compareAndSet(0, 0)) {
+                drain()
+            }
+        } finally {
+            processing.compareAndSet(1, 0)
+            finalizeIfIdle()
+        }
+        if (closed) {
+            requestTermination()
+            return
+        }
+        if (lifecycle.compareAndSet(0, 0)) {
+            registerPoll()
+        }
+    }
+
+    private fun drain() {
+        while (true) {
+            val bytes = popBatch(subscription, batchSize)
+                ?: throw IllegalStateException("BoltFFI stream pop_batch returned null")
+            if (bytes.isEmpty()) return
+            processItems(bytes)
+        }
+    }
+
+    private fun finalizeIfIdle() {
+        if (!processing.compareAndSet(0, 0)) return
+        if (!lifecycle.compareAndSet(2, 3)) return
+        free(subscription)
+        finish()
+    }
+}
+
+@Suppress("FunctionName")
+private object Native {
+    @JvmStatic external fun boltffi_release_class_demo_engine(handle: Long): Unit
+    @JvmStatic external fun boltffi_stream_demo_engine_points_subscribe(`receiver`: Long): Long
+    @JvmStatic external fun boltffi_stream_demo_engine_points_pop_batch(subscription: Long, maxCount: Long): ByteArray?
+    @JvmStatic external fun boltffi_stream_demo_engine_points_wait(subscription: Long, timeout_milliseconds: Int): Int
+    @JvmStatic external fun boltffi_stream_demo_engine_points_poll(subscription: Long, callback_data: Long): Unit
+    @JvmStatic external fun boltffi_stream_demo_engine_points_unsubscribe(subscription: Long): Unit
+    @JvmStatic external fun boltffi_stream_demo_engine_points_free(subscription: Long): Unit
+    @JvmStatic external fun boltffi_stream_demo_engine_names_subscribe(`receiver`: Long): Long
+    @JvmStatic external fun boltffi_stream_demo_engine_names_pop_batch(subscription: Long, max_count: Long): ByteArray?
+    @JvmStatic external fun boltffi_stream_demo_engine_names_wait(subscription: Long, timeout_milliseconds: Int): Int
+    @JvmStatic external fun boltffi_stream_demo_engine_names_poll(subscription: Long, callback_data: Long): Unit
+    @JvmStatic external fun boltffi_stream_demo_engine_names_unsubscribe(subscription: Long): Unit
+    @JvmStatic external fun boltffi_stream_demo_engine_names_free(subscription: Long): Unit
+
+    @JvmStatic fun boltffiFutureContinuationCallback(handle: Long, pollResult: Byte) {
+        BoltFfiAsync.resume(handle, pollResult)
     }
 }
 
 
 data class Point(
-    val x: Int,
-    val y: Int
+    val x: Double,
+    val y: Double
 ) {
     internal fun toByteArray(): ByteArray {
         val buffer = java.nio.ByteBuffer
             .allocate(STRUCT_SIZE)
             .order(java.nio.ByteOrder.nativeOrder())
-        buffer.putInt(0, x)
-        buffer.putInt(4, y)
+        buffer.putDouble(0, x)
+        buffer.putDouble(8, y)
         return buffer.array()
     }
 
     companion object {
-        internal const val STRUCT_SIZE: Int = 8
+        internal const val STRUCT_SIZE: Int = 16
 
         internal fun fromByteArray(bytes: ByteArray): Point {
             require(bytes.size == STRUCT_SIZE)
@@ -476,13 +612,92 @@ data class Point(
 
         internal fun fromBuffer(buffer: java.nio.ByteBuffer, offset: Int): Point {
             return Point(
-                buffer.getInt(offset),
-                buffer.getInt(offset + 4)
+                buffer.getDouble(offset),
+                buffer.getDouble(offset + 8)
             )
         }
     }
 }
 
-fun install(callback: (() -> Point)) {
-    Native.boltffi_function_demo_install(ClosureToDemoPointCallbacks.insert(callback))
+class Engine internal constructor(internal val handle: Long) : AutoCloseable {
+    private val __boltffi_closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun close() {
+        if (__boltffi_closed.compareAndSet(false, true)) {
+            Native.boltffi_release_class_demo_engine(handle)
+        }
+    }
+}
+
+fun Engine.points(): PointsSubscription =
+    PointsSubscription(
+        handle = Native.boltffi_stream_demo_engine_points_subscribe(handle),
+        popBatch = Native::boltffi_stream_demo_engine_points_pop_batch,
+        wait = Native::boltffi_stream_demo_engine_points_wait,
+        unsubscribe = Native::boltffi_stream_demo_engine_points_unsubscribe,
+        free = Native::boltffi_stream_demo_engine_points_free
+    )
+
+class PointsSubscription(
+    private val handle: Long,
+    private val popBatch: (Long, Long) -> ByteArray?,
+    private val wait: (Long, Int) -> Int,
+    private val unsubscribe: (Long) -> Unit,
+    private val free: (Long) -> Unit
+) : AutoCloseable {
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        if (handle == 0L) return
+        free(handle)
+    }
+
+    fun popBatch(maxCount: Long = 16L): List<Point> {
+        if (handle == 0L) return emptyList()
+        val bytes = popBatch(handle, maxCount)
+            ?: throw IllegalStateException("BoltFFI stream pop_batch returned null")
+        if (bytes.isEmpty()) return emptyList()
+        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.nativeOrder())
+        val items = List(bytes.size / 16) { index -> Point.fromBuffer(buffer, index * 16) }
+        return items
+    }
+
+    fun wait(timeout: Int): Int {
+        if (handle == 0L) return -1
+        return wait(handle, timeout)
+    }
+
+    fun unsubscribe() {
+        if (handle == 0L) return
+        unsubscribe(handle)
+    }
+}
+
+fun Engine.names(): kotlinx.coroutines.flow.Flow<String> = kotlinx.coroutines.flow.callbackFlow {
+    val subscription = Native.boltffi_stream_demo_engine_names_subscribe(handle)
+    if (subscription == 0L) {
+        close()
+        return@callbackFlow
+    }
+    val context = BoltFfiStreamContext(
+        scope = this,
+        subscription = subscription,
+        batchSize = 16L,
+        popBatch = Native::boltffi_stream_demo_engine_names_pop_batch,
+        poll = Native::boltffi_stream_demo_engine_names_poll,
+        unsubscribe = Native::boltffi_stream_demo_engine_names_unsubscribe,
+        free = Native::boltffi_stream_demo_engine_names_free,
+        processItems = { bytes ->
+            val reader = WireReader(bytes)
+            val count = reader.readU32().toInt()
+            val items = List(count) { reader.readString() }
+            items.forEach { item ->
+                trySend(item)
+            }
+        },
+        finish = { close() }
+    )
+    context.start()
+    kotlinx.coroutines.channels.awaitClose { context.requestTermination() }
 }

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_binding::{
-    CallbackDecl, ClassDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol,
+    CallbackDecl, ClassDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol, StreamDecl,
 };
 
 use crate::{
@@ -9,8 +9,9 @@ use crate::{
         c::Identifier as CIdentifier,
         jni::{
             CallbackCompletionInvoker, CallbackCompletionPayload, CallbackCompletionPayloadValue,
-            CallbackHandleLifecycle, CallbackHandleMethod, CallbackRegistration, JniBridgeContract,
-            NativeMethod, NativeParameter, SuccessOutValue, SuccessOutWriter,
+            CallbackHandleLifecycle, CallbackHandleMethod, CallbackRegistration,
+            DirectStreamBatchMethod, JniBridgeContract, NativeMethod, NativeParameter,
+            SuccessOutValue, SuccessOutWriter,
         },
     },
     core::{Error, Result},
@@ -24,6 +25,7 @@ const JNI_BRIDGE: &str = "jni";
 
 pub struct NativeMethods<'bridge> {
     methods: HashMap<&'bridge str, &'bridge NativeMethod>,
+    direct_stream_batches: HashMap<&'bridge str, &'bridge DirectStreamBatchMethod>,
     callbacks: HashMap<&'bridge str, &'bridge CallbackRegistration>,
     success_out_writers: &'bridge [SuccessOutWriter],
     callback_completions: &'bridge [CallbackCompletionInvoker],
@@ -49,7 +51,19 @@ impl<'bridge> NativeMethods<'bridge> {
             methods: bridge
                 .methods()
                 .iter()
+                .chain(
+                    bridge
+                        .streams()
+                        .iter()
+                        .flat_map(|stream| stream.methods().iter()),
+                )
                 .map(|method| (method.c_function().name(), method))
+                .collect(),
+            direct_stream_batches: bridge
+                .streams()
+                .iter()
+                .flat_map(|stream| stream.direct_batches().iter())
+                .map(|batch| (batch.c_function().name(), batch))
                 .collect(),
             callbacks: bridge
                 .callbacks()
@@ -102,6 +116,21 @@ impl<'bridge> NativeMethods<'bridge> {
             .collect()
     }
 
+    pub fn stream(&self, decl: &StreamDecl<Native>) -> Result<Vec<NativeFunction>> {
+        let protocol = decl.protocol();
+        [
+            protocol.subscribe(),
+            protocol.pop_batch(),
+            protocol.wait(),
+            protocol.poll(),
+            protocol.unsubscribe(),
+            protocol.free(),
+        ]
+        .into_iter()
+        .map(|symbol| self.stream_symbol(symbol))
+        .collect()
+    }
+
     pub fn callback_handle_lifecycle(&self) -> Result<Vec<NativeFunction>> {
         self.callback_handle_lifecycle
             .map(NativeFunction::from_callback_handle_lifecycle)
@@ -146,6 +175,23 @@ impl<'bridge> NativeMethods<'bridge> {
                 invariant: "declaration has no JNI native method",
             })
             .and_then(NativeFunction::from_method)
+    }
+
+    fn stream_symbol(&self, symbol: &NativeSymbol) -> Result<NativeFunction> {
+        self.methods
+            .get(symbol.name().as_str())
+            .copied()
+            .map(NativeFunction::from_method)
+            .or_else(|| {
+                self.direct_stream_batches
+                    .get(symbol.name().as_str())
+                    .copied()
+                    .map(NativeFunction::from_direct_stream_batch)
+            })
+            .ok_or(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "stream declaration has no JNI stream method",
+            })?
     }
 }
 
@@ -226,6 +272,23 @@ impl NativeFunction {
         .into_iter()
         .flatten()
         .collect())
+    }
+
+    pub fn from_direct_stream_batch(batch: &DirectStreamBatchMethod) -> Result<Self> {
+        Ok(Self {
+            name: Identifier::escape(batch.c_function().name())?,
+            parameters: vec![
+                NativeFunctionParameter {
+                    name: Identifier::parse("subscription")?,
+                    ty: TypeName::long(),
+                },
+                NativeFunctionParameter {
+                    name: Identifier::parse("maxCount")?,
+                    ty: TypeName::long(),
+                },
+            ],
+            returns: TypeName::byte_array(true),
+        })
     }
 
     pub fn name(&self) -> &Identifier {

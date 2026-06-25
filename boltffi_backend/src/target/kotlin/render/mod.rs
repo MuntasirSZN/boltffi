@@ -8,6 +8,7 @@ mod function;
 mod module;
 mod native;
 mod record;
+mod stream;
 mod type_name;
 
 pub use callback::Callback;
@@ -16,3 +17,4 @@ pub use enumeration::Enumeration;
 pub use function::Function;
 pub use module::Module;
 pub use record::Record;
+pub use stream::Stream;

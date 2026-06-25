@@ -77,7 +77,7 @@ data class {{ record.name() }}(
 ) {
     internal fun toByteArray(): ByteArray {
         val buffer = java.nio.ByteBuffer
-            .allocate({{ record.size() }})
+            .allocate(STRUCT_SIZE)
             .order(java.nio.ByteOrder.nativeOrder())
 {%- for field in record.fields() %}
         {{ field.write() }}
@@ -86,14 +86,20 @@ data class {{ record.name() }}(
     }
 
     companion object {
+        internal const val STRUCT_SIZE: Int = {{ record.size() }}
+
         internal fun fromByteArray(bytes: ByteArray): {{ record.name() }} {
-            require(bytes.size == {{ record.size() }})
+            require(bytes.size == STRUCT_SIZE)
             val buffer = java.nio.ByteBuffer
                 .wrap(bytes)
                 .order(java.nio.ByteOrder.nativeOrder())
+            return fromBuffer(buffer, 0)
+        }
+
+        internal fun fromBuffer(buffer: java.nio.ByteBuffer, offset: Int): {{ record.name() }} {
             return {{ record.name() }}(
-{%- for field in record.fields() %}
-                {{ field.read() }}{% if !loop.last %},{% endif %}
+{%- for field in record.direct_fields() %}
+                {{ field.read_from_base() }}{% if !loop.last %},{% endif %}
 {%- endfor %}
             )
         }

@@ -305,6 +305,10 @@ impl Expression {
         Self(format!("{self} * {other}"))
     }
 
+    pub fn divide(self, other: Self) -> Self {
+        Self(format!("{self} / {other}"))
+    }
+
     pub fn not_equal(self, other: Self) -> Self {
         Self(format!("{self} != {other}"))
     }
@@ -327,6 +331,18 @@ impl Expression {
 
     pub fn sum_of(self, parameter: Identifier, body: Self) -> Self {
         Self(format!("{self}.sumOf {{ {parameter} -> {body} }}"))
+    }
+
+    pub fn map(self, parameter: Identifier, body: Self) -> Self {
+        Self(format!("{self}.map {{ {parameter} -> {body} }}"))
+    }
+
+    pub fn list(count: Self, body: Self) -> Self {
+        Self(format!("List({count}) {{ {body} }}"))
+    }
+
+    pub fn indexed_list(count: Self, index: Identifier, body: Self) -> Self {
+        Self(format!("List({count}) {{ {index} -> {body} }}"))
     }
 
     pub fn optional_size(self, parameter: Identifier, body: Self) -> Self {

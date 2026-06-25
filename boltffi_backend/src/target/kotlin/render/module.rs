@@ -43,9 +43,14 @@ struct BuiltinRuntimeTemplate;
 #[template(path = "target/kotlin/runtime/async.kt", escape = "none")]
 struct AsyncRuntimeTemplate;
 
+#[derive(AskamaTemplate)]
+#[template(path = "target/kotlin/runtime/stream.kt", escape = "none")]
+struct StreamRuntimeTemplate;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct RuntimeFeatures {
     asynchronous: bool,
+    streaming: bool,
     builtin: bool,
     result: bool,
 }
@@ -106,6 +111,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
                 DeclarationRef::Function(function) => methods.function(function),
                 DeclarationRef::Class(class) => methods.class(class),
                 DeclarationRef::Callback(callback) => methods.callback(callback),
+                DeclarationRef::Stream(stream) => methods.stream(stream),
                 _ => Ok(Vec::new()),
             })
             .collect::<Result<Vec<_>>>()?
@@ -177,12 +183,19 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         })
     }
 
+    fn streams(&self) -> Vec<String> {
+        self.primary_chunks(|declaration| {
+            matches!(declaration.declaration(), DeclarationRef::Stream(_))
+        })
+    }
+
     fn declarations(&self) -> String {
         [
             self.records(),
             self.enumerations(),
             self.callbacks(),
             self.classes(),
+            self.streams(),
             self.functions(),
         ]
         .into_iter()
@@ -227,6 +240,9 @@ impl Runtime {
         if self.features.asynchronous {
             blocks.push(AsyncRuntimeTemplate.render()?);
         }
+        if self.features.streaming {
+            blocks.push(StreamRuntimeTemplate.render()?);
+        }
         if self.features.builtin {
             blocks.push(BuiltinRuntimeTemplate.render()?);
         }
@@ -240,9 +256,13 @@ impl Runtime {
 impl RuntimeFeatures {
     fn from_declarations(declarations: &[RenderedDeclaration<'_, Native>]) -> Self {
         Self {
-            asynchronous: declarations
+            asynchronous: declarations.iter().any(|declaration| {
+                declaration.declaration().uses_async_execution()
+                    || matches!(declaration.declaration(), DeclarationRef::Stream(_))
+            }),
+            streaming: declarations
                 .iter()
-                .any(|declaration| declaration.declaration().uses_async_execution()),
+                .any(|declaration| matches!(declaration.declaration(), DeclarationRef::Stream(_))),
             builtin: declarations
                 .iter()
                 .any(|declaration| Self::declaration_uses_builtin(declaration.declaration())),
