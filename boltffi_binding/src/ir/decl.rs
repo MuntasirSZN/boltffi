@@ -177,6 +177,18 @@ impl<'a, S: Surface> DeclarationRef<'a, S> {
             Self::CustomType(_) => false,
         }
     }
+
+    /// Returns whether any callable in this declaration uses an asynchronous execution protocol.
+    pub fn uses_async_execution(self) -> bool {
+        match self {
+            Self::Record(record) => record.uses_async_execution(),
+            Self::Enum(enumeration) => enumeration.uses_async_execution(),
+            Self::Function(function) => function.uses_async_execution(),
+            Self::Class(class) => class.uses_async_execution(),
+            Self::Callback(callback) => callback.uses_async_execution(),
+            Self::Stream(_) | Self::Constant(_) | Self::CustomType(_) => false,
+        }
+    }
 }
 
 impl<S: Surface> Decl<S> {
@@ -423,6 +435,13 @@ impl<S: Surface> RecordDecl<S> {
             Self::Encoded(record) => record.uses_builtin_codec(kind),
         }
     }
+
+    fn uses_async_execution(&self) -> bool {
+        match self {
+            Self::Direct(record) => record.uses_async_execution(),
+            Self::Encoded(record) => record.uses_async_execution(),
+        }
+    }
 }
 
 /// A record that crosses the boundary as raw memory.
@@ -516,6 +535,13 @@ impl<S: Surface> DirectRecordDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_async_execution)
+            || self.methods.iter().any(MethodDecl::uses_async_execution)
     }
 }
 
@@ -626,6 +652,13 @@ impl<S: Surface> EncodedRecordDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_async_execution)
+            || self.methods.iter().any(MethodDecl::uses_async_execution)
     }
 }
 
@@ -780,6 +813,13 @@ impl<S: Surface> EnumDecl<S> {
             Self::Data(enumeration) => enumeration.uses_builtin_codec(kind),
         }
     }
+
+    fn uses_async_execution(&self) -> bool {
+        match self {
+            Self::CStyle(enumeration) => enumeration.uses_async_execution(),
+            Self::Data(enumeration) => enumeration.uses_async_execution(),
+        }
+    }
 }
 
 /// A fieldless enum whose variants are integer values.
@@ -869,6 +909,13 @@ impl<S: Surface> CStyleEnumDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_async_execution)
+            || self.methods.iter().any(MethodDecl::uses_async_execution)
     }
 }
 
@@ -1008,6 +1055,13 @@ impl<S: Surface> DataEnumDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::uses_async_execution)
+            || self.methods.iter().any(MethodDecl::uses_async_execution)
     }
 }
 
@@ -1182,6 +1236,10 @@ impl<S: Surface> FunctionDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.callable.uses_async_execution()
     }
 }
 
@@ -1365,6 +1423,13 @@ impl<S: Surface> ClassDecl<S> {
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
     }
+
+    fn uses_async_execution(&self) -> bool {
+        self.initializers()
+            .iter()
+            .any(InitializerDecl::uses_async_execution)
+            || self.methods().iter().any(MethodDecl::uses_async_execution)
+    }
 }
 
 impl From<InvalidClassDecl> for crate::BindingError {
@@ -1463,6 +1528,15 @@ impl<S: Surface> CallbackDecl<S> {
                 .local_protocol()
                 .is_some_and(|protocol| protocol.uses_builtin_codec(kind))
     }
+
+    fn uses_async_execution(&self) -> bool {
+        self.protocol()
+            .method_callables()
+            .any(ImportedCallable::uses_async_execution)
+            || self
+                .local_protocol()
+                .is_some_and(CallbackLocalProtocol::uses_async_execution)
+    }
 }
 
 /// Rust-side functions backing callback values implemented in Rust.
@@ -1523,6 +1597,12 @@ impl<S: Surface> CallbackLocalProtocol<S> {
         self.methods
             .iter()
             .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.methods
+            .iter()
+            .any(CallbackLocalMethodDecl::uses_async_execution)
     }
 }
 
@@ -1588,6 +1668,10 @@ impl<S: Surface> CallbackLocalMethodDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.callable.uses_async_execution()
     }
 }
 
@@ -2135,6 +2219,10 @@ where
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
     }
+
+    fn uses_async_execution(&self) -> bool {
+        self.callable.uses_async_execution()
+    }
 }
 
 /// A method whose body is implemented in Rust. The contained
@@ -2224,5 +2312,9 @@ impl<S: Surface> InitializerDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn uses_async_execution(&self) -> bool {
+        self.callable.uses_async_execution()
     }
 }

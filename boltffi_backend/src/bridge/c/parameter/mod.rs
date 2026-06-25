@@ -49,6 +49,7 @@ enum ParameterRole {
     },
     DirectVectorLength(Identifier),
     SuccessOut,
+    CompletionStatusOut,
     CallbackCompletionCallback(Identifier),
     CallbackCompletionContext(Identifier),
     ContinuationData(Identifier),
@@ -116,6 +117,15 @@ impl Parameter {
     /// Creates caller-owned storage for a fallible success value.
     pub fn success_out(name: &str, ty: Type) -> Result<Self> {
         Self::with_role(name, ty, ParameterRole::SuccessOut)
+    }
+
+    /// Creates caller-owned status storage.
+    pub fn completion_status_out(name: &str) -> Result<Self> {
+        Self::with_role(
+            name,
+            Type::MutPointer(Box::new(Type::Status)),
+            ParameterRole::CompletionStatusOut,
+        )
     }
 
     /// Creates the callback function pointer in an async callback completion group.

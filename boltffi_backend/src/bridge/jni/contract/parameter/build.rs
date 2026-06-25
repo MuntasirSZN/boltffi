@@ -55,7 +55,9 @@ impl NativeParameter {
                 DirectVectorParameter::from_c_group(vector, function)
                     .map(|vector| Some(Self::new(NativeParameterKind::DirectVector(vector))))
             }
-            c::ParameterGroup::SuccessOut(_) => Ok(None),
+            c::ParameterGroup::SuccessOut(_) | c::ParameterGroup::CompletionStatusOut(_) => {
+                Ok(None)
+            }
             c::ParameterGroup::DirectWriteback(writeback) => {
                 RecordParameter::from_c_writeback(writeback, function)
                     .map(|record| Some(Self::new(NativeParameterKind::Record(record))))

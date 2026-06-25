@@ -19,6 +19,8 @@ pub enum ParameterGroup {
     DirectVector(DirectVectorParameter),
     /// One fallible success value maps to caller-owned output storage.
     SuccessOut(ParameterIndex),
+    /// One status output value maps to bridge-owned status storage.
+    CompletionStatusOut(ParameterIndex),
     /// One mutable direct record maps to an input value and output pointer.
     DirectWriteback(DirectWritebackParameter),
     /// One async callback completion maps to callback and context parameters.
@@ -68,6 +70,9 @@ impl ParameterGroup {
                 invariant: "direct-vector parameter group does not start with pointer parameter",
             }),
             ParameterRole::SuccessOut => Ok(Self::SuccessOut(ParameterIndex::new(index))),
+            ParameterRole::CompletionStatusOut => {
+                Ok(Self::CompletionStatusOut(ParameterIndex::new(index)))
+            }
             ParameterRole::CallbackCompletionCallback(name) => {
                 CallbackCompletionParameter::from_params(params, index, name)
                     .map(Self::CallbackCompletion)
@@ -113,6 +118,7 @@ impl ParameterGroup {
             Self::ByteSlice(_) => 2,
             Self::DirectVector(_) => 2,
             Self::SuccessOut(_) => 1,
+            Self::CompletionStatusOut(_) => 1,
             Self::DirectWriteback(_) => 2,
             Self::CallbackCompletion(_) => 2,
             Self::Continuation(_) => 2,

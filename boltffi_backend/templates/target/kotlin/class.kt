@@ -32,7 +32,39 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
         }
 {%- endfor %}
 {%- for method in class.static_methods() %}
-        fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{%- if let Some(async_call) = method.async_call() %}
+{%- if async_call.returns_value() %}
+            return boltffiCallAsync(
+{%- else %}
+            boltffiCallAsync(
+{%- endif %}
+                createFuture = {
+{%- for statement in async_call.create_setup() %}
+                    {{ statement }}
+{%- endfor %}
+{%- if async_call.has_create_cleanup() %}
+                    try {
+                        {{ async_call.create() }}
+                    } finally {
+{%- for statement in async_call.create_cleanup() %}
+                        {{ statement }}
+{%- endfor %}
+                    }
+{%- else %}
+                    {{ async_call.create() }}
+{%- endif %}
+                },
+                poll = { future, contHandle -> Native.{{ async_call.poll() }}(future, contHandle) },
+                complete = { future ->
+{%- for statement in async_call.complete_body() %}
+                    {{ statement }}
+{%- endfor %}
+                },
+                free = { future -> Native.{{ async_call.free() }}(future) },
+                cancel = { future -> Native.{{ async_call.cancel() }}(future) },
+            )
+{%- else %}
 {%- for statement in method.setup() %}
             {{ statement }}
 {%- endfor %}
@@ -51,13 +83,46 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
             {{ statement }}
 {%- endfor %}
 {%- endif %}
+{%- endif %}
         }
 {%- endfor %}
     }
 {%- endif %}
 {%- for method in class.instance_methods() %}
 
-    fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{%- if let Some(async_call) = method.async_call() %}
+{%- if async_call.returns_value() %}
+        return boltffiCallAsync(
+{%- else %}
+        boltffiCallAsync(
+{%- endif %}
+            createFuture = {
+{%- for statement in async_call.create_setup() %}
+                {{ statement }}
+{%- endfor %}
+{%- if async_call.has_create_cleanup() %}
+                try {
+                    {{ async_call.create() }}
+                } finally {
+{%- for statement in async_call.create_cleanup() %}
+                    {{ statement }}
+{%- endfor %}
+                }
+{%- else %}
+                {{ async_call.create() }}
+{%- endif %}
+            },
+            poll = { future, contHandle -> Native.{{ async_call.poll() }}(future, contHandle) },
+            complete = { future ->
+{%- for statement in async_call.complete_body() %}
+                {{ statement }}
+{%- endfor %}
+            },
+            free = { future -> Native.{{ async_call.free() }}(future) },
+            cancel = { future -> Native.{{ async_call.cancel() }}(future) },
+        )
+{%- else %}
 {%- for statement in method.setup() %}
         {{ statement }}
 {%- endfor %}
@@ -75,6 +140,7 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
 {%- for statement in method.call() %}
         {{ statement }}
 {%- endfor %}
+{%- endif %}
 {%- endif %}
     }
 {%- endfor %}

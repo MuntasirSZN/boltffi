@@ -43,6 +43,7 @@ pub struct CallbackHandleMethodView {
     pub returns_closure: bool,
     pub return_value: Expression,
     pub checks_status: bool,
+    pub checks_completion_status: bool,
     pub checks_error_buffer: bool,
     pub success_out: Option<SuccessOutReturn>,
     pub closure_return: Option<CallbackHandleClosureReturnView>,
@@ -86,6 +87,7 @@ impl CallbackHandleMethodView {
             return_value: method
                 .return_value(Expression::identifier(Identifier::parse("result")?))?,
             checks_status: method.checks_status(),
+            checks_completion_status: false,
             checks_error_buffer: method.checks_error_buffer(),
             success_out: method.success_out().cloned(),
             closure_return: method

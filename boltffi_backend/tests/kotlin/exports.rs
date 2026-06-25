@@ -59,3 +59,13 @@ fn kotlin_target_encodes_nullable_primitives_as_compact_wire() {
 fn kotlin_target_renders_class_handles_and_associated_callables() {
     insta::assert_snapshot!(rendered_fixture("exports/kotlin_class_handles"));
 }
+
+#[test]
+fn kotlin_target_renders_async_complete_return_shapes() {
+    insta::assert_snapshot!(rendered_fixture("exports/async_complete_return_shapes"));
+}
+
+#[test]
+fn kotlin_target_renders_async_class_methods() {
+    insta::assert_snapshot!(rendered_fixture("exports/async_class_methods"));
+}

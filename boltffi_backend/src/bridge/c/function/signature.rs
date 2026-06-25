@@ -655,10 +655,7 @@ impl Signature {
             Type::FutureHandle,
         )?;
         let complete_params = std::iter::once(Parameter::new("handle", Type::FutureHandle)?)
-            .chain([Parameter::new(
-                "out_status",
-                Type::MutPointer(Box::new(Type::Status)),
-            )?])
+            .chain([Parameter::completion_status_out("out_status")?])
             .chain(self.return_params(callable.returns().plan(), callable.error())?)
             .collect();
         Ok(vec![

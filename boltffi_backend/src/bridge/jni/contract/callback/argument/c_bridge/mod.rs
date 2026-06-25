@@ -43,6 +43,10 @@ impl CallbackArgument {
                 bridge: JNI_BRIDGE,
                 invariant: "callback method argument cannot be a return out-pointer",
             }),
+            c::ParameterGroup::CompletionStatusOut(_) => Err(Error::BrokenBridgeContract {
+                bridge: JNI_BRIDGE,
+                invariant: "callback method argument cannot be a status out-pointer",
+            }),
             c::ParameterGroup::CallbackCompletion(completion) => {
                 completion::from_group(slot, completion, callbacks)
             }

@@ -11,7 +11,7 @@
 
 use crate::{
     bridge::{
-        c::{self, ArgumentList},
+        c::{self, ArgumentList, Expression, Identifier},
         jni::{ClosureRegistration, JniSymbolName, JvmClassPath, NativeParameter, NativeReturn},
     },
     core::{Error, Result},
@@ -103,6 +103,14 @@ impl NativeMethod {
         self.returns.checks_error_buffer()
     }
 
+    /// Returns whether this method passes bridge-owned status storage.
+    pub fn checks_completion_status(&self) -> bool {
+        self.c_function
+            .parameter_groups()
+            .iter()
+            .any(|group| matches!(group, c::ParameterGroup::CompletionStatusOut(_)))
+    }
+
     /// Returns the success value written through `return_out`.
     pub fn success_out(&self) -> Option<&crate::bridge::jni::SuccessOutReturn> {
         self.returns.success_out()
@@ -122,6 +130,11 @@ impl NativeMethod {
                             invariant: "success out-pointer has no matching JNI return value",
                         },
                     )
+                }
+                c::ParameterGroup::CompletionStatusOut(_) => {
+                    Ok(vec![Expression::address_of(Expression::identifier(
+                        Identifier::parse("status")?,
+                    ))])
                 }
                 c::ParameterGroup::CallbackCompletion(_)
                 | c::ParameterGroup::ClosureReturn(_) => Err(Error::BrokenBridgeContract {

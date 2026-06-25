@@ -244,6 +244,12 @@ static void boltffi_jni_throw_illegal_argument(JNIEnv *env, const char *message)
     (*env)->DeleteLocalRef(env, exception_class);
 }
 
+static void boltffi_jni_throw_status(JNIEnv *env, FfiStatus status) {
+    if (status.code != 0) {
+        boltffi_jni_throw_runtime(env, "BoltFFI call failed");
+    }
+}
+
 static jbyteArray boltffi_jni_buffer_to_byte_array(JNIEnv *env, FfiBuf_u8 buffer) {
     if (buffer.ptr == NULL) {
         if (buffer.len != 0) {
@@ -378,11 +384,17 @@ JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1function_1de
     return;
 }
 
-JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1function_1demo_1fetch_1count_1complete(JNIEnv *env, jclass cls, jlong handle, jlong out_status) {
+JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1async_1function_1demo_1fetch_1count_1complete(JNIEnv *env, jclass cls, jlong handle) {
     (void)cls;
 
-    (void)env;
-    uint32_t result = boltffi_async_function_demo_fetch_count_complete((RustFutureHandle)handle, (FfiStatus *)out_status);
+    FfiStatus status = (FfiStatus){0};
+
+    uint32_t result = boltffi_async_function_demo_fetch_count_complete((RustFutureHandle)handle, &status);
+
+    if (status.code != 0) {
+        boltffi_jni_throw_status(env, status);
+        return 0;
+    }
 
     return (jint)result;
 }

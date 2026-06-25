@@ -41,6 +41,7 @@ pub struct NativeMethodView {
     pub returns_callback: bool,
     pub return_value: Expression,
     pub checks_status: bool,
+    pub checks_completion_status: bool,
     pub checks_error_buffer: bool,
     pub success_out: Option<SuccessOutReturn>,
     pub uses_continuations: bool,
@@ -82,6 +83,7 @@ impl NativeMethodView {
                 .returns()
                 .return_expression(Expression::identifier(Identifier::parse("result")?))?,
             checks_status: method.checks_status(),
+            checks_completion_status: method.checks_completion_status(),
             checks_error_buffer: method.checks_error_buffer(),
             success_out: method.success_out().cloned(),
             uses_continuations: method

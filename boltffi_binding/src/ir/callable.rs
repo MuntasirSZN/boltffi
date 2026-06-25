@@ -162,6 +162,11 @@ where
             || self.returns.uses_builtin_codec(kind)
             || self.error.uses_builtin_codec(kind)
     }
+
+    /// Returns whether this callable uses an asynchronous execution protocol.
+    pub fn uses_async_execution(&self) -> bool {
+        self.execution.uses_async_execution()
+    }
 }
 
 /// A callable whose body is implemented in Rust. Foreign code calls
@@ -1333,6 +1338,11 @@ impl<S: Surface> ExecutionDecl<S> {
     /// protocol value.
     pub fn asynchronous(protocol: S::AsyncProtocol) -> Self {
         Self::Asynchronous(protocol)
+    }
+
+    /// Returns whether control returns through an asynchronous protocol.
+    pub fn uses_async_execution(&self) -> bool {
+        matches!(self, Self::Asynchronous(_))
     }
 }
 

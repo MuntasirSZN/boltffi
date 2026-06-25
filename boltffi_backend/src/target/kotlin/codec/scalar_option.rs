@@ -42,7 +42,7 @@ impl ScalarOption {
         buffer.write_statements(size, writes)
     }
 
-    pub fn read(&self, call: Expression) -> Result<Vec<Statement>> {
+    pub fn read_value(&self, call: Expression) -> Result<Vec<Statement>> {
         let result = Identifier::parse("__boltffi_result")?;
         let reader = Identifier::parse("__boltffi_reader")?;
         let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
@@ -64,7 +64,7 @@ impl ScalarOption {
                         .collect::<ArgumentList>(),
                 ),
             ),
-            Statement::return_value(value),
+            Statement::expression(value),
         ])
     }
 

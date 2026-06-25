@@ -15,3 +15,6 @@
 {%- if let Some(success_out) = method.success_out %}
     {{ success_out.c_type() }} {{ success_out.local() }} = ({{ success_out.c_type() }}){0};
 {%- endif %}
+{%- if method.checks_completion_status %}
+    FfiStatus status = (FfiStatus){0};
+{%- endif %}

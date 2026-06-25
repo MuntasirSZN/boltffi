@@ -4,6 +4,7 @@ use boltffi_binding::{
     ErrorChannel, ErrorPlacement, ExecutionDecl, ExportedCallable, FunctionDecl, HandlePresence,
     HandleTarget, IncomingParam, IntoRust, Native, NativeSymbol, OutOfRust, ParamDecl, ParamPlan,
     ParamPlanRender, Primitive, RecordId, ReturnPlanRender, ReturnValueSlot, Surface, TypeRef,
+    native,
 };
 
 use crate::{
@@ -40,6 +41,7 @@ pub struct Function {
     setup: Vec<Statement>,
     call: Vec<Statement>,
     cleanup: Vec<Statement>,
+    async_call: Option<AsyncCall>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,6 +52,7 @@ pub struct ExportedCall {
     setup: Vec<Statement>,
     call: Vec<Statement>,
     cleanup: Vec<Statement>,
+    async_call: Option<AsyncCall>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,6 +73,25 @@ struct NativeArgument {
 struct FunctionReturn {
     ty: Option<TypeName>,
     conversion: ReturnConversion,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsyncCall {
+    create_setup: Vec<Statement>,
+    create: Expression,
+    create_cleanup: Vec<Statement>,
+    poll: Identifier,
+    complete_body: Vec<Statement>,
+    free: Identifier,
+    cancel: Identifier,
+    returns_value: bool,
+}
+
+struct AsyncProtocolFunctions {
+    poll: Identifier,
+    complete: Identifier,
+    cancel: Identifier,
+    free: Identifier,
 }
 
 enum ReturnConversion {
@@ -132,6 +154,10 @@ impl Function {
         !self.cleanup.is_empty()
     }
 
+    pub fn async_call(&self) -> Option<&AsyncCall> {
+        self.async_call.as_ref()
+    }
+
     fn from_call(call: ExportedCall) -> Self {
         Self {
             name: call.name,
@@ -140,6 +166,7 @@ impl Function {
             setup: call.setup,
             call: call.call,
             cleanup: call.cleanup,
+            async_call: call.async_call,
         }
     }
 }
@@ -152,13 +179,6 @@ impl ExportedCall {
         native_prefix: Vec<Expression>,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
-            return Err(Error::UnsupportedTarget {
-                target: KOTLIN_TARGET,
-                shape: "async function",
-            });
-        }
-
         let parameters = callable
             .params()
             .iter()
@@ -175,7 +195,7 @@ impl ExportedCall {
                     .iter()
                     .map(|parameter| parameter.native_argument().clone()),
             )
-            .collect();
+            .collect::<Vec<_>>();
         let native_call = NativeCall::new(
             Identifier::escape(symbol.name().as_str())?,
             native_arguments,
@@ -183,21 +203,53 @@ impl ExportedCall {
         let setup = parameters
             .iter()
             .flat_map(|parameter| parameter.setup().iter().cloned())
-            .collect();
+            .collect::<Vec<_>>();
         let cleanup = parameters
             .iter()
             .flat_map(|parameter| parameter.cleanup().iter().cloned())
-            .collect();
+            .collect::<Vec<_>>();
         let returns = function_return.ty.clone();
-        let call = function_return.statements(native_call.expression(), context)?;
-        Ok(Self {
-            name,
-            parameters,
-            returns,
-            setup,
-            call,
-            cleanup,
-        })
+        match callable.execution() {
+            ExecutionDecl::Synchronous(_) => Ok(Self {
+                name,
+                parameters,
+                returns,
+                setup,
+                call: function_return.return_statements(native_call.expression(), context)?,
+                cleanup,
+                async_call: None,
+            }),
+            ExecutionDecl::Asynchronous(native::AsyncProtocol::PollHandle {
+                poll,
+                complete,
+                cancel,
+                free,
+                ..
+            }) => Ok(Self {
+                name,
+                parameters,
+                returns,
+                setup: Vec::new(),
+                call: Vec::new(),
+                cleanup: Vec::new(),
+                async_call: Some(AsyncCall::new(
+                    native_call.expression(),
+                    setup,
+                    cleanup,
+                    AsyncProtocolFunctions::new(poll, complete, cancel, free)?,
+                    function_return,
+                    context,
+                )?),
+            }),
+            ExecutionDecl::Asynchronous(_) => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unsupported async function protocol",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown function execution",
+            }),
+        }
     }
 
     pub fn name(&self) -> &Identifier {
@@ -226,6 +278,10 @@ impl ExportedCall {
 
     pub fn has_cleanup(&self) -> bool {
         !self.cleanup.is_empty()
+    }
+
+    pub fn async_call(&self) -> Option<&AsyncCall> {
+        self.async_call.as_ref()
     }
 }
 
@@ -317,6 +373,82 @@ impl NativeArgument {
             setup,
             cleanup,
         }
+    }
+}
+
+impl AsyncCall {
+    fn new(
+        create: Expression,
+        create_setup: Vec<Statement>,
+        create_cleanup: Vec<Statement>,
+        functions: AsyncProtocolFunctions,
+        returns: FunctionReturn,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let future = Expression::identifier(Identifier::parse("future")?);
+        let complete_call = NativeCall::new(functions.complete.clone(), vec![future]).expression();
+        Ok(Self {
+            create_setup,
+            create,
+            create_cleanup,
+            poll: functions.poll,
+            complete_body: returns.value_statements(complete_call, context)?,
+            free: functions.free,
+            cancel: functions.cancel,
+            returns_value: returns.ty.is_some(),
+        })
+    }
+
+    pub fn create_setup(&self) -> &[Statement] {
+        &self.create_setup
+    }
+
+    pub fn create(&self) -> &Expression {
+        &self.create
+    }
+
+    pub fn create_cleanup(&self) -> &[Statement] {
+        &self.create_cleanup
+    }
+
+    pub fn has_create_cleanup(&self) -> bool {
+        !self.create_cleanup.is_empty()
+    }
+
+    pub fn poll(&self) -> &Identifier {
+        &self.poll
+    }
+
+    pub fn complete_body(&self) -> &[Statement] {
+        &self.complete_body
+    }
+
+    pub fn free(&self) -> &Identifier {
+        &self.free
+    }
+
+    pub fn cancel(&self) -> &Identifier {
+        &self.cancel
+    }
+
+    pub fn returns_value(&self) -> bool {
+        self.returns_value
+    }
+}
+
+impl AsyncProtocolFunctions {
+    fn new(
+        poll: &NativeSymbol,
+        complete: &NativeSymbol,
+        cancel: &NativeSymbol,
+        free: &NativeSymbol,
+    ) -> Result<Self> {
+        Ok(Self {
+            poll: Identifier::escape(poll.name().as_str())?,
+            complete: Identifier::escape(complete.name().as_str())?,
+            cancel: Identifier::escape(cancel.name().as_str())?,
+            free: Identifier::escape(free.name().as_str())?,
+        })
     }
 }
 
@@ -604,7 +736,21 @@ impl FunctionReturn {
         })
     }
 
-    fn statements(
+    fn return_statements(
+        &self,
+        call: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        self.value_statements(call, context).map(|body| {
+            if self.ty.is_some() {
+                Statement::with_return_value(body)
+            } else {
+                body
+            }
+        })
+    }
+
+    fn value_statements(
         &self,
         call: Expression,
         context: &RenderContext<Native>,
@@ -614,7 +760,7 @@ impl FunctionReturn {
             ReturnConversion::Direct(primitive) => Ok(vec![
                 KotlinPrimitive::new(*primitive)
                     .public_return(call)
-                    .map(Statement::return_value)?,
+                    .map(Statement::expression)?,
             ]),
             ReturnConversion::DirectRecord(record) => {
                 let result = Identifier::parse("__boltffi_result")?;
@@ -623,7 +769,7 @@ impl FunctionReturn {
                 )));
                 Ok(vec![
                     Statement::value(result.clone(), payload),
-                    Statement::return_value(Record::decode_expression(
+                    Statement::expression(Record::decode_expression(
                         record.clone(),
                         Expression::identifier(result),
                     )?),
@@ -631,13 +777,13 @@ impl FunctionReturn {
             }
             ReturnConversion::DirectEnum { ty, repr } => {
                 let value = KotlinPrimitive::new(*repr).public_return(call)?;
-                Ok(vec![Statement::return_value(Expression::call(
+                Ok(vec![Statement::expression(Expression::call(
                     ty.clone(),
                     Identifier::parse("fromValue")?,
                     [value].into_iter().collect::<ArgumentList>(),
                 ))])
             }
-            ReturnConversion::DirectVector(vector) => vector.return_statements(call),
+            ReturnConversion::DirectVector(vector) => vector.value_statements(call),
             ReturnConversion::Encoded(codec) => {
                 let result = Identifier::parse("__boltffi_result")?;
                 let reader = Identifier::parse("__boltffi_reader")?;
@@ -656,11 +802,13 @@ impl FunctionReturn {
                                 .collect::<ArgumentList>(),
                         ),
                     ),
-                    Statement::return_value(value),
+                    Statement::expression(value),
                 ])
             }
-            ReturnConversion::ClassHandle(handle) => handle.return_statements(call),
-            ReturnConversion::ScalarOption(primitive) => ScalarOption::new(*primitive).read(call),
+            ReturnConversion::ClassHandle(handle) => handle.value_statements(call),
+            ReturnConversion::ScalarOption(primitive) => {
+                ScalarOption::new(*primitive).read_value(call)
+            }
         }
     }
 }

@@ -36,7 +36,7 @@ impl DirectVector {
         &self.ty
     }
 
-    pub fn return_statements(&self, call: Expression) -> Result<Vec<Statement>> {
+    pub fn value_statements(&self, call: Expression) -> Result<Vec<Statement>> {
         let result = Identifier::parse("__boltffi_result")?;
         let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
             "null buffer returned",
@@ -50,7 +50,7 @@ impl DirectVector {
         );
         Ok(vec![
             Statement::value(result, payload),
-            Statement::return_value(decoded),
+            Statement::expression(decoded),
         ])
     }
 

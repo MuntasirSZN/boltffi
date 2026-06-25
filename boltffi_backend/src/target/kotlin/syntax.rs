@@ -374,6 +374,13 @@ impl Statement {
     pub fn expression(value: Expression) -> Self {
         Self(value.to_string())
     }
+
+    pub fn with_return_value(mut statements: Vec<Self>) -> Vec<Self> {
+        if let Some(statement) = statements.last_mut() {
+            statement.0 = format!("return {}", statement.0);
+        }
+        statements
+    }
 }
 
 impl sealed::SyntaxFragment for Literal {}

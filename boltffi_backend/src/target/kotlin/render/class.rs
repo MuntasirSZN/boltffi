@@ -190,9 +190,9 @@ impl ClassHandle {
         }
     }
 
-    pub fn return_statements(&self, value: Expression) -> Result<Vec<Statement>> {
+    pub fn value_statements(&self, value: Expression) -> Result<Vec<Statement>> {
         match self.presence {
-            HandlePresence::Required => Ok(vec![Statement::return_value(Expression::construct(
+            HandlePresence::Required => Ok(vec![Statement::expression(Expression::construct(
                 self.ty.clone(),
                 [value].into_iter().collect(),
             ))]),
@@ -201,7 +201,7 @@ impl ClassHandle {
                 let raw_value = Expression::identifier(raw_handle.clone());
                 Ok(vec![
                     Statement::value(raw_handle, value),
-                    Statement::return_value(Expression::conditional(
+                    Statement::expression(Expression::conditional(
                         raw_value.clone().equal(Expression::long(0)),
                         Expression::null(),
                         Expression::construct(self.ty.clone(), [raw_value].into_iter().collect()),

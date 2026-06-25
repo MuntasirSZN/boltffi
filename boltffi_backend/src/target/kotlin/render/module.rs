@@ -17,6 +17,7 @@ struct ModuleTemplate {
     runtime: String,
     native_functions: Vec<NativeFunction>,
     declarations: String,
+    async_runtime: bool,
 }
 
 #[derive(AskamaTemplate)]
@@ -31,8 +32,13 @@ struct ResultRuntimeTemplate;
 #[template(path = "target/kotlin/runtime/builtin.kt", escape = "none")]
 struct BuiltinRuntimeTemplate;
 
+#[derive(AskamaTemplate)]
+#[template(path = "target/kotlin/runtime/async.kt", escape = "none")]
+struct AsyncRuntimeTemplate;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct RuntimeFeatures {
+    asynchronous: bool,
     builtin: bool,
     result: bool,
 }
@@ -60,12 +66,13 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         let diagnostics = self.diagnostics();
         let native_functions = self.native_functions()?;
         let declarations = self.declarations();
+        let features = RuntimeFeatures::from_declarations(&self.declarations);
         let contents = ModuleTemplate {
             package: self.host.package().clone(),
-            runtime: Runtime::new(RuntimeFeatures::from_declarations(&self.declarations))
-                .render()?,
+            runtime: Runtime::new(features).render()?,
             native_functions,
             declarations,
+            async_runtime: features.asynchronous,
         }
         .render()?;
         Ok(GeneratedOutput::new(
@@ -84,9 +91,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
             .iter()
             .filter(|declaration| !declaration.emitted().primary_chunk().is_empty())
             .map(|declaration| match declaration.declaration() {
-                DeclarationRef::Function(function) => {
-                    methods.function(function).map(|function| vec![function])
-                }
+                DeclarationRef::Function(function) => methods.function(function),
                 DeclarationRef::Class(class) => methods.class(class),
                 _ => Ok(Vec::new()),
             })
@@ -166,6 +171,9 @@ impl Runtime {
 
     fn render(self) -> Result<String> {
         let mut blocks = vec![RuntimeTemplate.render()?];
+        if self.features.asynchronous {
+            blocks.push(AsyncRuntimeTemplate.render()?);
+        }
         if self.features.builtin {
             blocks.push(BuiltinRuntimeTemplate.render()?);
         }
@@ -179,6 +187,9 @@ impl Runtime {
 impl RuntimeFeatures {
     fn from_declarations(declarations: &[RenderedDeclaration<'_, Native>]) -> Self {
         Self {
+            asynchronous: declarations
+                .iter()
+                .any(|declaration| declaration.declaration().uses_async_execution()),
             builtin: declarations
                 .iter()
                 .any(|declaration| Self::declaration_uses_builtin(declaration.declaration())),

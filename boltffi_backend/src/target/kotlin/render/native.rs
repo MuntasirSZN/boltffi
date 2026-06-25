@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use boltffi_binding::{ClassDecl, FunctionDecl, Native, NativeSymbol};
+use boltffi_binding::{ClassDecl, ExportedCallable, FunctionDecl, Native, NativeSymbol};
 
 use crate::{
     bridge::jni::{JniBridgeContract, NativeMethod, NativeParameter},
@@ -41,18 +41,41 @@ impl<'bridge> NativeMethods<'bridge> {
         }
     }
 
-    pub fn function(&self, decl: &FunctionDecl<Native>) -> Result<NativeFunction> {
-        self.symbol(decl.symbol())
+    pub fn function(&self, decl: &FunctionDecl<Native>) -> Result<Vec<NativeFunction>> {
+        self.exported(decl.symbol(), decl.callable())
     }
 
     pub fn class(&self, decl: &ClassDecl<Native>) -> Result<Vec<NativeFunction>> {
         std::iter::once(decl.release())
+            .map(|symbol| self.symbol(symbol).map(|function| vec![function]))
             .chain(
                 decl.initializers()
                     .iter()
-                    .map(|initializer| initializer.symbol()),
+                    .map(|initializer| self.exported(initializer.symbol(), initializer.callable())),
             )
-            .chain(decl.methods().iter().map(|method| method.target()))
+            .chain(
+                decl.methods()
+                    .iter()
+                    .map(|method| self.exported(method.target(), method.callable())),
+            )
+            .collect::<Result<Vec<_>>>()
+            .map(|functions| {
+                functions
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<NativeFunction>>()
+            })
+    }
+
+    fn exported(
+        &self,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+    ) -> Result<Vec<NativeFunction>> {
+        let mut seen = HashSet::new();
+        std::iter::once(symbol)
+            .chain(callable.native_symbols())
+            .filter(|symbol| seen.insert(symbol.name().as_str()))
             .map(|symbol| self.symbol(symbol))
             .collect()
     }
