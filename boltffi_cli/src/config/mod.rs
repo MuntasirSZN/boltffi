@@ -17,10 +17,9 @@ pub use experimental::Experimental;
 pub use symbols::{DebugSymbolsBundle, DebugSymbolsConfig, DebugSymbolsFormat};
 pub use targets::{
     AndroidConfig, AndroidPackConfig, AppleConfig, CSharpConfig, DartConfig, HeaderConfig,
-    JavaConfig, KotlinApiStyle, KotlinConfig, KotlinDesktopLoader, KotlinFactoryStyle,
-    KotlinMultiplatformConfig, PythonConfig, SpmConfig, SpmDistribution, SpmLayout, SwiftConfig,
-    TargetsConfig, WasmConfig, WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMissing,
-    WasmProfile, XcframeworkConfig,
+    JavaConfig, KotlinConfig, KotlinDesktopLoader, KotlinFactoryStyle, KotlinMultiplatformConfig,
+    PythonConfig, SpmConfig, SpmDistribution, SpmLayout, SwiftConfig, TargetsConfig, WasmConfig,
+    WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMissing, WasmProfile, XcframeworkConfig,
 };
 #[cfg(test)]
 pub use targets::{CSharpNugetConfig, JavaJvmConfig, PythonWheelConfig};
@@ -577,10 +576,6 @@ impl Config {
         self.targets.android.kotlin.desktop_loader
     }
 
-    pub fn android_kotlin_api_style(&self) -> KotlinApiStyle {
-        self.targets.android.kotlin.api_style
-    }
-
     pub fn android_kotlin_factory_style(&self) -> KotlinFactoryStyle {
         self.targets.android.kotlin.factory_style
     }
@@ -659,10 +654,6 @@ impl Config {
 
     pub fn swift_type_mappings(&self) -> &HashMap<String, TypeMapping> {
         &self.targets.apple.swift.type_mappings
-    }
-
-    pub fn kotlin_type_mappings(&self) -> &HashMap<String, TypeMapping> {
-        &self.targets.android.kotlin.type_mappings
     }
 
     pub fn kotlin_multiplatform_output(&self) -> PathBuf {

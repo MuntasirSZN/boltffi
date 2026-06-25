@@ -56,7 +56,6 @@ val generateKotlinBindings = tasks.register<Exec>("generateKotlinBindings") {
         "generate",
         "kotlin",
         "--experimental",
-        "--ir",
     )
 }
 
