@@ -1,5 +1,5 @@
 use askama::Template as AskamaTemplate;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use boltffi_binding::{
     BuiltinType, ClassDecl, ConstantValueDecl, DeclarationRef, EnumDecl, EnumId, ErrorChannel,
@@ -161,20 +161,18 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
     }
 
     fn unique_native_functions(functions: Vec<NativeFunction>) -> Result<Vec<NativeFunction>> {
+        let mut names = HashSet::new();
         functions
             .into_iter()
             .try_fold(Vec::new(), |mut unique, function| {
-                if unique
-                    .iter()
-                    .any(|existing: &NativeFunction| existing.name() == function.name())
-                {
+                if names.insert(function.name().clone()) {
+                    unique.push(function);
+                    Ok(unique)
+                } else {
                     Err(Error::KotlinNameCollision {
                         scope: "Native".to_owned(),
                         name: function.name().to_string(),
                     })
-                } else {
-                    unique.push(function);
-                    Ok(unique)
                 }
             })
     }

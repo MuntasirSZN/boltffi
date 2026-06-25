@@ -21,7 +21,8 @@ use crate::{
         primitive::KotlinPrimitive,
         render::{
             class::ClassHandle, direct_vector::DirectVector, enumeration::Enumeration,
-            native::NativeCall, record::Record, type_name::KotlinType,
+            jvm_invocation, native::NativeCall, record::Record, signature::Parameter,
+            type_name::KotlinType,
         },
         syntax::{ArgumentList, Expression, Identifier, Literal, Statement, TypeName},
     },
@@ -60,12 +61,6 @@ pub struct Method {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Parameter {
-    name: Identifier,
-    ty: TypeName,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandleMethod {
     name: Identifier,
     parameters: Vec<Parameter>,
@@ -90,13 +85,6 @@ pub struct CallbackHandle {
 
 struct CallbackRegistrationSet<'bridge> {
     registrations: &'bridge [CallbackRegistration],
-}
-
-struct ParameterRender<'context> {
-    source_name: Name,
-    name: Identifier,
-    host: &'context KotlinHost,
-    context: &'context RenderContext<'context, Native>,
 }
 
 struct ReturnRender<'context> {
@@ -367,7 +355,7 @@ impl Method {
         let parameters = callable
             .params()
             .iter()
-            .map(|parameter| MethodParameter::from_declaration(parameter, host, context))
+            .map(|parameter| jvm_invocation::Parameter::from_declaration(parameter, host, context))
             .collect::<Result<Vec<_>>>()?;
         let source_name = Name::new(source.name());
         let fallible =
@@ -384,7 +372,7 @@ impl Method {
             Name::new(source.name()).function()?,
             parameters
                 .iter()
-                .map(|parameter| parameter.call_argument.clone())
+                .map(|parameter| parameter.argument().clone())
                 .collect::<ArgumentList>(),
         );
         let public_return = return_value.public_ty.clone();
@@ -394,7 +382,7 @@ impl Method {
             .transpose()?
             .into_iter()
             .flatten()
-            .chain(parameters.iter().map(|parameter| parameter.jvm.clone()))
+            .chain(parameters.iter().map(|parameter| parameter.jvm().clone()))
             .chain(
                 async_completion
                     .as_ref()
@@ -430,11 +418,11 @@ impl Method {
             jvm_name: Identifier::escape(method.method().as_str())?,
             public_parameters: parameters
                 .iter()
-                .map(|parameter| parameter.public.clone())
+                .map(|parameter| parameter.public().clone())
                 .collect(),
             setup: parameters
                 .iter()
-                .flat_map(|parameter| parameter.setup.iter().cloned())
+                .flat_map(|parameter| parameter.setup().iter().cloned())
                 .collect(),
             jvm_parameters,
             public_return,
@@ -510,14 +498,8 @@ impl AsyncCompletion {
 
     fn parameters(&self) -> Vec<Parameter> {
         [
-            Parameter {
-                name: self.callback.clone(),
-                ty: TypeName::long(),
-            },
-            Parameter {
-                name: self.context.clone(),
-                ty: TypeName::long(),
-            },
+            Parameter::new(self.callback.clone(), TypeName::long()),
+            Parameter::new(self.context.clone(), TypeName::long()),
         ]
         .into_iter()
         .collect()
@@ -599,10 +581,10 @@ impl<'error> FallibleReturn<'error> {
         self.success_out
             .as_ref()
             .map(|success_out| {
-                Ok(Parameter {
-                    name: Identifier::escape(success_out.name().as_str())?,
-                    ty: KotlinType::jni(success_out.jni_type())?,
-                })
+                Ok(Parameter::new(
+                    Identifier::escape(success_out.name().as_str())?,
+                    KotlinType::jni(success_out.jni_type())?,
+                ))
             })
             .transpose()
     }
@@ -699,16 +681,6 @@ impl HandleMethod {
                 .flat_map(|parameter| parameter.cleanup)
                 .collect(),
         })
-    }
-}
-
-impl Parameter {
-    pub fn name(&self) -> &Identifier {
-        &self.name
-    }
-
-    pub fn ty(&self) -> &TypeName {
-        &self.ty
     }
 }
 
@@ -813,33 +785,6 @@ impl<'bridge> CallbackRegistrationSet<'bridge> {
     }
 }
 
-struct MethodParameter {
-    public: Parameter,
-    jvm: Parameter,
-    setup: Vec<Statement>,
-    call_argument: Expression,
-}
-
-impl MethodParameter {
-    fn from_declaration(
-        parameter: &ParamDecl<Native, OutOfRust>,
-        host: &KotlinHost,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        let OutgoingParam::Value(plan) = parameter.payload() else {
-            return Err(KotlinHost::unsupported("callback method closure parameter"));
-        };
-        let source_name = Name::new(parameter.name());
-        let name = source_name.parameter()?;
-        plan.render_with(&mut ParameterRender {
-            source_name,
-            name,
-            host,
-            context,
-        })
-    }
-}
-
 impl HandleParameter {
     fn from_declaration(
         parameter: &ParamDecl<Native, OutOfRust>,
@@ -873,10 +818,10 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
         let value = Expression::identifier(self.name.clone());
         match ty {
             DirectValueType::Primitive(primitive) => Ok(HandleParameter {
-                public: Parameter {
-                    name: self.name.clone(),
-                    ty: KotlinPrimitive::new(*primitive).api_type()?,
-                },
+                public: Parameter::new(
+                    self.name.clone(),
+                    KotlinPrimitive::new(*primitive).api_type()?,
+                ),
                 native_argument: KotlinPrimitive::new(*primitive).native_argument(value)?,
                 setup: Vec::new(),
                 cleanup: Vec::new(),
@@ -884,10 +829,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
             DirectValueType::Record(record) => {
                 let ty = Record::type_name_from_id(*record, self.context)?;
                 Ok(HandleParameter {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty,
-                    },
+                    public: Parameter::new(self.name.clone(), ty),
                     native_argument: Record::encode_expression(value)?,
                     setup: Vec::new(),
                     cleanup: Vec::new(),
@@ -896,10 +838,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
             DirectValueType::Enum(enumeration) => {
                 let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
                 Ok(HandleParameter {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: enumeration.name().clone(),
-                    },
+                    public: Parameter::new(self.name.clone(), enumeration.name().clone()),
                     native_argument: KotlinPrimitive::new(enumeration.repr()?).native_argument(
                         Expression::property(value, Identifier::parse("value")?),
                     )?,
@@ -928,10 +867,10 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
         )?;
         let (setup, native_argument, cleanup) = write.into_parts();
         Ok(HandleParameter {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: KotlinType::type_ref(ty, self.host, self.context)?,
-            },
+            public: Parameter::new(
+                self.name.clone(),
+                KotlinType::type_ref(ty, self.host, self.context)?,
+            ),
             native_argument,
             setup,
             cleanup,
@@ -950,10 +889,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
             HandleTarget::Class(class) => {
                 let handle = ClassHandle::new(*class, presence, self.context)?;
                 Ok(HandleParameter {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: handle.ty()?,
-                    },
+                    public: Parameter::new(self.name.clone(), handle.ty()?),
                     native_argument: handle.parameter_argument(value)?,
                     setup: Vec::new(),
                     cleanup: Vec::new(),
@@ -962,10 +898,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
             HandleTarget::Callback(callback) => {
                 let handle = CallbackHandle::new(*callback, presence, self.context)?;
                 Ok(HandleParameter {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: handle.ty()?,
-                    },
+                    public: Parameter::new(self.name.clone(), handle.ty()?),
                     native_argument: handle.parameter_argument(value)?,
                     setup: Vec::new(),
                     cleanup: Vec::new(),
@@ -984,10 +917,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
         let write = ScalarOption::new(primitive).write(&self.source_name)?;
         let (setup, native_argument, cleanup) = write.into_parts();
         Ok(HandleParameter {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: ScalarOption::new(primitive).ty()?,
-            },
+            public: Parameter::new(self.name.clone(), ScalarOption::new(primitive).ty()?),
             native_argument,
             setup,
             cleanup,
@@ -997,177 +927,10 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
         let vector = DirectVector::from_element(element, self.context)?;
         Ok(HandleParameter {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: vector.ty().clone(),
-            },
+            public: Parameter::new(self.name.clone(), vector.ty().clone()),
             native_argument: vector.native_argument(Expression::identifier(self.name.clone()))?,
             setup: Vec::new(),
             cleanup: Vec::new(),
-        })
-    }
-}
-
-impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
-    type Output = Result<MethodParameter>;
-
-    fn direct(
-        &mut self,
-        ty: &'plan DirectValueType,
-        _receive: <OutOfRust as Direction>::Receive,
-    ) -> Self::Output {
-        match ty {
-            DirectValueType::Primitive(primitive) => {
-                let value = Expression::identifier(self.name.clone());
-                Ok(MethodParameter {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: KotlinPrimitive::new(*primitive).api_type()?,
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: KotlinPrimitive::new(*primitive).native_type()?,
-                    },
-                    setup: Vec::new(),
-                    call_argument: KotlinPrimitive::new(*primitive).public_return(value)?,
-                })
-            }
-            DirectValueType::Enum(enumeration) => {
-                let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
-                let repr = enumeration.repr()?;
-                Ok(MethodParameter {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: enumeration.name().clone(),
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: KotlinPrimitive::new(repr).native_type()?,
-                    },
-                    setup: Vec::new(),
-                    call_argument: Expression::call(
-                        enumeration.name().clone(),
-                        Identifier::parse("fromValue")?,
-                        [Expression::identifier(self.name.clone())]
-                            .into_iter()
-                            .collect::<ArgumentList>(),
-                    ),
-                })
-            }
-            DirectValueType::Record(record) => {
-                let ty = Record::type_name_from_id(*record, self.context)?;
-                Ok(MethodParameter {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: ty.clone(),
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: TypeName::byte_array(false),
-                    },
-                    setup: Vec::new(),
-                    call_argument: Record::decode_expression(
-                        ty,
-                        Expression::identifier(self.name.clone()),
-                    )?,
-                })
-            }
-            _ => Err(KotlinHost::unsupported("callback method direct parameter")),
-        }
-    }
-
-    fn encoded(
-        &mut self,
-        ty: &'plan TypeRef,
-        codec: &'plan <OutOfRust as Direction>::Codec,
-        _shape: <Native as Surface>::BufferShape,
-        _receive: <OutOfRust as Direction>::Receive,
-    ) -> Self::Output {
-        let reader = self.source_name.generated("reader")?;
-        let value = self.source_name.generated("value")?;
-        let expression = codec
-            .render_with(&mut Reader::new(reader.clone(), self.host, self.context))?
-            .into_expression();
-        Ok(MethodParameter {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: KotlinType::type_ref(ty, self.host, self.context)?,
-            },
-            jvm: Parameter {
-                name: self.name.clone(),
-                ty: TypeName::byte_array(false),
-            },
-            setup: vec![
-                Statement::value(
-                    reader,
-                    Expression::construct(
-                        TypeName::new("WireReader"),
-                        [Expression::identifier(self.name.clone())]
-                            .into_iter()
-                            .collect::<ArgumentList>(),
-                    ),
-                ),
-                Statement::value(value.clone(), expression),
-            ],
-            call_argument: Expression::identifier(value),
-        })
-    }
-
-    fn handle(
-        &mut self,
-        _target: &'plan HandleTarget,
-        _carrier: <Native as Surface>::HandleCarrier,
-        _presence: HandlePresence,
-        _receive: <OutOfRust as Direction>::Receive,
-    ) -> Self::Output {
-        Err(KotlinHost::unsupported("callback method handle parameter"))
-    }
-
-    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
-        let reader = self.source_name.generated("reader")?;
-        let value = self.source_name.generated("value")?;
-        Ok(MethodParameter {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: ScalarOption::new(primitive).ty()?,
-            },
-            jvm: Parameter {
-                name: self.name.clone(),
-                ty: TypeName::byte_array(false),
-            },
-            setup: vec![
-                Statement::value(
-                    reader.clone(),
-                    Expression::construct(
-                        TypeName::new("WireReader"),
-                        [Expression::identifier(self.name.clone())]
-                            .into_iter()
-                            .collect::<ArgumentList>(),
-                    ),
-                ),
-                Statement::value(
-                    value.clone(),
-                    ScalarOption::new(primitive).read_expression(reader)?,
-                ),
-            ],
-            call_argument: Expression::identifier(value),
-        })
-    }
-
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element, self.context)?;
-        let decoded = vector.decoded_argument(&self.source_name, self.name.clone())?;
-        Ok(MethodParameter {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: vector.ty().clone(),
-            },
-            jvm: Parameter {
-                name: self.name.clone(),
-                ty: decoded.jvm_ty().clone(),
-            },
-            setup: decoded.setup().to_vec(),
-            call_argument: decoded.call_argument().clone(),
         })
     }
 }

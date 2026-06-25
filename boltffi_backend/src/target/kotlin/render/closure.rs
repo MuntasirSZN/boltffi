@@ -15,12 +15,13 @@ use crate::{
     core::{Error, RenderContext, RenderedDeclaration, Result},
     target::kotlin::{
         KotlinHost,
-        codec::{Reader, ScalarOption, WireBuffer},
+        codec::{ScalarOption, WireBuffer},
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
             callback::CallbackHandle, class::ClassHandle, direct_vector::DirectVector,
-            enumeration::Enumeration, record::Record, type_name::KotlinType,
+            enumeration::Enumeration, jvm_invocation, record::Record, signature::Parameter,
+            type_name::KotlinType,
         },
         syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
     },
@@ -43,19 +44,6 @@ pub struct Closure {
     returns: Option<TypeName>,
     setup: Vec<Statement>,
     call: Vec<Statement>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Parameter {
-    name: Identifier,
-    ty: TypeName,
-}
-
-struct ClosureParameterView {
-    public: Parameter,
-    jvm: Parameter,
-    setup: Vec<Statement>,
-    call_argument: Expression,
 }
 
 struct ClosureReturnValue {
@@ -82,13 +70,6 @@ enum ReturnConversion {
         source_name: Name,
     },
     DirectVector(DirectVector),
-}
-
-struct ParameterRender<'context> {
-    source_name: Name,
-    name: Identifier,
-    host: &'context KotlinHost,
-    context: &'context RenderContext<'context, Native>,
 }
 
 struct ReturnRender<'context> {
@@ -257,7 +238,7 @@ impl Closure {
         let parameters = callable
             .params()
             .iter()
-            .map(|parameter| ClosureParameterView::from_declaration(parameter, host, context))
+            .map(|parameter| jvm_invocation::Parameter::from_declaration(parameter, host, context))
             .collect::<Result<Vec<_>>>()?;
         let source_name = Name::new(&boltffi_binding::CanonicalName::single("closure"));
         let fallible = FallibleReturn::from_registration(
@@ -277,7 +258,7 @@ impl Closure {
             Identifier::parse("invoke")?,
             parameters
                 .iter()
-                .map(|parameter| parameter.call_argument.clone())
+                .map(|parameter| parameter.argument().clone())
                 .collect::<ArgumentList>(),
         );
         let jvm_parameters = fallible
@@ -289,7 +270,7 @@ impl Closure {
             .collect::<Vec<_>>();
         let jvm_parameters = parameters
             .iter()
-            .map(|parameter| parameter.jvm.clone())
+            .map(|parameter| parameter.jvm().clone())
             .chain(jvm_parameters)
             .collect();
         Ok(Self {
@@ -297,7 +278,7 @@ impl Closure {
             interface_name: ClosureName::new(host, context).name(callable)?,
             interface_parameters: parameters
                 .iter()
-                .map(|parameter| parameter.public.clone())
+                .map(|parameter| parameter.public().clone())
                 .collect(),
             interface_return: returned.interface_type(callable.error().channel())?,
             parameters: jvm_parameters,
@@ -307,7 +288,7 @@ impl Closure {
                 .or_else(|| returned.jvm_ty.clone()),
             setup: parameters
                 .iter()
-                .flat_map(|parameter| parameter.setup.iter().cloned())
+                .flat_map(|parameter| parameter.setup().iter().cloned())
                 .collect(),
             call: match fallible {
                 Some(fallible) => returned.fallible_statements(call, fallible, host, context)?,
@@ -625,36 +606,6 @@ fn type_name_fragment(name: &TypeName) -> String {
         .collect()
 }
 
-impl Parameter {
-    pub fn name(&self) -> &Identifier {
-        &self.name
-    }
-
-    pub fn ty(&self) -> &TypeName {
-        &self.ty
-    }
-}
-
-impl ClosureParameterView {
-    fn from_declaration(
-        parameter: &ParamDecl<Native, OutOfRust>,
-        host: &KotlinHost,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        let boltffi_binding::OutgoingParam::Value(plan) = parameter.payload() else {
-            return Err(KotlinHost::unsupported("closure nested closure parameter"));
-        };
-        let source_name = Name::new(parameter.name());
-        let name = source_name.parameter()?;
-        plan.render_with(&mut ParameterRender {
-            source_name,
-            name,
-            host,
-            context,
-        })
-    }
-}
-
 impl<'error> FallibleReturn<'error> {
     fn from_registration(
         source_name: Name,
@@ -685,210 +636,12 @@ impl<'error> FallibleReturn<'error> {
         self.success_out
             .as_ref()
             .map(|success_out| {
-                Ok(Parameter {
-                    name: Identifier::escape(success_out.name().as_str())?,
-                    ty: KotlinType::jni(success_out.jni_type())?,
-                })
+                Ok(Parameter::new(
+                    Identifier::escape(success_out.name().as_str())?,
+                    KotlinType::jni(success_out.jni_type())?,
+                ))
             })
             .transpose()
-    }
-}
-
-impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
-    type Output = Result<ClosureParameterView>;
-
-    fn direct(
-        &mut self,
-        ty: &'plan DirectValueType,
-        _receive: <OutOfRust as Direction>::Receive,
-    ) -> Self::Output {
-        match ty {
-            DirectValueType::Primitive(primitive) => {
-                let value = Expression::identifier(self.name.clone());
-                Ok(ClosureParameterView {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: KotlinPrimitive::new(*primitive).api_type()?,
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: KotlinPrimitive::new(*primitive).native_type()?,
-                    },
-                    setup: Vec::new(),
-                    call_argument: KotlinPrimitive::new(*primitive).public_return(value)?,
-                })
-            }
-            DirectValueType::Enum(enumeration) => {
-                let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
-                let repr = enumeration.repr()?;
-                Ok(ClosureParameterView {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: enumeration.name().clone(),
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: KotlinPrimitive::new(repr).native_type()?,
-                    },
-                    setup: Vec::new(),
-                    call_argument: Expression::call(
-                        enumeration.name().clone(),
-                        Identifier::parse("fromValue")?,
-                        [Expression::identifier(self.name.clone())]
-                            .into_iter()
-                            .collect::<ArgumentList>(),
-                    ),
-                })
-            }
-            DirectValueType::Record(record) => {
-                let ty = Record::type_name_from_id(*record, self.context)?;
-                Ok(ClosureParameterView {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: ty.clone(),
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: TypeName::byte_array(false),
-                    },
-                    setup: Vec::new(),
-                    call_argument: Record::decode_expression(
-                        ty,
-                        Expression::identifier(self.name.clone()),
-                    )?,
-                })
-            }
-            _ => Err(KotlinHost::unsupported("closure direct parameter")),
-        }
-    }
-
-    fn encoded(
-        &mut self,
-        ty: &'plan TypeRef,
-        codec: &'plan <OutOfRust as Direction>::Codec,
-        _shape: <Native as Surface>::BufferShape,
-        _receive: <OutOfRust as Direction>::Receive,
-    ) -> Self::Output {
-        let reader = self.source_name.generated("reader")?;
-        let value = self.source_name.generated("value")?;
-        let expression = codec
-            .render_with(&mut Reader::new(reader.clone(), self.host, self.context))?
-            .into_expression();
-        Ok(ClosureParameterView {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: KotlinType::type_ref(ty, self.host, self.context)?,
-            },
-            jvm: Parameter {
-                name: self.name.clone(),
-                ty: TypeName::byte_array(false),
-            },
-            setup: vec![
-                Statement::value(
-                    reader,
-                    Expression::construct(
-                        TypeName::new("WireReader"),
-                        [Expression::identifier(self.name.clone())]
-                            .into_iter()
-                            .collect::<ArgumentList>(),
-                    ),
-                ),
-                Statement::value(value.clone(), expression),
-            ],
-            call_argument: Expression::identifier(value),
-        })
-    }
-
-    fn handle(
-        &mut self,
-        target: &'plan HandleTarget,
-        _carrier: <Native as Surface>::HandleCarrier,
-        presence: HandlePresence,
-        _receive: <OutOfRust as Direction>::Receive,
-    ) -> Self::Output {
-        let value = Expression::identifier(self.name.clone());
-        match target {
-            HandleTarget::Class(class) => {
-                let handle = ClassHandle::new(*class, presence, self.context)?;
-                Ok(ClosureParameterView {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: handle.ty()?,
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: TypeName::long(),
-                    },
-                    setup: Vec::new(),
-                    call_argument: handle.value_expression(value)?,
-                })
-            }
-            HandleTarget::Callback(callback) => {
-                let handle = CallbackHandle::new(*callback, presence, self.context)?;
-                Ok(ClosureParameterView {
-                    public: Parameter {
-                        name: self.name.clone(),
-                        ty: handle.ty()?,
-                    },
-                    jvm: Parameter {
-                        name: self.name.clone(),
-                        ty: TypeName::long(),
-                    },
-                    setup: Vec::new(),
-                    call_argument: handle.value_expression(value)?,
-                })
-            }
-            HandleTarget::Stream(_) => Err(KotlinHost::unsupported("closure stream parameter")),
-            _ => Err(KotlinHost::unsupported("unknown closure handle parameter")),
-        }
-    }
-
-    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
-        let reader = self.source_name.generated("reader")?;
-        let value = self.source_name.generated("value")?;
-        Ok(ClosureParameterView {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: ScalarOption::new(primitive).ty()?,
-            },
-            jvm: Parameter {
-                name: self.name.clone(),
-                ty: TypeName::byte_array(false),
-            },
-            setup: vec![
-                Statement::value(
-                    reader.clone(),
-                    Expression::construct(
-                        TypeName::new("WireReader"),
-                        [Expression::identifier(self.name.clone())]
-                            .into_iter()
-                            .collect::<ArgumentList>(),
-                    ),
-                ),
-                Statement::value(
-                    value.clone(),
-                    ScalarOption::new(primitive).read_expression(reader)?,
-                ),
-            ],
-            call_argument: Expression::identifier(value),
-        })
-    }
-
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::from_element(element, self.context)?;
-        let decoded = vector.decoded_argument(&self.source_name, self.name.clone())?;
-        Ok(ClosureParameterView {
-            public: Parameter {
-                name: self.name.clone(),
-                ty: vector.ty().clone(),
-            },
-            jvm: Parameter {
-                name: self.name.clone(),
-                ty: decoded.jvm_ty().clone(),
-            },
-            setup: decoded.setup().to_vec(),
-            call_argument: decoded.call_argument().clone(),
-        })
     }
 }
 

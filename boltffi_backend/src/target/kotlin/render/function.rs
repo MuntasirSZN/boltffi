@@ -12,7 +12,7 @@ use crate::{
     core::{Emitted, RenderContext, Result},
     target::kotlin::{
         KotlinHost,
-        codec::{EncodedWrite, Reader, ScalarOption, WireBuffer},
+        codec::{EncodedWrite, MutableParameter, Reader, ScalarOption, WireBuffer},
         name_style::{KotlinPackage, Name},
         primitive::KotlinPrimitive,
         render::{
@@ -23,6 +23,7 @@ use crate::{
             enumeration::Enumeration,
             native::NativeCall,
             record::Record,
+            signature,
             type_name::{KotlinType, ParameterType},
         },
         syntax::{ArgumentList, Expression, Identifier, Literal, Statement, TypeName},
@@ -38,7 +39,7 @@ struct FunctionTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Function {
     name: Identifier,
-    parameters: Vec<Parameter>,
+    parameters: Vec<ExportedParameter>,
     returns: Option<TypeName>,
     setup: Vec<Statement>,
     call: Vec<Statement>,
@@ -49,7 +50,7 @@ pub struct Function {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportedCall {
     name: Identifier,
-    parameters: Vec<Parameter>,
+    parameters: Vec<ExportedParameter>,
     returns: Option<TypeName>,
     setup: Vec<Statement>,
     call: Vec<Statement>,
@@ -64,9 +65,8 @@ pub struct ExportedCallRenderer<'render> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Parameter {
-    name: Identifier,
-    ty: TypeName,
+pub struct ExportedParameter {
+    signature: signature::Parameter,
     native_argument: Expression,
     mutation: Option<ParameterMutation>,
     setup: Vec<Statement>,
@@ -217,7 +217,7 @@ impl Function {
         &self.name
     }
 
-    pub fn parameters(&self) -> &[Parameter] {
+    pub fn parameters(&self) -> &[ExportedParameter] {
         &self.parameters
     }
 
@@ -328,7 +328,7 @@ impl<'render> ExportedCallRenderer<'render> {
             .params()
             .iter()
             .map(|parameter| {
-                Parameter::from_declaration(
+                ExportedParameter::from_declaration(
                     parameter,
                     record_package,
                     self.host,
@@ -425,7 +425,7 @@ impl ExportedCall {
         &self.name
     }
 
-    pub fn parameters(&self) -> &[Parameter] {
+    pub fn parameters(&self) -> &[ExportedParameter] {
         &self.parameters
     }
 
@@ -453,8 +453,11 @@ impl ExportedCall {
         self.async_call.as_ref()
     }
 
-    fn parameter_mutation(parameters: &[Parameter]) -> Result<Option<ParameterMutation>> {
-        let mut mutations = parameters.iter().filter_map(Parameter::mutation).cloned();
+    fn parameter_mutation(parameters: &[ExportedParameter]) -> Result<Option<ParameterMutation>> {
+        let mut mutations = parameters
+            .iter()
+            .filter_map(ExportedParameter::mutation)
+            .cloned();
         let mutation = mutations.next();
         if mutations.next().is_some() {
             return Err(KotlinHost::unsupported(
@@ -465,7 +468,7 @@ impl ExportedCall {
     }
 }
 
-impl Parameter {
+impl ExportedParameter {
     pub fn from_declaration(
         parameter: &ParamDecl<Native, IntoRust>,
         record_package: Option<&KotlinPackage>,
@@ -492,19 +495,18 @@ impl Parameter {
         Ok(Self {
             native_argument: native_argument.expression,
             mutation: native_argument.mutation,
-            name,
-            ty,
+            signature: signature::Parameter::new(name, ty),
             setup: native_argument.setup,
             cleanup: native_argument.cleanup,
         })
     }
 
     pub fn name(&self) -> &Identifier {
-        &self.name
+        self.signature.name()
     }
 
     pub fn ty(&self) -> &TypeName {
-        &self.ty
+        self.signature.ty()
     }
 
     fn native_argument(&self) -> &Expression {
@@ -533,7 +535,7 @@ impl Parameter {
     }
 }
 
-impl Parameter {
+impl ExportedParameter {
     fn native_argument_for(
         source_name: Name,
         name: Identifier,
@@ -582,7 +584,6 @@ impl ParameterMutation {
     fn from_encoded(
         source_name: &Name,
         destination: Identifier,
-        ty: &TypeRef,
         codec: &<IntoRust as Direction>::Codec,
         shape: native::BufferShape,
         receive: Receive,
@@ -590,17 +591,11 @@ impl ParameterMutation {
         if receive != Receive::ByMutRef {
             return Ok(None);
         }
-        match (shape, ty) {
-            (native::BufferShape::Slice, TypeRef::Bytes) => {
-                Self::new(source_name, destination, codec).map(Some)
-            }
-            (native::BufferShape::Slice, TypeRef::Sequence(inner))
-                if matches!(inner.as_ref(), TypeRef::Primitive(_)) =>
-            {
-                Self::new(source_name, destination, codec).map(Some)
-            }
-            _ => Err(KotlinHost::unsupported("mutable encoded parameter")),
+        if shape != native::BufferShape::Slice {
+            return Err(KotlinHost::unsupported("mutable encoded parameter"));
         }
+        MutableParameter::validate(&codec.read_plan())?;
+        Self::new(source_name, destination, codec).map(Some)
     }
 
     fn new(
@@ -864,7 +859,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
 
     fn encoded(
         &mut self,
-        ty: &'plan TypeRef,
+        _: &'plan TypeRef,
         codec: &'plan <IntoRust as Direction>::Codec,
         shape: <Native as Surface>::BufferShape,
         receive: <IntoRust as Direction>::Receive,
@@ -872,7 +867,6 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
         let mutation = ParameterMutation::from_encoded(
             &self.source_name,
             self.name.clone(),
-            ty,
             codec,
             shape,
             receive,

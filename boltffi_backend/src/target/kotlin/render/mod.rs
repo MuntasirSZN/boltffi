@@ -8,9 +8,11 @@ mod direct_vector;
 mod enumeration;
 mod field;
 mod function;
+mod jvm_invocation;
 mod module;
 mod native;
 mod record;
+mod signature;
 mod stream;
 mod type_name;
 
