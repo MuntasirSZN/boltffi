@@ -10,9 +10,13 @@ use crate::{
     bridge::jni::{CallbackMethod as JniCallbackMethod, CallbackRegistration, JniBridgeContract},
     core::{Emitted, Error, RenderContext, Result},
     target::kotlin::{
+        codec::{Reader, ScalarOption, WireBuffer},
         name_style::Name,
         primitive::KotlinPrimitive,
-        render::enumeration::Enumeration,
+        render::{
+            direct_vector::DirectVector, enumeration::Enumeration, record::Record,
+            type_name::KotlinType,
+        },
         syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
     },
 };
@@ -42,6 +46,7 @@ pub struct Method {
     jvm_parameters: Vec<Parameter>,
     public_return: Option<TypeName>,
     jvm_return: Option<TypeName>,
+    setup: Vec<Statement>,
     call_return: Vec<Statement>,
 }
 
@@ -62,11 +67,13 @@ struct CallbackRegistrationSet<'bridge> {
 }
 
 struct ParameterRender<'context> {
+    source_name: Name,
     name: Identifier,
     context: &'context RenderContext<'context, Native>,
 }
 
 struct ReturnRender<'context> {
+    source_name: Name,
     context: &'context RenderContext<'context, Native>,
 }
 
@@ -79,7 +86,18 @@ struct ReturnValue {
 enum ReturnConversion {
     Void,
     Direct(DirectValueType),
-    DirectEnum { repr: Primitive },
+    DirectEnum {
+        repr: Primitive,
+    },
+    Encoded {
+        codec: <IntoRust as Direction>::Codec,
+        source_name: Name,
+    },
+    ScalarOption {
+        primitive: Primitive,
+        source_name: Name,
+    },
+    DirectVector(DirectVector),
 }
 
 impl Callback {
@@ -168,6 +186,10 @@ impl Method {
     pub fn call_return(&self) -> &[Statement] {
         &self.call_return
     }
+
+    pub fn setup(&self) -> &[Statement] {
+        &self.setup
+    }
 }
 
 impl Method {
@@ -200,10 +222,11 @@ impl Method {
             .iter()
             .map(|parameter| MethodParameter::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
-        let return_value = callable
-            .returns()
-            .plan()
-            .render_with(&mut ReturnRender { context })?;
+        let source_name = Name::new(source.name());
+        let return_value = callable.returns().plan().render_with(&mut ReturnRender {
+            source_name,
+            context,
+        })?;
         let implementation = Expression::identifier(Identifier::parse("impl")?);
         let interface_call = Expression::call(
             implementation,
@@ -220,13 +243,17 @@ impl Method {
                 .iter()
                 .map(|parameter| parameter.public.clone())
                 .collect(),
+            setup: parameters
+                .iter()
+                .flat_map(|parameter| parameter.setup.iter().cloned())
+                .collect(),
             jvm_parameters: parameters
                 .into_iter()
                 .map(|parameter| parameter.jvm)
                 .collect(),
             public_return: return_value.public_ty.clone(),
             jvm_return: return_value.jvm_ty.clone(),
-            call_return: return_value.statements(interface_call)?,
+            call_return: return_value.statements(interface_call, context)?,
         })
     }
 }
@@ -323,6 +350,7 @@ impl<'bridge> CallbackRegistrationSet<'bridge> {
 struct MethodParameter {
     public: Parameter,
     jvm: Parameter,
+    setup: Vec<Statement>,
     call_argument: Expression,
 }
 
@@ -339,7 +367,11 @@ impl MethodParameter {
         };
         let source_name = Name::new(parameter.name());
         let name = source_name.parameter()?;
-        plan.render_with(&mut ParameterRender { name, context })
+        plan.render_with(&mut ParameterRender {
+            source_name,
+            name,
+            context,
+        })
     }
 }
 
@@ -363,6 +395,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
                         name: self.name.clone(),
                         ty: KotlinPrimitive::new(*primitive).native_type()?,
                     },
+                    setup: Vec::new(),
                     call_argument: KotlinPrimitive::new(*primitive).public_return(value)?,
                 })
             }
@@ -380,11 +413,30 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
                         name: self.name.clone(),
                         ty: KotlinPrimitive::new(repr).native_type()?,
                     },
+                    setup: Vec::new(),
                     call_argument: Expression::call(
                         enumeration.name().clone(),
                         Identifier::parse("fromValue")?,
                         [value].into_iter().collect::<ArgumentList>(),
                     ),
+                })
+            }
+            DirectValueType::Record(record) => {
+                let ty = Record::type_name_from_id(*record, self.context)?;
+                Ok(MethodParameter {
+                    public: Parameter {
+                        name: self.name.clone(),
+                        ty: ty.clone(),
+                    },
+                    jvm: Parameter {
+                        name: self.name.clone(),
+                        ty: TypeName::byte_array(false),
+                    },
+                    setup: Vec::new(),
+                    call_argument: Record::decode_expression(
+                        ty,
+                        Expression::identifier(self.name.clone()),
+                    )?,
                 })
             }
             _ => Err(Error::UnsupportedTarget {
@@ -396,14 +448,36 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
 
     fn encoded(
         &mut self,
-        _ty: &'plan TypeRef,
-        _codec: &'plan <OutOfRust as Direction>::Codec,
+        ty: &'plan TypeRef,
+        codec: &'plan <OutOfRust as Direction>::Codec,
         _shape: <Native as Surface>::BufferShape,
         _receive: <OutOfRust as Direction>::Receive,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "callback method encoded parameter",
+        let reader = self.source_name.generated("reader")?;
+        let value = self.source_name.generated("value")?;
+        let expression = codec.render_with(&mut Reader::new(reader.clone(), self.context))?;
+        Ok(MethodParameter {
+            public: Parameter {
+                name: self.name.clone(),
+                ty: KotlinType::type_ref(ty, self.context)?,
+            },
+            jvm: Parameter {
+                name: self.name.clone(),
+                ty: TypeName::byte_array(false),
+            },
+            setup: vec![
+                Statement::value(
+                    reader,
+                    Expression::construct(
+                        TypeName::new("WireReader"),
+                        [Expression::identifier(self.name.clone())]
+                            .into_iter()
+                            .collect::<ArgumentList>(),
+                    ),
+                ),
+                Statement::value(value.clone(), expression),
+            ],
+            call_argument: Expression::identifier(value),
         })
     }
 
@@ -420,17 +494,50 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
         })
     }
 
-    fn scalar_option(&mut self, _primitive: Primitive) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "callback method optional scalar parameter",
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
+        let reader = self.source_name.generated("reader")?;
+        let value = self.source_name.generated("value")?;
+        Ok(MethodParameter {
+            public: Parameter {
+                name: self.name.clone(),
+                ty: ScalarOption::new(primitive).ty()?,
+            },
+            jvm: Parameter {
+                name: self.name.clone(),
+                ty: TypeName::byte_array(false),
+            },
+            setup: vec![
+                Statement::value(
+                    reader.clone(),
+                    Expression::construct(
+                        TypeName::new("WireReader"),
+                        [Expression::identifier(self.name.clone())]
+                            .into_iter()
+                            .collect::<ArgumentList>(),
+                    ),
+                ),
+                Statement::value(
+                    value.clone(),
+                    ScalarOption::new(primitive).read_expression(reader)?,
+                ),
+            ],
+            call_argument: Expression::identifier(value),
         })
     }
 
-    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "callback method direct vector parameter",
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        let vector = DirectVector::from_element(element)?;
+        Ok(MethodParameter {
+            public: Parameter {
+                name: self.name.clone(),
+                ty: vector.ty().clone(),
+            },
+            jvm: Parameter {
+                name: self.name.clone(),
+                ty: vector.ty().clone(),
+            },
+            setup: Vec::new(),
+            call_argument: Expression::identifier(self.name.clone()),
         })
     }
 }
@@ -469,14 +576,24 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
 
     fn encoded(
         &mut self,
-        _slot: ReturnValueSlot,
-        _ty: &'plan TypeRef,
-        _codec: &'plan <IntoRust as Direction>::Codec,
+        slot: ReturnValueSlot,
+        ty: &'plan TypeRef,
+        codec: &'plan <IntoRust as Direction>::Codec,
         _shape: <Native as Surface>::BufferShape,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "callback method encoded return",
+        if !matches!(slot, ReturnValueSlot::ReturnSlot) {
+            return Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "callback method out-pointer encoded return",
+            });
+        }
+        Ok(ReturnValue {
+            public_ty: Some(KotlinType::type_ref(ty, self.context)?),
+            jvm_ty: Some(TypeName::byte_array(false)),
+            conversion: ReturnConversion::Encoded {
+                codec: codec.clone(),
+                source_name: self.source_name.clone(),
+            },
         })
     }
 
@@ -493,17 +610,23 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
         })
     }
 
-    fn scalar_option(&mut self, _primitive: Primitive) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "callback method optional scalar return",
+    fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
+        Ok(ReturnValue {
+            public_ty: Some(ScalarOption::new(primitive).ty()?),
+            jvm_ty: Some(TypeName::byte_array(false)),
+            conversion: ReturnConversion::ScalarOption {
+                primitive,
+                source_name: self.source_name.clone(),
+            },
         })
     }
 
-    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "callback method direct vector return",
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        let vector = DirectVector::from_element(element)?;
+        Ok(ReturnValue {
+            public_ty: Some(vector.ty().clone()),
+            jvm_ty: Some(TypeName::byte_array(false)),
+            conversion: ReturnConversion::DirectVector(vector),
         })
     }
 
@@ -528,7 +651,11 @@ impl ReturnRender<'_> {
 }
 
 impl ReturnValue {
-    fn statements(&self, call: Expression) -> Result<Vec<Statement>> {
+    fn statements(
+        &self,
+        call: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
         match &self.conversion {
             ReturnConversion::Void => Ok(vec![Statement::expression(call)]),
             ReturnConversion::Direct(DirectValueType::Primitive(primitive)) => {
@@ -541,6 +668,45 @@ impl ReturnValue {
                 .native_argument(Expression::property(call, Identifier::parse("value")?))
                 .map(Statement::return_value)
                 .map(|statement| vec![statement]),
+            ReturnConversion::Encoded { codec, source_name } => {
+                let result = source_name.generated("result")?;
+                let bytes = source_name.generated("bytes")?;
+                let write = WireBuffer::new(source_name)?.write_value(
+                    codec,
+                    Expression::identifier(result.clone()),
+                    context,
+                )?;
+                let (setup, expression, cleanup) = write.into_parts();
+                Ok(std::iter::once(Statement::value(result, call))
+                    .chain(setup)
+                    .chain(std::iter::once(Statement::value(bytes.clone(), expression)))
+                    .chain(cleanup)
+                    .chain(std::iter::once(Statement::return_value(
+                        Expression::identifier(bytes),
+                    )))
+                    .collect())
+            }
+            ReturnConversion::ScalarOption {
+                primitive,
+                source_name,
+            } => {
+                let result = source_name.generated("result")?;
+                let bytes = source_name.generated("bytes")?;
+                let write = ScalarOption::new(*primitive)
+                    .write_value(source_name, Expression::identifier(result.clone()))?;
+                let (setup, expression, cleanup) = write.into_parts();
+                Ok(std::iter::once(Statement::value(result, call))
+                    .chain(setup)
+                    .chain(std::iter::once(Statement::value(bytes.clone(), expression)))
+                    .chain(cleanup)
+                    .chain(std::iter::once(Statement::return_value(
+                        Expression::identifier(bytes),
+                    )))
+                    .collect())
+            }
+            ReturnConversion::DirectVector(vector) => Ok(vec![Statement::return_value(
+                vector.byte_array_expression(call),
+            )]),
             ReturnConversion::Direct(_) => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "callback method direct return",

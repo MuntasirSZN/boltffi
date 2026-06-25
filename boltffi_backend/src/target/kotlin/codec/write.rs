@@ -60,8 +60,21 @@ impl WireBuffer {
     }
 
     pub fn write(self, plan: &WritePlan, context: &RenderContext<Native>) -> Result<EncodedWrite> {
-        let size = plan.size_with(&mut Sizer::new(context)?)?;
-        let mut writer = Writer::new(self.writer.clone(), context)?;
+        self.write_value(
+            plan,
+            Expression::identifier(Identifier::parse("value")?),
+            context,
+        )
+    }
+
+    pub fn write_value(
+        self,
+        plan: &WritePlan,
+        value: Expression,
+        context: &RenderContext<Native>,
+    ) -> Result<EncodedWrite> {
+        let size = plan.size_with(&mut Sizer::new(context)?.current(value.clone()))?;
+        let mut writer = Writer::new(self.writer.clone(), context)?.current(value);
         let writes = plan
             .render_with(&mut writer)
             .into_iter()

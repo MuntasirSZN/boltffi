@@ -39,6 +39,9 @@ object {{ callback.callbacks_name() }} {
     @JvmStatic
     fun {{ method.jvm_name() }}(handle: Long{% for parameter in method.jvm_parameters() %}, {{ parameter.name() }}: {{ parameter.ty() }}{% endfor %}){% if let Some(return_type) = method.jvm_return() %}: {{ return_type }}{% endif %} {
         val impl = {{ callback.map_name() }}.get(handle) ?: error("{{ callback.map_name() }}: invalid handle $handle")
+{%- for statement in method.setup() %}
+        {{ statement }}
+{%- endfor %}
 {%- for statement in method.call_return() %}
         {{ statement }}
 {%- endfor %}

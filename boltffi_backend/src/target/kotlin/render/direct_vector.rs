@@ -14,6 +14,7 @@ const KOTLIN_TARGET: &str = "kotlin";
 pub struct DirectVector {
     ty: TypeName,
     decoder: Identifier,
+    encoder: Identifier,
     carrier_conversion: Option<Identifier>,
 }
 
@@ -61,11 +62,22 @@ impl DirectVector {
         }
     }
 
+    pub fn byte_array_expression(&self, value: Expression) -> Expression {
+        Expression::call(
+            "DirectVectorCodec",
+            self.encoder.clone(),
+            [self.carrier_expression(value)]
+                .into_iter()
+                .collect::<ArgumentList>(),
+        )
+    }
+
     fn from_primitive(primitive: DirectVectorPrimitive) -> Result<Self> {
         let primitive = primitive.primitive();
         Ok(Self {
             ty: KotlinPrimitive::new(primitive).array_type()?,
             decoder: Identifier::parse(Self::decoder_name(primitive)?)?,
+            encoder: Identifier::parse(Self::encoder_name(primitive)?)?,
             carrier_conversion: Self::carrier_conversion_name(primitive)
                 .map(Identifier::parse)
                 .transpose()?,
@@ -84,6 +96,28 @@ impl DirectVector {
             Primitive::U16 => Ok("readUShortArray"),
             Primitive::U32 => Ok("readUIntArray"),
             Primitive::U64 | Primitive::USize => Ok("readULongArray"),
+            Primitive::U8 => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "u8 direct-vector primitive",
+            }),
+            _ => Err(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "unknown direct-vector primitive",
+            }),
+        }
+    }
+
+    fn encoder_name(primitive: Primitive) -> Result<&'static str> {
+        match primitive {
+            Primitive::Bool => Ok("writeBooleanArray"),
+            Primitive::I8 => Ok("writeByteArray"),
+            Primitive::I16 | Primitive::U16 => Ok("writeShortArray"),
+            Primitive::I32 | Primitive::U32 => Ok("writeIntArray"),
+            Primitive::I64 | Primitive::U64 | Primitive::ISize | Primitive::USize => {
+                Ok("writeLongArray")
+            }
+            Primitive::F32 => Ok("writeFloatArray"),
+            Primitive::F64 => Ok("writeDoubleArray"),
             Primitive::U8 => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "u8 direct-vector primitive",

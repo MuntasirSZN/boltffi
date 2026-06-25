@@ -26,7 +26,10 @@ impl ScalarOption {
     }
 
     pub fn write(&self, name: &Name) -> Result<EncodedWrite> {
-        let value = Expression::identifier(name.parameter()?);
+        self.write_value(name, Expression::identifier(name.parameter()?))
+    }
+
+    pub fn write_value(&self, name: &Name, value: Expression) -> Result<EncodedWrite> {
         let size = Expression::conditional(
             value.clone().equal(Expression::null()),
             Expression::integer(1),
@@ -42,17 +45,21 @@ impl ScalarOption {
         buffer.write_statements(size, writes)
     }
 
+    pub fn read_expression(&self, reader: Identifier) -> Result<Expression> {
+        Ok(Expression::call(
+            Expression::identifier(reader),
+            self.read_method()?,
+            ArgumentList::default(),
+        ))
+    }
+
     pub fn read_value(&self, call: Expression) -> Result<Vec<Statement>> {
         let result = Identifier::parse("__boltffi_result")?;
         let reader = Identifier::parse("__boltffi_reader")?;
         let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
             "null buffer returned",
         )));
-        let value = Expression::call(
-            Expression::identifier(reader.clone()),
-            self.read_method()?,
-            ArgumentList::default(),
-        );
+        let value = self.read_expression(reader.clone())?;
         Ok(vec![
             Statement::value(result.clone(), payload),
             Statement::value(

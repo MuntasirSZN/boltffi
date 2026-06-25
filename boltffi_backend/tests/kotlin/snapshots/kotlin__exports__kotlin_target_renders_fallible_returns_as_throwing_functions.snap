@@ -323,6 +323,11 @@ private object DirectVectorCodec {
 
     fun readByteArray(bytes: ByteArray): ByteArray = bytes
 
+    fun writeBooleanArray(values: BooleanArray): ByteArray =
+        ByteArray(values.size) { index -> if (values[index]) 1.toByte() else 0.toByte() }
+
+    fun writeByteArray(values: ByteArray): ByteArray = values
+
     fun readShortArray(bytes: ByteArray): ShortArray {
         val values = ShortArray(elementCount(bytes, 2))
         nativeBuffer(bytes).asShortBuffer().get(values)
@@ -331,6 +336,12 @@ private object DirectVectorCodec {
 
     fun readUShortArray(bytes: ByteArray): UShortArray =
         readShortArray(bytes).toUShortArray()
+
+    fun writeShortArray(values: ShortArray): ByteArray {
+        val bytes = ByteArray(values.size * 2)
+        nativeBuffer(bytes).asShortBuffer().put(values)
+        return bytes
+    }
 
     fun readIntArray(bytes: ByteArray): IntArray {
         val values = IntArray(elementCount(bytes, 4))
@@ -341,6 +352,12 @@ private object DirectVectorCodec {
     fun readUIntArray(bytes: ByteArray): UIntArray =
         readIntArray(bytes).toUIntArray()
 
+    fun writeIntArray(values: IntArray): ByteArray {
+        val bytes = ByteArray(values.size * 4)
+        nativeBuffer(bytes).asIntBuffer().put(values)
+        return bytes
+    }
+
     fun readLongArray(bytes: ByteArray): LongArray {
         val values = LongArray(elementCount(bytes, 8))
         nativeBuffer(bytes).asLongBuffer().get(values)
@@ -350,16 +367,34 @@ private object DirectVectorCodec {
     fun readULongArray(bytes: ByteArray): ULongArray =
         readLongArray(bytes).toULongArray()
 
+    fun writeLongArray(values: LongArray): ByteArray {
+        val bytes = ByteArray(values.size * 8)
+        nativeBuffer(bytes).asLongBuffer().put(values)
+        return bytes
+    }
+
     fun readFloatArray(bytes: ByteArray): FloatArray {
         val values = FloatArray(elementCount(bytes, 4))
         nativeBuffer(bytes).asFloatBuffer().get(values)
         return values
     }
 
+    fun writeFloatArray(values: FloatArray): ByteArray {
+        val bytes = ByteArray(values.size * 4)
+        nativeBuffer(bytes).asFloatBuffer().put(values)
+        return bytes
+    }
+
     fun readDoubleArray(bytes: ByteArray): DoubleArray {
         val values = DoubleArray(elementCount(bytes, 8))
         nativeBuffer(bytes).asDoubleBuffer().get(values)
         return values
+    }
+
+    fun writeDoubleArray(values: DoubleArray): ByteArray {
+        val bytes = ByteArray(values.size * 8)
+        nativeBuffer(bytes).asDoubleBuffer().put(values)
+        return bytes
     }
 
     private fun nativeBuffer(bytes: ByteArray): java.nio.ByteBuffer =
