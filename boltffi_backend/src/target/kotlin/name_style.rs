@@ -90,6 +90,12 @@ impl KotlinFile {
     }
 }
 
+impl fmt::Display for KotlinFile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 impl KotlinLibrary {
     /// Parses a Kotlin native library load name.
     pub fn parse(name: impl Into<String>) -> Result<Self> {

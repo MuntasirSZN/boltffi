@@ -23,7 +23,12 @@ fn bindings(source: &str) -> boltffi_binding::Bindings<Native> {
 }
 
 pub fn rendered_fixture(name: &str) -> String {
-    let kotlin_file = files(&fixture(name))
+    let host = KotlinHost::new("com.boltffi.demo", "Demo").expect("Kotlin host");
+    rendered_fixture_with_host(name, host)
+}
+
+pub fn rendered_fixture_with_host(name: &str, host: KotlinHost) -> String {
+    let kotlin_file = files_with_host(&fixture(name), host)
         .into_iter()
         .find(|(path, _)| path.ends_with(".kt"))
         .expect("Kotlin target should render a Kotlin source file");
@@ -31,11 +36,13 @@ pub fn rendered_fixture(name: &str) -> String {
 }
 
 pub fn files(source: &str) -> Vec<(String, String)> {
+    let host = KotlinHost::new("com.boltffi.demo", "Demo").expect("Kotlin host");
+    files_with_host(source, host)
+}
+
+pub fn files_with_host(source: &str, host: KotlinHost) -> Vec<(String, String)> {
     let bindings = bindings(source);
-    let target = KotlinHost::new("com.boltffi.demo", "Demo")
-        .expect("Kotlin host")
-        .into_target()
-        .expect("Kotlin target");
+    let target = host.into_target().expect("Kotlin target");
 
     target
         .render(&bindings)

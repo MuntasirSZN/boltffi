@@ -17,9 +17,10 @@ pub use experimental::Experimental;
 pub use symbols::{DebugSymbolsBundle, DebugSymbolsConfig, DebugSymbolsFormat};
 pub use targets::{
     AndroidConfig, AndroidPackConfig, AppleConfig, CSharpConfig, DartConfig, HeaderConfig,
-    JavaConfig, KotlinConfig, KotlinDesktopLoader, KotlinFactoryStyle, KotlinMultiplatformConfig,
-    PythonConfig, SpmConfig, SpmDistribution, SpmLayout, SwiftConfig, TargetsConfig, WasmConfig,
-    WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMissing, WasmProfile, XcframeworkConfig,
+    JavaConfig, KotlinApiStyle, KotlinConfig, KotlinDesktopLoader, KotlinFactoryStyle,
+    KotlinMultiplatformConfig, PythonConfig, SpmConfig, SpmDistribution, SpmLayout, SwiftConfig,
+    TargetsConfig, WasmConfig, WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMissing,
+    WasmProfile, XcframeworkConfig,
 };
 #[cfg(test)]
 pub use targets::{CSharpNugetConfig, JavaJvmConfig, PythonWheelConfig};
@@ -574,6 +575,10 @@ impl Config {
 
     pub fn android_kotlin_desktop_loader(&self) -> KotlinDesktopLoader {
         self.targets.android.kotlin.desktop_loader
+    }
+
+    pub fn android_kotlin_api_style(&self) -> KotlinApiStyle {
+        self.targets.android.kotlin.api_style
     }
 
     pub fn android_kotlin_factory_style(&self) -> KotlinFactoryStyle {

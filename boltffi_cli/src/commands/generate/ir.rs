@@ -1,13 +1,18 @@
 use std::path::PathBuf;
 
-use boltffi_backend::target::kotlin::KotlinDesktopLoader as BackendKotlinDesktopLoader;
+use boltffi_backend::target::kotlin::{
+    KotlinApiStyle as BackendKotlinApiStyle, KotlinDesktopLoader as BackendKotlinDesktopLoader,
+};
 use boltffi_backend::{CoverageMode, GeneratedOutput};
 use boltffi_bindgen::generate::{Generation, GenerationError};
 use boltffi_bindgen::target::Target;
 
 use crate::cargo::Cargo;
 use crate::cli::{CliError, Result};
-use crate::config::{Config, targets::KotlinDesktopLoader};
+use crate::config::{
+    Config,
+    targets::kotlin::{KotlinApiStyle, KotlinDesktopLoader},
+};
 
 use super::{GenerateOptions, GenerateTarget};
 
@@ -66,6 +71,7 @@ fn generate_kotlin(config: &Config, options: &GenerateOptions) -> Result<()> {
         .cargo_args(selected.cargo_args)
         .kotlin_package(config.android_kotlin_package())
         .kotlin_file(config.android_kotlin_module_name())
+        .kotlin_api_style(kotlin_api_style(config.android_kotlin_api_style()))
         .kotlin_android_library(config.resolved_android_kotlin_library_name())
         .kotlin_desktop_jni_library(format!(
             "{}_jni",
@@ -89,6 +95,13 @@ fn kotlin_desktop_loader(loader: KotlinDesktopLoader) -> BackendKotlinDesktopLoa
         KotlinDesktopLoader::Bundled => BackendKotlinDesktopLoader::Bundled,
         KotlinDesktopLoader::System => BackendKotlinDesktopLoader::System,
         KotlinDesktopLoader::None => BackendKotlinDesktopLoader::None,
+    }
+}
+
+fn kotlin_api_style(style: KotlinApiStyle) -> BackendKotlinApiStyle {
+    match style {
+        KotlinApiStyle::TopLevel => BackendKotlinApiStyle::TopLevel,
+        KotlinApiStyle::ModuleObject => BackendKotlinApiStyle::ModuleObject,
     }
 }
 

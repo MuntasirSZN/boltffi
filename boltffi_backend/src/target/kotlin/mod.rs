@@ -41,6 +41,17 @@ pub enum KotlinDesktopLoader {
     None,
 }
 
+/// Public API layout for generated Kotlin declarations.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum KotlinApiStyle {
+    /// Render declarations directly in the Kotlin package.
+    #[default]
+    TopLevel,
+    /// Render declarations inside the configured module object.
+    ModuleObject,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct NativeLibraries {
     android: KotlinLibrary,
@@ -58,6 +69,7 @@ pub struct KotlinHost {
     c_header: PathBuf,
     jni_source: PathBuf,
     native_libraries: NativeLibraries,
+    api_style: KotlinApiStyle,
 }
 
 impl KotlinHost {
@@ -71,6 +83,7 @@ impl KotlinHost {
             c_header: PathBuf::from("jni/boltffi.h"),
             jni_source: PathBuf::from("jni/jni_glue.c"),
             native_libraries: NativeLibraries::default()?,
+            api_style: KotlinApiStyle::default(),
         })
     }
 
@@ -110,6 +123,12 @@ impl KotlinHost {
         self
     }
 
+    /// Selects the generated Kotlin API layout.
+    pub fn api_style(mut self, style: KotlinApiStyle) -> Self {
+        self.api_style = style;
+        self
+    }
+
     /// Creates the backend target stack for this Kotlin host.
     pub fn into_target(self) -> Result<Target<Self, BridgeLayer<CBridge, JniBridge>>> {
         Ok(Target::new(
@@ -133,6 +152,10 @@ impl KotlinHost {
 
     fn native_libraries(&self) -> &NativeLibraries {
         &self.native_libraries
+    }
+
+    fn api_layout(&self) -> KotlinApiStyle {
+        self.api_style
     }
 }
 

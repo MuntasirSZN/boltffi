@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use boltffi_backend::core::{CoverageMode, bridge, host};
 use boltffi_backend::target::{
-    kotlin::{KotlinDesktopLoader, KotlinHost},
+    kotlin::{KotlinApiStyle, KotlinDesktopLoader, KotlinHost},
     python::PythonCExtHost,
 };
 use boltffi_backend::{GeneratedOutput, Target as BackendTarget};
@@ -37,6 +37,7 @@ pub struct Generation {
     kotlin_desktop_jni_library: Option<String>,
     kotlin_desktop_fallback_library: Option<String>,
     kotlin_desktop_loader: KotlinDesktopLoader,
+    kotlin_api_style: KotlinApiStyle,
 }
 
 impl Generation {
@@ -57,6 +58,7 @@ impl Generation {
             kotlin_desktop_jni_library: None,
             kotlin_desktop_fallback_library: None,
             kotlin_desktop_loader: KotlinDesktopLoader::default(),
+            kotlin_api_style: KotlinApiStyle::default(),
         }
     }
 
@@ -138,6 +140,12 @@ impl Generation {
         self
     }
 
+    /// Sets the generated Kotlin API layout.
+    pub fn kotlin_api_style(mut self, style: KotlinApiStyle) -> Self {
+        self.kotlin_api_style = style;
+        self
+    }
+
     /// Reads the embedded metadata, selects the target surface contract, and renders it.
     pub fn render(&self, target: Target) -> Result<GeneratedOutput, GenerationError> {
         match target {
@@ -189,7 +197,8 @@ impl Generation {
     fn kotlin_host(&self, package: &str, file: &str) -> Result<KotlinHost, GenerationError> {
         let host = KotlinHost::new(package, file)
             .map_err(GenerationError::Render)?
-            .desktop_loader(self.kotlin_desktop_loader);
+            .desktop_loader(self.kotlin_desktop_loader)
+            .api_style(self.kotlin_api_style);
         let host = self
             .kotlin_android_library
             .iter()

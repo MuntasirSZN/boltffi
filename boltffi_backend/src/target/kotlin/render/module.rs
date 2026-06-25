@@ -14,7 +14,7 @@ use crate::{
         RenderedDeclaration, Result,
     },
     target::kotlin::{
-        KotlinHost, KotlinPackage, NativeLibraries,
+        KotlinApiStyle, KotlinHost, KotlinPackage, NativeLibraries,
         render::{
             closure::Closures,
             enumeration::Enumeration,
@@ -99,6 +99,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         let closures = self.closures()?;
         let error_types = ErrorTypes::from_declarations(&self.declarations);
         let declarations = self.declarations(&error_types)?;
+        let declarations = self.api_declarations(declarations);
         let features = RuntimeFeatures::from_declarations(&self.declarations);
         let contents = ModuleTemplate {
             package: self.host.package().clone(),
@@ -221,6 +222,28 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         self.primary_chunks(None, |declaration| {
             matches!(declaration.declaration(), DeclarationRef::CustomType(_))
         })
+    }
+
+    fn api_declarations(&self, declarations: String) -> String {
+        match self.host.api_layout() {
+            KotlinApiStyle::TopLevel => declarations,
+            KotlinApiStyle::ModuleObject => format!(
+                "object {} {{\n{}\n}}",
+                self.host.file(),
+                Self::indent_declarations(declarations)
+            ),
+        }
+    }
+
+    fn indent_declarations(declarations: String) -> String {
+        declarations
+            .lines()
+            .map(|line| match line.is_empty() {
+                true => String::new(),
+                false => format!("    {line}"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn declarations(&self, error_types: &ErrorTypes) -> Result<String> {

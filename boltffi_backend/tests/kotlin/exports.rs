@@ -1,8 +1,22 @@
-use super::rendered_fixture;
+use boltffi_backend::target::kotlin::{KotlinApiStyle, KotlinHost};
+
+use super::{rendered_fixture, rendered_fixture_with_host};
 
 #[test]
 fn kotlin_target_renders_primitive_function_stack() {
     insta::assert_snapshot!(rendered_fixture("exports/primitive_functions"));
+}
+
+#[test]
+fn kotlin_target_renders_module_object_api_style() {
+    let host = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .api_style(KotlinApiStyle::ModuleObject);
+
+    insta::assert_snapshot!(rendered_fixture_with_host(
+        "exports/primitive_functions",
+        host
+    ));
 }
 
 #[test]
