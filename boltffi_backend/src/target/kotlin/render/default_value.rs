@@ -1,7 +1,7 @@
 use boltffi_binding::{DefaultValue, FloatValue, Primitive, TypeRef};
 
 use crate::{
-    core::{Error, Result},
+    core::Result,
     target::kotlin::{
         KotlinHost,
         name_style::Name,
@@ -20,10 +20,7 @@ impl DefaultExpression {
                 TypeRef::Primitive(primitive) => {
                     KotlinPrimitive::new(*primitive).integer_literal(*value)
                 }
-                _ => Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "integer default type",
-                }),
+                _ => Err(KotlinHost::unsupported("integer default type")),
             },
             DefaultValue::Float(value) => Self::float(*value, ty),
             DefaultValue::String(value) => Ok(Expression::literal(Literal::string(value))),
@@ -35,10 +32,7 @@ impl DefaultExpression {
                 Name::new(variant_name).variant()?,
             )),
             DefaultValue::Null => Ok(Expression::null()),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown default literal",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown default literal")),
         }
     }
 
@@ -46,10 +40,7 @@ impl DefaultExpression {
         match ty {
             TypeRef::Primitive(Primitive::F32) => Ok(Expression::float(value.to_f64(), true)),
             TypeRef::Primitive(Primitive::F64) => Ok(Expression::float(value.to_f64(), false)),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "float default type",
-            }),
+            _ => Err(KotlinHost::unsupported("float default type")),
         }
     }
 }

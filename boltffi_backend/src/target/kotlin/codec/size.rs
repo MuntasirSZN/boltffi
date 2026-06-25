@@ -4,7 +4,7 @@ use boltffi_binding::{
 };
 
 use crate::{
-    core::{Error, RenderContext, Result},
+    core::{RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         codec::value::ValueExpression,
@@ -16,6 +16,7 @@ use crate::{
 
 pub struct Sizer<'context> {
     current: Expression,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
@@ -25,9 +26,13 @@ pub struct SizeExpression {
 }
 
 impl<'context> Sizer<'context> {
-    pub fn new(context: &'context RenderContext<'context, Native>) -> Result<Self> {
+    pub fn new(
+        host: &'context KotlinHost,
+        context: &'context RenderContext<'context, Native>,
+    ) -> Result<Self> {
         Ok(Self {
             current: Expression::identifier(Identifier::parse("value")?),
+            host,
             context,
         })
     }
@@ -83,7 +88,7 @@ impl<'context> Sizer<'context> {
     }
 
     fn enum_size(&self, id: EnumId) -> Result<SizeExpression> {
-        Enumeration::from_id(id, self.context).and_then(|enumeration| {
+        Enumeration::from_id(id, self.host, self.context).and_then(|enumeration| {
             KotlinPrimitive::new(enumeration.repr()?)
                 .wire_size()
                 .map(Expression::integer)
@@ -92,10 +97,18 @@ impl<'context> Sizer<'context> {
     }
 
     fn unsupported(shape: &'static str) -> Result<SizeExpression> {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape,
-        })
+        Err(KotlinHost::unsupported(shape))
+    }
+
+    fn with_current(
+        &mut self,
+        current: Expression,
+        render: impl FnOnce(&mut Self, &ValueRef) -> Result<SizeExpression>,
+    ) -> Result<SizeExpression> {
+        let previous = std::mem::replace(&mut self.current, current);
+        let expression = render(self, &ValueRef::self_value());
+        self.current = previous;
+        expression
     }
 }
 
@@ -163,11 +176,17 @@ impl CodecSize for Sizer<'_> {
         Self::unsupported("callback handle wire size")
     }
 
-    fn custom<F>(&mut self, _id: CustomTypeId, value: &ValueRef, representation: F) -> Self::Expr
+    fn custom<F>(&mut self, id: CustomTypeId, value: &ValueRef, representation: F) -> Self::Expr
     where
         F: FnOnce(&mut Self, &ValueRef) -> Self::Expr,
     {
-        let representation = representation(self, value);
+        let representation = match self.host.custom_type_mapping(id, self.context) {
+            Some(mapping) => self
+                .value(value)
+                .and_then(|value| mapping.encode(value))
+                .and_then(|value| self.with_current(value, representation)),
+            None => representation(self, value),
+        };
         representation.map(SizeExpression::without_primitive)
     }
 

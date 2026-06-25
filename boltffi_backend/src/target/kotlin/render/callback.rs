@@ -95,11 +95,13 @@ struct CallbackRegistrationSet<'bridge> {
 struct ParameterRender<'context> {
     source_name: Name,
     name: Identifier,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
 struct ReturnRender<'context> {
     source_name: Name,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
     fallible_success_out: bool,
 }
@@ -107,10 +109,12 @@ struct ReturnRender<'context> {
 struct HandleParameterRender<'context> {
     source_name: Name,
     name: Identifier,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
 struct HandleReturnRender<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
@@ -183,6 +187,7 @@ struct AsyncCompletion {
 impl Callback {
     pub fn from_declaration(
         decl: &CallbackDecl<Native>,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -200,7 +205,7 @@ impl Callback {
             .methods()
             .iter()
             .zip(registration.methods())
-            .map(|(source, method)| Method::from_declaration(source, method, bridge, context))
+            .map(|(source, method)| Method::from_declaration(source, method, host, bridge, context))
             .collect::<Result<Vec<_>>>()?;
         if !registration.handle_methods().is_empty()
             && decl.protocol().vtable().methods().len() != registration.handle_methods().len()
@@ -216,7 +221,7 @@ impl Callback {
             .methods()
             .iter()
             .zip(registration.handle_methods())
-            .map(|(source, method)| HandleMethod::from_declaration(source, method, context))
+            .map(|(source, method)| HandleMethod::from_declaration(source, method, host, context))
             .collect::<Result<Vec<_>>>()?;
         let handle_name = TypeName::new(format!("{name}Handle"));
         let handle_release = bridge
@@ -336,6 +341,7 @@ impl Method {
     fn from_declaration(
         source: &ImportedMethodDecl<Native, VTableSlot>,
         method: &JniCallbackMethod,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -350,10 +356,7 @@ impl Method {
             ExecutionDecl::Synchronous(_) => false,
             ExecutionDecl::Asynchronous(_) => true,
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown callback method execution",
-                });
+                return Err(KotlinHost::unsupported("unknown callback method execution"));
             }
         };
         let async_completion = if asynchronous {
@@ -364,13 +367,14 @@ impl Method {
         let parameters = callable
             .params()
             .iter()
-            .map(|parameter| MethodParameter::from_declaration(parameter, context))
+            .map(|parameter| MethodParameter::from_declaration(parameter, host, context))
             .collect::<Result<Vec<_>>>()?;
         let source_name = Name::new(source.name());
         let fallible =
             FallibleReturn::from_method(source_name.clone(), callable.error().channel(), method)?;
         let return_value = callable.returns().plan().render_with(&mut ReturnRender {
             source_name,
+            host,
             context,
             fallible_success_out: fallible.is_some(),
         })?;
@@ -403,9 +407,10 @@ impl Method {
             (Some(fallible), None) => return_value.throwing_fallible_statements(
                 interface_call.clone(),
                 fallible,
+                host,
                 context,
             )?,
-            (None, None) => return_value.statements(interface_call.clone(), context)?,
+            (None, None) => return_value.statements(interface_call.clone(), host, context)?,
         };
         let async_body = async_completion
             .as_ref()
@@ -415,6 +420,7 @@ impl Method {
                     &return_value,
                     fallible.as_ref(),
                     completion,
+                    host,
                     context,
                 )
             })
@@ -453,13 +459,17 @@ impl AsyncMethodBody {
         return_value: &ReturnValue,
         fallible: Option<&FallibleReturn<'_>>,
         completion: &AsyncCompletion,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         Ok(Self {
             statements: match fallible {
-                Some(fallible) => return_value
-                    .throwing_completion_fallible_statements(call, fallible, completion, context)?,
-                None => return_value.completion_success_statements(call, completion, context)?,
+                Some(fallible) => return_value.throwing_completion_fallible_statements(
+                    call, fallible, completion, host, context,
+                )?,
+                None => {
+                    return_value.completion_success_statements(call, completion, host, context)?
+                }
             },
             failure: completion.failure_statement(),
         })
@@ -576,14 +586,12 @@ impl<'error> FallibleReturn<'error> {
                 error_ty: ty,
                 error_codec: codec,
             })),
-            ErrorChannel::Encoded { .. } | ErrorChannel::Status => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback method error return",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown callback method error return",
-            }),
+            ErrorChannel::Encoded { .. } | ErrorChannel::Status => {
+                Err(KotlinHost::unsupported("callback method error return"))
+            }
+            _ => Err(KotlinHost::unsupported(
+                "unknown callback method error return",
+            )),
         }
     }
 
@@ -634,20 +642,15 @@ impl HandleMethod {
     fn from_declaration(
         source: &ImportedMethodDecl<Native, VTableSlot>,
         method: &JniCallbackHandleMethod,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let callable = source.callable();
         if !matches!(callable.error().channel(), ErrorChannel::None) {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback method error return",
-            });
+            return Err(KotlinHost::unsupported("callback method error return"));
         }
         if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "async callback method",
-            });
+            return Err(KotlinHost::unsupported("async callback method"));
         }
         if source.target().as_str() != method.slot().as_str() {
             return Err(Error::BrokenBridgeContract {
@@ -658,12 +661,12 @@ impl HandleMethod {
         let parameters = callable
             .params()
             .iter()
-            .map(|parameter| HandleParameter::from_declaration(parameter, context))
+            .map(|parameter| HandleParameter::from_declaration(parameter, host, context))
             .collect::<Result<Vec<_>>>()?;
         let returned = callable
             .returns()
             .plan()
-            .render_with(&mut HandleReturnRender { context })?;
+            .render_with(&mut HandleReturnRender { host, context })?;
         let native_arguments = std::iter::once(Expression::call(
             Expression::this(),
             Identifier::parse("requireOpen")?,
@@ -690,7 +693,7 @@ impl HandleMethod {
                 .iter()
                 .flat_map(|parameter| parameter.setup.iter().cloned())
                 .collect(),
-            call: returned.statements(native_call.expression(), context)?,
+            call: returned.statements(native_call.expression(), host, context)?,
             cleanup: parameters
                 .into_iter()
                 .flat_map(|parameter| parameter.cleanup)
@@ -715,10 +718,9 @@ impl CallbackHandle {
         presence: HandlePresence,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        let callback = context.callback(id).ok_or(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "callback handle without declaration",
-        })?;
+        let callback = context.callback(id).ok_or(KotlinHost::unsupported(
+            "callback handle without declaration",
+        ))?;
         let ty = Name::new(callback.name()).type_name();
         Ok(Self {
             bridge: TypeName::new(format!("{ty}Bridge")),
@@ -732,10 +734,7 @@ impl CallbackHandle {
         match self.presence {
             HandlePresence::Required => Ok(self.ty.clone()),
             HandlePresence::Nullable => Ok(self.ty.clone().nullable()),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown callback handle presence",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown callback handle presence")),
         }
     }
 
@@ -762,10 +761,7 @@ impl CallbackHandle {
                 Expression::long(0),
             ),
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown callback handle presence",
-                });
+                return Err(KotlinHost::unsupported("unknown callback handle presence"));
             }
         })
     }
@@ -783,10 +779,7 @@ impl CallbackHandle {
                 handle,
             ),
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown callback handle presence",
-                });
+                return Err(KotlinHost::unsupported("unknown callback handle presence"));
             }
         })
     }
@@ -830,19 +823,18 @@ struct MethodParameter {
 impl MethodParameter {
     fn from_declaration(
         parameter: &ParamDecl<Native, OutOfRust>,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let OutgoingParam::Value(plan) = parameter.payload() else {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback method closure parameter",
-            });
+            return Err(KotlinHost::unsupported("callback method closure parameter"));
         };
         let source_name = Name::new(parameter.name());
         let name = source_name.parameter()?;
         plan.render_with(&mut ParameterRender {
             source_name,
             name,
+            host,
             context,
         })
     }
@@ -851,19 +843,20 @@ impl MethodParameter {
 impl HandleParameter {
     fn from_declaration(
         parameter: &ParamDecl<Native, OutOfRust>,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let OutgoingParam::Value(plan) = parameter.payload() else {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method closure parameter",
-            });
+            return Err(KotlinHost::unsupported(
+                "callback handle method closure parameter",
+            ));
         };
         let source_name = Name::new(parameter.name());
         let name = source_name.parameter()?;
         plan.render_with(&mut HandleParameterRender {
             source_name,
             name,
+            host,
             context,
         })
     }
@@ -901,7 +894,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
                 })
             }
             DirectValueType::Enum(enumeration) => {
-                let enumeration = Enumeration::from_id(*enumeration, self.context)?;
+                let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
                 Ok(HandleParameter {
                     public: Parameter {
                         name: self.name.clone(),
@@ -914,10 +907,9 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
                     cleanup: Vec::new(),
                 })
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method direct parameter",
-            }),
+            _ => Err(KotlinHost::unsupported(
+                "callback handle method direct parameter",
+            )),
         }
     }
 
@@ -931,13 +923,14 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
         let write = WireBuffer::new(&self.source_name)?.write_value(
             &codec.write_self_value(),
             Expression::identifier(self.name.clone()),
+            self.host,
             self.context,
         )?;
         let (setup, native_argument, cleanup) = write.into_parts();
         Ok(HandleParameter {
             public: Parameter {
                 name: self.name.clone(),
-                ty: KotlinType::type_ref(ty, self.context)?,
+                ty: KotlinType::type_ref(ty, self.host, self.context)?,
             },
             native_argument,
             setup,
@@ -978,14 +971,12 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
                     cleanup: Vec::new(),
                 })
             }
-            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method stream parameter",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown callback handle method handle parameter",
-            }),
+            HandleTarget::Stream(_) => Err(KotlinHost::unsupported(
+                "callback handle method stream parameter",
+            )),
+            _ => Err(KotlinHost::unsupported(
+                "unknown callback handle method handle parameter",
+            )),
         }
     }
 
@@ -1042,7 +1033,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
                 })
             }
             DirectValueType::Enum(enumeration) => {
-                let enumeration = Enumeration::from_id(*enumeration, self.context)?;
+                let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
                 let repr = enumeration.repr()?;
                 Ok(MethodParameter {
                     public: Parameter {
@@ -1081,10 +1072,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
                     )?,
                 })
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback method direct parameter",
-            }),
+            _ => Err(KotlinHost::unsupported("callback method direct parameter")),
         }
     }
 
@@ -1098,12 +1086,12 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
         let reader = self.source_name.generated("reader")?;
         let value = self.source_name.generated("value")?;
         let expression = codec
-            .render_with(&mut Reader::new(reader.clone(), self.context))?
+            .render_with(&mut Reader::new(reader.clone(), self.host, self.context))?
             .into_expression();
         Ok(MethodParameter {
             public: Parameter {
                 name: self.name.clone(),
-                ty: KotlinType::type_ref(ty, self.context)?,
+                ty: KotlinType::type_ref(ty, self.host, self.context)?,
             },
             jvm: Parameter {
                 name: self.name.clone(),
@@ -1132,10 +1120,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
         _presence: HandlePresence,
         _receive: <OutOfRust as Direction>::Receive,
     ) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "callback method handle parameter",
-        })
+        Err(KotlinHost::unsupported("callback method handle parameter"))
     }
 
     fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
@@ -1222,11 +1207,8 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
             (
                 ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
                 DirectValueType::Enum(enumeration),
-            ) => Self::direct_enum(*enumeration, self.context),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback method direct return",
-            }),
+            ) => Self::direct_enum(*enumeration, self.host, self.context),
+            _ => Err(KotlinHost::unsupported("callback method direct return")),
         }
     }
 
@@ -1239,7 +1221,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     ) -> Self::Output {
         self.require_supported_slot(slot, "callback method out-pointer encoded return")?;
         Ok(ReturnValue {
-            public_ty: Some(KotlinType::type_ref(ty, self.context)?),
+            public_ty: Some(KotlinType::type_ref(ty, self.host, self.context)?),
             jvm_ty: Some(TypeName::byte_array(false)),
             conversion: ReturnConversion::Encoded {
                 codec: codec.clone(),
@@ -1273,14 +1255,12 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
                     conversion: ReturnConversion::CallbackHandle(handle),
                 })
             }
-            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback method stream return",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown callback method handle return",
-            }),
+            HandleTarget::Stream(_) => {
+                Err(KotlinHost::unsupported("callback method stream return"))
+            }
+            _ => Err(KotlinHost::unsupported(
+                "unknown callback method handle return",
+            )),
         }
     }
 
@@ -1305,10 +1285,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 
     fn closure(&mut self, _closure: &'plan ClosureReturn<Native, IntoRust>) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "callback method closure return",
-        })
+        Err(KotlinHost::unsupported("callback method closure return"))
     }
 }
 
@@ -1324,10 +1301,9 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
 
     fn direct(&mut self, slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output {
         if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method out-pointer return",
-            });
+            return Err(KotlinHost::unsupported(
+                "callback handle method out-pointer return",
+            ));
         }
         match ty {
             DirectValueType::Primitive(primitive) => Ok(HandleReturn {
@@ -1342,17 +1318,16 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
                 })
             }
             DirectValueType::Enum(enumeration) => {
-                let enumeration = Enumeration::from_id(*enumeration, self.context)?;
+                let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
                 let ty = enumeration.name().clone();
                 Ok(HandleReturn {
                     ty: Some(ty.clone()),
                     conversion: HandleReturnConversion::DirectEnum(ty),
                 })
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method direct return",
-            }),
+            _ => Err(KotlinHost::unsupported(
+                "callback handle method direct return",
+            )),
         }
     }
 
@@ -1364,13 +1339,12 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
         _shape: <Native as Surface>::BufferShape,
     ) -> Self::Output {
         if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method out-pointer encoded return",
-            });
+            return Err(KotlinHost::unsupported(
+                "callback handle method out-pointer encoded return",
+            ));
         }
         Ok(HandleReturn {
-            ty: Some(KotlinType::type_ref(ty, self.context)?),
+            ty: Some(KotlinType::type_ref(ty, self.host, self.context)?),
             conversion: HandleReturnConversion::Encoded(codec.read_plan()),
         })
     }
@@ -1383,10 +1357,9 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
         presence: HandlePresence,
     ) -> Self::Output {
         if !matches!(slot, ReturnValueSlot::ReturnSlot) {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method out-pointer handle return",
-            });
+            return Err(KotlinHost::unsupported(
+                "callback handle method out-pointer handle return",
+            ));
         }
         match target {
             HandleTarget::Class(class) => {
@@ -1403,14 +1376,12 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
                     conversion: HandleReturnConversion::CallbackHandle(handle),
                 })
             }
-            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback handle method stream return",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown callback handle method handle return",
-            }),
+            HandleTarget::Stream(_) => Err(KotlinHost::unsupported(
+                "callback handle method stream return",
+            )),
+            _ => Err(KotlinHost::unsupported(
+                "unknown callback handle method handle return",
+            )),
         }
     }
 
@@ -1430,10 +1401,9 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
     }
 
     fn closure(&mut self, _closure: &'plan ClosureReturn<Native, IntoRust>) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "callback handle method closure return",
-        })
+        Err(KotlinHost::unsupported(
+            "callback handle method closure return",
+        ))
     }
 }
 
@@ -1442,19 +1412,19 @@ impl ReturnRender<'_> {
         match slot {
             ReturnValueSlot::ReturnSlot => Ok(()),
             ReturnValueSlot::OutPointer if self.fallible_success_out => Ok(()),
-            ReturnValueSlot::OutPointer => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape,
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown callback method return slot",
-            }),
+            ReturnValueSlot::OutPointer => Err(KotlinHost::unsupported(shape)),
+            _ => Err(KotlinHost::unsupported(
+                "unknown callback method return slot",
+            )),
         }
     }
 
-    fn direct_enum(enumeration: EnumId, context: &RenderContext<Native>) -> Result<ReturnValue> {
-        let enumeration = Enumeration::from_id(enumeration, context)?;
+    fn direct_enum(
+        enumeration: EnumId,
+        host: &KotlinHost,
+        context: &RenderContext<Native>,
+    ) -> Result<ReturnValue> {
+        let enumeration = Enumeration::from_id(enumeration, host, context)?;
         let repr = enumeration.repr()?;
         Ok(ReturnValue {
             public_ty: Some(enumeration.name().clone()),
@@ -1469,15 +1439,16 @@ impl ReturnValue {
         &self,
         call: Expression,
         fallible: &FallibleReturn,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         let error = fallible.source_name.generated("error")?;
         Ok(vec![Statement::return_value(
-            self.fallible_success_expression(call, fallible, context)?
+            self.fallible_success_expression(call, fallible, host, context)?
                 .try_catch(
                     error.clone(),
-                    fallible.error_type(context)?,
-                    fallible.error_expression(Expression::identifier(error), context)?,
+                    fallible.error_type(host, context)?,
+                    fallible.error_expression(Expression::identifier(error), host, context)?,
                 ),
         )])
     }
@@ -1486,6 +1457,7 @@ impl ReturnValue {
         &self,
         call: Expression,
         completion: &AsyncCompletion,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         match completion.payload {
@@ -1507,7 +1479,7 @@ impl ReturnValue {
             Some(_) => {
                 let result = Identifier::parse("__boltffi_result")?;
                 let (setup, payload, cleanup) =
-                    self.success_value(Expression::identifier(result.clone()), context)?;
+                    self.success_value(Expression::identifier(result.clone()), host, context)?;
                 Ok(std::iter::once(Statement::value(result, call))
                     .chain(setup)
                     .chain(std::iter::once(completion.success_statement(Some(payload))))
@@ -1522,17 +1494,19 @@ impl ReturnValue {
         call: Expression,
         fallible: &FallibleReturn,
         completion: &AsyncCompletion,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         let error = fallible.source_name.generated("error")?;
         Ok(vec![Statement::expression(
-            self.completion_success_expression(call, completion, context)?
+            self.completion_success_expression(call, completion, host, context)?
                 .try_catch(
                     error.clone(),
-                    fallible.error_type(context)?,
+                    fallible.error_type(host, context)?,
                     fallible.completion_error_expression(
                         Expression::identifier(error),
                         completion,
+                        host,
                         context,
                     )?,
                 ),
@@ -1542,6 +1516,7 @@ impl ReturnValue {
     fn statements(
         &self,
         call: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         match &self.conversion {
@@ -1565,6 +1540,7 @@ impl ReturnValue {
                 let write = WireBuffer::new(source_name)?.write_value(
                     codec,
                     Expression::identifier(result.clone()),
+                    host,
                     context,
                 )?;
                 let (setup, expression, cleanup) = write.into_parts();
@@ -1606,10 +1582,9 @@ impl ReturnValue {
                 .parameter_argument(call)
                 .map(Statement::return_value)
                 .map(|statement| vec![statement]),
-            ReturnConversion::Direct(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "callback method direct return",
-            }),
+            ReturnConversion::Direct(_) => {
+                Err(KotlinHost::unsupported("callback method direct return"))
+            }
         }
     }
 
@@ -1617,6 +1592,7 @@ impl ReturnValue {
         &self,
         value: Expression,
         fallible: &FallibleReturn,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Expression> {
         let ReturnConversion::Void = &self.conversion else {
@@ -1627,7 +1603,7 @@ impl ReturnValue {
                     bridge: "jni",
                     invariant: "fallible callback method has no success out-pointer",
                 })?;
-            let (setup, value, cleanup) = self.success_value(value, context)?;
+            let (setup, value, cleanup) = self.success_value(value, host, context)?;
             let write = Statement::expression(Expression::call(
                 "Native",
                 Identifier::escape(success_out.writer().as_str())?,
@@ -1654,10 +1630,11 @@ impl ReturnValue {
         &self,
         value: Expression,
         completion: &AsyncCompletion,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Expression> {
         Ok(Expression::run(
-            self.completion_success_value(value, completion, context)?,
+            self.completion_success_value(value, completion, host, context)?,
             Expression::identifier(Identifier::parse("Unit")?),
         ))
     }
@@ -1666,6 +1643,7 @@ impl ReturnValue {
         &self,
         value: Expression,
         completion: &AsyncCompletion,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         match completion.payload {
@@ -1684,7 +1662,7 @@ impl ReturnValue {
                 ])
             }
             Some(_) => {
-                let (setup, payload, cleanup) = self.success_value(value, context)?;
+                let (setup, payload, cleanup) = self.success_value(value, host, context)?;
                 Ok(setup
                     .into_iter()
                     .chain(std::iter::once(completion.success_statement(Some(payload))))
@@ -1697,6 +1675,7 @@ impl ReturnValue {
     fn success_value(
         &self,
         value: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<(Vec<Statement>, Expression, Vec<Statement>)> {
         match &self.conversion {
@@ -1715,7 +1694,7 @@ impl ReturnValue {
                 Ok((Vec::new(), Record::encode_expression(value)?, Vec::new()))
             }
             ReturnConversion::Encoded { codec, source_name } => Ok(WireBuffer::new(source_name)?
-                .write_value(codec, value, context)?
+                .write_value(codec, value, host, context)?
                 .into_parts()),
             ReturnConversion::ScalarOption {
                 primitive,
@@ -1732,10 +1711,9 @@ impl ReturnValue {
             ReturnConversion::CallbackHandle(handle) => {
                 Ok((Vec::new(), handle.parameter_argument(value)?, Vec::new()))
             }
-            ReturnConversion::Void | ReturnConversion::Direct(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "fallible callback method success return",
-            }),
+            ReturnConversion::Void | ReturnConversion::Direct(_) => Err(KotlinHost::unsupported(
+                "fallible callback method success return",
+            )),
         }
     }
 
@@ -1750,18 +1728,23 @@ impl ReturnValue {
 }
 
 impl FallibleReturn<'_> {
-    fn error_type(&self, context: &RenderContext<Native>) -> Result<TypeName> {
-        KotlinType::type_ref(self.error_ty, context)
+    fn error_type(&self, host: &KotlinHost, context: &RenderContext<Native>) -> Result<TypeName> {
+        KotlinType::type_ref(self.error_ty, host, context)
     }
 
     fn error_expression(
         &self,
         value: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Expression> {
         let bytes = self.source_name.generated("error_bytes")?;
-        let write =
-            WireBuffer::new(&self.source_name)?.write_value(self.error_codec, value, context)?;
+        let write = WireBuffer::new(&self.source_name)?.write_value(
+            self.error_codec,
+            value,
+            host,
+            context,
+        )?;
         let (setup, expression, cleanup) = write.into_parts();
         Ok(Expression::run(
             setup
@@ -1777,11 +1760,16 @@ impl FallibleReturn<'_> {
         &self,
         value: Expression,
         completion: &AsyncCompletion,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Expression> {
         let bytes = self.source_name.generated("error_bytes")?;
-        let write =
-            WireBuffer::new(&self.source_name)?.write_value(self.error_codec, value, context)?;
+        let write = WireBuffer::new(&self.source_name)?.write_value(
+            self.error_codec,
+            value,
+            host,
+            context,
+        )?;
         let (setup, expression, cleanup) = write.into_parts();
         Ok(Expression::run(
             setup
@@ -1801,9 +1789,10 @@ impl HandleReturn {
     fn statements(
         &self,
         call: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
-        self.value_statements(call, context).map(|body| {
+        self.value_statements(call, host, context).map(|body| {
             if self.ty.is_some() {
                 Statement::with_return_value(body)
             } else {
@@ -1815,6 +1804,7 @@ impl HandleReturn {
     fn value_statements(
         &self,
         call: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         match &self.conversion {
@@ -1852,7 +1842,7 @@ impl HandleReturn {
                     "null buffer returned",
                 )));
                 let value = codec
-                    .render_with(&mut Reader::new(reader.clone(), context))?
+                    .render_with(&mut Reader::new(reader.clone(), host, context))?
                     .into_expression();
                 Ok(vec![
                     Statement::value(result.clone(), payload),

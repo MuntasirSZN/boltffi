@@ -4,7 +4,7 @@ use boltffi_binding::{
 };
 
 use crate::{
-    core::{Error, RenderContext, Result},
+    core::{RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         codec::{size::Sizer, value::ValueExpression},
@@ -31,6 +31,7 @@ pub struct WireBuffer {
 pub struct Writer<'context> {
     writer: Identifier,
     current: Expression,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
@@ -66,10 +67,16 @@ impl WireBuffer {
         &self.writer
     }
 
-    pub fn write(self, plan: &WritePlan, context: &RenderContext<Native>) -> Result<EncodedWrite> {
+    pub fn write(
+        self,
+        plan: &WritePlan,
+        host: &KotlinHost,
+        context: &RenderContext<Native>,
+    ) -> Result<EncodedWrite> {
         self.write_value(
             plan,
             Expression::identifier(Identifier::parse("value")?),
+            host,
             context,
         )
     }
@@ -78,12 +85,13 @@ impl WireBuffer {
         self,
         plan: &WritePlan,
         value: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<EncodedWrite> {
         let size = plan
-            .size_with(&mut Sizer::new(context)?.current(value.clone()))?
+            .size_with(&mut Sizer::new(host, context)?.current(value.clone()))?
             .into_expression();
-        let mut writer = Writer::new(self.writer.clone(), context)?.current(value);
+        let mut writer = Writer::new(self.writer.clone(), host, context)?.current(value);
         let writes = plan
             .render_with(&mut writer)
             .into_iter()
@@ -131,11 +139,13 @@ impl WireBuffer {
 impl<'context> Writer<'context> {
     pub fn new(
         writer: Identifier,
+        host: &'context KotlinHost,
         context: &'context RenderContext<'context, Native>,
     ) -> Result<Self> {
         Ok(Self {
             writer,
             current: Expression::identifier(Identifier::parse("value")?),
+            host,
             context,
         })
     }
@@ -180,21 +190,26 @@ impl<'context> Writer<'context> {
     }
 
     fn unsupported(shape: &'static str) -> Vec<Result<WriteStatement>> {
-        vec![Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape,
-        })]
+        vec![Err(KotlinHost::unsupported(shape))]
     }
 
     fn single_statement(statements: Vec<Result<WriteStatement>>) -> Result<Statement> {
         let mut statements = statements.into_iter().collect::<Result<Vec<_>>>()?;
         match statements.len() {
             1 => Ok(statements.remove(0).into_statement()),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "multi-statement wire writer",
-            }),
+            _ => Err(KotlinHost::unsupported("multi-statement wire writer")),
         }
+    }
+
+    fn with_current(
+        &mut self,
+        current: Expression,
+        render: impl FnOnce(&mut Self, &ValueRef) -> Vec<Result<WriteStatement>>,
+    ) -> Vec<Result<WriteStatement>> {
+        let previous = std::mem::replace(&mut self.current, current);
+        let statements = render(self, &ValueRef::self_value());
+        self.current = previous;
+        statements
     }
 }
 
@@ -267,7 +282,7 @@ impl CodecWrite for Writer<'_> {
 
     fn c_style_enum(&mut self, id: EnumId, value: &ValueRef) -> Vec<Self::Stmt> {
         vec![
-            Enumeration::from_id(id, self.context).and_then(|enumeration| {
+            Enumeration::from_id(id, self.host, self.context).and_then(|enumeration| {
                 Self::native_primitive_method(enumeration.repr()?).and_then(|method| {
                     self.writer_call_expression(
                         method,
@@ -296,14 +311,20 @@ impl CodecWrite for Writer<'_> {
 
     fn custom<F>(
         &mut self,
-        _id: CustomTypeId,
+        id: CustomTypeId,
         value: &ValueRef,
         representation: F,
     ) -> Vec<Self::Stmt>
     where
         F: FnOnce(&mut Self, &ValueRef) -> Vec<Self::Stmt>,
     {
-        let representation = representation(self, value);
+        let representation = match self.host.custom_type_mapping(id, self.context) {
+            Some(mapping) => match self.value(value).and_then(|value| mapping.encode(value)) {
+                Ok(value) => self.with_current(value, representation),
+                Err(error) => vec![Err(error)],
+            },
+            None => representation(self, value),
+        };
         representation
             .into_iter()
             .map(|statement| statement.map(WriteStatement::without_primitive))

@@ -6,11 +6,11 @@ mod primitive;
 mod render;
 mod syntax;
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use boltffi_binding::{
-    Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, EnumDecl, FunctionDecl,
-    Native, RecordDecl, StreamDecl,
+    Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, CustomTypeId, EnumDecl,
+    FunctionDecl, Native, RecordDecl, StreamDecl,
 };
 
 use crate::{
@@ -19,14 +19,15 @@ use crate::{
         jni::{JniBridge, JniBridgeContract},
     },
     core::{
-        BindingCapability, BridgeCapability, BridgeLayer, CapabilityRequirements, Emitted,
+        BindingCapability, BridgeCapability, BridgeLayer, CapabilityRequirements, Emitted, Error,
         GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result, Target,
         contract::sealed, host,
     },
 };
 
+use name_style::Name;
 pub use name_style::{KotlinFile, KotlinLibrary, KotlinPackage};
-use syntax::Syntax;
+use syntax::{ArgumentList, Expression, Identifier, Syntax, TypeName};
 
 /// Desktop native-library loading policy for the generated Kotlin module.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -63,6 +64,24 @@ pub enum KotlinFactoryStyle {
     CompanionMethods,
 }
 
+/// Conversion used by a Kotlin custom type mapping.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum KotlinCustomConversion {
+    /// Convert a string representation to and from `java.util.UUID`.
+    UuidString,
+    /// Convert a string representation to and from `java.net.URI`.
+    UrlString,
+}
+
+/// Public Kotlin type and conversion for one BoltFFI custom type.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub struct KotlinCustomMapping {
+    ty: TypeName,
+    conversion: KotlinCustomConversion,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct NativeLibraries {
     android: KotlinLibrary,
@@ -82,6 +101,50 @@ pub struct KotlinHost {
     native_libraries: NativeLibraries,
     api_style: KotlinApiStyle,
     factory_style: KotlinFactoryStyle,
+    custom_mappings: BTreeMap<String, KotlinCustomMapping>,
+}
+
+impl KotlinCustomMapping {
+    /// Creates a mapping whose FFI representation is a UUID string.
+    pub fn uuid_string(ty: impl Into<String>) -> Self {
+        Self {
+            ty: TypeName::new(ty),
+            conversion: KotlinCustomConversion::UuidString,
+        }
+    }
+
+    /// Creates a mapping whose FFI representation is a URL string.
+    pub fn url_string(ty: impl Into<String>) -> Self {
+        Self {
+            ty: TypeName::new(ty),
+            conversion: KotlinCustomConversion::UrlString,
+        }
+    }
+
+    fn ty(&self) -> TypeName {
+        self.ty.clone()
+    }
+
+    fn decode(&self, representation: Expression) -> Result<Expression> {
+        match self.conversion {
+            KotlinCustomConversion::UuidString => Ok(Expression::invoke(
+                "java.util.UUID.fromString",
+                [representation].into_iter().collect::<ArgumentList>(),
+            )),
+            KotlinCustomConversion::UrlString => Ok(Expression::invoke(
+                "java.net.URI.create",
+                [representation].into_iter().collect::<ArgumentList>(),
+            )),
+        }
+    }
+
+    fn encode(&self, value: Expression) -> Result<Expression> {
+        Ok(Expression::call(
+            value,
+            Identifier::parse("toString")?,
+            ArgumentList::default(),
+        ))
+    }
 }
 
 impl KotlinHost {
@@ -97,6 +160,7 @@ impl KotlinHost {
             native_libraries: NativeLibraries::default()?,
             api_style: KotlinApiStyle::default(),
             factory_style: KotlinFactoryStyle::default(),
+            custom_mappings: BTreeMap::new(),
         })
     }
 
@@ -148,6 +212,16 @@ impl KotlinHost {
         self
     }
 
+    /// Registers a Kotlin API mapping for one custom type id.
+    pub fn custom_mapping(
+        mut self,
+        custom_type: impl Into<String>,
+        mapping: KotlinCustomMapping,
+    ) -> Self {
+        self.custom_mappings.insert(custom_type.into(), mapping);
+        self
+    }
+
     /// Creates the backend target stack for this Kotlin host.
     pub fn into_target(self) -> Result<Target<Self, BridgeLayer<CBridge, JniBridge>>> {
         Ok(Target::new(
@@ -179,6 +253,33 @@ impl KotlinHost {
 
     fn factory_layout(&self) -> KotlinFactoryStyle {
         self.factory_style
+    }
+
+    fn custom_type_mapping(
+        &self,
+        id: CustomTypeId,
+        context: &RenderContext<Native>,
+    ) -> Option<&KotlinCustomMapping> {
+        let declaration = context.custom_type(id)?;
+        let kotlin_name = Name::new(declaration.name()).type_name().to_string();
+        self.custom_mappings.get(&kotlin_name).or_else(|| {
+            self.custom_mappings
+                .get(&declaration.name().as_path_string())
+        })
+    }
+
+    fn unsupported(shape: &'static str) -> Error {
+        Error::UnsupportedTarget {
+            target: Self::TARGET,
+            shape,
+        }
+    }
+
+    fn broken_bridge_contract(invariant: &'static str) -> Error {
+        Error::BrokenBridgeContract {
+            bridge: Self::TARGET,
+            invariant,
+        }
     }
 }
 
@@ -244,7 +345,7 @@ impl host::HostBackend for KotlinHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Record::from_declaration(decl, bridge, context)?.render()
+        render::Record::from_declaration(decl, self, bridge, context)?.render()
     }
 
     fn enumeration(
@@ -255,6 +356,7 @@ impl host::HostBackend for KotlinHost {
     ) -> Result<Emitted> {
         render::Enumeration::from_declaration_with_package(
             decl,
+            self,
             bridge,
             context,
             Some(self.package()),
@@ -268,7 +370,7 @@ impl host::HostBackend for KotlinHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Function::from_declaration(decl, bridge, context)?.render()
+        render::Function::from_declaration(decl, self, bridge, context)?.render()
     }
 
     fn class(
@@ -277,7 +379,8 @@ impl host::HostBackend for KotlinHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Class::from_declaration(decl, self.factory_layout(), bridge, context)?.render()
+        render::Class::from_declaration(decl, self, self.factory_layout(), bridge, context)?
+            .render()
     }
 
     fn callback(
@@ -286,7 +389,7 @@ impl host::HostBackend for KotlinHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Callback::from_declaration(decl, bridge, context)?.render()
+        render::Callback::from_declaration(decl, self, bridge, context)?.render()
     }
 
     fn stream(
@@ -295,7 +398,7 @@ impl host::HostBackend for KotlinHost {
         _bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Stream::from_declaration(decl, context)?.render()
+        render::Stream::from_declaration(decl, self, context)?.render()
     }
 
     fn constant(
@@ -304,7 +407,7 @@ impl host::HostBackend for KotlinHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Constant::from_declaration(decl, bridge, context)?.render()
+        render::Constant::from_declaration(decl, self, bridge, context)?.render()
     }
 
     fn custom_type(
@@ -313,7 +416,7 @@ impl host::HostBackend for KotlinHost {
         _bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::CustomType::from_declaration(decl, context)?.render()
+        render::CustomType::from_declaration(decl, self, context)?.render()
     }
 
     fn assemble<'decl>(

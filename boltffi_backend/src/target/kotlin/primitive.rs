@@ -1,7 +1,7 @@
 use boltffi_binding::{IntegerValue, Primitive};
 
 use crate::{
-    core::{Error, Result},
+    core::Result,
     target::kotlin::{
         KotlinHost,
         syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
@@ -31,10 +31,7 @@ impl KotlinPrimitive {
             Primitive::F32 => TypeName::float(),
             Primitive::F64 => TypeName::double(),
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown primitive type",
-                });
+                return Err(KotlinHost::unsupported("unknown primitive type"));
             }
         })
     }
@@ -51,10 +48,7 @@ impl KotlinPrimitive {
             Primitive::F32 => TypeName::float(),
             Primitive::F64 => TypeName::double(),
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown native primitive type",
-                });
+                return Err(KotlinHost::unsupported("unknown native primitive type"));
             }
         })
     }
@@ -73,10 +67,7 @@ impl KotlinPrimitive {
             Primitive::F32 => TypeName::new("FloatArray"),
             Primitive::F64 => TypeName::new("DoubleArray"),
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown direct-vector primitive",
-                });
+                return Err(KotlinHost::unsupported("unknown direct-vector primitive"));
             }
         })
     }
@@ -109,10 +100,7 @@ impl KotlinPrimitive {
             | Primitive::ISize
             | Primitive::USize
             | Primitive::F64 => Ok(8),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown primitive wire size",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown primitive wire size")),
         }
     }
 
@@ -129,10 +117,7 @@ impl KotlinPrimitive {
             Primitive::U64 | Primitive::USize => Ok("U64"),
             Primitive::F32 => Ok("F32"),
             Primitive::F64 => Ok("F64"),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown primitive wire method",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown primitive wire method")),
         }
     }
 
@@ -145,10 +130,9 @@ impl KotlinPrimitive {
             Primitive::I64 | Primitive::U64 | Primitive::ISize | Primitive::USize => Ok("I64"),
             Primitive::F32 => Ok("F32"),
             Primitive::F64 => Ok("F64"),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown primitive native wire method",
-            }),
+            _ => Err(KotlinHost::unsupported(
+                "unknown primitive native wire method",
+            )),
         }
     }
 
@@ -161,10 +145,7 @@ impl KotlinPrimitive {
             Primitive::I64 | Primitive::U64 | Primitive::ISize | Primitive::USize => Ok("Long"),
             Primitive::F32 => Ok("Float"),
             Primitive::F64 => Ok("Double"),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown primitive array method",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown primitive array method")),
         }
     }
 
@@ -184,10 +165,7 @@ impl KotlinPrimitive {
             Primitive::U64 | Primitive::USize => converted.convert(Identifier::parse("toULong")?),
             Primitive::I32 | Primitive::I64 | Primitive::ISize => value,
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown primitive literal",
-                });
+                return Err(KotlinHost::unsupported("unknown primitive literal"));
             }
         })
     }
@@ -213,10 +191,7 @@ impl KotlinPrimitive {
                 Expression::unsigned_long(signed as u128).convert(Identifier::parse("toLong")?)
             }
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown native primitive literal",
-                });
+                return Err(KotlinHost::unsupported("unknown native primitive literal"));
             }
         })
     }
@@ -243,10 +218,7 @@ impl KotlinPrimitive {
                 .and_then(|value| Self::converted(value, "toULong")),
             Primitive::F32 => Self::buffer_call(buffer, "getFloat", [offset]),
             Primitive::F64 => Self::buffer_call(buffer, "getDouble", [offset]),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct record field read",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown direct record field read")),
         }
     }
 
@@ -277,10 +249,7 @@ impl KotlinPrimitive {
             Primitive::F32 => ("putFloat", value),
             Primitive::F64 => ("putDouble", value),
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown direct record field write",
-                });
+                return Err(KotlinHost::unsupported("unknown direct record field write"));
             }
         };
         Self::buffer_call(buffer, method, [offset, value]).map(Statement::expression)
@@ -307,10 +276,7 @@ impl KotlinPrimitive {
             | Primitive::F32
             | Primitive::F64 => None,
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown primitive conversion",
-                });
+                return Err(KotlinHost::unsupported("unknown primitive conversion"));
             }
         }
         .transpose()

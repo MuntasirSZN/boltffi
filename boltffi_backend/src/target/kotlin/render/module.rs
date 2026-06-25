@@ -149,7 +149,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
 
     fn closures(&self) -> Result<String> {
         Ok(
-            Closures::from_declarations(&self.declarations, self.bridge, self.context)?
+            Closures::from_declarations(&self.declarations, self.host, self.bridge, self.context)?
                 .render()?
                 .into_iter()
                 .collect::<Vec<_>>()
@@ -288,12 +288,17 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
                 if error_types.is_some_and(|types| types.contains_record(record.id())) =>
             {
                 Ok(
-                    Record::from_declaration_as_error(record, self.bridge, self.context)?
-                        .render()?
-                        .primary_chunk()
-                        .as_str()
-                        .trim_end()
-                        .to_owned(),
+                    Record::from_declaration_as_error(
+                        record,
+                        self.host,
+                        self.bridge,
+                        self.context,
+                    )?
+                    .render()?
+                    .primary_chunk()
+                    .as_str()
+                    .trim_end()
+                    .to_owned(),
                 )
             }
             DeclarationRef::Enum(enumeration)
@@ -301,6 +306,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
             {
                 Ok(Enumeration::from_declaration_as_error(
                     enumeration,
+                    self.host,
                     self.bridge,
                     self.context,
                     Some(self.host.package()),

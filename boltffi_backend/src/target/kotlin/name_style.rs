@@ -107,10 +107,7 @@ impl KotlinLibrary {
         {
             Ok(Self { name })
         } else {
-            Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "kotlin native library name",
-            })
+            Err(KotlinHost::unsupported("kotlin native library name"))
         }
     }
 

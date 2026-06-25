@@ -8,7 +8,7 @@ use crate::{
     bridge::jni::{
         CallbackHandleMethod, DirectVectorParameter, JniType, NativeParameterKind, NativeReturn,
     },
-    core::{Error, RenderContext, Result},
+    core::{RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         codec::ScalarOption,
@@ -98,17 +98,22 @@ impl KotlinType {
         }
     }
 
-    pub fn type_ref(ty: &TypeRef, context: &RenderContext<Native>) -> Result<TypeName> {
-        ty.render_with(&mut KotlinTypeRef::new(context))
+    pub fn type_ref(
+        ty: &TypeRef,
+        host: &KotlinHost,
+        context: &RenderContext<Native>,
+    ) -> Result<TypeName> {
+        ty.render_with(&mut KotlinTypeRef::new(host, context))
             .map(ApiType::into_type)
     }
 
     pub fn type_ref_with_record_package(
         ty: &TypeRef,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
         package: &KotlinPackage,
     ) -> Result<TypeName> {
-        ty.render_with(&mut KotlinTypeRef::new(context).record_package(package))
+        ty.render_with(&mut KotlinTypeRef::new(host, context).record_package(package))
             .map(ApiType::into_type)
     }
 
@@ -122,6 +127,7 @@ impl KotlinType {
 }
 
 struct KotlinTypeRef<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
     record_package: Option<KotlinPackage>,
 }
@@ -132,8 +138,9 @@ struct ApiType {
 }
 
 impl<'context> KotlinTypeRef<'context> {
-    pub fn new(context: &'context RenderContext<Native>) -> Self {
+    pub fn new(host: &'context KotlinHost, context: &'context RenderContext<Native>) -> Self {
         Self {
+            host,
             context,
             record_package: None,
         }
@@ -180,27 +187,22 @@ impl TypeRefRender for KotlinTypeRef<'_> {
     }
 
     fn class(&mut self, _id: ClassId) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "class type",
-        })
+        Err(KotlinHost::unsupported("class type"))
     }
 
     fn callback(&mut self, _id: CallbackId) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "callback type",
-        })
+        Err(KotlinHost::unsupported("callback type"))
     }
 
     fn custom(&mut self, id: CustomTypeId) -> Self::Output {
+        if let Some(mapping) = self.host.custom_type_mapping(id, self.context) {
+            return Ok(ApiType::new(mapping.ty()));
+        }
+
         self.context
             .custom_type(id)
             .map(|custom_type| custom_type.representation())
-            .ok_or(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "custom type without declaration",
-            })?
+            .ok_or(KotlinHost::unsupported("custom type without declaration"))?
             .render_with(self)
             .map(|inner| ApiType::new(inner.ty))
     }
@@ -224,10 +226,7 @@ impl TypeRefRender for KotlinTypeRef<'_> {
     }
 
     fn tuple(&mut self, _elements: Vec<Self::Output>) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "tuple type",
-        })
+        Err(KotlinHost::unsupported("tuple type"))
     }
 
     fn result(&mut self, ok: Self::Output, err: Self::Output) -> Self::Output {
@@ -235,10 +234,7 @@ impl TypeRefRender for KotlinTypeRef<'_> {
     }
 
     fn map(&mut self, _key: Self::Output, _value: Self::Output) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "map type",
-        })
+        Err(KotlinHost::unsupported("map type"))
     }
 }
 
@@ -256,13 +252,18 @@ impl ApiType {
 }
 
 pub struct ParameterType<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
     record_package: Option<KotlinPackage>,
 }
 
 impl<'context> ParameterType<'context> {
-    pub fn new(context: &'context RenderContext<'context, Native>) -> Self {
+    pub fn new(
+        host: &'context KotlinHost,
+        context: &'context RenderContext<'context, Native>,
+    ) -> Self {
         Self {
+            host,
             context,
             record_package: None,
         }
@@ -295,10 +296,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
             DirectValueType::Enum(enumeration) => {
                 Enumeration::type_name_from_id(*enumeration, self.context)
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct function parameter",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown direct function parameter")),
         }
     }
 
@@ -310,8 +308,10 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
         _receive: <IntoRust as Direction>::Receive,
     ) -> Self::Output {
         match &self.record_package {
-            Some(package) => KotlinType::type_ref_with_record_package(ty, self.context, package),
-            None => KotlinType::type_ref(ty, self.context),
+            Some(package) => {
+                KotlinType::type_ref_with_record_package(ty, self.host, self.context, package)
+            }
+            None => KotlinType::type_ref(ty, self.host, self.context),
         }
     }
 
@@ -330,14 +330,8 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
                 CallbackHandle::new(*callback, presence, self.context)
                     .and_then(|handle| handle.ty())
             }
-            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "handle function parameter",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown handle function parameter",
-            }),
+            HandleTarget::Stream(_) => Err(KotlinHost::unsupported("handle function parameter")),
+            _ => Err(KotlinHost::unsupported("unknown handle function parameter")),
         }
     }
 

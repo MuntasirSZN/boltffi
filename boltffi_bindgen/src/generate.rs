@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use boltffi_backend::core::{CoverageMode, bridge, host};
 use boltffi_backend::target::{
-    kotlin::{KotlinApiStyle, KotlinDesktopLoader, KotlinFactoryStyle, KotlinHost},
+    kotlin::{
+        KotlinApiStyle, KotlinCustomMapping, KotlinDesktopLoader, KotlinFactoryStyle, KotlinHost,
+    },
     python::PythonCExtHost,
 };
 use boltffi_backend::{GeneratedOutput, Target as BackendTarget};
@@ -39,6 +41,7 @@ pub struct Generation {
     kotlin_desktop_loader: KotlinDesktopLoader,
     kotlin_api_style: KotlinApiStyle,
     kotlin_factory_style: KotlinFactoryStyle,
+    kotlin_custom_mappings: Vec<(String, KotlinCustomMapping)>,
 }
 
 impl Generation {
@@ -61,6 +64,7 @@ impl Generation {
             kotlin_desktop_loader: KotlinDesktopLoader::default(),
             kotlin_api_style: KotlinApiStyle::default(),
             kotlin_factory_style: KotlinFactoryStyle::default(),
+            kotlin_custom_mappings: Vec::new(),
         }
     }
 
@@ -154,6 +158,15 @@ impl Generation {
         self
     }
 
+    /// Registers Kotlin API mappings for custom types.
+    pub fn kotlin_custom_mappings(
+        mut self,
+        mappings: impl IntoIterator<Item = (String, KotlinCustomMapping)>,
+    ) -> Self {
+        self.kotlin_custom_mappings = mappings.into_iter().collect();
+        self
+    }
+
     /// Reads the embedded metadata, selects the target surface contract, and renders it.
     pub fn render(&self, target: Target) -> Result<GeneratedOutput, GenerationError> {
         match target {
@@ -208,6 +221,12 @@ impl Generation {
             .desktop_loader(self.kotlin_desktop_loader)
             .api_style(self.kotlin_api_style)
             .factory_style(self.kotlin_factory_style);
+        let host = self
+            .kotlin_custom_mappings
+            .iter()
+            .fold(host, |host, (custom_type, mapping)| {
+                host.custom_mapping(custom_type.clone(), mapping.clone())
+            });
         let host = self
             .kotlin_android_library
             .iter()

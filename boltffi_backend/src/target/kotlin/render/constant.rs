@@ -5,11 +5,15 @@ use boltffi_binding::{
 
 use crate::{
     bridge::jni::JniBridgeContract,
-    core::{Emitted, Error, RenderContext, Result},
+    core::{Emitted, RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         name_style::Name,
-        render::{default_value::DefaultExpression, function::ExportedCall, type_name::KotlinType},
+        render::{
+            default_value::DefaultExpression,
+            function::{ExportedCall, ExportedCallRenderer},
+            type_name::KotlinType,
+        },
         syntax::{Expression, Identifier, TypeName},
     },
 };
@@ -36,12 +40,13 @@ pub struct Inline {
 impl Constant {
     pub fn from_declaration(
         declaration: &ConstantDecl<Native>,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration.value() {
             ConstantValueDecl::Inline { ty, value, .. } => Ok(Self {
-                inline: Some(Inline::new(declaration, ty, value, context)?),
+                inline: Some(Inline::new(declaration, ty, value, host, context)?),
                 accessor: None,
             }),
             ConstantValueDecl::Accessor { symbol, callable } => Ok(Self {
@@ -50,14 +55,12 @@ impl Constant {
                     declaration,
                     symbol,
                     callable,
+                    host,
                     bridge,
                     context,
                 )?),
             }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown constant value",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown constant value")),
         }
     }
 
@@ -82,28 +85,21 @@ impl Constant {
         declaration: &ConstantDecl<Native>,
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Native>,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<ExportedCall> {
-        let call = ExportedCall::new(
+        let call = ExportedCallRenderer::new(host, bridge, context).exported(
             Name::new(declaration.name()).function()?,
             symbol,
             callable,
             Vec::new(),
-            bridge,
-            context,
         )?;
         if call.async_call().is_some() {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "async constant accessor",
-            });
+            return Err(KotlinHost::unsupported("async constant accessor"));
         }
         if call.returns().is_none() {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "constant accessor without return",
-            });
+            return Err(KotlinHost::unsupported("constant accessor without return"));
         }
         Ok(call)
     }
@@ -114,11 +110,12 @@ impl Inline {
         declaration: &ConstantDecl<Native>,
         ty: &TypeRef,
         value: &DefaultValue,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         Ok(Self {
             name: Name::new(declaration.name()).function()?,
-            ty: KotlinType::type_ref(ty, context)?,
+            ty: KotlinType::type_ref(ty, host, context)?,
             value: DefaultExpression::render(ty, value)?,
         })
     }

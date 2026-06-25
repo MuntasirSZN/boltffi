@@ -1,7 +1,7 @@
 use boltffi_binding::{DirectVectorElementType, DirectVectorPrimitive, Primitive};
 
 use crate::{
-    core::{Error, Result},
+    core::Result,
     target::kotlin::{
         KotlinHost,
         primitive::KotlinPrimitive,
@@ -20,14 +20,10 @@ impl DirectVector {
     pub fn from_element(element: &DirectVectorElementType) -> Result<Self> {
         match element {
             DirectVectorElementType::Primitive(primitive) => Self::from_primitive(*primitive),
-            DirectVectorElementType::Record(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "direct-record vector type",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct-vector type",
-            }),
+            DirectVectorElementType::Record(_) => {
+                Err(KotlinHost::unsupported("direct-record vector type"))
+            }
+            _ => Err(KotlinHost::unsupported("unknown direct-vector type")),
         }
     }
 
@@ -83,10 +79,7 @@ impl DirectVector {
             Primitive::U16 => Ok("readShortArray"),
             Primitive::U32 => Ok("readIntArray"),
             Primitive::U64 | Primitive::USize => Ok("readLongArray"),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct-vector primitive",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown direct-vector primitive")),
         }
     }
 
@@ -102,10 +95,7 @@ impl DirectVector {
             Primitive::F32 => Ok("writeFloatArray"),
             Primitive::F64 => Ok("writeDoubleArray"),
             Primitive::U8 => Ok("writeByteArray"),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct-vector primitive",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown direct-vector primitive")),
         }
     }
 }

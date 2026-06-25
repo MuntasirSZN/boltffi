@@ -8,11 +8,11 @@ use boltffi_binding::{
 
 use crate::{
     bridge::jni::JniBridgeContract,
-    core::{Emitted, Error, RenderContext, Result},
+    core::{Emitted, RenderContext, Result},
     target::kotlin::{
         KotlinFactoryStyle, KotlinHost,
         name_style::Name,
-        render::function::ExportedCall,
+        render::function::{ExportedCall, ExportedCallRenderer},
         syntax::{Expression, Identifier, Statement, TypeName},
     },
 };
@@ -44,6 +44,7 @@ struct ConstructorSignature(Vec<String>);
 impl Class {
     pub fn from_declaration(
         decl: &ClassDecl<Native>,
+        host: &KotlinHost,
         factory_style: KotlinFactoryStyle,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
@@ -51,16 +52,17 @@ impl Class {
         let initializers = decl
             .initializers()
             .iter()
-            .map(|initializer| Initializer::from_declaration(initializer, bridge, context))
+            .map(|initializer| Initializer::from_declaration(initializer, host, bridge, context))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             name: Self::type_name(decl.name())?,
             release: Identifier::escape(decl.release().name().as_str())?,
             initializers: Initializer::apply_factory_style(initializers, factory_style),
-            static_methods: Self::methods(decl.methods(), None, bridge, context)?,
+            static_methods: Self::methods(decl.methods(), None, host, bridge, context)?,
             instance_methods: Self::methods(
                 decl.methods(),
                 Some(Expression::property("this", Identifier::parse("handle")?)),
+                host,
                 bridge,
                 context,
             )?,
@@ -74,10 +76,9 @@ impl Class {
     pub fn type_name_from_id(id: ClassId, context: &RenderContext<Native>) -> Result<TypeName> {
         context
             .class(id)
-            .ok_or(Error::BrokenBridgeContract {
-                bridge: KotlinHost::TARGET,
-                invariant: "class handle target has no class declaration",
-            })
+            .ok_or(KotlinHost::broken_bridge_contract(
+                "class handle target has no class declaration",
+            ))
             .and_then(|decl| Self::type_name(decl.name()))
     }
 
@@ -108,9 +109,11 @@ impl Class {
     fn methods(
         methods: &[ExportedMethodDecl<Native, NativeSymbol>],
         receiver: Option<Expression>,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Vec<ExportedCall>> {
+        let calls = ExportedCallRenderer::new(host, bridge, context);
         methods
             .iter()
             .filter(|method| method.callable().receiver().is_some() == receiver.is_some())
@@ -121,19 +124,14 @@ impl Class {
                     }
                     (None, None) => Vec::new(),
                     _ => {
-                        return Err(Error::UnsupportedTarget {
-                            target: KotlinHost::TARGET,
-                            shape: "class method receiver",
-                        });
+                        return Err(KotlinHost::unsupported("class method receiver"));
                     }
                 };
-                ExportedCall::new(
+                calls.exported(
                     Name::new(method.name()).function()?,
                     method.target(),
                     method.callable(),
                     native_prefix,
-                    bridge,
-                    context,
                 )
             })
             .collect()
@@ -143,21 +141,21 @@ impl Class {
 impl Initializer {
     pub fn from_declaration(
         initializer: &InitializerDecl<Native>,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        ExportedCall::new(
-            Name::new(initializer.name()).function()?,
-            initializer.symbol(),
-            initializer.callable(),
-            Vec::new(),
-            bridge,
-            context,
-        )
-        .map(|call| Self {
-            call,
-            constructor: true,
-        })
+        ExportedCallRenderer::new(host, bridge, context)
+            .exported(
+                Name::new(initializer.name()).function()?,
+                initializer.symbol(),
+                initializer.callable(),
+                Vec::new(),
+            )
+            .map(|call| Self {
+                call,
+                constructor: true,
+            })
     }
 
     pub fn call(&self) -> &ExportedCall {
@@ -231,10 +229,7 @@ impl ClassHandle {
         match self.presence {
             HandlePresence::Required => Ok(self.ty.clone()),
             HandlePresence::Nullable => Ok(self.ty.clone().nullable()),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown class handle presence",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown class handle presence")),
         }
     }
 
@@ -245,10 +240,7 @@ impl ClassHandle {
             HandlePresence::Nullable => {
                 Ok(Expression::safe_property(value, handle).or_else(Expression::long(0)))
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown class handle presence",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown class handle presence")),
         }
     }
 
@@ -263,10 +255,7 @@ impl ClassHandle {
                 Expression::null(),
                 Expression::construct(self.ty.clone(), [value].into_iter().collect()),
             )),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown class handle presence",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown class handle presence")),
         }
     }
 
@@ -285,10 +274,7 @@ impl ClassHandle {
                     ))?),
                 ])
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown class handle presence",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown class handle presence")),
         }
     }
 }

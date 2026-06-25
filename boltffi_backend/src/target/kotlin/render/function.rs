@@ -9,7 +9,7 @@ use boltffi_binding::{
 
 use crate::{
     bridge::jni::JniBridgeContract,
-    core::{Emitted, Error, RenderContext, Result},
+    core::{Emitted, RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         codec::{EncodedWrite, Reader, ScalarOption, WireBuffer},
@@ -55,6 +55,12 @@ pub struct ExportedCall {
     call: Vec<Statement>,
     cleanup: Vec<Statement>,
     async_call: Option<AsyncCall>,
+}
+
+pub struct ExportedCallRenderer<'render> {
+    host: &'render KotlinHost,
+    bridge: &'render JniBridgeContract,
+    context: &'render RenderContext<'render, Native>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,6 +161,12 @@ pub struct AsyncCall {
     returns_value: bool,
 }
 
+struct AsyncStart {
+    call: Expression,
+    setup: Vec<Statement>,
+    cleanup: Vec<Statement>,
+}
+
 struct AsyncProtocolFunctions {
     poll: Identifier,
     complete: Identifier,
@@ -181,18 +193,18 @@ enum ReturnConversion {
 impl Function {
     pub fn from_declaration(
         decl: &FunctionDecl<Native>,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        ExportedCall::new(
-            Name::new(decl.name()).function()?,
-            decl.symbol(),
-            decl.callable(),
-            Vec::new(),
-            bridge,
-            context,
-        )
-        .map(Self::from_call)
+        ExportedCallRenderer::new(host, bridge, context)
+            .exported(
+                Name::new(decl.name()).function()?,
+                decl.symbol(),
+                decl.callable(),
+                Vec::new(),
+            )
+            .map(Self::from_call)
     }
 
     pub fn render(self) -> Result<Emitted> {
@@ -246,81 +258,83 @@ impl Function {
     }
 }
 
-impl ExportedCall {
+impl<'render> ExportedCallRenderer<'render> {
     pub fn new(
+        host: &'render KotlinHost,
+        bridge: &'render JniBridgeContract,
+        context: &'render RenderContext<'render, Native>,
+    ) -> Self {
+        Self {
+            host,
+            bridge,
+            context,
+        }
+    }
+
+    pub fn exported(
+        &self,
         name: Identifier,
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Native>,
         native_prefix: Vec<Expression>,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        Self::build(
-            name,
-            symbol,
-            callable,
-            native_prefix,
-            ReceiverBinding::None,
-            bridge,
-            context,
-        )
+    ) -> Result<ExportedCall> {
+        self.build(name, symbol, callable, native_prefix, ReceiverBinding::None)
     }
 
-    pub fn new_with_record_package(
+    pub fn with_record_package(
+        &self,
         name: Identifier,
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Native>,
         native_prefix: Vec<Expression>,
         record_package: &KotlinPackage,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        Self::build(
+    ) -> Result<ExportedCall> {
+        self.build(
             name,
             symbol,
             callable,
             native_prefix,
             ReceiverBinding::RecordPackage(record_package.clone()),
-            bridge,
-            context,
         )
     }
 
-    pub fn new_encoded_receiver_mutation(
+    pub fn with_encoded_receiver_mutation(
+        &self,
         name: Identifier,
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Native>,
         native_prefix: Vec<Expression>,
         receiver_mutation: EncodedReceiverMutation,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        Self::build(
+    ) -> Result<ExportedCall> {
+        self.build(
             name,
             symbol,
             callable,
             native_prefix,
             ReceiverBinding::EncodedMutation(receiver_mutation),
-            bridge,
-            context,
         )
     }
 
     fn build(
+        &self,
         name: Identifier,
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Native>,
         native_prefix: Vec<Expression>,
         receiver: ReceiverBinding,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
+    ) -> Result<ExportedCall> {
         let record_package = receiver.record_package();
         let parameters = callable
             .params()
             .iter()
             .map(|parameter| {
-                Parameter::from_declaration(parameter, record_package, bridge, context)
+                Parameter::from_declaration(
+                    parameter,
+                    record_package,
+                    self.host,
+                    self.bridge,
+                    self.context,
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         let mut function_return =
@@ -328,7 +342,8 @@ impl ExportedCall {
                 .returns()
                 .plan()
                 .render_with(&mut FunctionReturnPlan::new(
-                    context,
+                    self.host,
+                    self.context,
                     record_package,
                     callable,
                 ))?;
@@ -336,7 +351,7 @@ impl ExportedCall {
             function_return =
                 function_return.with_byte_array_receiver_writeback(receiver_mutation.ty)?;
         }
-        if let Some(mutation) = Self::parameter_mutation(&parameters)? {
+        if let Some(mutation) = ExportedCall::parameter_mutation(&parameters)? {
             function_return = function_return.with_parameter_mutation(mutation)?;
         }
         let native_arguments = native_prefix
@@ -362,14 +377,15 @@ impl ExportedCall {
             .collect::<Vec<_>>();
         let returns = function_return.ty.clone();
         match callable.execution() {
-            ExecutionDecl::Synchronous(_) => Ok(Self {
+            ExecutionDecl::Synchronous(_) => Ok(ExportedCall {
                 name,
                 parameters,
                 returns,
                 setup,
                 call: function_return.return_statements(
-                    error_conversion.wrap(native_call.expression(), context)?,
-                    context,
+                    error_conversion.wrap(native_call.expression(), self.host, self.context)?,
+                    self.host,
+                    self.context,
                 )?,
                 cleanup,
                 async_call: None,
@@ -380,7 +396,7 @@ impl ExportedCall {
                 cancel,
                 free,
                 ..
-            }) => Ok(Self {
+            }) => Ok(ExportedCall {
                 name,
                 parameters,
                 returns,
@@ -388,26 +404,23 @@ impl ExportedCall {
                 call: Vec::new(),
                 cleanup: Vec::new(),
                 async_call: Some(AsyncCall::new(
-                    native_call.expression(),
-                    setup,
-                    cleanup,
+                    AsyncStart::new(native_call.expression(), setup, cleanup),
                     AsyncProtocolFunctions::new(poll, complete, cancel, free)?,
                     function_return,
                     error_conversion,
-                    context,
+                    self.host,
+                    self.context,
                 )?),
             }),
-            ExecutionDecl::Asynchronous(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unsupported async function protocol",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown function execution",
-            }),
+            ExecutionDecl::Asynchronous(_) => Err(KotlinHost::unsupported(
+                "unsupported async function protocol",
+            )),
+            _ => Err(KotlinHost::unsupported("unknown function execution")),
         }
     }
+}
 
+impl ExportedCall {
     pub fn name(&self) -> &Identifier {
         &self.name
     }
@@ -444,10 +457,9 @@ impl ExportedCall {
         let mut mutations = parameters.iter().filter_map(Parameter::mutation).cloned();
         let mutation = mutations.next();
         if mutations.next().is_some() {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "multiple mutable encoded parameters",
-            });
+            return Err(KotlinHost::unsupported(
+                "multiple mutable encoded parameters",
+            ));
         }
         Ok(mutation)
     }
@@ -457,6 +469,7 @@ impl Parameter {
     pub fn from_declaration(
         parameter: &ParamDecl<Native, IntoRust>,
         record_package: Option<&KotlinPackage>,
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -464,11 +477,11 @@ impl Parameter {
         let name = source_name.parameter()?;
         let (ty, native_argument) = match parameter.payload() {
             IncomingParam::Value(plan) => (
-                Self::type_name(plan, record_package, context)?,
-                Self::native_argument_for(source_name, name.clone(), plan, context)?,
+                Self::type_name(plan, record_package, host, context)?,
+                Self::native_argument_for(source_name, name.clone(), plan, host, context)?,
             ),
             IncomingParam::Closure(closure) => (
-                Closure::type_name(closure, context)?,
+                Closure::type_name(closure, host, context)?,
                 NativeArgument::direct(Closure::native_argument(
                     closure,
                     Expression::identifier(name.clone()),
@@ -513,9 +526,10 @@ impl Parameter {
     fn type_name(
         plan: &ParamPlan<Native, IntoRust>,
         record_package: Option<&KotlinPackage>,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<TypeName> {
-        plan.render_with(&mut ParameterType::new(context).record_package(record_package))
+        plan.render_with(&mut ParameterType::new(host, context).record_package(record_package))
     }
 }
 
@@ -524,11 +538,13 @@ impl Parameter {
         source_name: Name,
         name: Identifier,
         plan: &ParamPlan<Native, IntoRust>,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<NativeArgument> {
         plan.render_with(&mut NativeArgumentRender {
             source_name,
             name,
+            host,
             context,
         })
     }
@@ -537,6 +553,7 @@ impl Parameter {
 struct NativeArgumentRender<'context> {
     source_name: Name,
     name: Identifier,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
@@ -582,10 +599,7 @@ impl ParameterMutation {
             {
                 Self::new(source_name, destination, codec).map(Some)
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "mutable encoded parameter",
-            }),
+            _ => Err(KotlinHost::unsupported("mutable encoded parameter")),
         }
     }
 
@@ -605,12 +619,13 @@ impl ParameterMutation {
     fn statements(
         &self,
         call: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
             "null mutation buffer returned",
         )));
-        let mut reader = Reader::new(self.reader.clone(), context);
+        let mut reader = Reader::new(self.reader.clone(), host, context);
         let decoded = self
             .read
             .read_plan()
@@ -638,27 +653,37 @@ impl ParameterMutation {
     }
 }
 
+impl AsyncStart {
+    fn new(call: Expression, setup: Vec<Statement>, cleanup: Vec<Statement>) -> Self {
+        Self {
+            call,
+            setup,
+            cleanup,
+        }
+    }
+}
+
 impl AsyncCall {
     fn new(
-        create: Expression,
-        create_setup: Vec<Statement>,
-        create_cleanup: Vec<Statement>,
+        start: AsyncStart,
         functions: AsyncProtocolFunctions,
         returns: FunctionReturn,
         error_conversion: ErrorConversion,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let future = Expression::identifier(Identifier::parse("future")?);
         let complete_call = error_conversion.wrap(
             NativeCall::new(functions.complete.clone(), vec![future]).expression(),
+            host,
             context,
         )?;
         Ok(Self {
-            create_setup,
-            create,
-            create_cleanup,
+            create_setup: start.setup,
+            create: start.call,
+            create_cleanup: start.cleanup,
             poll: functions.poll,
-            complete_body: returns.value_statements(complete_call, context)?,
+            complete_body: returns.value_statements(complete_call, host, context)?,
             free: functions.free,
             cancel: functions.cancel,
             returns_value: returns.ty.is_some(),
@@ -716,22 +741,23 @@ impl ErrorConversion {
                 ty: ty.clone(),
                 codec: codec.clone(),
             }),
-            ErrorChannel::Encoded { .. } => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "encoded error out-pointer",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown function error channel",
-            }),
+            ErrorChannel::Encoded { .. } => {
+                Err(KotlinHost::unsupported("encoded error out-pointer"))
+            }
+            _ => Err(KotlinHost::unsupported("unknown function error channel")),
         }
     }
 
-    fn wrap(&self, call: Expression, context: &RenderContext<Native>) -> Result<Expression> {
+    fn wrap(
+        &self,
+        call: Expression,
+        host: &KotlinHost,
+        context: &RenderContext<Native>,
+    ) -> Result<Expression> {
         match self {
             Self::None => Ok(call),
             Self::Status => self.status(call),
-            Self::Encoded { ty, codec } => self.encoded(call, ty, codec, context),
+            Self::Encoded { ty, codec } => self.encoded(call, ty, codec, host, context),
         }
     }
 
@@ -757,11 +783,12 @@ impl ErrorConversion {
         call: Expression,
         ty: &TypeRef,
         codec: &<OutOfRust as Direction>::Codec,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Expression> {
         let error = Identifier::parse("__boltffi_error")?;
         let reader = Identifier::parse("__boltffi_error_reader")?;
-        let mut codec_reader = Reader::new(reader.clone(), context);
+        let mut codec_reader = Reader::new(reader.clone(), host, context);
         let decoded = codec.render_with(&mut codec_reader)?.into_expression();
         let thrown = match ty {
             TypeRef::String => Expression::construct(
@@ -770,10 +797,7 @@ impl ErrorConversion {
             ),
             TypeRef::Record(_) | TypeRef::Enum(_) => decoded,
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "kotlin throwable error type",
-                });
+                return Err(KotlinHost::unsupported("kotlin throwable error type"));
             }
         };
         Ok(call.try_catch(
@@ -834,10 +858,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
                 Enumeration::native_argument(*enumeration, value, self.context)
                     .map(NativeArgument::direct)
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct function parameter",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown direct function parameter")),
         }
     }
 
@@ -857,7 +878,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
             receive,
         )?;
         WireBuffer::new(&self.source_name)
-            .and_then(|buffer| buffer.write(codec, self.context))
+            .and_then(|buffer| buffer.write(codec, self.host, self.context))
             .map(|write| NativeArgument::encoded(write, mutation))
     }
 
@@ -882,14 +903,8 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
                         .map(NativeArgument::direct)
                 })
             }
-            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "handle function parameter",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown handle function parameter",
-            }),
+            HandleTarget::Stream(_) => Err(KotlinHost::unsupported("handle function parameter")),
+            _ => Err(KotlinHost::unsupported("unknown handle function parameter")),
         }
     }
 
@@ -906,6 +921,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
 }
 
 struct FunctionReturnPlan<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
     record_package: Option<KotlinPackage>,
     fallible_success_out: bool,
@@ -913,12 +929,14 @@ struct FunctionReturnPlan<'context> {
 
 impl<'context> FunctionReturnPlan<'context> {
     fn new(
+        host: &'context KotlinHost,
         context: &'context RenderContext<'context, Native>,
         record_package: Option<&KotlinPackage>,
         callable: &ExportedCallable<Native>,
     ) -> Self {
         let error_channel = callable.error().channel();
         Self {
+            host,
             context,
             record_package: record_package.cloned(),
             fallible_success_out: matches!(
@@ -936,14 +954,8 @@ impl<'context> FunctionReturnPlan<'context> {
         match slot {
             ReturnValueSlot::ReturnSlot => Ok(()),
             ReturnValueSlot::OutPointer if self.fallible_success_out => Ok(()),
-            ReturnValueSlot::OutPointer => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape,
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown function return slot",
-            }),
+            ReturnValueSlot::OutPointer => Err(KotlinHost::unsupported(shape)),
+            _ => Err(KotlinHost::unsupported("unknown function return slot")),
         }
     }
 }
@@ -970,10 +982,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
                 ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
                 DirectValueType::Enum(enumeration),
             ) => FunctionReturn::direct_enum(*enumeration, self.context),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct function return",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown direct function return")),
         }
     }
 
@@ -989,13 +998,11 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
             ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer => FunctionReturn::encoded(
                 ty,
                 codec.clone(),
+                self.host,
                 self.context,
                 self.record_package.as_ref(),
             ),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown encoded function return",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown encoded function return")),
         }
     }
 
@@ -1016,14 +1023,8 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
                 ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
                 HandleTarget::Callback(callback),
             ) => FunctionReturn::callback_handle(*callback, presence, self.context),
-            (_, HandleTarget::Stream(_)) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "handle function return",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown handle function return",
-            }),
+            (_, HandleTarget::Stream(_)) => Err(KotlinHost::unsupported("handle function return")),
+            _ => Err(KotlinHost::unsupported("unknown handle function return")),
         }
     }
 
@@ -1036,10 +1037,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for FunctionReturnPlan<'_
     }
 
     fn closure(&mut self, _closure: &'plan ClosureReturn<Native, OutOfRust>) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "closure function return",
-        })
+        Err(KotlinHost::unsupported("closure function return"))
     }
 }
 
@@ -1080,8 +1078,7 @@ impl FunctionReturn {
     }
 
     fn direct_enum(enumeration: EnumId, context: &RenderContext<Native>) -> Result<Self> {
-        let enumeration = Enumeration::from_id(enumeration, context)?;
-        let ty = enumeration.name().clone();
+        let ty = Enumeration::type_name_from_id(enumeration, context)?;
         Ok(Self {
             ty: Some(ty.clone()),
             conversion: ReturnConversion::DirectEnum(ty),
@@ -1099,13 +1096,16 @@ impl FunctionReturn {
     fn encoded(
         ty: &TypeRef,
         codec: <OutOfRust as Direction>::Codec,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
         record_package: Option<&KotlinPackage>,
     ) -> Result<Self> {
         Ok(Self {
             ty: Some(match record_package {
-                Some(package) => KotlinType::type_ref_with_record_package(ty, context, package)?,
-                None => KotlinType::type_ref(ty, context)?,
+                Some(package) => {
+                    KotlinType::type_ref_with_record_package(ty, host, context, package)?
+                }
+                None => KotlinType::type_ref(ty, host, context)?,
             }),
             conversion: ReturnConversion::Encoded {
                 codec,
@@ -1150,10 +1150,9 @@ impl FunctionReturn {
     fn with_byte_array_receiver_writeback(self, receiver_type: TypeName) -> Result<Self> {
         match self.ty {
             None => Ok(Self::byte_array_value(receiver_type)),
-            Some(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "mutable receiver with explicit return",
-            }),
+            Some(_) => Err(KotlinHost::unsupported(
+                "mutable receiver with explicit return",
+            )),
         }
     }
 
@@ -1163,19 +1162,19 @@ impl FunctionReturn {
                 ty: None,
                 conversion: ReturnConversion::ParameterMutation(mutation),
             }),
-            Some(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "mutable encoded parameter with explicit return",
-            }),
+            Some(_) => Err(KotlinHost::unsupported(
+                "mutable encoded parameter with explicit return",
+            )),
         }
     }
 
     fn return_statements(
         &self,
         call: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
-        self.value_statements(call, context).map(|body| {
+        self.value_statements(call, host, context).map(|body| {
             if self.ty.is_some() {
                 Statement::with_return_value(body)
             } else {
@@ -1187,6 +1186,7 @@ impl FunctionReturn {
     fn value_statements(
         &self,
         call: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         match &self.conversion {
@@ -1227,7 +1227,7 @@ impl FunctionReturn {
                 let payload = call.or_else(Expression::throw_illegal_state(Literal::string(
                     "null buffer returned",
                 )));
-                let mut codec_reader = Reader::new(reader.clone(), context);
+                let mut codec_reader = Reader::new(reader.clone(), host, context);
                 if let Some(package) = record_package {
                     codec_reader = codec_reader.record_package(package);
                 }
@@ -1251,7 +1251,9 @@ impl FunctionReturn {
             ReturnConversion::ScalarOption(primitive) => {
                 ScalarOption::new(*primitive).read_value(call)
             }
-            ReturnConversion::ParameterMutation(mutation) => mutation.statements(call, context),
+            ReturnConversion::ParameterMutation(mutation) => {
+                mutation.statements(call, host, context)
+            }
         }
     }
 }

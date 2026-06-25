@@ -4,7 +4,7 @@ use boltffi_binding::{
 };
 
 use crate::{
-    core::{Error, RenderContext, Result},
+    core::{RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         name_style::KotlinPackage,
@@ -16,6 +16,7 @@ use crate::{
 
 pub struct Reader<'context> {
     reader: Identifier,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
     record_package: Option<KotlinPackage>,
 }
@@ -26,9 +27,14 @@ pub struct ReadExpression {
 }
 
 impl<'context> Reader<'context> {
-    pub fn new(reader: Identifier, context: &'context RenderContext<'context, Native>) -> Self {
+    pub fn new(
+        reader: Identifier,
+        host: &'context KotlinHost,
+        context: &'context RenderContext<'context, Native>,
+    ) -> Self {
         Self {
             reader,
+            host,
             context,
             record_package: None,
         }
@@ -48,10 +54,7 @@ impl<'context> Reader<'context> {
     }
 
     fn unsupported(shape: &'static str) -> Result<ReadExpression> {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape,
-        })
+        Err(KotlinHost::unsupported(shape))
     }
 }
 
@@ -116,7 +119,7 @@ impl CodecRead for Reader<'_> {
     }
 
     fn c_style_enum(&mut self, id: EnumId) -> Self::Expr {
-        Enumeration::from_id(id, self.context).and_then(|enumeration| {
+        Enumeration::from_id(id, self.host, self.context).and_then(|enumeration| {
             KotlinPrimitive::new(enumeration.repr()?)
                 .native_wire_method_suffix()
                 .and_then(|suffix| {
@@ -143,8 +146,14 @@ impl CodecRead for Reader<'_> {
         Self::unsupported("callback handle wire read")
     }
 
-    fn custom(&mut self, _id: CustomTypeId, representation: Self::Expr) -> Self::Expr {
-        representation.map(|representation| ReadExpression::new(representation.expression))
+    fn custom(&mut self, id: CustomTypeId, representation: Self::Expr) -> Self::Expr {
+        let representation = representation?;
+        match self.host.custom_type_mapping(id, self.context) {
+            Some(mapping) => mapping
+                .decode(representation.expression)
+                .map(ReadExpression::new),
+            None => Ok(ReadExpression::new(representation.expression)),
+        }
     }
 
     fn builtin(&mut self, kind: BuiltinType) -> Self::Expr {

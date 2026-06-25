@@ -3,7 +3,9 @@ use boltffi_binding::{CustomTypeDecl, Native};
 
 use crate::{
     core::{Emitted, RenderContext, Result},
-    target::kotlin::{name_style::Name, render::type_name::KotlinType, syntax::TypeName},
+    target::kotlin::{
+        KotlinHost, name_style::Name, render::type_name::KotlinType, syntax::TypeName,
+    },
 };
 
 #[derive(AskamaTemplate)]
@@ -15,17 +17,22 @@ struct CustomTypeTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CustomType {
     name: TypeName,
-    representation: TypeName,
+    representation: Option<TypeName>,
 }
 
 impl CustomType {
     pub fn from_declaration(
         declaration: &CustomTypeDecl,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         Ok(Self {
             name: Name::new(declaration.name()).type_name(),
-            representation: KotlinType::type_ref(declaration.representation(), context)?,
+            representation: host
+                .custom_type_mapping(declaration.id(), context)
+                .is_none()
+                .then(|| KotlinType::type_ref(declaration.representation(), host, context))
+                .transpose()?,
         })
     }
 
@@ -40,6 +47,12 @@ impl CustomType {
     }
 
     pub fn representation(&self) -> &TypeName {
-        &self.representation
+        self.representation
+            .as_ref()
+            .expect("unmapped custom type has a representation alias")
+    }
+
+    pub fn has_representation_alias(&self) -> bool {
+        self.representation.is_some()
     }
 }

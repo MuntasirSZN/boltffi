@@ -5,7 +5,7 @@ use boltffi_binding::{
 };
 
 use crate::{
-    core::{Emitted, Error, RenderContext, Result},
+    core::{Emitted, RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         codec::Reader,
@@ -53,15 +53,17 @@ struct StreamItem {
 }
 
 struct StreamItemRenderer<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
 impl Stream {
     pub fn from_declaration(
         declaration: &StreamDecl<Native>,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        let item = StreamItem::from_plan(declaration.item(), context)?;
+        let item = StreamItem::from_plan(declaration.item(), host, context)?;
         Ok(Self {
             name: Name::new(declaration.name()).function()?,
             receiver: declaration
@@ -166,18 +168,19 @@ impl Delivery {
                 cancellable: TypeName::new(format!("{name}Cancellable")),
             },
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown stream mode",
-                });
+                return Err(KotlinHost::unsupported("unknown stream mode"));
             }
         })
     }
 }
 
 impl StreamItem {
-    fn from_plan(plan: &StreamItemPlan<Native>, context: &RenderContext<Native>) -> Result<Self> {
-        plan.render_with(&mut StreamItemRenderer { context })
+    fn from_plan(
+        plan: &StreamItemPlan<Native>,
+        host: &KotlinHost,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        plan.render_with(&mut StreamItemRenderer { host, context })
     }
 }
 
@@ -202,10 +205,7 @@ impl StreamItemRenderer<'_> {
                     .convert(Identifier::parse("toList")?));
             }
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown direct stream primitive",
-                });
+                return Err(KotlinHost::unsupported("unknown direct stream primitive"));
             }
         };
         let items = self.direct_vector_call(method, bytes)?;
@@ -221,7 +221,7 @@ impl StreamItemRenderer<'_> {
     }
 
     fn direct_record_items(&self, record: RecordId) -> Result<Expression> {
-        let record = Record::from_id(record, self.context)?;
+        let record = Record::from_id(record, self.host, self.context)?;
         let bytes = Identifier::parse("bytes")?;
         let buffer = Identifier::parse("buffer")?;
         let index = Identifier::parse("index")?;
@@ -269,7 +269,7 @@ impl StreamItemRenderer<'_> {
     }
 
     fn direct_enum_items(&self, enumeration: EnumId) -> Result<Expression> {
-        let enumeration = Enumeration::from_id(enumeration, self.context)?;
+        let enumeration = Enumeration::from_id(enumeration, self.host, self.context)?;
         let value = Identifier::parse("value")?;
         let items = self.direct_primitive_items(enumeration.repr()?)?;
         Ok(items.map(
@@ -316,7 +316,7 @@ impl StreamItemRenderer<'_> {
         let reader = Identifier::parse("reader")?;
         let count = Identifier::parse("count")?;
         let item = read
-            .render_with(&mut Reader::new(reader, self.context))?
+            .render_with(&mut Reader::new(reader, self.host, self.context))?
             .into_expression();
         Ok(Expression::list(Expression::identifier(count), item))
     }
@@ -342,10 +342,7 @@ impl<'plan> StreamItemPlanRender<'plan, Native> for StreamItemRenderer<'_> {
                 setup: Vec::new(),
                 items: self.direct_enum_items(*enumeration)?,
             }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown direct stream item",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown direct stream item")),
         }
     }
 
@@ -357,14 +354,11 @@ impl<'plan> StreamItemPlanRender<'plan, Native> for StreamItemRenderer<'_> {
     ) -> Self::Output {
         match shape {
             native::BufferShape::Buffer => Ok(StreamItem {
-                ty: KotlinType::type_ref(ty, self.context)?,
+                ty: KotlinType::type_ref(ty, self.host, self.context)?,
                 setup: self.encoded_setup()?,
                 items: self.encoded_items(read)?,
             }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "encoded stream item shape",
-            }),
+            _ => Err(KotlinHost::unsupported("encoded stream item shape")),
         }
     }
 }

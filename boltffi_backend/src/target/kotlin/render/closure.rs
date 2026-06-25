@@ -87,24 +87,29 @@ enum ReturnConversion {
 struct ParameterRender<'context> {
     source_name: Name,
     name: Identifier,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
 struct ReturnRender<'context> {
     source_name: Name,
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
     fallible_success_out: bool,
 }
 
 struct ClosureName<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
 struct ClosureTypeName<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
 struct ClosureReturnName<'context> {
+    host: &'context KotlinHost,
     context: &'context RenderContext<'context, Native>,
 }
 
@@ -122,6 +127,7 @@ pub struct Closures {
 impl Closures {
     pub fn from_declarations(
         declarations: &[RenderedDeclaration<'_, Native>],
+        host: &KotlinHost,
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -136,7 +142,12 @@ impl Closures {
                     Entry::Occupied(_) => Ok::<_, Error>(closures),
                     Entry::Vacant(entry) => {
                         let registration = registrations.get(closure)?;
-                        entry.insert(Closure::from_parameter(closure, registration, context)?);
+                        entry.insert(Closure::from_parameter(
+                            closure,
+                            registration,
+                            host,
+                            context,
+                        )?);
                         Ok::<_, Error>(closures)
                     }
                 }
@@ -157,16 +168,16 @@ impl Closures {
 impl Closure {
     pub fn type_name(
         closure: &ClosureParameter<Native, IntoRust>,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<TypeName> {
-        let interface_name = ClosureName::new(context).name(closure.invoke())?;
+        let interface_name = ClosureName::new(host, context).name(closure.invoke())?;
         match closure.presence() {
             HandlePresence::Required => Ok(interface_name),
             HandlePresence::Nullable => Ok(interface_name.nullable()),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown closure parameter presence",
-            }),
+            _ => Err(KotlinHost::unsupported(
+                "unknown closure parameter presence",
+            )),
         }
     }
 
@@ -198,10 +209,9 @@ impl Closure {
                 ),
                 Expression::long(0),
             )),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown closure parameter presence",
-            }),
+            _ => Err(KotlinHost::unsupported(
+                "unknown closure parameter presence",
+            )),
         }
     }
 
@@ -240,13 +250,14 @@ impl Closure {
     fn from_parameter(
         closure: &ClosureParameter<Native, IntoRust>,
         registration: &ClosureRegistration,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let callable = closure.invoke();
         let parameters = callable
             .params()
             .iter()
-            .map(|parameter| ClosureParameterView::from_declaration(parameter, context))
+            .map(|parameter| ClosureParameterView::from_declaration(parameter, host, context))
             .collect::<Result<Vec<_>>>()?;
         let source_name = Name::new(&boltffi_binding::CanonicalName::single("closure"));
         let fallible = FallibleReturn::from_registration(
@@ -256,6 +267,7 @@ impl Closure {
         )?;
         let returned = callable.returns().plan().render_with(&mut ReturnRender {
             source_name,
+            host,
             context,
             fallible_success_out: fallible.is_some(),
         })?;
@@ -282,7 +294,7 @@ impl Closure {
             .collect();
         Ok(Self {
             name: TypeName::new(registration.class().class_name()),
-            interface_name: ClosureName::new(context).name(callable)?,
+            interface_name: ClosureName::new(host, context).name(callable)?,
             interface_parameters: parameters
                 .iter()
                 .map(|parameter| parameter.public.clone())
@@ -298,16 +310,16 @@ impl Closure {
                 .flat_map(|parameter| parameter.setup.iter().cloned())
                 .collect(),
             call: match fallible {
-                Some(fallible) => returned.fallible_statements(call, fallible, context)?,
-                None => returned.statements(call, context)?,
+                Some(fallible) => returned.fallible_statements(call, fallible, host, context)?,
+                None => returned.statements(call, host, context)?,
             },
         })
     }
 }
 
 impl<'context> ClosureName<'context> {
-    fn new(context: &'context RenderContext<'context, Native>) -> Self {
-        Self { context }
+    fn new(host: &'context KotlinHost, context: &'context RenderContext<'context, Native>) -> Self {
+        Self { host, context }
     }
 
     fn name(&self, callable: &CallableDecl<Native, ForeignBody>) -> Result<TypeName> {
@@ -320,7 +332,7 @@ impl<'context> ClosureName<'context> {
         let returns = callable
             .returns()
             .plan()
-            .render_with(&mut ClosureReturnName::new(self.context))?;
+            .render_with(&mut ClosureReturnName::new(self.host, self.context))?;
         let returns = match callable.error().channel() {
             ErrorChannel::None => returns,
             ErrorChannel::Encoded {
@@ -330,19 +342,13 @@ impl<'context> ClosureName<'context> {
             } => Some(format!(
                 "Result{}Err{}",
                 returns.unwrap_or_else(|| "Void".to_owned()),
-                ClosureTypeName::new(self.context).type_ref(ty)?
+                ClosureTypeName::new(self.host, self.context).type_ref(ty)?
             )),
             ErrorChannel::Encoded { .. } | ErrorChannel::Status => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "closure error return",
-                });
+                return Err(KotlinHost::unsupported("closure error return"));
             }
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown closure error return",
-                });
+                return Err(KotlinHost::unsupported("unknown closure error return"));
             }
         };
         let signature = match (parameters.is_empty(), returns) {
@@ -356,22 +362,19 @@ impl<'context> ClosureName<'context> {
 
     fn parameter(&self, parameter: &ParamDecl<Native, OutOfRust>) -> Result<String> {
         let boltffi_binding::OutgoingParam::Value(plan) = parameter.payload() else {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure nested closure parameter",
-            });
+            return Err(KotlinHost::unsupported("closure nested closure parameter"));
         };
-        plan.render_with(&mut ClosureTypeName::new(self.context))
+        plan.render_with(&mut ClosureTypeName::new(self.host, self.context))
     }
 }
 
 impl<'context> ClosureTypeName<'context> {
-    fn new(context: &'context RenderContext<'context, Native>) -> Self {
-        Self { context }
+    fn new(host: &'context KotlinHost, context: &'context RenderContext<'context, Native>) -> Self {
+        Self { host, context }
     }
 
     fn type_ref(&self, ty: &TypeRef) -> Result<String> {
-        ty.render_with(&mut Self::new(self.context))
+        ty.render_with(&mut Self::new(self.host, self.context))
     }
 
     fn direct_type(&self, ty: &DirectValueType) -> Result<String> {
@@ -383,10 +386,7 @@ impl<'context> ClosureTypeName<'context> {
                 Enumeration::type_name_from_id(*enumeration, self.context)
                     .map(|name| type_name_fragment(&name))
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure direct type name",
-            }),
+            _ => Err(KotlinHost::unsupported("closure direct type name")),
         }
     }
 
@@ -400,16 +400,10 @@ impl<'context> ClosureTypeName<'context> {
                     .and_then(|handle| handle.ty())?
             }
             HandleTarget::Stream(_) => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "closure stream handle type name",
-                });
+                return Err(KotlinHost::unsupported("closure stream handle type name"));
             }
             _ => {
-                return Err(Error::UnsupportedTarget {
-                    target: KotlinHost::TARGET,
-                    shape: "unknown closure handle type name",
-                });
+                return Err(KotlinHost::unsupported("unknown closure handle type name"));
             }
         };
         Ok(match presence {
@@ -427,17 +421,14 @@ impl<'context> ClosureTypeName<'context> {
                 Record::type_name_from_id(*record, self.context)
                     .map(|name| format!("Vec{}", type_name_fragment(&name)))
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure direct vector type name",
-            }),
+            _ => Err(KotlinHost::unsupported("closure direct vector type name")),
         }
     }
 }
 
 impl<'context> ClosureReturnName<'context> {
-    fn new(context: &'context RenderContext<'context, Native>) -> Self {
-        Self { context }
+    fn new(host: &'context KotlinHost, context: &'context RenderContext<'context, Native>) -> Self {
+        Self { host, context }
     }
 }
 
@@ -489,7 +480,9 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ClosureReturnName<'_> 
     }
 
     fn direct(&mut self, _slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output {
-        ClosureTypeName::new(self.context).direct_type(ty).map(Some)
+        ClosureTypeName::new(self.host, self.context)
+            .direct_type(ty)
+            .map(Some)
     }
 
     fn encoded(
@@ -499,7 +492,9 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ClosureReturnName<'_> 
         _codec: &'plan <IntoRust as Direction>::Codec,
         _shape: <Native as Surface>::BufferShape,
     ) -> Self::Output {
-        ClosureTypeName::new(self.context).type_ref(ty).map(Some)
+        ClosureTypeName::new(self.host, self.context)
+            .type_ref(ty)
+            .map(Some)
     }
 
     fn handle(
@@ -509,7 +504,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ClosureReturnName<'_> 
         _carrier: <Native as Surface>::HandleCarrier,
         presence: HandlePresence,
     ) -> Self::Output {
-        ClosureTypeName::new(self.context)
+        ClosureTypeName::new(self.host, self.context)
             .handle_type(target, presence)
             .map(Some)
     }
@@ -519,16 +514,13 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ClosureReturnName<'_> 
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        ClosureTypeName::new(self.context)
+        ClosureTypeName::new(self.host, self.context)
             .direct_vector_type(element)
             .map(Some)
     }
 
     fn closure(&mut self, _closure: &'plan IrClosureReturn<Native, IntoRust>) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "closure return type name",
-        })
+        Err(KotlinHost::unsupported("closure return type name"))
     }
 }
 
@@ -568,13 +560,14 @@ impl TypeRefRender for ClosureTypeName<'_> {
     }
 
     fn custom(&mut self, id: CustomTypeId) -> Self::Output {
+        if let Some(mapping) = self.host.custom_type_mapping(id, self.context) {
+            return Ok(type_name_fragment(&mapping.ty()));
+        }
+
         self.context
             .custom_type(id)
             .map(|custom_type| custom_type.representation())
-            .ok_or(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "custom closure type name",
-            })?
+            .ok_or(KotlinHost::unsupported("custom closure type name"))?
             .render_with(self)
     }
 
@@ -621,10 +614,7 @@ fn primitive_name(primitive: Primitive) -> Result<&'static str> {
         Primitive::USize => Ok("USize"),
         Primitive::F32 => Ok("F32"),
         Primitive::F64 => Ok("F64"),
-        _ => Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "closure primitive type name",
-        }),
+        _ => Err(KotlinHost::unsupported("closure primitive type name")),
     }
 }
 
@@ -648,19 +638,18 @@ impl Parameter {
 impl ClosureParameterView {
     fn from_declaration(
         parameter: &ParamDecl<Native, OutOfRust>,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let boltffi_binding::OutgoingParam::Value(plan) = parameter.payload() else {
-            return Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure nested closure parameter",
-            });
+            return Err(KotlinHost::unsupported("closure nested closure parameter"));
         };
         let source_name = Name::new(parameter.name());
         let name = source_name.parameter()?;
         plan.render_with(&mut ParameterRender {
             source_name,
             name,
+            host,
             context,
         })
     }
@@ -685,14 +674,10 @@ impl<'error> FallibleReturn<'error> {
                 error_ty: ty,
                 error_codec: codec,
             })),
-            ErrorChannel::Encoded { .. } | ErrorChannel::Status => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure error return",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown closure error return",
-            }),
+            ErrorChannel::Encoded { .. } | ErrorChannel::Status => {
+                Err(KotlinHost::unsupported("closure error return"))
+            }
+            _ => Err(KotlinHost::unsupported("unknown closure error return")),
         }
     }
 
@@ -734,7 +719,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
                 })
             }
             DirectValueType::Enum(enumeration) => {
-                let enumeration = Enumeration::from_id(*enumeration, self.context)?;
+                let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
                 let repr = enumeration.repr()?;
                 Ok(ClosureParameterView {
                     public: Parameter {
@@ -773,10 +758,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
                     )?,
                 })
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure direct parameter",
-            }),
+            _ => Err(KotlinHost::unsupported("closure direct parameter")),
         }
     }
 
@@ -790,12 +772,12 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
         let reader = self.source_name.generated("reader")?;
         let value = self.source_name.generated("value")?;
         let expression = codec
-            .render_with(&mut Reader::new(reader.clone(), self.context))?
+            .render_with(&mut Reader::new(reader.clone(), self.host, self.context))?
             .into_expression();
         Ok(ClosureParameterView {
             public: Parameter {
                 name: self.name.clone(),
-                ty: KotlinType::type_ref(ty, self.context)?,
+                ty: KotlinType::type_ref(ty, self.host, self.context)?,
             },
             jvm: Parameter {
                 name: self.name.clone(),
@@ -856,14 +838,8 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ParameterRender<'_> {
                     call_argument: handle.value_expression(value)?,
                 })
             }
-            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure stream parameter",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown closure handle parameter",
-            }),
+            HandleTarget::Stream(_) => Err(KotlinHost::unsupported("closure stream parameter")),
+            _ => Err(KotlinHost::unsupported("unknown closure handle parameter")),
         }
     }
 
@@ -943,7 +919,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
                 })
             }
             DirectValueType::Enum(enumeration) => {
-                let enumeration = Enumeration::from_id(*enumeration, self.context)?;
+                let enumeration = Enumeration::from_id(*enumeration, self.host, self.context)?;
                 let repr = enumeration.repr()?;
                 Ok(ClosureReturnValue {
                     public_ty: Some(enumeration.name().clone()),
@@ -951,10 +927,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
                     conversion: ReturnConversion::DirectEnum { repr },
                 })
             }
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure direct return",
-            }),
+            _ => Err(KotlinHost::unsupported("closure direct return")),
         }
     }
 
@@ -967,7 +940,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     ) -> Self::Output {
         self.require_supported_slot(slot, "closure out-pointer encoded return")?;
         Ok(ClosureReturnValue {
-            public_ty: Some(KotlinType::type_ref(ty, self.context)?),
+            public_ty: Some(KotlinType::type_ref(ty, self.host, self.context)?),
             jvm_ty: Some(TypeName::byte_array(false)),
             conversion: ReturnConversion::Encoded {
                 codec: codec.clone(),
@@ -1001,14 +974,8 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
                     conversion: ReturnConversion::CallbackHandle(handle),
                 })
             }
-            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure stream return",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown closure handle return",
-            }),
+            HandleTarget::Stream(_) => Err(KotlinHost::unsupported("closure stream return")),
+            _ => Err(KotlinHost::unsupported("unknown closure handle return")),
         }
     }
 
@@ -1033,10 +1000,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for ReturnRender<'_> {
     }
 
     fn closure(&mut self, _closure: &'plan IrClosureReturn<Native, IntoRust>) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KotlinHost::TARGET,
-            shape: "closure return from closure",
-        })
+        Err(KotlinHost::unsupported("closure return from closure"))
     }
 }
 
@@ -1045,14 +1009,8 @@ impl ReturnRender<'_> {
         match slot {
             ReturnValueSlot::ReturnSlot => Ok(()),
             ReturnValueSlot::OutPointer if self.fallible_success_out => Ok(()),
-            ReturnValueSlot::OutPointer => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape,
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown closure return slot",
-            }),
+            ReturnValueSlot::OutPointer => Err(KotlinHost::unsupported(shape)),
+            _ => Err(KotlinHost::unsupported("unknown closure return slot")),
         }
     }
 }
@@ -1068,14 +1026,10 @@ impl ClosureReturnValue {
                 placement: ErrorPlacement::ReturnSlot,
                 ..
             } => Ok(self.public_ty.clone()),
-            ErrorChannel::Encoded { .. } | ErrorChannel::Status => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "closure error return",
-            }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown closure error return",
-            }),
+            ErrorChannel::Encoded { .. } | ErrorChannel::Status => {
+                Err(KotlinHost::unsupported("closure error return"))
+            }
+            _ => Err(KotlinHost::unsupported("unknown closure error return")),
         }
     }
 
@@ -1083,15 +1037,16 @@ impl ClosureReturnValue {
         &self,
         call: Expression,
         fallible: FallibleReturn,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         let error = fallible.source_name.generated("error")?;
         Ok(vec![Statement::return_value(
-            self.fallible_success_expression(call, &fallible, context)?
+            self.fallible_success_expression(call, &fallible, host, context)?
                 .try_catch(
                     error.clone(),
-                    fallible.error_type(context)?,
-                    fallible.error_expression(Expression::identifier(error), context)?,
+                    fallible.error_type(host, context)?,
+                    fallible.error_expression(Expression::identifier(error), host, context)?,
                 ),
         )])
     }
@@ -1099,6 +1054,7 @@ impl ClosureReturnValue {
     fn statements(
         &self,
         call: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
         match &self.conversion {
@@ -1128,6 +1084,7 @@ impl ClosureReturnValue {
                 let write = WireBuffer::new(source_name)?.write_value(
                     codec,
                     Expression::identifier(result.clone()),
+                    host,
                     context,
                 )?;
                 let (setup, expression, cleanup) = write.into_parts();
@@ -1168,6 +1125,7 @@ impl ClosureReturnValue {
         &self,
         value: Expression,
         fallible: &FallibleReturn,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Expression> {
         let ReturnConversion::Void = &self.conversion else {
@@ -1178,7 +1136,7 @@ impl ClosureReturnValue {
                     bridge: "jni",
                     invariant: "fallible closure has no success out-pointer",
                 })?;
-            let (setup, value, cleanup) = self.success_value(value, context)?;
+            let (setup, value, cleanup) = self.success_value(value, host, context)?;
             let write = Statement::expression(Expression::call(
                 "Native",
                 Identifier::escape(success_out.writer().as_str())?,
@@ -1204,6 +1162,7 @@ impl ClosureReturnValue {
     fn success_value(
         &self,
         value: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<(Vec<Statement>, Expression, Vec<Statement>)> {
         match &self.conversion {
@@ -1222,7 +1181,7 @@ impl ClosureReturnValue {
                 Ok((Vec::new(), Record::encode_expression(value)?, Vec::new()))
             }
             ReturnConversion::Encoded { codec, source_name } => Ok(WireBuffer::new(source_name)?
-                .write_value(codec, value, context)?
+                .write_value(codec, value, host, context)?
                 .into_parts()),
             ReturnConversion::ScalarOption {
                 primitive,
@@ -1235,10 +1194,9 @@ impl ClosureReturnValue {
             }
             ReturnConversion::ClassHandle(_)
             | ReturnConversion::CallbackHandle(_)
-            | ReturnConversion::Void => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "fallible closure success return",
-            }),
+            | ReturnConversion::Void => {
+                Err(KotlinHost::unsupported("fallible closure success return"))
+            }
         }
     }
 
@@ -1253,18 +1211,23 @@ impl ClosureReturnValue {
 }
 
 impl FallibleReturn<'_> {
-    fn error_type(&self, context: &RenderContext<Native>) -> Result<TypeName> {
-        KotlinType::type_ref(self.error_ty, context)
+    fn error_type(&self, host: &KotlinHost, context: &RenderContext<Native>) -> Result<TypeName> {
+        KotlinType::type_ref(self.error_ty, host, context)
     }
 
     fn error_expression(
         &self,
         value: Expression,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
     ) -> Result<Expression> {
         let bytes = self.source_name.generated("error_bytes")?;
-        let write =
-            WireBuffer::new(&self.source_name)?.write_value(self.error_codec, value, context)?;
+        let write = WireBuffer::new(&self.source_name)?.write_value(
+            self.error_codec,
+            value,
+            host,
+            context,
+        )?;
         let (setup, expression, cleanup) = write.into_parts();
         Ok(Expression::run(
             setup

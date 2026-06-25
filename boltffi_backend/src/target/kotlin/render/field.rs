@@ -1,7 +1,7 @@
 use boltffi_binding::{EncodedFieldDecl, FieldKey, Native};
 
 use crate::{
-    core::{Error, RenderContext, Result},
+    core::{RenderContext, Result},
     target::kotlin::{
         KotlinHost,
         codec::{Reader, Sizer, Writer},
@@ -24,6 +24,7 @@ pub struct EncodedField {
 impl EncodedField {
     pub fn from_declaration(
         field: &EncodedFieldDecl,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
         reader: &Identifier,
         writer: &Identifier,
@@ -31,9 +32,10 @@ impl EncodedField {
     ) -> Result<Self> {
         Self::from_declaration_with_reader(
             field,
+            host,
             context,
-            Reader::new(reader.clone(), context),
-            KotlinType::type_ref(field.ty(), context)?,
+            Reader::new(reader.clone(), host, context),
+            KotlinType::type_ref(field.ty(), host, context)?,
             writer,
             current,
         )
@@ -41,6 +43,7 @@ impl EncodedField {
 
     pub fn from_enum_payload(
         field: &EncodedFieldDecl,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
         reader: &Identifier,
         writer: &Identifier,
@@ -49,9 +52,10 @@ impl EncodedField {
     ) -> Result<Self> {
         Self::from_declaration_with_reader(
             field,
+            host,
             context,
-            Reader::new(reader.clone(), context).record_package(package),
-            KotlinType::type_ref_with_record_package(field.ty(), context, package)?,
+            Reader::new(reader.clone(), host, context).record_package(package),
+            KotlinType::type_ref_with_record_package(field.ty(), host, context, package)?,
             writer,
             current,
         )
@@ -59,13 +63,14 @@ impl EncodedField {
 
     fn from_declaration_with_reader(
         field: &EncodedFieldDecl,
+        host: &KotlinHost,
         context: &RenderContext<Native>,
         mut reader: Reader,
         ty: TypeName,
         writer: &Identifier,
         current: Expression,
     ) -> Result<Self> {
-        let mut writer = Writer::new(writer.clone(), context)?.current(current.clone());
+        let mut writer = Writer::new(writer.clone(), host, context)?.current(current.clone());
         let write = field
             .write()
             .render_with(&mut writer)
@@ -80,13 +85,10 @@ impl EncodedField {
                 write: write.clone(),
                 size: field
                     .write()
-                    .size_with(&mut Sizer::new(context)?.current(current))?
+                    .size_with(&mut Sizer::new(host, context)?.current(current))?
                     .into_expression(),
             }),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "multi-statement encoded field",
-            }),
+            _ => Err(KotlinHost::unsupported("multi-statement encoded field")),
         }
     }
 
@@ -114,10 +116,7 @@ impl EncodedField {
         match key {
             FieldKey::Named(name) => Name::new(name).parameter(),
             FieldKey::Position(position) => Identifier::parse(format!("field{position}")),
-            _ => Err(Error::UnsupportedTarget {
-                target: KotlinHost::TARGET,
-                shape: "unknown encoded field key",
-            }),
+            _ => Err(KotlinHost::unsupported("unknown encoded field key")),
         }
     }
 }

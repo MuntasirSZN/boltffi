@@ -1,4 +1,6 @@
-use boltffi_backend::target::kotlin::{KotlinApiStyle, KotlinFactoryStyle, KotlinHost};
+use boltffi_backend::target::kotlin::{
+    KotlinApiStyle, KotlinCustomMapping, KotlinFactoryStyle, KotlinHost,
+};
 
 use super::{rendered_fixture, rendered_fixture_with_host};
 
@@ -52,6 +54,18 @@ fn kotlin_target_renders_fallible_returns_as_throwing_functions() {
 #[test]
 fn kotlin_target_renders_custom_types_through_representations() {
     insta::assert_snapshot!(rendered_fixture("exports/custom_type_functions"));
+}
+
+#[test]
+fn kotlin_target_renders_custom_type_mappings() {
+    let host = KotlinHost::new("com.boltffi.demo", "Demo")
+        .expect("Kotlin host")
+        .custom_mapping("Email", KotlinCustomMapping::url_string("java.net.URI"));
+
+    insta::assert_snapshot!(rendered_fixture_with_host(
+        "exports/custom_string_type_functions",
+        host
+    ));
 }
 
 #[test]
