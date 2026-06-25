@@ -4,6 +4,8 @@ use boltffi_ast::PackageInfo;
 use boltffi_backend::target::kotlin::KotlinHost;
 use boltffi_binding::{Native, lower};
 
+#[path = "kotlin/callback.rs"]
+mod callback;
 #[path = "kotlin/direct_vector.rs"]
 mod direct_vector;
 #[path = "kotlin/exports.rs"]

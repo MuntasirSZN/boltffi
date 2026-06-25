@@ -36,6 +36,26 @@ impl KotlinPrimitive {
         })
     }
 
+    pub fn native_type(self) -> Result<TypeName> {
+        Ok(match self.primitive {
+            Primitive::Bool => TypeName::boolean(),
+            Primitive::I8 | Primitive::U8 => TypeName::byte(),
+            Primitive::I16 | Primitive::U16 => TypeName::short(),
+            Primitive::I32 | Primitive::U32 => TypeName::int(),
+            Primitive::I64 | Primitive::U64 | Primitive::ISize | Primitive::USize => {
+                TypeName::long()
+            }
+            Primitive::F32 => TypeName::float(),
+            Primitive::F64 => TypeName::double(),
+            _ => {
+                return Err(Error::UnsupportedTarget {
+                    target: "kotlin",
+                    shape: "unknown native primitive type",
+                });
+            }
+        })
+    }
+
     pub fn array_type(self) -> Result<TypeName> {
         Ok(match self.primitive {
             Primitive::Bool => TypeName::new("BooleanArray"),

@@ -125,10 +125,17 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         })
     }
 
+    fn callbacks(&self) -> Vec<String> {
+        self.primary_chunks(|declaration| {
+            matches!(declaration.declaration(), DeclarationRef::Callback(_))
+        })
+    }
+
     fn declarations(&self) -> String {
         [
             self.records(),
             self.enumerations(),
+            self.callbacks(),
             self.classes(),
             self.functions(),
         ]

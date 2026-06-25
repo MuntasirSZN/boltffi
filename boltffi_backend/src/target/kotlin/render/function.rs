@@ -14,6 +14,7 @@ use crate::{
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
+            callback::CallbackHandle,
             class::ClassHandle,
             direct_vector::DirectVector,
             enumeration::Enumeration,
@@ -505,7 +506,14 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
                         .parameter_argument(Expression::identifier(self.name.clone()))
                         .map(NativeArgument::direct)
                 }),
-            HandleTarget::Callback(_) | HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
+            HandleTarget::Callback(callback) => {
+                CallbackHandle::new(*callback, presence, self.context).and_then(|handle| {
+                    handle
+                        .parameter_argument(Expression::identifier(self.name.clone()))
+                        .map(NativeArgument::direct)
+                })
+            }
+            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "handle function parameter",
             }),

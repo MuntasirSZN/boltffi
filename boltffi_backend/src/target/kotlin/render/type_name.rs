@@ -11,8 +11,8 @@ use crate::{
         codec::ScalarOption,
         primitive::KotlinPrimitive,
         render::{
-            class::ClassHandle, direct_vector::DirectVector, enumeration::Enumeration,
-            record::Record,
+            callback::CallbackHandle, class::ClassHandle, direct_vector::DirectVector,
+            enumeration::Enumeration, record::Record,
         },
         syntax::TypeName,
     },
@@ -238,7 +238,11 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
             HandleTarget::Class(class) => {
                 ClassHandle::new(*class, presence, self.context).and_then(|handle| handle.ty())
             }
-            HandleTarget::Callback(_) | HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
+            HandleTarget::Callback(callback) => {
+                CallbackHandle::new(*callback, presence, self.context)
+                    .and_then(|handle| handle.ty())
+            }
+            HandleTarget::Stream(_) => Err(Error::UnsupportedTarget {
                 target: KOTLIN_TARGET,
                 shape: "handle function parameter",
             }),

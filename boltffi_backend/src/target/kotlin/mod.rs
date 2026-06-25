@@ -98,6 +98,7 @@ impl host::HostBackend for KotlinHost {
             .stable(BindingCapability::Enums)
             .stable(BindingCapability::Classes)
             .stable(BindingCapability::Functions)
+            .stable(BindingCapability::Callbacks)
             .stable(BindingCapability::CustomTypes)
     }
 
@@ -143,13 +144,11 @@ impl host::HostBackend for KotlinHost {
 
     fn callback(
         &self,
-        _decl: &CallbackDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        decl: &CallbackDecl<Self::Surface>,
+        bridge: &Self::Bridge,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Ok(Emitted::diagnostic(crate::core::Diagnostic::new(
-            "kotlin target skipped callback declaration",
-        )))
+        render::Callback::from_declaration(decl, bridge, context)?.render()
     }
 
     fn stream(

@@ -332,6 +332,12 @@ impl Expression {
         Self(format!("{self} ?: {fallback}"))
     }
 
+    pub fn let_or_else(self, parameter: Identifier, body: Self, fallback: Self) -> Self {
+        Self(format!(
+            "{self}?.let {{ {parameter} -> {body} }} ?: {fallback}"
+        ))
+    }
+
     pub fn throw_illegal_state(message: Literal) -> Self {
         Self(format!("throw IllegalStateException({message})"))
     }
