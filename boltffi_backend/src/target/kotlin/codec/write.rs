@@ -294,12 +294,16 @@ impl CodecWrite for Writer<'_> {
         Self::unsupported("callback handle wire write")
     }
 
-    fn custom(
+    fn custom<F>(
         &mut self,
         _id: CustomTypeId,
-        _value: &ValueRef,
-        representation: Vec<Self::Stmt>,
-    ) -> Vec<Self::Stmt> {
+        value: &ValueRef,
+        representation: F,
+    ) -> Vec<Self::Stmt>
+    where
+        F: FnOnce(&mut Self, &ValueRef) -> Vec<Self::Stmt>,
+    {
+        let representation = representation(self, value);
         representation
             .into_iter()
             .map(|statement| statement.map(WriteStatement::without_primitive))

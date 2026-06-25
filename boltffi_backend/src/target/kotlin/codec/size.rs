@@ -163,12 +163,11 @@ impl CodecSize for Sizer<'_> {
         Self::unsupported("callback handle wire size")
     }
 
-    fn custom(
-        &mut self,
-        _id: CustomTypeId,
-        _value: &ValueRef,
-        representation: Self::Expr,
-    ) -> Self::Expr {
+    fn custom<F>(&mut self, _id: CustomTypeId, value: &ValueRef, representation: F) -> Self::Expr
+    where
+        F: FnOnce(&mut Self, &ValueRef) -> Self::Expr,
+    {
+        let representation = representation(self, value);
         representation.map(SizeExpression::without_primitive)
     }
 

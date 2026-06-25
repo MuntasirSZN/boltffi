@@ -373,12 +373,14 @@ pub trait CodecWrite {
     fn callback_handle(&mut self, id: CallbackId, value: &ValueRef) -> Vec<Self::Stmt>;
 
     /// Writes a custom type representation.
-    fn custom(
+    fn custom<F>(
         &mut self,
         id: CustomTypeId,
         value: &ValueRef,
-        representation: Vec<Self::Stmt>,
-    ) -> Vec<Self::Stmt>;
+        representation: F,
+    ) -> Vec<Self::Stmt>
+    where
+        F: FnOnce(&mut Self, &ValueRef) -> Vec<Self::Stmt>;
 
     /// Writes a builtin value.
     fn builtin(&mut self, kind: BuiltinType, value: &ValueRef) -> Vec<Self::Stmt>;
@@ -462,12 +464,9 @@ pub trait CodecSize {
     fn callback_handle(&mut self, id: CallbackId, value: &ValueRef) -> Self::Expr;
 
     /// Returns the encoded size of a custom type representation.
-    fn custom(
-        &mut self,
-        id: CustomTypeId,
-        value: &ValueRef,
-        representation: Self::Expr,
-    ) -> Self::Expr;
+    fn custom<F>(&mut self, id: CustomTypeId, value: &ValueRef, representation: F) -> Self::Expr
+    where
+        F: FnOnce(&mut Self, &ValueRef) -> Self::Expr;
 
     /// Returns the encoded size of a builtin value.
     fn builtin(&mut self, kind: BuiltinType, value: &ValueRef) -> Self::Expr;
@@ -594,8 +593,9 @@ impl CodecWalker {
             CodecNode::ClassHandle(id) => renderer.class_handle(*id, value),
             CodecNode::CallbackHandle(id) => renderer.callback_handle(*id, value),
             CodecNode::Custom { id, representation } => {
-                let representation = Self::write_node(representation, value, renderer, next_binder);
-                renderer.custom(*id, value, representation)
+                renderer.custom(*id, value, |renderer, value| {
+                    Self::write_node(representation, value, renderer, next_binder)
+                })
             }
             CodecNode::Builtin(kind) => renderer.builtin(*kind, value),
             CodecNode::Optional(inner) => {
@@ -680,8 +680,9 @@ impl CodecWalker {
             CodecNode::ClassHandle(id) => renderer.class_handle(*id, value),
             CodecNode::CallbackHandle(id) => renderer.callback_handle(*id, value),
             CodecNode::Custom { id, representation } => {
-                let representation = Self::size_node(representation, value, renderer, next_binder);
-                renderer.custom(*id, value, representation)
+                renderer.custom(*id, value, |renderer, value| {
+                    Self::size_node(representation, value, renderer, next_binder)
+                })
             }
             CodecNode::Builtin(kind) => renderer.builtin(*kind, value),
             CodecNode::Optional(inner) => {
@@ -869,12 +870,16 @@ mod tests {
             )]
         }
 
-        fn custom(
+        fn custom<F>(
             &mut self,
             id: CustomTypeId,
             value: &ValueRef,
-            representation: Vec<Self::Stmt>,
-        ) -> Vec<Self::Stmt> {
+            representation: F,
+        ) -> Vec<Self::Stmt>
+        where
+            F: FnOnce(&mut Self, &ValueRef) -> Vec<Self::Stmt>,
+        {
+            let representation = representation(self, value);
             vec![format!(
                 "custom({}, {}, [{}])",
                 id.raw(),
@@ -1000,12 +1005,11 @@ mod tests {
             format!("size_callback_handle({}, {})", id.raw(), value_name(value))
         }
 
-        fn custom(
-            &mut self,
-            id: CustomTypeId,
-            value: &ValueRef,
-            representation: Self::Expr,
-        ) -> Self::Expr {
+        fn custom<F>(&mut self, id: CustomTypeId, value: &ValueRef, representation: F) -> Self::Expr
+        where
+            F: FnOnce(&mut Self, &ValueRef) -> Self::Expr,
+        {
+            let representation = representation(self, value);
             format!(
                 "size_custom({}, {}, {representation})",
                 id.raw(),
