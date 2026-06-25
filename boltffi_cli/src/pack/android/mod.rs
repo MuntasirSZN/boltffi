@@ -17,7 +17,7 @@ use super::{
     resolve_build_cargo_args,
 };
 
-pub(crate) use self::link::AndroidPackager;
+pub(crate) use self::link::{AndroidPackageLayout, AndroidPackager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AndroidBindingMode {
@@ -124,12 +124,7 @@ pub(crate) fn pack_android(
         )?;
     }
 
-    let packager = AndroidPackager::new(
-        config,
-        android_libraries,
-        build_profile.is_release_like(),
-        AndroidBindingMode::Kotlin,
-    );
+    let packager = AndroidPackager::new(config, android_libraries, build_profile.is_release_like());
     let step = reporter.step("Packaging jniLibs");
     packager.package()?;
     step.finish_success();

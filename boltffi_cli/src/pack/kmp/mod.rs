@@ -1,9 +1,7 @@
 use std::fs;
-use std::path::PathBuf;
 
 use boltffi_bindgen::render::kmp::{
-    KMP_SELECTED_PLATFORMS, KMP_SUPPORT_REPORT_FILE, KMP_SUPPORT_REPORT_SCHEMA_VERSION,
-    KmpSupportPolicy, KmpSupportReport,
+    KMP_SELECTED_PLATFORMS, KMP_SUPPORT_REPORT_SCHEMA_VERSION, KmpSupportPolicy, KmpSupportReport,
 };
 use boltffi_bindgen::target::Target;
 
@@ -16,19 +14,19 @@ use crate::commands::pack::PackKmpOptions;
 use crate::config::Config;
 use crate::pack::PackError;
 use crate::pack::android::{AndroidBindingMode, AndroidPackager, build_android_targets};
-use crate::pack::java::link::{
-    JvmNativePackageLayout, build_jvm_native_library, compile_jni_library_with_layout,
-};
+use crate::pack::java::link::{build_jvm_native_library, compile_jni_library_with_layout};
 use crate::pack::java::outputs::remove_stale_structured_jvm_outputs;
-use crate::pack::java::{
-    generate_jvm_header, prepare_kmp_jvm_packaging, selected_jvm_package_artifact_name,
-    selected_jvm_package_source_directory,
-};
+use crate::pack::java::{generate_jvm_header, prepare_kmp_jvm_packaging};
 use crate::pack::{
     discover_built_libraries_for_targets, missing_built_libraries, resolve_build_cargo_args,
 };
 use crate::reporter::Reporter;
 use crate::target::Platform;
+
+mod layout;
+mod plan;
+
+use plan::KmpPackagingPlan;
 
 pub(crate) fn pack_kmp(
     config: &Config,
@@ -53,30 +51,25 @@ pub(crate) fn pack_kmp(
     )?;
     step.finish_success();
 
-    let source_directory =
-        selected_jvm_package_source_directory(&prepared_jvm_packaging.packaging_targets)?;
-    let artifact_name =
-        selected_jvm_package_artifact_name(&prepared_jvm_packaging.packaging_targets)?;
-    let source_crate_name = config.library_name();
-    let jni_dir = kmp_jvm_jni_dir(config);
+    let plan = KmpPackagingPlan::new(config, prepared_jvm_packaging)?;
 
     if options.execution.regenerate {
         let step = reporter.step("Generating Kotlin Multiplatform bindings");
         run_generate_kmp_with_output_from_source_dir_and_desktop_fallback_library_name(
             config,
-            Some(config.kotlin_multiplatform_output()),
-            &source_directory,
-            source_crate_name,
-            artifact_name,
+            Some(plan.layout().output_root().clone()),
+            plan.source_directory(),
+            plan.source_crate_name(),
+            plan.artifact_name(),
         )?;
         step.finish_success();
 
         let step = reporter.step("Generating JVM C header");
         generate_jvm_header(
-            &source_directory,
-            source_crate_name,
-            &jni_dir,
-            source_crate_name,
+            plan.source_directory(),
+            plan.source_crate_name(),
+            plan.layout().jvm_jni_dir(),
+            plan.source_crate_name(),
         )?;
         step.finish_success();
 
@@ -84,17 +77,19 @@ pub(crate) fn pack_kmp(
         run_generate_header_with_output_from_source_dir(
             config,
             Some(config.android_header_output()),
-            &source_directory,
-            source_crate_name,
+            plan.source_directory(),
+            plan.source_crate_name(),
         )?;
         step.finish_success();
     }
 
-    verify_kmp_support_metadata(config)?;
-    package_kmp_android_libraries(config, &options, reporter)?;
+    verify_kmp_support_metadata(config, plan.layout())?;
+    package_kmp_android_libraries(config, &options, plan.layout(), reporter)?;
 
-    let kmp_jvm_layout = kmp_jvm_native_layout(config, source_crate_name);
-    for packaging_target in &prepared_jvm_packaging.packaging_targets {
+    let kmp_jvm_layout = plan
+        .layout()
+        .jvm_native_layout(config, plan.source_crate_name());
+    for packaging_target in &plan.jvm_packaging().packaging_targets {
         let host_target = packaging_target.cargo_context.host_target;
         let step = reporter.step(&format!(
             "Building Rust library for {}",
@@ -118,22 +113,22 @@ pub(crate) fn pack_kmp(
     }
 
     remove_stale_structured_jvm_outputs(
-        &kmp_jvm_native_resource_root(config),
-        &prepared_jvm_packaging.host_targets,
+        plan.layout().jvm_native_resource_root(),
+        &plan.jvm_packaging().host_targets,
     )?;
 
     reporter.finish();
     Ok(())
 }
 
-fn verify_kmp_support_metadata(config: &Config) -> Result<()> {
-    let path = kmp_support_report_path(config);
-    let contents = fs::read_to_string(&path).map_err(|source| {
+fn verify_kmp_support_metadata(config: &Config, layout: &layout::KmpPackageLayout) -> Result<()> {
+    let path = layout.support_report_path();
+    let contents = fs::read_to_string(path).map_err(|source| {
         if source.kind() == std::io::ErrorKind::NotFound {
-            CliError::FileNotFound(path.clone())
+            CliError::FileNotFound(path.to_path_buf())
         } else {
             CliError::ReadFailed {
-                path: path.clone(),
+                path: path.to_path_buf(),
                 source,
             }
         }
@@ -248,6 +243,7 @@ fn ensure_kmp_packaging_enabled(config: &Config, experimental_flag: bool) -> Res
 fn package_kmp_android_libraries(
     config: &Config,
     options: &PackKmpOptions,
+    layout: &layout::KmpPackageLayout,
     reporter: &Reporter,
 ) -> Result<()> {
     let build_cargo_args = resolve_build_cargo_args(config, &options.execution.cargo_args);
@@ -284,11 +280,12 @@ fn package_kmp_android_libraries(
         .into());
     }
 
-    let packager = AndroidPackager::new(
+    let packager = AndroidPackager::new_with_layout(
         config,
         android_libraries,
         build_profile.is_release_like(),
         AndroidBindingMode::KotlinMultiplatform,
+        layout.android_native_layout(),
     );
     let step = reporter.step("Packaging Android jniLibs for Kotlin Multiplatform");
     packager.package()?;
@@ -315,40 +312,12 @@ pub(crate) fn ensure_kmp_no_build_supported(
     Ok(())
 }
 
-fn kmp_jvm_jni_dir(config: &Config) -> PathBuf {
-    config.kotlin_multiplatform_output().join("src/jvmMain/c")
-}
-
-fn kmp_jvm_native_resource_root(config: &Config) -> PathBuf {
-    config
-        .kotlin_multiplatform_output()
-        .join("src/jvmMain/resources/native")
-}
-
-fn kmp_support_report_path(config: &Config) -> PathBuf {
-    config
-        .kotlin_multiplatform_output()
-        .join(KMP_SUPPORT_REPORT_FILE)
-}
-
-fn kmp_jvm_native_layout(config: &Config, header_name: &str) -> JvmNativePackageLayout {
-    JvmNativePackageLayout {
-        jni_dir: kmp_jvm_jni_dir(config),
-        header_name: header_name.to_string(),
-        jni_library_name: config.resolved_android_kotlin_desktop_library_name(),
-        native_output_root: kmp_jvm_native_resource_root(config),
-        flat_output_root: None,
-        strip_symbols: false,
-        debug_symbols_enabled: false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::layout::KmpPackageLayout;
     use super::{
-        ensure_kmp_no_build_supported, ensure_kmp_packaging_enabled, kmp_jvm_jni_dir,
-        kmp_jvm_native_layout, kmp_jvm_native_resource_root, kmp_support_report_path,
-        validate_kmp_support_report, verify_kmp_support_metadata,
+        ensure_kmp_no_build_supported, ensure_kmp_packaging_enabled, validate_kmp_support_report,
+        verify_kmp_support_metadata,
     };
     use crate::cli::CliError;
     use crate::config::Config;
@@ -411,26 +380,41 @@ output = "dist/kmp"
 module_name = "Demo"
 "#,
         );
-        let layout = kmp_jvm_native_layout(&config, "demo-lib");
+        let layout = KmpPackageLayout::from_config(&config);
+        let android_layout = layout.android_native_layout();
+        let jvm_layout = layout.jvm_native_layout(&config, "demo-lib");
 
+        assert_eq!(layout.output_root(), &PathBuf::from("dist/kmp"));
         assert_eq!(
-            kmp_jvm_jni_dir(&config),
-            PathBuf::from("dist/kmp/src/jvmMain/c")
+            android_layout.jni_glue_path,
+            PathBuf::from("dist/kmp/src/androidMain/c/jni_glue.c")
         );
         assert_eq!(
-            kmp_jvm_native_resource_root(&config),
+            android_layout.jnilibs_path,
+            PathBuf::from("dist/kmp/src/androidMain/jniLibs")
+        );
+        assert_eq!(
+            layout.jvm_jni_dir(),
+            &PathBuf::from("dist/kmp/src/jvmMain/c")
+        );
+        assert_eq!(
+            layout.jvm_native_resource_root(),
+            &PathBuf::from("dist/kmp/src/jvmMain/resources/native")
+        );
+        assert_eq!(
+            layout.support_report_path(),
+            &PathBuf::from("dist/kmp/boltffi-kmp-support.json")
+        );
+        assert_eq!(jvm_layout.jni_dir, PathBuf::from("dist/kmp/src/jvmMain/c"));
+        assert_eq!(jvm_layout.header_name, "demo-lib");
+        assert_eq!(jvm_layout.jni_library_name, "demo_lib");
+        assert_eq!(
+            jvm_layout.native_output_root,
             PathBuf::from("dist/kmp/src/jvmMain/resources/native")
         );
-        assert_eq!(layout.jni_dir, PathBuf::from("dist/kmp/src/jvmMain/c"));
-        assert_eq!(layout.header_name, "demo-lib");
-        assert_eq!(layout.jni_library_name, "demo_lib");
-        assert_eq!(
-            layout.native_output_root,
-            PathBuf::from("dist/kmp/src/jvmMain/resources/native")
-        );
-        assert!(layout.flat_output_root.is_none());
-        assert!(!layout.strip_symbols);
-        assert!(!layout.debug_symbols_enabled);
+        assert!(jvm_layout.flat_output_root.is_none());
+        assert!(!jvm_layout.strip_symbols);
+        assert!(!jvm_layout.debug_symbols_enabled);
     }
 
     #[test]
@@ -451,26 +435,27 @@ output = "dist/kmp"
 module_name = "Demo"
 "#,
         );
-        let layout = kmp_jvm_native_layout(&config, "demo");
+        let layout = KmpPackageLayout::from_config(&config);
+        let jvm_layout = layout.jvm_native_layout(&config, "demo");
 
         assert_eq!(
-            kmp_jvm_jni_dir(&config),
-            PathBuf::from("dist/kmp/src/jvmMain/c")
+            layout.jvm_jni_dir(),
+            &PathBuf::from("dist/kmp/src/jvmMain/c")
         );
         assert_eq!(
-            kmp_jvm_native_resource_root(&config),
-            PathBuf::from("dist/kmp/src/jvmMain/resources/native")
+            layout.jvm_native_resource_root(),
+            &PathBuf::from("dist/kmp/src/jvmMain/resources/native")
         );
-        assert_eq!(layout.jni_dir, PathBuf::from("dist/kmp/src/jvmMain/c"));
-        assert_eq!(layout.header_name, "demo");
-        assert_eq!(layout.jni_library_name, "configured_library");
+        assert_eq!(jvm_layout.jni_dir, PathBuf::from("dist/kmp/src/jvmMain/c"));
+        assert_eq!(jvm_layout.header_name, "demo");
+        assert_eq!(jvm_layout.jni_library_name, "configured_library");
         assert_eq!(
-            layout.native_output_root,
+            jvm_layout.native_output_root,
             PathBuf::from("dist/kmp/src/jvmMain/resources/native")
         );
-        assert!(layout.flat_output_root.is_none());
-        assert!(!layout.strip_symbols);
-        assert!(!layout.debug_symbols_enabled);
+        assert!(jvm_layout.flat_output_root.is_none());
+        assert!(!jvm_layout.strip_symbols);
+        assert!(!jvm_layout.debug_symbols_enabled);
     }
 
     #[test]
@@ -493,7 +478,7 @@ strip_symbols = true
 enabled = true
 "#,
         );
-        let layout = kmp_jvm_native_layout(&config, "demo");
+        let layout = KmpPackageLayout::from_config(&config).jvm_native_layout(&config, "demo");
 
         assert!(config.java_jvm_strip_symbols());
         assert!(config.java_jvm_debug_symbols_enabled());
@@ -596,13 +581,14 @@ module_name = "Demo"
 "#,
             output_directory.display()
         ));
+        let layout = KmpPackageLayout::from_config(&config);
 
-        let error = verify_kmp_support_metadata(&config)
+        let error = verify_kmp_support_metadata(&config, &layout)
             .expect_err("missing support report should fail packaging");
 
         assert!(matches!(
             error,
-            CliError::FileNotFound(path) if path == kmp_support_report_path(&config)
+            CliError::FileNotFound(path) if path == *layout.support_report_path()
         ));
 
         if output_directory.exists() {
