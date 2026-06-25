@@ -36,6 +36,11 @@ fn kotlin_target_renders_fallible_returns_as_throwing_functions() {
 }
 
 #[test]
+fn kotlin_target_renders_custom_types_through_representations() {
+    insta::assert_snapshot!(rendered_fixture("exports/custom_type_functions"));
+}
+
+#[test]
 fn kotlin_target_encodes_nullable_primitives_as_compact_wire() {
     insta::assert_snapshot!(rendered_fixture("exports/nullable_primitive_functions"));
 }

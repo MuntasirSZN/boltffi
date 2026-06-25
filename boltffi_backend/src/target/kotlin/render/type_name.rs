@@ -135,11 +135,15 @@ impl TypeRefRender for KotlinTypeRef<'_> {
         })
     }
 
-    fn custom(&mut self, _id: CustomTypeId) -> Self::Output {
-        Err(Error::UnsupportedTarget {
-            target: KOTLIN_TARGET,
-            shape: "custom type",
-        })
+    fn custom(&mut self, id: CustomTypeId) -> Self::Output {
+        self.context
+            .custom_type(id)
+            .map(|custom_type| custom_type.representation())
+            .ok_or(Error::UnsupportedTarget {
+                target: KOTLIN_TARGET,
+                shape: "custom type without declaration",
+            })?
+            .render_with(self)
     }
 
     fn builtin(&mut self, _kind: BuiltinType) -> Self::Output {

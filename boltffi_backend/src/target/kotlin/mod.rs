@@ -98,6 +98,7 @@ impl host::HostBackend for KotlinHost {
             .stable(BindingCapability::Enums)
             .stable(BindingCapability::Classes)
             .stable(BindingCapability::Functions)
+            .stable(BindingCapability::CustomTypes)
     }
 
     fn bridge_capabilities(&self) -> CapabilityRequirements<BridgeCapability> {
@@ -179,9 +180,7 @@ impl host::HostBackend for KotlinHost {
         _bridge: &Self::Bridge,
         _context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Ok(Emitted::diagnostic(crate::core::Diagnostic::new(
-            "kotlin target skipped custom type declaration",
-        )))
+        Ok(Emitted::primary(""))
     }
 
     fn assemble<'decl>(
