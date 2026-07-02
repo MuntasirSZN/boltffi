@@ -355,6 +355,19 @@ mod tests {
     }
 
     #[test]
+    fn function_symbol_replaces_hyphenated_package_segments() {
+        let bindings = TestContract::new()
+            .with_function(function("my-crate::add", "add"))
+            .lower_ok::<Native>();
+        let function = first_function(&bindings);
+
+        assert_eq!(
+            function.symbol().name().as_str(),
+            "boltffi_function_my_crate_add"
+        );
+    }
+
+    #[test]
     fn async_free_function_lowers_to_poll_handle_protocol_on_native() {
         let mut spin = function("demo::spin", "spin");
         spin.execution = ExecutionKind::Async;

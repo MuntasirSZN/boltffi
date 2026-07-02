@@ -90,9 +90,9 @@ impl KmpJvmDelegateAdapter {
             self.module_name.clone(),
         )
         .with_jvm_binding_style(JvmBindingStyle::Kotlin)
-        .with_header_include(kmp_generated_c_header_include(
+        .with_header_include(kmp_generated_c_header_include(&kmp_c_header_basename(
             &internal_contract.package.name,
-        ))
+        )))
         .lower();
 
         let runtime_source = native_runtime_members(&kotlin_module)?;
@@ -115,6 +115,10 @@ impl KmpJvmDelegateAdapter {
 
 fn kmp_generated_c_header_include(module_name: &str) -> String {
     format!("{KMP_GENERATED_C_HEADER_DIR}/{module_name}.h")
+}
+
+fn kmp_c_header_basename(package_name: &str) -> String {
+    naming::cargo_crate_name(package_name)
 }
 
 fn delegate_functions(
@@ -502,7 +506,11 @@ fn to_snake_case(name: &str) -> String {
                     result.push('_');
                 }
             }
-            result.extend(character.to_lowercase());
+            if character == '-' {
+                result.push('_');
+            } else {
+                result.extend(character.to_lowercase());
+            }
             result
         })
 }
@@ -633,6 +641,17 @@ mod tests {
         }
     }
 
+    fn empty_contract_for_package(package_name: &str) -> FfiContract {
+        FfiContract {
+            package: PackageInfo {
+                name: package_name.to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::new(),
+            functions: Vec::new(),
+        }
+    }
+
     fn sync_primitive_function(
         id: &str,
         params: Vec<(&str, PrimitiveType)>,
@@ -681,7 +700,14 @@ mod tests {
     }
 
     fn bindings_for_functions(functions: Vec<SourceFunctionDef>) -> Bindings<Native> {
-        let mut source = SourceContract::new(SourcePackageInfo::new("demo", None));
+        bindings_for_package_functions("demo", functions)
+    }
+
+    fn bindings_for_package_functions(
+        package_name: &str,
+        functions: Vec<SourceFunctionDef>,
+    ) -> Bindings<Native> {
+        let mut source = SourceContract::new(SourcePackageInfo::new(package_name, None));
         source.functions = functions;
         boltffi_binding::lower::<Native>(&source).expect("function should lower")
     }
@@ -779,6 +805,46 @@ mod tests {
     }
 
     #[test]
+    fn adapter_fallback_replaces_hyphenated_package_segments_in_native_symbol() {
+        let mut contract = empty_contract_for_package("my-crate");
+        contract.functions.push(sync_primitive_function(
+            "add",
+            vec![("left", PrimitiveType::I32), ("right", PrimitiveType::I32)],
+            ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+        ));
+
+        let delegate = adapt(&contract);
+        assert!(
+            delegate
+                .shared_jni_source()
+                .contains("#include <boltffi_generated/my_crate.h>")
+        );
+        assert!(!delegate.shared_jni_source().contains("my-crate"));
+        let function_plan = KmpFunctionPlan::new(
+            "add",
+            "boltffi_function_my_crate_add",
+            vec![
+                KmpParamPlan::new("left", KmpTypePlan::Primitive(BackendPrimitive::I32)),
+                KmpParamPlan::new("right", KmpTypePlan::Primitive(BackendPrimitive::I32)),
+            ],
+            Some(KmpTypePlan::Primitive(BackendPrimitive::I32)),
+        );
+        let function = delegate
+            .function_for(&function_plan)
+            .expect("hyphenated package fallback should use identifier-safe native symbol");
+
+        assert!(function.jni_glue_source().contains(
+            "JNIEXPORT jint JNICALL Java_com_example_demo_jvm_Native_boltffi_1function_1my_1crate_1add"
+        ));
+        assert!(
+            function
+                .jni_glue_source()
+                .contains("_result = boltffi_function_my_crate_add(left, right);")
+        );
+        assert!(!function.jni_glue_source().contains("my-crate"));
+    }
+
+    #[test]
     fn adapter_preserves_binding_docs_when_adapting_production_bindings() {
         let mut add = source_primitive_function(
             "demo::add",
@@ -817,6 +883,53 @@ mod tests {
                 .expect("adapter should provide delegated Kotlin source")
                 .contains("Adds two values through the production binding path.")
         );
+    }
+
+    #[test]
+    fn adapter_bindings_replaces_hyphenated_package_segments_in_native_symbol() {
+        let add = source_primitive_function(
+            "my-crate::add",
+            "add",
+            vec![
+                ("left", SourcePrimitive::I32),
+                ("right", SourcePrimitive::I32),
+            ],
+            SourcePrimitive::I32,
+        );
+        let bindings = bindings_for_package_functions("my-crate", vec![add]);
+
+        let delegate =
+            KmpJvmDelegateAdapter::new("com.example.demo", "Demo", KotlinOptions::default())
+                .adapt_bindings(&bindings)
+                .expect("delegate adapter should render production bindings");
+        assert!(
+            delegate
+                .shared_jni_source()
+                .contains("#include <boltffi_generated/my_crate.h>")
+        );
+        assert!(!delegate.shared_jni_source().contains("my-crate"));
+        let function_plan = KmpFunctionPlan::new(
+            "add",
+            "boltffi_function_my_crate_add",
+            vec![
+                KmpParamPlan::new("left", KmpTypePlan::Primitive(BackendPrimitive::I32)),
+                KmpParamPlan::new("right", KmpTypePlan::Primitive(BackendPrimitive::I32)),
+            ],
+            Some(KmpTypePlan::Primitive(BackendPrimitive::I32)),
+        );
+        let function = delegate
+            .function_for(&function_plan)
+            .expect("production primitive function should use identifier-safe native symbol");
+
+        assert!(function.jni_glue_source().contains(
+            "JNIEXPORT jint JNICALL Java_com_example_demo_jvm_Native_boltffi_1function_1my_1crate_1add"
+        ));
+        assert!(
+            function
+                .jni_glue_source()
+                .contains("_result = boltffi_function_my_crate_add(left, right);")
+        );
+        assert!(!function.jni_glue_source().contains("my-crate"));
     }
 
     #[test]
