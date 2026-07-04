@@ -80,6 +80,7 @@ mod custom;
 mod decl;
 mod direction;
 mod error;
+mod error_payloads;
 mod ids;
 mod layout;
 mod metadata;
@@ -123,6 +124,7 @@ pub use decl::{
 pub(crate) use decl::{ClassDeclParts, InvalidClassDecl, StreamDeclParts};
 pub use direction::{CallableScope, Direction, ForeignBody, IntoRust, OutOfRust, RustBody};
 pub use error::{BindingError, BindingErrorKind};
+pub use error_payloads::ErrorPayloadTypes;
 pub use ids::{
     CallbackId, ClassId, ConstantId, CustomTypeId, DeclarationId, EnumId, FunctionId,
     InitializerId, MethodId, RecordId, StreamId, SymbolId,

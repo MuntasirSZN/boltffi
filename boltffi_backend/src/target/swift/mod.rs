@@ -1,5 +1,6 @@
 //! Swift target rendered through the C ABI bridge.
 
+mod codec;
 mod name_style;
 mod primitive;
 mod render;
@@ -8,8 +9,8 @@ mod syntax;
 use std::path::PathBuf;
 
 use boltffi_binding::{
-    Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, EnumDecl, FunctionDecl,
-    Native, RecordDecl, StreamDecl,
+    Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, EnumDecl, ErrorPayloadTypes,
+    FunctionDecl, Native, RecordDecl, StreamDecl,
 };
 
 use crate::{
@@ -98,6 +99,7 @@ impl host::HostBackend for SwiftHost {
             .stable(BindingCapability::Records)
             .stable(BindingCapability::Enums)
             .stable(BindingCapability::Functions)
+            .stable(BindingCapability::Classes)
     }
 
     fn bridge_capabilities(&self) -> CapabilityRequirements<BridgeCapability> {
@@ -133,11 +135,11 @@ impl host::HostBackend for SwiftHost {
 
     fn class(
         &self,
-        _decl: &ClassDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        decl: &ClassDecl<Self::Surface>,
+        bridge: &Self::Bridge,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Self::unsupported("class declaration"))
+        render::Class::from_declaration(decl, bridge, context)?.render()
     }
 
     fn callback(
@@ -178,12 +180,19 @@ impl host::HostBackend for SwiftHost {
 
     fn assemble<'decl>(
         &self,
-        _bindings: &Bindings<Self::Surface>,
-        _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        bindings: &Bindings<Self::Surface>,
+        bridge: &Self::Bridge,
+        context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
-        render::Module::new(self, declarations).render()
+        render::Module::new(
+            self,
+            bridge,
+            context,
+            ErrorPayloadTypes::from_bindings(bindings),
+            declarations,
+        )
+        .render()
     }
 }
 

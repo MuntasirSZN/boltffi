@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use boltffi_binding::{
     Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, CustomTypeId, EnumDecl,
-    FunctionDecl, Native, RecordDecl, StreamDecl,
+    ErrorPayloadTypes, FunctionDecl, Native, RecordDecl, StreamDecl,
 };
 
 use crate::{
@@ -428,12 +428,19 @@ impl host::HostBackend for KotlinHost {
 
     fn assemble<'decl>(
         &self,
-        _bindings: &Bindings<Self::Surface>,
+        bindings: &Bindings<Self::Surface>,
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
-        render::Module::new(self, bridge, context, declarations).render()
+        render::Module::new(
+            self,
+            bridge,
+            context,
+            ErrorPayloadTypes::from_bindings(bindings),
+            declarations,
+        )
+        .render()
     }
 }
 

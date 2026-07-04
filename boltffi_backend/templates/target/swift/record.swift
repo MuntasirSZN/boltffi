@@ -1,4 +1,4 @@
-{{ record.documentation() }}public struct {{ record.name() }}: Hashable, Equatable, Sendable {
+{{ record.documentation() }}public struct {{ record.name() }}: Hashable, Equatable, Sendable{{ record.error_conformance() }} {
 {%- for field in record.fields() %}
 {{ field.documentation() }}    public var {{ field.name() }}: {{ field.ty() }}
 {%- endfor %}
@@ -8,6 +8,7 @@
         {{ field.assignment() }}
 {%- endfor %}
     }
+{%- if record.direct() %}
 
     @usableFromInline init(fromC c: {{ record.c_type() }}) {
         self.init({% for field in record.fields() %}{{ field.c_initializer_argument() }}{% if !loop.last %}, {% endif %}{% endfor %})
@@ -16,6 +17,19 @@
     @usableFromInline var cValue: {{ record.c_type() }} {
         {{ record.c_type() }}({% for field in record.fields() %}{{ field.c_value_argument() }}{% if !loop.last %}, {% endif %}{% endfor %})
     }
+{%- endif %}
+{%- if record.encoded() %}
+
+    @inlinable static func decode(from reader: inout WireReader) -> {{ record.name() }} {
+        {{ record.name() }}({% for field in record.fields() %}{{ field.name() }}: {{ field.read() }}{% if !loop.last %}, {% endif %}{% endfor %})
+    }
+
+    @inlinable func encode(to writer: inout WireWriter) {
+{%- for field in record.fields() %}
+        {{ field.write() }}
+{%- endfor %}
+    }
+{%- endif %}
 {%- for initializer in record.initializers() %}
 
 {{ initializer.documentation() }}    public static func {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.signature() }}{% if !loop.last %}, {% endif %}{% endfor %}){{ initializer.returns().signature() }} {

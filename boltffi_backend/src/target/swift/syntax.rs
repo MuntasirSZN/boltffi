@@ -269,6 +269,75 @@ impl Expression {
     pub fn labeled(label: impl fmt::Display, value: impl fmt::Display) -> Self {
         Self::new(format!("{label}: {value}"))
     }
+
+    pub fn forced(expression: impl fmt::Display) -> Self {
+        Self::new(format!("{expression}!"))
+    }
+
+    pub fn address(expression: impl fmt::Display) -> Self {
+        Self::new(format!("&{expression}"))
+    }
+
+    pub fn nil() -> Self {
+        Self::new("nil")
+    }
+
+    pub fn not_equal(left: impl fmt::Display, right: impl fmt::Display) -> Self {
+        Self::new(format!("{left} != {right}"))
+    }
+
+    pub fn equal(left: impl fmt::Display, right: impl fmt::Display) -> Self {
+        Self::new(format!("{left} == {right}"))
+    }
+
+    pub fn or(left: impl fmt::Display, right: impl fmt::Display) -> Self {
+        Self::new(format!("{left} || {right}"))
+    }
+
+    pub fn nil_coalescing(left: impl fmt::Display, right: impl fmt::Display) -> Self {
+        Self::new(format!("{left} ?? {right}"))
+    }
+
+    pub fn conditional(
+        condition: impl fmt::Display,
+        success: impl fmt::Display,
+        failure: impl fmt::Display,
+    ) -> Self {
+        Self::new(format!("{condition} ? {success} : {failure}"))
+    }
+
+    pub fn trailing_closure(
+        callee: impl fmt::Display,
+        arguments: ArgumentList,
+        parameter: impl fmt::Display,
+        expression: impl fmt::Display,
+    ) -> Self {
+        match arguments.is_empty() {
+            true => Self::new(format!("{callee} {{ {parameter} in {expression} }}")),
+            false => Self::new(format!(
+                "{callee}({arguments}) {{ {parameter} in {expression} }}"
+            )),
+        }
+    }
+
+    pub fn trailing_closure_parameters(
+        callee: impl fmt::Display,
+        arguments: ArgumentList,
+        parameters: impl IntoIterator<Item = Identifier>,
+        expression: impl fmt::Display,
+    ) -> Self {
+        let parameters = parameters
+            .into_iter()
+            .map(|parameter| parameter.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        match arguments.is_empty() {
+            true => Self::new(format!("{callee} {{ {parameters} in {expression} }}")),
+            false => Self::new(format!(
+                "{callee}({arguments}) {{ {parameters} in {expression} }}"
+            )),
+        }
+    }
 }
 
 impl sealed::SyntaxFragment for Statement {}
@@ -282,6 +351,55 @@ impl fmt::Display for Statement {
 impl Statement {
     pub fn new(statement: impl Into<String>) -> Self {
         Self(statement.into())
+    }
+
+    pub fn expression(expression: impl fmt::Display) -> Self {
+        Self::new(expression.to_string())
+    }
+
+    pub fn let_value(identifier: impl fmt::Display, expression: impl fmt::Display) -> Self {
+        Self::new(format!("let {identifier} = {expression}"))
+    }
+
+    pub fn var_value(
+        identifier: impl fmt::Display,
+        ty: impl fmt::Display,
+        expression: impl fmt::Display,
+    ) -> Self {
+        Self::new(format!("var {identifier}: {ty} = {expression}"))
+    }
+
+    pub fn assign(target: impl fmt::Display, expression: impl fmt::Display) -> Self {
+        Self::new(format!("{target} = {expression}"))
+    }
+
+    pub fn returns(expression: impl fmt::Display) -> Self {
+        Self::new(format!("return {expression}"))
+    }
+
+    pub fn throwing(expression: impl fmt::Display) -> Self {
+        Self::new(format!("throw {expression}"))
+    }
+
+    pub fn defer(expression: impl fmt::Display) -> Self {
+        Self::new(format!("defer {{ {expression} }}"))
+    }
+
+    pub fn if_then(condition: impl fmt::Display, body: impl IntoIterator<Item = Self>) -> Self {
+        let body = body
+            .into_iter()
+            .map(|statement| statement.indented("    "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(format!("if {condition} {{\n{body}\n}}"))
+    }
+
+    pub fn indented(&self, indent: &str) -> String {
+        self.0
+            .lines()
+            .map(|line| format!("{indent}{line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -311,6 +429,12 @@ impl fmt::Display for ArgumentList {
                 .collect::<Vec<_>>()
                 .join(", "),
         )
+    }
+}
+
+impl ArgumentList {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 

@@ -24,6 +24,15 @@ pub struct Name {
     parts: Vec<NamePart>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum GeneratedLocal {
+    ReturnBuffer,
+    ReturnHandle,
+    ErrorBuffer,
+    WireReader,
+    ErrorReader,
+}
+
 impl SwiftModule {
     /// Parses a Swift module name.
     pub fn parse(name: impl Into<String>) -> Result<Self> {
@@ -108,6 +117,10 @@ impl Name {
         Identifier::escape(self.lower_camel())
     }
 
+    pub fn generated(&self, suffix: &str) -> Result<Identifier> {
+        Identifier::parse(format!("__boltffi_{}_{}", self.lower_snake(), suffix))
+    }
+
     pub fn type_name(&self) -> TypeName {
         TypeName::new(
             self.parts
@@ -128,10 +141,34 @@ impl Name {
             .collect()
     }
 
+    fn lower_snake(&self) -> String {
+        self.parts
+            .iter()
+            .map(NamePart::as_str)
+            .collect::<Vec<_>>()
+            .join("_")
+    }
+
     fn capitalized(part: &str) -> String {
         let mut characters = part.chars();
         characters.next().map_or_else(String::new, |first| {
             first.to_uppercase().chain(characters).collect()
         })
+    }
+}
+
+impl GeneratedLocal {
+    pub fn identifier(self) -> Result<Identifier> {
+        Identifier::parse(format!("__boltffi_{}", self.role()))
+    }
+
+    fn role(self) -> &'static str {
+        match self {
+            Self::ReturnBuffer => "result",
+            Self::ReturnHandle => "handle",
+            Self::ErrorBuffer => "error",
+            Self::WireReader => "reader",
+            Self::ErrorReader => "error_reader",
+        }
     }
 }

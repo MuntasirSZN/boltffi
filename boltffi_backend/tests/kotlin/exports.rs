@@ -4,7 +4,7 @@ use boltffi_backend::target::kotlin::{
 
 use super::{
     files_with_host, fixture, rendered_files, rendered_fixture, rendered_fixture_with_host,
-    rendered_fixture_with_runtime,
+    rendered_fixture_with_runtime, rendered_source, source::SourceFixture,
 };
 
 #[test]
@@ -46,12 +46,21 @@ fn kotlin_target_renders_direct_records_and_function_bridges() {
 
 #[test]
 fn kotlin_target_renders_encoded_records_through_codec_methods() {
-    insta::assert_snapshot!(rendered_fixture("exports/encoded_record_functions"));
+    insta::assert_snapshot!(rendered_source(SourceFixture::many([
+        "enums/role",
+        "records/encoded_user",
+        "exports/encoded_record_functions",
+    ])));
 }
 
 #[test]
 fn kotlin_target_renders_data_enums_through_codec_methods() {
-    insta::assert_snapshot!(rendered_fixture("exports/encoded_functions"));
+    insta::assert_snapshot!(rendered_source(SourceFixture::many([
+        "records/person",
+        "enums/shape",
+        "enums/message",
+        "exports/encoded_functions",
+    ])));
 }
 
 #[test]

@@ -1,3 +1,4 @@
+mod class;
 mod documentation;
 mod enumeration;
 mod function;
@@ -5,6 +6,7 @@ mod module;
 mod record;
 mod type_name;
 
+pub use class::Class;
 pub use documentation::Documentation;
 pub use enumeration::Enumeration;
 pub use function::Function;
