@@ -1,7 +1,7 @@
 use askama::Template as AskamaTemplate;
 use std::collections::HashSet;
 
-use boltffi_binding::{BuiltinType, DeclarationRef, ErrorPayloadTypes, Native};
+use boltffi_binding::{BuiltinType, DeclarationRef, Native};
 
 use crate::{
     bridge::jni::JniBridgeContract,
@@ -13,9 +13,7 @@ use crate::{
         KotlinApiStyle, KotlinHost, KotlinPackage, NativeLibraries,
         render::{
             closure::Closures,
-            enumeration::Enumeration,
             native::{NativeFunction, NativeMethods},
-            record::Record,
         },
     },
 };
@@ -68,7 +66,6 @@ pub struct Module<'host, 'bridge, 'decl> {
     host: &'host KotlinHost,
     bridge: &'bridge JniBridgeContract,
     context: &'decl RenderContext<'decl, Native>,
-    error_payloads: ErrorPayloadTypes,
     declarations: Vec<RenderedDeclaration<'decl, Native>>,
 }
 
@@ -77,14 +74,12 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         host: &'host KotlinHost,
         bridge: &'bridge JniBridgeContract,
         context: &'decl RenderContext<'decl, Native>,
-        error_payloads: ErrorPayloadTypes,
         declarations: Vec<RenderedDeclaration<'decl, Native>>,
     ) -> Self {
         Self {
             host,
             bridge,
             context,
-            error_payloads,
             declarations,
         }
     }
@@ -93,7 +88,7 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         let diagnostics = self.diagnostics();
         let native_functions = self.native_functions()?;
         let closures = self.closures()?;
-        let declarations = self.declarations(&self.error_payloads)?;
+        let declarations = self.declarations()?;
         let features = RuntimeFeatures::from_declarations(&self.declarations);
         let contents = ModuleTemplate {
             package: self.host.package().clone(),
@@ -169,49 +164,49 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
     }
 
     fn functions(&self) -> Result<Vec<String>> {
-        self.primary_chunks(None, |declaration| {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Function(_))
         })
     }
 
-    fn records(&self, error_types: &ErrorPayloadTypes) -> Result<Vec<String>> {
-        self.primary_chunks(Some(error_types), |declaration| {
+    fn records(&self) -> Result<Vec<String>> {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Record(_))
         })
     }
 
-    fn enumerations(&self, error_types: &ErrorPayloadTypes) -> Result<Vec<String>> {
-        self.primary_chunks(Some(error_types), |declaration| {
+    fn enumerations(&self) -> Result<Vec<String>> {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Enum(_))
         })
     }
 
     fn classes(&self) -> Result<Vec<String>> {
-        self.primary_chunks(None, |declaration| {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Class(_))
         })
     }
 
     fn callbacks(&self) -> Result<Vec<String>> {
-        self.primary_chunks(None, |declaration| {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Callback(_))
         })
     }
 
     fn streams(&self) -> Result<Vec<String>> {
-        self.primary_chunks(None, |declaration| {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Stream(_))
         })
     }
 
     fn constants(&self) -> Result<Vec<String>> {
-        self.primary_chunks(None, |declaration| {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::Constant(_))
         })
     }
 
     fn custom_types(&self) -> Result<Vec<String>> {
-        self.primary_chunks(None, |declaration| {
+        self.primary_chunks(|declaration| {
             matches!(declaration.declaration(), DeclarationRef::CustomType(_))
         })
     }
@@ -238,12 +233,12 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
             .join("\n")
     }
 
-    fn declarations(&self, error_types: &ErrorPayloadTypes) -> Result<String> {
+    fn declarations(&self) -> Result<String> {
         match self.host.api_layout() {
-            KotlinApiStyle::TopLevel => self.all_declarations(error_types),
+            KotlinApiStyle::TopLevel => self.all_declarations(),
             KotlinApiStyle::ModuleObject => {
                 let callbacks = self.callbacks()?.join("\n\n");
-                let declarations = self.api_declarations(self.object_declarations(error_types)?);
+                let declarations = self.api_declarations(self.object_declarations()?);
                 Ok([callbacks, declarations]
                     .into_iter()
                     .filter(|chunk| !chunk.is_empty())
@@ -253,11 +248,11 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         }
     }
 
-    fn all_declarations(&self, error_types: &ErrorPayloadTypes) -> Result<String> {
+    fn all_declarations(&self) -> Result<String> {
         Ok(Self::join_declarations([
             self.custom_types()?,
-            self.records(error_types)?,
-            self.enumerations(error_types)?,
+            self.records()?,
+            self.enumerations()?,
             self.callbacks()?,
             self.classes()?,
             self.streams()?,
@@ -266,11 +261,11 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         ]))
     }
 
-    fn object_declarations(&self, error_types: &ErrorPayloadTypes) -> Result<String> {
+    fn object_declarations(&self) -> Result<String> {
         Ok(Self::join_declarations([
             self.custom_types()?,
-            self.records(error_types)?,
-            self.enumerations(error_types)?,
+            self.records()?,
+            self.enumerations()?,
             self.classes()?,
             self.streams()?,
             self.constants()?,
@@ -288,7 +283,6 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
 
     fn primary_chunks(
         &self,
-        error_types: Option<&ErrorPayloadTypes>,
         include: impl Fn(&RenderedDeclaration<'decl, Native>) -> bool,
     ) -> Result<Vec<String>> {
         self.declarations
@@ -297,56 +291,17 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
                 let chunk = declaration.emitted().primary_chunk();
                 include(declaration) && !chunk.is_empty()
             })
-            .map(|declaration| self.primary_chunk(declaration, error_types))
+            .map(Self::primary_chunk)
             .collect()
     }
 
-    fn primary_chunk(
-        &self,
-        declaration: &RenderedDeclaration<'decl, Native>,
-        error_types: Option<&ErrorPayloadTypes>,
-    ) -> Result<String> {
-        match declaration.declaration() {
-            DeclarationRef::Record(record)
-                if error_types.is_some_and(|types| types.contains_record(record.id())) =>
-            {
-                Ok(
-                    Record::from_declaration_as_error(
-                        record,
-                        self.host,
-                        self.bridge,
-                        self.context,
-                    )?
-                    .render()?
-                    .primary_chunk()
-                    .as_str()
-                    .trim_end()
-                    .to_owned(),
-                )
-            }
-            DeclarationRef::Enum(enumeration)
-                if error_types.is_some_and(|types| types.contains_enum(enumeration.id())) =>
-            {
-                Ok(Enumeration::from_declaration_as_error(
-                    enumeration,
-                    self.host,
-                    self.bridge,
-                    self.context,
-                    Some(self.host.package()),
-                )?
-                .render()?
-                .primary_chunk()
-                .as_str()
-                .trim_end()
-                .to_owned())
-            }
-            _ => Ok(declaration
-                .emitted()
-                .primary_chunk()
-                .as_str()
-                .trim_end()
-                .to_owned()),
-        }
+    fn primary_chunk(declaration: &RenderedDeclaration<'decl, Native>) -> Result<String> {
+        Ok(declaration
+            .emitted()
+            .primary_chunk()
+            .as_str()
+            .trim_end()
+            .to_owned())
     }
 
     fn diagnostics(&self) -> Vec<Diagnostic> {

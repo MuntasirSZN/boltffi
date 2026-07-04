@@ -78,12 +78,12 @@ impl Enumeration {
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            EnumDecl::CStyle(enumeration) => {
-                Self::from_c_style(enumeration, None, host, context, false)
-            }
-            EnumDecl::Data(enumeration) => {
-                Self::from_data(enumeration, None, host, context, None, false)
-            }
+            EnumDecl::CStyle(enumeration) => enumeration.map_role(|enumeration, error| {
+                Self::from_c_style(enumeration, None, host, context, error)
+            }),
+            EnumDecl::Data(enumeration) => enumeration.map_role(|enumeration, error| {
+                Self::from_data(enumeration, None, host, context, None, error)
+            }),
             _ => Err(KotlinHost::unsupported("unknown enum declaration")),
         }
     }
@@ -95,48 +95,13 @@ impl Enumeration {
         context: &RenderContext<Native>,
         package: Option<&KotlinPackage>,
     ) -> Result<Self> {
-        Self::from_declaration_with_package_and_error(
-            declaration,
-            host,
-            bridge,
-            context,
-            package,
-            false,
-        )
-    }
-
-    pub fn from_declaration_as_error(
-        declaration: &EnumDecl<Native>,
-        host: &KotlinHost,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-        package: Option<&KotlinPackage>,
-    ) -> Result<Self> {
-        Self::from_declaration_with_package_and_error(
-            declaration,
-            host,
-            bridge,
-            context,
-            package,
-            true,
-        )
-    }
-
-    pub fn from_declaration_with_package_and_error(
-        declaration: &EnumDecl<Native>,
-        host: &KotlinHost,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-        package: Option<&KotlinPackage>,
-        error: bool,
-    ) -> Result<Self> {
         match declaration {
-            EnumDecl::CStyle(enumeration) => {
+            EnumDecl::CStyle(enumeration) => enumeration.map_role(|enumeration, error| {
                 Self::from_c_style(enumeration, Some(bridge), host, context, error)
-            }
-            EnumDecl::Data(enumeration) => {
+            }),
+            EnumDecl::Data(enumeration) => enumeration.map_role(|enumeration, error| {
                 Self::from_data(enumeration, Some(bridge), host, context, package, error)
-            }
+            }),
             _ => Err(KotlinHost::unsupported("unknown enum declaration")),
         }
     }
@@ -235,7 +200,9 @@ impl Enumeration {
             .ok_or(KotlinHost::broken_bridge_contract(
                 "enum type was not found in render context",
             ))? {
-            EnumDecl::CStyle(enumeration) => enumeration.repr().primitive(),
+            EnumDecl::CStyle(enumeration) => {
+                enumeration.map(|enumeration| enumeration.repr().primitive())
+            }
             EnumDecl::Data(_) => {
                 return Err(KotlinHost::unsupported("data enum direct argument"));
             }

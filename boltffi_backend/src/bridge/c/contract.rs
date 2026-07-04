@@ -38,7 +38,10 @@ impl CBridgeContract {
                 .try_fold(BTreeMap::new(), |mut records, decl| {
                     match DeclarationRef::from(decl) {
                         DeclarationRef::Record(RecordDecl::Direct(record)) => {
-                            records.insert(record.id(), Record::direct(record, &names)?);
+                            let (id, record) = record.map(|record| {
+                                Ok::<_, Error>((record.id(), Record::direct(record, &names)?))
+                            })?;
+                            records.insert(id, record);
                         }
                         DeclarationRef::Record(RecordDecl::Encoded(_)) => {}
                         DeclarationRef::Record(_) => {
@@ -88,7 +91,10 @@ impl CBridgeContract {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .map(|enumeration| Ok((enumeration.id(), Enum::c_style(enumeration, &names)?)))
+            .map(|enumeration| {
+                enumeration
+                    .map(|enumeration| Ok((enumeration.id(), Enum::c_style(enumeration, &names)?)))
+            })
             .collect::<Result<BTreeMap<_, _>>>()?;
         let callbacks = bindings
             .decls()

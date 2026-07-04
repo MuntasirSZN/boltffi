@@ -2,6 +2,8 @@ use std::{collections::HashSet, error, fmt};
 
 use serde::{Deserialize, Serialize};
 
+use super::error_payloads::ErrorPayloadTypes;
+
 use crate::{
     BindingError, BindingErrorKind, CanonicalName, Decl, Native, NativeSymbol, NativeSymbolTable,
     Surface, Wasm32,
@@ -148,6 +150,8 @@ impl<S: Surface> Bindings<S> {
         decls: Vec<Decl<S>>,
         symbols: NativeSymbolTable,
     ) -> Result<Self, BindingError> {
+        let mut decls = decls;
+        ErrorPayloadTypes::from_decls(&decls).mark_decls(&mut decls);
         let bindings = Self {
             version: ContractVersion::current(),
             package,
@@ -288,10 +292,12 @@ impl<S: Surface> TryFrom<UncheckedBindings<S>> for Bindings<S> {
     type Error = BindingError;
 
     fn try_from(unchecked: UncheckedBindings<S>) -> Result<Self, Self::Error> {
+        let mut decls = unchecked.decls;
+        ErrorPayloadTypes::from_decls(&decls).mark_decls(&mut decls);
         let bindings = Self {
             version: unchecked.version,
             package: unchecked.package,
-            decls: unchecked.decls,
+            decls,
             symbols: unchecked.symbols,
         };
         bindings.validate()?;

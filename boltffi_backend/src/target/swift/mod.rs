@@ -9,8 +9,8 @@ mod syntax;
 use std::path::PathBuf;
 
 use boltffi_binding::{
-    Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, EnumDecl, ErrorPayloadTypes,
-    FunctionDecl, Native, RecordDecl, StreamDecl,
+    Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, EnumDecl, FunctionDecl,
+    Native, RecordDecl, StreamDecl,
 };
 
 use crate::{
@@ -180,19 +180,12 @@ impl host::HostBackend for SwiftHost {
 
     fn assemble<'decl>(
         &self,
-        bindings: &Bindings<Self::Surface>,
-        bridge: &Self::Bridge,
-        context: &RenderContext<Self::Surface>,
+        _bindings: &Bindings<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
-        render::Module::new(
-            self,
-            bridge,
-            context,
-            ErrorPayloadTypes::from_bindings(bindings),
-            declarations,
-        )
-        .render()
+        render::Module::new(self, declarations).render()
     }
 }
 

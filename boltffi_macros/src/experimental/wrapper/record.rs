@@ -97,18 +97,22 @@ impl<'expansion, 'lowered, S: RenderSurface> Renderer<'expansion, 'lowered, S> {
             >,
     {
         match self.pair.binding() {
-            RecordDecl::Direct(binding) => Direct {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
-            RecordDecl::Encoded(binding) => Encoded {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
+            RecordDecl::Direct(binding) => binding.map(|binding| {
+                Direct {
+                    source: self.pair.source(),
+                    binding,
+                    expansion: self.expansion,
+                }
+                .render()
+            }),
+            RecordDecl::Encoded(binding) => binding.map(|binding| {
+                Encoded {
+                    source: self.pair.source(),
+                    binding,
+                    expansion: self.expansion,
+                }
+                .render()
+            }),
             _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
         }
     }

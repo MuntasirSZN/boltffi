@@ -55,8 +55,12 @@ impl Record {
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            RecordDecl::Direct(record) => Self::from_direct(record, bridge, context),
-            RecordDecl::Encoded(record) => Self::from_encoded(record, bridge, context),
+            RecordDecl::Direct(record) => {
+                record.map(|record| Self::from_direct(record, bridge, context))
+            }
+            RecordDecl::Encoded(record) => {
+                record.map(|record| Self::from_encoded(record, bridge, context))
+            }
             _ => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "unknown record",
@@ -354,9 +358,9 @@ impl Symbols {
                             target: "python",
                             shape: "direct record without C typedef",
                         })?;
-                Self::from_direct(record, c_record)
+                record.map(|record| Self::from_direct(record, c_record))
             }
-            RecordDecl::Encoded(record) => Self::from_encoded(record),
+            RecordDecl::Encoded(record) => record.map(Self::from_encoded),
             _ => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "unknown record declaration",

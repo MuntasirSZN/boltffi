@@ -84,21 +84,14 @@ impl Enumeration {
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            EnumDecl::CStyle(enumeration) => Self::from_c_style(enumeration, bridge, context),
-            EnumDecl::Data(enumeration) => Self::from_data(enumeration, bridge, context),
+            EnumDecl::CStyle(enumeration) => enumeration.map_role(|enumeration, error| {
+                Self::from_c_style(enumeration, bridge, context, error)
+            }),
+            EnumDecl::Data(enumeration) => enumeration.map_role(|enumeration, error| {
+                Self::from_data(enumeration, bridge, context, error)
+            }),
             _ => Err(SwiftHost::unsupported("unknown enum declaration")),
         }
-    }
-
-    pub fn from_declaration_as_error(
-        declaration: &EnumDecl<Native>,
-        bridge: &CBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        Self::from_declaration(declaration, bridge, context).map(|mut enumeration| {
-            enumeration.conforms_to_error = true;
-            enumeration
-        })
     }
 
     pub fn render(&self) -> Result<Emitted> {
@@ -181,11 +174,12 @@ impl Enumeration {
         enumeration: &CStyleEnumDecl<Native>,
         bridge: &CBridgeContract,
         context: &RenderContext<Native>,
+        conforms_to_error: bool,
     ) -> Result<Self> {
         Ok(Self {
             documentation: Documentation::new(enumeration.meta().doc(), ""),
             name: Name::new(enumeration.name()).type_name(),
-            conforms_to_error: false,
+            conforms_to_error,
             body: Body::CStyle {
                 raw_type: SwiftType::primitive(enumeration.repr().primitive())?,
                 variants: enumeration
@@ -215,11 +209,12 @@ impl Enumeration {
         enumeration: &DataEnumDecl<Native>,
         bridge: &CBridgeContract,
         context: &RenderContext<Native>,
+        conforms_to_error: bool,
     ) -> Result<Self> {
         Ok(Self {
             documentation: Documentation::new(enumeration.meta().doc(), ""),
             name: Name::new(enumeration.name()).type_name(),
-            conforms_to_error: false,
+            conforms_to_error,
             body: Body::Data {
                 variants: enumeration
                     .variants()

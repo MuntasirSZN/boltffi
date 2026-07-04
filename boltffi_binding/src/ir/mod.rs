@@ -116,15 +116,14 @@ pub use decl::{
     CStyleEnumDecl, CStyleVariantDecl, CallbackDecl, CallbackLocalFunction,
     CallbackLocalMethodDecl, CallbackLocalProtocol, ClassDecl, ClassThreadSafety, ConstantDecl,
     ConstantValueDecl, CustomTypeDecl, DataEnumDecl, DataVariantDecl, DataVariantPayload, Decl,
-    DeclarationRef, DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl,
-    EnumDecl, ExportedMethodDecl, FieldKey, FunctionDecl, ImportedMethodDecl, InitializerDecl,
-    MethodDecl, RecordDecl, StreamDecl, StreamItemPlan, StreamItemPlanRender, StreamMode,
-    StreamProtocol, VariantTag,
+    DeclarationRef, Declared, DirectFieldDecl, DirectRecordDecl, EncodedFieldDecl,
+    EncodedRecordDecl, EnumDecl, ExportedMethodDecl, FieldKey, FunctionDecl, ImportedMethodDecl,
+    InitializerDecl, MethodDecl, RecordDecl, StreamDecl, StreamItemPlan, StreamItemPlanRender,
+    StreamMode, StreamProtocol, VariantTag,
 };
 pub(crate) use decl::{ClassDeclParts, InvalidClassDecl, StreamDeclParts};
 pub use direction::{CallableScope, Direction, ForeignBody, IntoRust, OutOfRust, RustBody};
 pub use error::{BindingError, BindingErrorKind};
-pub use error_payloads::ErrorPayloadTypes;
 pub use ids::{
     CallbackId, ClassId, ConstantId, CustomTypeId, DeclarationId, EnumId, FunctionId,
     InitializerId, MethodId, RecordId, StreamId, SymbolId,

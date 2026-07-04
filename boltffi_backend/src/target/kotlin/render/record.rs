@@ -70,28 +70,11 @@ impl Record {
         bridge: &JniBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        Self::from_declaration_with_error(declaration, host, bridge, context, false)
-    }
-
-    pub fn from_declaration_as_error(
-        declaration: &RecordDecl<Native>,
-        host: &KotlinHost,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        Self::from_declaration_with_error(declaration, host, bridge, context, true)
-    }
-
-    pub fn from_declaration_with_error(
-        declaration: &RecordDecl<Native>,
-        host: &KotlinHost,
-        bridge: &JniBridgeContract,
-        context: &RenderContext<Native>,
-        error: bool,
-    ) -> Result<Self> {
         match declaration {
-            RecordDecl::Direct(record) => Self::from_direct(record, host, bridge, context, error),
-            RecordDecl::Encoded(record) => Self::from_encoded(record, host, bridge, context, error),
+            RecordDecl::Direct(record) => record
+                .map_role(|record, error| Self::from_direct(record, host, bridge, context, error)),
+            RecordDecl::Encoded(record) => record
+                .map_role(|record, error| Self::from_encoded(record, host, bridge, context, error)),
             _ => Err(KotlinHost::unsupported("unknown record declaration")),
         }
     }
@@ -176,7 +159,7 @@ impl Record {
                 "record type was not found in render context",
             ))
             .and_then(|record| match record {
-                RecordDecl::Direct(record) => Ok(record.layout().size().get()),
+                RecordDecl::Direct(record) => record.map(|record| Ok(record.layout().size().get())),
                 RecordDecl::Encoded(_) => Err(KotlinHost::broken_bridge_contract(
                     "direct-vector record was not lowered as a direct record",
                 )),

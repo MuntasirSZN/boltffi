@@ -36,7 +36,9 @@ impl<'context, 'bindings> Reader<'context, 'bindings> {
 
     fn c_style_enum_repr(&self, id: EnumId) -> Result<Primitive> {
         match self.context.enumeration(id) {
-            Some(EnumDecl::CStyle(enumeration)) => Ok(enumeration.repr().primitive()),
+            Some(EnumDecl::CStyle(enumeration)) => {
+                enumeration.map(|enumeration| Ok(enumeration.repr().primitive()))
+            }
             Some(EnumDecl::Data(_)) => {
                 self.unsupported("data enum where C-style enum was expected")
             }

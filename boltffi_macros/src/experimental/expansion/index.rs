@@ -94,7 +94,7 @@ impl ExpansionIndex {
             .ok_or(Error::MissingDeclaration(declaration_id))?;
         match lowered.bindings().decls().get(index) {
             Some(Decl::Record(record)) => match record.as_ref() {
-                RecordDecl::Encoded(record) => Ok(record),
+                RecordDecl::Encoded(record) => record.map(Ok),
                 _ => Err(Error::WrongDeclaration),
             },
             _ => Err(Error::WrongDeclaration),

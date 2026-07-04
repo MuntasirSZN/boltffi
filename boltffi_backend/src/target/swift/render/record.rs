@@ -64,21 +64,14 @@ impl Record {
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            RecordDecl::Direct(record) => Self::from_direct(record, bridge, context),
-            RecordDecl::Encoded(record) => Self::from_encoded(record, bridge, context),
+            RecordDecl::Direct(record) => {
+                record.map_role(|record, error| Self::from_direct(record, bridge, context, error))
+            }
+            RecordDecl::Encoded(record) => {
+                record.map_role(|record, error| Self::from_encoded(record, bridge, context, error))
+            }
             _ => Err(SwiftHost::unsupported("unknown record declaration")),
         }
-    }
-
-    pub fn from_declaration_as_error(
-        declaration: &RecordDecl<Native>,
-        bridge: &CBridgeContract,
-        context: &RenderContext<Native>,
-    ) -> Result<Self> {
-        Self::from_declaration(declaration, bridge, context).map(|mut record| {
-            record.conforms_to_error = true;
-            record
-        })
     }
 
     pub fn render(&self) -> Result<Emitted> {
@@ -151,6 +144,7 @@ impl Record {
         record: &DirectRecordDecl<Native>,
         bridge: &CBridgeContract,
         context: &RenderContext<Native>,
+        conforms_to_error: bool,
     ) -> Result<Self> {
         let c_record =
             bridge
@@ -168,7 +162,7 @@ impl Record {
         Ok(Self {
             documentation: Documentation::new(record.meta().doc(), ""),
             name: Name::new(record.name()).type_name(),
-            conforms_to_error: false,
+            conforms_to_error,
             body: RecordBody::Direct {
                 c_type: TypeName::new(c_record.name()),
             },
@@ -199,13 +193,14 @@ impl Record {
         record: &EncodedRecordDecl<Native>,
         bridge: &CBridgeContract,
         context: &RenderContext<Native>,
+        conforms_to_error: bool,
     ) -> Result<Self> {
         let reader = Identifier::parse("reader")?;
         let writer = Identifier::parse("writer")?;
         Ok(Self {
             documentation: Documentation::new(record.meta().doc(), ""),
             name: Name::new(record.name()).type_name(),
-            conforms_to_error: false,
+            conforms_to_error,
             body: RecordBody::Encoded,
             fields: record
                 .fields()

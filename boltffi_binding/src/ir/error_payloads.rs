@@ -1,54 +1,39 @@
 use std::collections::BTreeSet;
 
-// TODO(engali94): This need to be revamped and make it part of the IR contract itself
-// not as a seperate callable object.
 use super::{
-    Bindings, CallbackDecl, CallbackProtocolIntrospect, ClassDecl, ConstantValueDecl,
-    DeclarationRef, EnumDecl, EnumId, ErrorChannel, ExportedCallable, ExportedMethodDecl,
-    FunctionDecl, ImportedCallable, IncomingParam, InitializerDecl, NativeSymbol, OutgoingParam,
-    RecordDecl, RecordId, Surface, TypeRef,
+    CallbackDecl, CallbackProtocolIntrospect, ClassDecl, ConstantValueDecl, Decl, DeclarationRef,
+    EnumDecl, EnumId, ErrorChannel, ExportedCallable, ExportedMethodDecl, FunctionDecl,
+    ImportedCallable, IncomingParam, InitializerDecl, NativeSymbol, OutgoingParam, RecordDecl,
+    RecordId, Surface, TypeRef,
 };
 
-/// Record and enum declarations carried by encoded error channels.
-///
-/// The set is derived from lowered callable signatures, including
-/// callback and closure payloads. It is an IR-level view of the types
-/// that can cross the boundary as thrown or rejected error values.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ErrorPayloadTypes {
+pub(crate) struct ErrorPayloadTypes {
     records: BTreeSet<RecordId>,
     enumerations: BTreeSet<EnumId>,
 }
 
 impl ErrorPayloadTypes {
-    /// Collects encoded error payload types from a binding contract.
-    pub fn from_bindings<S: Surface>(bindings: &Bindings<S>) -> Self {
-        Self::from_declarations(bindings.decls().iter().map(DeclarationRef::from))
-    }
-
-    /// Collects encoded error payload types from declaration views.
-    pub fn from_declarations<'declaration, S>(
-        declarations: impl IntoIterator<Item = DeclarationRef<'declaration, S>>,
-    ) -> Self
-    where
-        S: Surface,
-    {
-        declarations
-            .into_iter()
+    pub(crate) fn from_decls<S: Surface>(decls: &[Decl<S>]) -> Self {
+        decls
+            .iter()
+            .map(DeclarationRef::from)
             .fold(Self::default(), |mut payloads, declaration| {
                 payloads.insert_declaration(declaration);
                 payloads
             })
     }
 
-    /// Returns whether a record declaration is used as an encoded error.
-    pub fn contains_record(&self, id: RecordId) -> bool {
-        self.records.contains(&id)
-    }
-
-    /// Returns whether an enum declaration is used as an encoded error.
-    pub fn contains_enum(&self, id: EnumId) -> bool {
-        self.enumerations.contains(&id)
+    pub(crate) fn mark_decls<S: Surface>(&self, decls: &mut [Decl<S>]) {
+        decls.iter_mut().for_each(|decl| match decl {
+            Decl::Record(record) if self.records.contains(&record.id()) => {
+                record.mark_error_payload();
+            }
+            Decl::Enum(enumeration) if self.enumerations.contains(&enumeration.id()) => {
+                enumeration.mark_error_payload();
+            }
+            _ => {}
+        });
     }
 
     fn insert_declaration<S: Surface>(&mut self, declaration: DeclarationRef<'_, S>) {
@@ -72,25 +57,11 @@ impl ErrorPayloadTypes {
     }
 
     fn insert_record<S: Surface>(&mut self, record: &RecordDecl<S>) {
-        match record {
-            RecordDecl::Direct(record) => {
-                self.insert_associated(record.initializers(), record.methods())
-            }
-            RecordDecl::Encoded(record) => {
-                self.insert_associated(record.initializers(), record.methods())
-            }
-        }
+        self.insert_associated(record.initializers(), record.methods());
     }
 
     fn insert_enum<S: Surface>(&mut self, enumeration: &EnumDecl<S>) {
-        match enumeration {
-            EnumDecl::CStyle(enumeration) => {
-                self.insert_associated(enumeration.initializers(), enumeration.methods())
-            }
-            EnumDecl::Data(enumeration) => {
-                self.insert_associated(enumeration.initializers(), enumeration.methods())
-            }
-        }
+        self.insert_associated(enumeration.initializers(), enumeration.methods());
     }
 
     fn insert_class<S: Surface>(&mut self, class: &ClassDecl<S>) {

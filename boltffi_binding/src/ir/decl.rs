@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     BufferShapeRules, BuiltinType, ByteSize, CallableScope, CallbackId, CallbackProtocolIntrospect,
@@ -68,6 +68,85 @@ pub enum DeclarationRef<'a, S: Surface> {
     Constant(&'a ConstantDecl<S>),
     /// Custom type declaration.
     CustomType(&'a CustomTypeDecl),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+enum DeclarationRole {
+    #[default]
+    Value,
+    ErrorPayload,
+}
+
+/// A declaration payload paired with its role in the binding contract.
+///
+/// The payload keeps its normal transport shape, such as direct record or
+/// encoded enum. Access goes through [`fold`](Self::fold) so renderers handle
+/// ordinary API declarations and encoded error payload declarations at the
+/// same point where they render the payload.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Declared<T> {
+    role: DeclarationRole,
+    value: T,
+}
+
+impl<T> Declared<T> {
+    pub(crate) fn value(value: T) -> Self {
+        Self {
+            role: DeclarationRole::Value,
+            value,
+        }
+    }
+
+    /// Selects the branch for this declaration role.
+    pub fn fold<'value, R>(
+        &'value self,
+        value: impl FnOnce(&'value T) -> R,
+        error_payload: impl FnOnce(&'value T) -> R,
+    ) -> R {
+        match self.role {
+            DeclarationRole::Value => value(&self.value),
+            DeclarationRole::ErrorPayload => error_payload(&self.value),
+        }
+    }
+
+    /// Applies one operation to the payload regardless of declaration role.
+    pub fn map<'value, R>(&'value self, render: impl FnOnce(&'value T) -> R) -> R {
+        render(&self.value)
+    }
+
+    /// Applies one operation to the payload with its error-payload flag.
+    pub fn map_role<'value, R>(&'value self, render: impl FnOnce(&'value T, bool) -> R) -> R {
+        match self.role {
+            DeclarationRole::Value => render(&self.value, false),
+            DeclarationRole::ErrorPayload => render(&self.value, true),
+        }
+    }
+
+    pub(crate) fn mark_error_payload(&mut self) {
+        self.role = DeclarationRole::ErrorPayload;
+    }
+
+    pub(crate) fn payload(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T: Serialize> Serialize for Declared<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.value.serialize(serializer)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Declared<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        T::deserialize(deserializer).map(Self::value)
+    }
 }
 
 impl<'a, S: Surface> From<&'a Decl<S>> for DeclarationRef<'a, S> {
@@ -230,37 +309,20 @@ impl<S: Surface> Decl<S> {
     /// callback can be implemented in Rust.
     pub fn exported_callables(&self) -> Box<dyn Iterator<Item = &ExportedCallable<S>> + '_> {
         match self {
-            Self::Record(record) => match record.as_ref() {
-                RecordDecl::Direct(direct) => Box::new(
-                    direct
-                        .initializers()
-                        .iter()
-                        .map(|initializer| initializer.callable())
-                        .chain(direct.methods().iter().map(|method| method.callable())),
-                ),
-                RecordDecl::Encoded(encoded) => Box::new(
-                    encoded
-                        .initializers()
-                        .iter()
-                        .map(|initializer| initializer.callable())
-                        .chain(encoded.methods().iter().map(|method| method.callable())),
-                ),
-            },
-            Self::Enum(enumeration) => match enumeration.as_ref() {
-                EnumDecl::CStyle(c_style) => Box::new(
-                    c_style
-                        .initializers()
-                        .iter()
-                        .map(|initializer| initializer.callable())
-                        .chain(c_style.methods().iter().map(|method| method.callable())),
-                ),
-                EnumDecl::Data(data) => Box::new(
-                    data.initializers()
-                        .iter()
-                        .map(|initializer| initializer.callable())
-                        .chain(data.methods().iter().map(|method| method.callable())),
-                ),
-            },
+            Self::Record(record) => Box::new(
+                record
+                    .initializers()
+                    .iter()
+                    .map(|initializer| initializer.callable())
+                    .chain(record.methods().iter().map(|method| method.callable())),
+            ),
+            Self::Enum(enumeration) => Box::new(
+                enumeration
+                    .initializers()
+                    .iter()
+                    .map(|initializer| initializer.callable())
+                    .chain(enumeration.methods().iter().map(|method| method.callable())),
+            ),
             Self::Function(function) => Box::new(std::iter::once(function.callable())),
             Self::Class(class) => Box::new(
                 class
@@ -312,41 +374,22 @@ impl<S: Surface> Decl<S> {
                     .flat_map(ImportedCallable::native_symbols),
             );
         match self {
-            Self::Record(record) => match record.as_ref() {
-                RecordDecl::Direct(direct) => Box::new(
-                    direct
-                        .initializers()
-                        .iter()
-                        .map(|initializer| initializer.symbol())
-                        .chain(direct.methods().iter().map(|method| method.target()))
-                        .chain(nested),
-                ),
-                RecordDecl::Encoded(encoded) => Box::new(
-                    encoded
-                        .initializers()
-                        .iter()
-                        .map(|initializer| initializer.symbol())
-                        .chain(encoded.methods().iter().map(|method| method.target()))
-                        .chain(nested),
-                ),
-            },
-            Self::Enum(enumeration) => match enumeration.as_ref() {
-                EnumDecl::CStyle(c_style) => Box::new(
-                    c_style
-                        .initializers()
-                        .iter()
-                        .map(|initializer| initializer.symbol())
-                        .chain(c_style.methods().iter().map(|method| method.target()))
-                        .chain(nested),
-                ),
-                EnumDecl::Data(data) => Box::new(
-                    data.initializers()
-                        .iter()
-                        .map(|initializer| initializer.symbol())
-                        .chain(data.methods().iter().map(|method| method.target()))
-                        .chain(nested),
-                ),
-            },
+            Self::Record(record) => Box::new(
+                record
+                    .initializers()
+                    .iter()
+                    .map(|initializer| initializer.symbol())
+                    .chain(record.methods().iter().map(|method| method.target()))
+                    .chain(nested),
+            ),
+            Self::Enum(enumeration) => Box::new(
+                enumeration
+                    .initializers()
+                    .iter()
+                    .map(|initializer| initializer.symbol())
+                    .chain(enumeration.methods().iter().map(|method| method.target()))
+                    .chain(nested),
+            ),
             Self::Function(function) => Box::new(std::iter::once(function.symbol()).chain(nested)),
             Self::Class(class) => Box::new(
                 std::iter::once(class.release())
@@ -406,61 +449,92 @@ impl<S: Surface> Decl<S> {
 #[non_exhaustive]
 pub enum RecordDecl<S: Surface> {
     /// Crosses by raw memory.
-    Direct(DirectRecordDecl<S>),
+    Direct(Declared<DirectRecordDecl<S>>),
     /// Crosses through encoded bytes.
-    Encoded(EncodedRecordDecl<S>),
+    Encoded(Declared<EncodedRecordDecl<S>>),
 }
 
 impl<S: Surface> RecordDecl<S> {
+    pub(crate) fn direct(record: DirectRecordDecl<S>) -> Self {
+        Self::Direct(Declared::value(record))
+    }
+
+    pub(crate) fn encoded(record: EncodedRecordDecl<S>) -> Self {
+        Self::Encoded(Declared::value(record))
+    }
+
     /// Returns the record id.
     pub const fn id(&self) -> RecordId {
         match self {
-            Self::Direct(record) => record.id(),
-            Self::Encoded(record) => record.id(),
+            Self::Direct(record) => record.value.id(),
+            Self::Encoded(record) => record.value.id(),
         }
     }
 
     /// Returns the canonical record name.
     pub fn name(&self) -> &CanonicalName {
         match self {
-            Self::Direct(record) => record.name(),
-            Self::Encoded(record) => record.name(),
+            Self::Direct(record) => record.value.name(),
+            Self::Encoded(record) => record.value.name(),
         }
     }
 
     /// Returns the declaration metadata.
     pub fn meta(&self) -> &DeclMeta {
         match self {
-            Self::Direct(record) => record.meta(),
-            Self::Encoded(record) => record.meta(),
+            Self::Direct(record) => record.value.meta(),
+            Self::Encoded(record) => record.value.meta(),
+        }
+    }
+
+    /// Returns the record initializers.
+    pub fn initializers(&self) -> &[InitializerDecl<S>] {
+        match self {
+            Self::Direct(record) => record.value.initializers(),
+            Self::Encoded(record) => record.value.initializers(),
+        }
+    }
+
+    /// Returns the record methods.
+    pub fn methods(&self) -> &[ExportedMethodDecl<S, NativeSymbol>] {
+        match self {
+            Self::Direct(record) => record.value.methods(),
+            Self::Encoded(record) => record.value.methods(),
+        }
+    }
+
+    pub(crate) fn mark_error_payload(&mut self) {
+        match self {
+            Self::Direct(record) => record.mark_error_payload(),
+            Self::Encoded(record) => record.mark_error_payload(),
         }
     }
 
     fn uses_result_codec(&self) -> bool {
         match self {
-            Self::Direct(record) => record.uses_result_codec(),
-            Self::Encoded(record) => record.uses_result_codec(),
+            Self::Direct(record) => record.value.uses_result_codec(),
+            Self::Encoded(record) => record.value.uses_result_codec(),
         }
     }
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         match self {
-            Self::Direct(record) => record.uses_builtin_codec(kind),
-            Self::Encoded(record) => record.uses_builtin_codec(kind),
+            Self::Direct(record) => record.value.uses_builtin_codec(kind),
+            Self::Encoded(record) => record.value.uses_builtin_codec(kind),
         }
     }
 
     fn uses_direct_record_vector(&self) -> bool {
         match self {
-            Self::Direct(record) => record.uses_direct_record_vector(),
-            Self::Encoded(record) => record.uses_direct_record_vector(),
+            Self::Direct(record) => record.value.uses_direct_record_vector(),
+            Self::Encoded(record) => record.value.uses_direct_record_vector(),
         }
     }
 
     fn uses_async_execution(&self) -> bool {
         match self {
-            Self::Direct(record) => record.uses_async_execution(),
-            Self::Encoded(record) => record.uses_async_execution(),
+            Self::Direct(record) => record.value.uses_async_execution(),
+            Self::Encoded(record) => record.value.uses_async_execution(),
         }
     }
 }
@@ -819,53 +893,84 @@ impl EncodedFieldDecl {
 #[non_exhaustive]
 pub enum EnumDecl<S: Surface> {
     /// Fieldless enum represented by an integer discriminant.
-    CStyle(CStyleEnumDecl<S>),
+    CStyle(Declared<CStyleEnumDecl<S>>),
     /// Payload-carrying enum represented by an encoded tag and payload.
-    Data(Box<DataEnumDecl<S>>),
+    Data(Declared<Box<DataEnumDecl<S>>>),
 }
 
 impl<S: Surface> EnumDecl<S> {
+    pub(crate) fn c_style(enumeration: CStyleEnumDecl<S>) -> Self {
+        Self::CStyle(Declared::value(enumeration))
+    }
+
+    pub(crate) fn data(enumeration: DataEnumDecl<S>) -> Self {
+        Self::Data(Declared::value(Box::new(enumeration)))
+    }
+
     /// Returns the enum id.
     pub const fn id(&self) -> EnumId {
         match self {
-            Self::CStyle(enum_decl) => enum_decl.id(),
-            Self::Data(enum_decl) => enum_decl.id(),
+            Self::CStyle(enum_decl) => enum_decl.value.id(),
+            Self::Data(enum_decl) => enum_decl.value.id(),
         }
     }
 
     /// Returns the canonical name.
     pub fn name(&self) -> &CanonicalName {
         match self {
-            Self::CStyle(enum_decl) => enum_decl.name(),
-            Self::Data(enum_decl) => enum_decl.name(),
+            Self::CStyle(enum_decl) => enum_decl.value.name(),
+            Self::Data(enum_decl) => enum_decl.value.name(),
+        }
+    }
+
+    /// Returns the enum initializers.
+    pub fn initializers(&self) -> &[InitializerDecl<S>] {
+        match self {
+            Self::CStyle(enumeration) => enumeration.value.initializers(),
+            Self::Data(enumeration) => enumeration.value.initializers(),
+        }
+    }
+
+    /// Returns the enum methods.
+    pub fn methods(&self) -> &[ExportedMethodDecl<S, NativeSymbol>] {
+        match self {
+            Self::CStyle(enumeration) => enumeration.value.methods(),
+            Self::Data(enumeration) => enumeration.value.methods(),
+        }
+    }
+
+    pub(crate) fn mark_error_payload(&mut self) {
+        match self {
+            Self::CStyle(enumeration) => enumeration.mark_error_payload(),
+            Self::Data(enumeration) => enumeration.mark_error_payload(),
         }
     }
 
     fn uses_result_codec(&self) -> bool {
         match self {
-            Self::CStyle(enumeration) => enumeration.uses_result_codec(),
-            Self::Data(enumeration) => enumeration.uses_result_codec(),
+            Self::CStyle(enumeration) => enumeration.value.uses_result_codec(),
+            Self::Data(enumeration) => enumeration.value.uses_result_codec(),
         }
     }
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         match self {
-            Self::CStyle(enumeration) => enumeration.uses_builtin_codec(kind),
-            Self::Data(enumeration) => enumeration.uses_builtin_codec(kind),
+            Self::CStyle(enumeration) => enumeration.value.uses_builtin_codec(kind),
+            Self::Data(enumeration) => enumeration.value.uses_builtin_codec(kind),
         }
     }
 
     fn uses_direct_record_vector(&self) -> bool {
         match self {
-            Self::CStyle(enumeration) => enumeration.uses_direct_record_vector(),
-            Self::Data(enumeration) => enumeration.uses_direct_record_vector(),
+            Self::CStyle(enumeration) => enumeration.value.uses_direct_record_vector(),
+            Self::Data(enumeration) => enumeration.value.uses_direct_record_vector(),
         }
     }
 
     fn uses_async_execution(&self) -> bool {
         match self {
-            Self::CStyle(enumeration) => enumeration.uses_async_execution(),
-            Self::Data(enumeration) => enumeration.uses_async_execution(),
+            Self::CStyle(enumeration) => enumeration.value.uses_async_execution(),
+            Self::Data(enumeration) => enumeration.value.uses_async_execution(),
         }
     }
 }
