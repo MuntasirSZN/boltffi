@@ -1,0 +1,187 @@
+//! Swift target rendered through the C ABI bridge.
+
+mod name_style;
+mod primitive;
+mod render;
+mod syntax;
+
+use std::path::PathBuf;
+
+use boltffi_binding::{
+    Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, EnumDecl, FunctionDecl,
+    Native, RecordDecl, StreamDecl,
+};
+
+use crate::{
+    bridge::c::{CBridge, CBridgeContract},
+    core::{
+        BindingCapability, BridgeCapability, CapabilityRequirements, Emitted, Error,
+        GeneratedOutput, HostCapabilities, RenderContext, RenderedDeclaration, Result, Target,
+        contract::sealed, host,
+    },
+};
+
+pub use name_style::{SwiftFile, SwiftModule};
+use syntax::Syntax;
+
+/// Swift host renderer for a generated module.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub struct SwiftHost {
+    module: SwiftModule,
+    file: SwiftFile,
+    c_header: PathBuf,
+}
+
+impl SwiftHost {
+    const TARGET: &'static str = "swift";
+
+    /// Creates a Swift host renderer.
+    pub fn new(module: impl Into<String>) -> Result<Self> {
+        let module = SwiftModule::parse(module)?;
+        Ok(Self {
+            file: SwiftFile::from_module(&module),
+            module,
+            c_header: PathBuf::from("boltffi.h"),
+        })
+    }
+
+    /// Selects the generated Swift source file.
+    pub fn file(mut self, file: impl Into<String>) -> Result<Self> {
+        self.file = SwiftFile::parse(file)?;
+        Ok(self)
+    }
+
+    /// Selects the generated C header path.
+    pub fn c_header(mut self, path: impl Into<PathBuf>) -> Self {
+        self.c_header = path.into();
+        self
+    }
+
+    /// Creates the backend target stack for this Swift host.
+    pub fn into_target(self) -> Result<Target<Self, CBridge>> {
+        Ok(Target::new(
+            self.clone(),
+            CBridge::new(self.c_header.clone())?,
+        ))
+    }
+
+    /// Returns the Swift module name.
+    pub fn module(&self) -> &SwiftModule {
+        &self.module
+    }
+
+    /// Returns the generated Swift file name.
+    pub fn file_name(&self) -> &SwiftFile {
+        &self.file
+    }
+
+    fn unsupported(shape: &'static str) -> Error {
+        Error::UnsupportedTarget {
+            target: Self::TARGET,
+            shape,
+        }
+    }
+}
+
+impl host::HostBackend for SwiftHost {
+    type Surface = Native;
+    type Bridge = CBridgeContract;
+    type Syntax = Syntax;
+
+    fn name(&self) -> &'static str {
+        Self::TARGET
+    }
+
+    fn binding_capabilities(&self) -> HostCapabilities {
+        HostCapabilities::new().stable(BindingCapability::Functions)
+    }
+
+    fn bridge_capabilities(&self) -> CapabilityRequirements<BridgeCapability> {
+        CapabilityRequirements::new().require(BridgeCapability::CAbi)
+    }
+
+    fn record(
+        &self,
+        _decl: &RecordDecl<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        Err(Self::unsupported("record declaration"))
+    }
+
+    fn enumeration(
+        &self,
+        _decl: &EnumDecl<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        Err(Self::unsupported("enum declaration"))
+    }
+
+    fn function(
+        &self,
+        decl: &FunctionDecl<Self::Surface>,
+        bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        render::Function::from_declaration(decl, bridge)?.render()
+    }
+
+    fn class(
+        &self,
+        _decl: &ClassDecl<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        Err(Self::unsupported("class declaration"))
+    }
+
+    fn callback(
+        &self,
+        _decl: &CallbackDecl<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        Err(Self::unsupported("callback declaration"))
+    }
+
+    fn stream(
+        &self,
+        _decl: &StreamDecl<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        Err(Self::unsupported("stream declaration"))
+    }
+
+    fn constant(
+        &self,
+        _decl: &ConstantDecl<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        Err(Self::unsupported("constant declaration"))
+    }
+
+    fn custom_type(
+        &self,
+        _decl: &CustomTypeDecl,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+    ) -> Result<Emitted> {
+        Err(Self::unsupported("custom type declaration"))
+    }
+
+    fn assemble<'decl>(
+        &self,
+        _bindings: &Bindings<Self::Surface>,
+        _bridge: &Self::Bridge,
+        _context: &RenderContext<Self::Surface>,
+        declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
+    ) -> Result<GeneratedOutput> {
+        render::Module::new(self, declarations).render()
+    }
+}
+
+impl sealed::HostBackend for SwiftHost {}

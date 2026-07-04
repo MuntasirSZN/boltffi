@@ -138,6 +138,12 @@ pub enum BackendError {
         /// Invalid identifier text.
         identifier: String,
     },
+    /// A generated Swift identifier was invalid.
+    #[error("invalid Swift identifier `{identifier}`")]
+    InvalidSwiftIdentifier {
+        /// Invalid identifier text.
+        identifier: String,
+    },
     /// Two generated Python declarations require the same name in one scope.
     #[error("python name collision in {scope}: `{name}` is used by {existing} and {colliding}")]
     PythonNameCollision {
