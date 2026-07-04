@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use boltffi_backend::core::{CoverageMode, bridge, host};
 use boltffi_backend::target::{
+    kmp::KmpHost,
     kotlin::{
         KotlinApiStyle, KotlinCustomMapping, KotlinDesktopLoader, KotlinFactoryStyle, KotlinHost,
     },
@@ -180,8 +181,8 @@ impl Generation {
         match target {
             Target::Python => self.render_python(),
             Target::Kotlin => self.render_kotlin(),
+            Target::KotlinMultiplatform => self.render_kmp(),
             Target::Swift
-            | Target::KotlinMultiplatform
             | Target::Java
             | Target::TypeScript
             | Target::Header
@@ -258,6 +259,12 @@ impl Generation {
             .kotlin_c_header
             .iter()
             .fold(host, |host, header| host.c_header(header.clone())))
+    }
+
+    fn render_kmp(&self) -> Result<GeneratedOutput, GenerationError> {
+        let bindings = self.bindings::<Native>()?;
+        let target = KmpHost::new().into_target();
+        self.render_backend(&target, &bindings)
     }
 
     fn render_backend<H, S>(
