@@ -1,13 +1,19 @@
 use askama::Template;
-use boltffi_binding::{DirectFieldDecl, DirectRecordDecl, FieldKey, Native, RecordDecl};
+use boltffi_binding::{
+    DirectFieldDecl, DirectRecordDecl, ExportedMethodDecl, FieldKey, Native, NativeSymbol,
+    RecordDecl,
+};
 
 use crate::{
     bridge::c::CBridgeContract,
-    core::{Emitted, Error, Result},
+    core::{Emitted, Error, RenderContext, Result},
     target::swift::{
         SwiftHost,
         name_style::Name,
-        render::{Documentation, SwiftType},
+        render::{
+            Documentation, SwiftType,
+            function::{AssociatedFunction, Receiver},
+        },
         syntax::{Expression, Identifier, TypeName},
     },
 };
@@ -24,6 +30,9 @@ pub struct Record {
     name: TypeName,
     c_type: TypeName,
     fields: Vec<Field>,
+    initializers: Vec<AssociatedFunction>,
+    static_methods: Vec<AssociatedFunction>,
+    instance_methods: Vec<AssociatedFunction>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,9 +47,10 @@ impl Record {
     pub fn from_declaration(
         declaration: &RecordDecl<Native>,
         bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            RecordDecl::Direct(record) => Self::from_direct(record, bridge),
+            RecordDecl::Direct(record) => Self::from_direct(record, bridge, context),
             RecordDecl::Encoded(_) => Err(SwiftHost::unsupported("encoded record declaration")),
             _ => Err(SwiftHost::unsupported("unknown record declaration")),
         }
@@ -68,7 +78,23 @@ impl Record {
         &self.fields
     }
 
-    fn from_direct(record: &DirectRecordDecl<Native>, bridge: &CBridgeContract) -> Result<Self> {
+    fn initializers(&self) -> &[AssociatedFunction] {
+        &self.initializers
+    }
+
+    fn static_methods(&self) -> &[AssociatedFunction] {
+        &self.static_methods
+    }
+
+    fn instance_methods(&self) -> &[AssociatedFunction] {
+        &self.instance_methods
+    }
+
+    fn from_direct(
+        record: &DirectRecordDecl<Native>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         let c_record =
             bridge
                 .source_direct_record(record.id())
@@ -92,7 +118,36 @@ impl Record {
                 .zip(c_record.fields())
                 .map(|(field, c_field)| Field::from_direct(field, c_field.name()))
                 .collect::<Result<Vec<_>>>()?,
+            initializers: record
+                .initializers()
+                .iter()
+                .map(|initializer| {
+                    AssociatedFunction::from_initializer(initializer, bridge, context)
+                })
+                .collect::<Result<Vec<_>>>()?,
+            static_methods: Self::methods(record.methods(), None, bridge, context)?,
+            instance_methods: Self::methods(
+                record.methods(),
+                Some(Receiver::direct()),
+                bridge,
+                context,
+            )?,
         })
+    }
+
+    fn methods(
+        methods: &[ExportedMethodDecl<Native, NativeSymbol>],
+        receiver: Option<Receiver>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<AssociatedFunction>> {
+        methods
+            .iter()
+            .filter(|method| method.callable().receiver().is_some() == receiver.is_some())
+            .map(|method| {
+                AssociatedFunction::from_method(method, receiver.clone(), bridge, context)
+            })
+            .collect()
     }
 }
 

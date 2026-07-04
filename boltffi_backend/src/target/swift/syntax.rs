@@ -254,6 +254,10 @@ impl Expression {
         Self(expression.into())
     }
 
+    pub fn identifier(identifier: Identifier) -> Self {
+        Self::new(identifier.to_string())
+    }
+
     pub fn member(base: impl fmt::Display, member: impl fmt::Display) -> Self {
         Self::new(format!("{base}.{member}"))
     }

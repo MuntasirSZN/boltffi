@@ -108,18 +108,18 @@ impl host::HostBackend for SwiftHost {
         &self,
         decl: &RecordDecl<Self::Surface>,
         bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Record::from_declaration(decl, bridge)?.render()
+        render::Record::from_declaration(decl, bridge, context)?.render()
     }
 
     fn enumeration(
         &self,
         decl: &EnumDecl<Self::Surface>,
-        _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        bridge: &Self::Bridge,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        render::Enumeration::from_declaration(decl)?.render()
+        render::Enumeration::from_declaration(decl, bridge, context)?.render()
     }
 
     fn function(

@@ -54,3 +54,10 @@ fn swift_target_renders_primitive_function_stack() {
 fn swift_target_renders_direct_records_and_c_style_enums() {
     insta::assert_snapshot!(rendered_fixture("exports/direct_records_and_c_style_enums"));
 }
+
+#[test]
+fn swift_target_renders_documented_record_and_enum_methods() {
+    insta::assert_snapshot!(rendered_fixture(
+        "associated/direct_record_and_enum_callables"
+    ));
+}

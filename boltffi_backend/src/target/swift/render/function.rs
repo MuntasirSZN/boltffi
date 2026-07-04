@@ -2,12 +2,13 @@ use askama::Template;
 
 use boltffi_binding::{
     ClosureReturn, DirectValueType, DirectVectorElementType, Direction, ErrorDecl, ExecutionDecl,
-    FunctionDecl, HandlePresence, HandleTarget, IntoRust, Native, OutOfRust, ParamDecl,
-    ParamPlanRender, Primitive, Receive, ReturnPlanRender, ReturnValueSlot, Surface, TypeRef,
+    ExportedCallable, ExportedMethodDecl, FunctionDecl, HandlePresence, HandleTarget, IntoRust,
+    Native, NativeSymbol, OutOfRust, ParamDecl, ParamPlanRender, Primitive, Receive,
+    ReturnPlanRender, ReturnValueSlot, Surface, TypeRef,
 };
 
 use crate::{
-    bridge::c::CBridgeContract,
+    bridge::c::{CBridgeContract, Function as CFunction},
     core::{Emitted, Error, RenderContext, Result},
     target::swift::{
         SwiftHost,
@@ -21,13 +22,28 @@ use crate::{
 pub struct Function {
     documentation: Documentation,
     name: Identifier,
-    symbol: String,
     parameters: Vec<Parameter>,
-    returns: Return,
+    body: String,
+    returns: ReturnSignature,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Parameter {
+pub struct AssociatedFunction {
+    documentation: Documentation,
+    static_: bool,
+    name: Identifier,
+    parameters: Vec<Parameter>,
+    body: String,
+    returns: ReturnSignature,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Receiver {
+    argument: Expression,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Parameter {
     name: Identifier,
     ty: TypeName,
     argument: Expression,
@@ -45,6 +61,17 @@ enum ReturnConversion {
     FromC(TypeName),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Invocation {
+    symbol: String,
+    parameters: Vec<Parameter>,
+    arguments: Vec<Expression>,
+    returns: Return,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReturnSignature(Option<TypeName>);
+
 #[derive(Template)]
 #[template(path = "target/swift/function.swift", escape = "none")]
 struct FunctionTemplate<'a> {
@@ -57,41 +84,14 @@ impl Function {
         bridge: &CBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
-        let symbol = decl.symbol().name().as_str();
-        let c_function = bridge
-            .functions()
-            .iter()
-            .find(|function| function.name() == symbol)
-            .ok_or(Error::BrokenBridgeContract {
-                bridge: "swift",
-                invariant: "missing C function for Swift function",
-            })?;
-        let callable = decl.callable();
-        match callable.execution() {
-            ExecutionDecl::Synchronous(_) => {}
-            ExecutionDecl::Asynchronous(_) => {
-                return Err(SwiftHost::unsupported("async function"));
-            }
-            _ => return Err(SwiftHost::unsupported("unknown function execution")),
-        }
-        match callable.error() {
-            ErrorDecl::None(_) => {}
-            _ => return Err(SwiftHost::unsupported("fallible function")),
-        }
-        let parameters = callable
-            .params()
-            .iter()
-            .map(|parameter| Parameter::from_decl(parameter, context))
-            .collect::<Result<Vec<_>>>()?;
-        let returns = callable
-            .returns()
-            .plan()
-            .render_with(&mut ReturnPlan { context })?;
+        let invocation =
+            Invocation::from_callable(decl.symbol(), decl.callable(), None, bridge, context)?;
+        let (parameters, body, returns) = invocation.into_rendered("    ");
         Ok(Self {
             documentation: Documentation::new(decl.meta().doc(), ""),
             name: Name::new(decl.name()).function()?,
-            symbol: c_function.name().to_owned(),
             parameters,
+            body,
             returns,
         })
     }
@@ -110,16 +110,209 @@ impl Function {
         &self.documentation
     }
 
-    fn symbol(&self) -> &str {
-        &self.symbol
-    }
-
     fn parameters(&self) -> &[Parameter] {
         &self.parameters
     }
 
-    fn returns(&self) -> &Return {
+    fn body(&self) -> &str {
+        &self.body
+    }
+
+    fn returns(&self) -> &ReturnSignature {
         &self.returns
+    }
+}
+
+impl AssociatedFunction {
+    pub fn from_initializer(
+        initializer: &boltffi_binding::InitializerDecl<Native>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        Self::from_parts(
+            Documentation::new(initializer.meta().doc(), "    "),
+            true,
+            Name::new(initializer.name()).function()?,
+            Invocation::from_callable(
+                initializer.symbol(),
+                initializer.callable(),
+                None,
+                bridge,
+                context,
+            )?,
+        )
+    }
+
+    pub fn from_method(
+        method: &ExportedMethodDecl<Native, NativeSymbol>,
+        receiver: Option<Receiver>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let static_ = receiver.is_none();
+        Self::from_parts(
+            Documentation::new(method.meta().doc(), "    "),
+            static_,
+            Name::new(method.name()).function()?,
+            Invocation::from_callable(
+                method.target(),
+                method.callable(),
+                receiver,
+                bridge,
+                context,
+            )?,
+        )
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
+    }
+
+    pub fn static_keyword(&self) -> &str {
+        match self.static_ {
+            true => "static ",
+            false => "",
+        }
+    }
+
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    pub fn parameters(&self) -> &[Parameter] {
+        &self.parameters
+    }
+
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
+    pub fn returns(&self) -> &ReturnSignature {
+        &self.returns
+    }
+
+    fn from_parts(
+        documentation: Documentation,
+        static_: bool,
+        name: Identifier,
+        invocation: Invocation,
+    ) -> Result<Self> {
+        let (parameters, body, returns) = invocation.into_rendered("        ");
+        Ok(Self {
+            documentation,
+            static_,
+            name,
+            parameters,
+            body,
+            returns,
+        })
+    }
+}
+
+impl Receiver {
+    pub fn direct() -> Self {
+        Self {
+            argument: Expression::member("self", "cValue"),
+        }
+    }
+
+    fn argument(self) -> Expression {
+        self.argument
+    }
+}
+
+impl Invocation {
+    fn from_callable(
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        receiver: Option<Receiver>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        Self::check_execution(callable)?;
+        Self::check_error(callable)?;
+        Self::check_receiver(callable, receiver.as_ref())?;
+        let c_function = Self::c_function(symbol, bridge)?;
+        let parameters = callable
+            .params()
+            .iter()
+            .map(|parameter| Parameter::from_decl(parameter, context))
+            .collect::<Result<Vec<_>>>()?;
+        let arguments = receiver
+            .into_iter()
+            .map(Receiver::argument)
+            .chain(
+                parameters
+                    .iter()
+                    .map(|parameter| parameter.argument().clone()),
+            )
+            .collect::<Vec<_>>();
+        let returns = callable
+            .returns()
+            .plan()
+            .render_with(&mut ReturnPlan { context })?;
+        Ok(Self {
+            symbol: c_function.name().to_owned(),
+            parameters,
+            arguments,
+            returns,
+        })
+    }
+
+    fn into_rendered(self, indent: &str) -> (Vec<Parameter>, String, ReturnSignature) {
+        let body = self.returns.body(self.call(), indent);
+        let returns = self.returns.signature();
+        (self.parameters, body, returns)
+    }
+
+    fn call(&self) -> Expression {
+        Expression::call(
+            &self.symbol,
+            self.arguments.iter().cloned().collect::<ArgumentList>(),
+        )
+    }
+
+    fn c_function<'bridge>(
+        symbol: &NativeSymbol,
+        bridge: &'bridge CBridgeContract,
+    ) -> Result<&'bridge CFunction> {
+        bridge
+            .functions()
+            .iter()
+            .find(|function| function.name() == symbol.name().as_str())
+            .ok_or(Error::BrokenBridgeContract {
+                bridge: SwiftHost::TARGET,
+                invariant: "missing C function for Swift function",
+            })
+    }
+
+    fn check_execution(callable: &ExportedCallable<Native>) -> Result<()> {
+        match callable.execution() {
+            ExecutionDecl::Synchronous(_) => Ok(()),
+            ExecutionDecl::Asynchronous(_) => Err(SwiftHost::unsupported("async function")),
+            _ => Err(SwiftHost::unsupported("unknown function execution")),
+        }
+    }
+
+    fn check_error(callable: &ExportedCallable<Native>) -> Result<()> {
+        match callable.error() {
+            ErrorDecl::None(_) => Ok(()),
+            _ => Err(SwiftHost::unsupported("fallible function")),
+        }
+    }
+
+    fn check_receiver(
+        callable: &ExportedCallable<Native>,
+        receiver: Option<&Receiver>,
+    ) -> Result<()> {
+        match (callable.receiver(), receiver) {
+            (None, None) => Ok(()),
+            (Some(Receive::ByValue | Receive::ByRef), Some(_)) => Ok(()),
+            (Some(Receive::ByMutRef), Some(_)) => {
+                Err(SwiftHost::unsupported("mutable value receiver"))
+            }
+            _ => Err(SwiftHost::unsupported("method receiver mismatch")),
+        }
     }
 }
 
@@ -137,7 +330,7 @@ impl Parameter {
             })
     }
 
-    fn signature(&self) -> String {
+    pub fn signature(&self) -> String {
         format!("{}: {}", self.name, self.ty)
     }
 
@@ -215,26 +408,27 @@ impl<'plan, 'context, 'bindings> ParamPlanRender<'plan, Native, IntoRust>
 }
 
 impl Return {
-    fn signature(&self) -> String {
-        self.ty
+    fn signature(&self) -> ReturnSignature {
+        ReturnSignature(self.ty.clone())
+    }
+
+    fn body(&self, call: Expression, indent: &str) -> String {
+        match self.ty {
+            Some(_) => match &self.conversion {
+                ReturnConversion::Direct => format!("{indent}return {call}"),
+                ReturnConversion::FromC(ty) => format!("{indent}return {}(fromC: {call})", ty),
+            },
+            None => format!("{indent}{call}"),
+        }
+    }
+}
+
+impl ReturnSignature {
+    pub fn signature(&self) -> String {
+        self.0
             .as_ref()
             .map(|ty| format!(" -> {ty}"))
             .unwrap_or_default()
-    }
-
-    fn call_body(&self, symbol: &str, arguments: &[Parameter]) -> String {
-        let arguments: ArgumentList = arguments
-            .iter()
-            .map(|parameter| parameter.argument().clone())
-            .collect();
-        let call = Expression::call(symbol, arguments);
-        match self.ty {
-            Some(_) => match &self.conversion {
-                ReturnConversion::Direct => format!("    return {call}"),
-                ReturnConversion::FromC(ty) => format!("    return {}(fromC: {call})", ty),
-            },
-            None => format!("    {call}"),
-        }
     }
 }
 

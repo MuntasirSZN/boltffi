@@ -1,12 +1,18 @@
 use askama::Template;
-use boltffi_binding::{CStyleEnumDecl, CStyleVariantDecl, EnumDecl, Native};
+use boltffi_binding::{
+    CStyleEnumDecl, CStyleVariantDecl, EnumDecl, ExportedMethodDecl, Native, NativeSymbol,
+};
 
 use crate::{
-    core::{Emitted, Result},
+    bridge::c::CBridgeContract,
+    core::{Emitted, RenderContext, Result},
     target::swift::{
         SwiftHost,
         name_style::Name,
-        render::{Documentation, SwiftType},
+        render::{
+            Documentation, SwiftType,
+            function::{AssociatedFunction, Receiver},
+        },
         syntax::{Identifier, TypeName},
     },
 };
@@ -23,6 +29,9 @@ pub struct Enumeration {
     name: TypeName,
     raw_type: TypeName,
     variants: Vec<Variant>,
+    initializers: Vec<AssociatedFunction>,
+    static_methods: Vec<AssociatedFunction>,
+    instance_methods: Vec<AssociatedFunction>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,9 +42,13 @@ struct Variant {
 }
 
 impl Enumeration {
-    pub fn from_declaration(declaration: &EnumDecl<Native>) -> Result<Self> {
+    pub fn from_declaration(
+        declaration: &EnumDecl<Native>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         match declaration {
-            EnumDecl::CStyle(enumeration) => Self::from_c_style(enumeration),
+            EnumDecl::CStyle(enumeration) => Self::from_c_style(enumeration, bridge, context),
             EnumDecl::Data(_) => Err(SwiftHost::unsupported("data enum declaration")),
             _ => Err(SwiftHost::unsupported("unknown enum declaration")),
         }
@@ -63,7 +76,23 @@ impl Enumeration {
         &self.variants
     }
 
-    fn from_c_style(enumeration: &CStyleEnumDecl<Native>) -> Result<Self> {
+    fn initializers(&self) -> &[AssociatedFunction] {
+        &self.initializers
+    }
+
+    fn static_methods(&self) -> &[AssociatedFunction] {
+        &self.static_methods
+    }
+
+    fn instance_methods(&self) -> &[AssociatedFunction] {
+        &self.instance_methods
+    }
+
+    fn from_c_style(
+        enumeration: &CStyleEnumDecl<Native>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
         Ok(Self {
             documentation: Documentation::new(enumeration.meta().doc(), ""),
             name: Name::new(enumeration.name()).type_name(),
@@ -73,7 +102,36 @@ impl Enumeration {
                 .iter()
                 .map(Variant::from_declaration)
                 .collect::<Result<Vec<_>>>()?,
+            initializers: enumeration
+                .initializers()
+                .iter()
+                .map(|initializer| {
+                    AssociatedFunction::from_initializer(initializer, bridge, context)
+                })
+                .collect::<Result<Vec<_>>>()?,
+            static_methods: Self::methods(enumeration.methods(), None, bridge, context)?,
+            instance_methods: Self::methods(
+                enumeration.methods(),
+                Some(Receiver::direct()),
+                bridge,
+                context,
+            )?,
         })
+    }
+
+    fn methods(
+        methods: &[ExportedMethodDecl<Native, NativeSymbol>],
+        receiver: Option<Receiver>,
+        bridge: &CBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<AssociatedFunction>> {
+        methods
+            .iter()
+            .filter(|method| method.callable().receiver().is_some() == receiver.is_some())
+            .map(|method| {
+                AssociatedFunction::from_method(method, receiver.clone(), bridge, context)
+            })
+            .collect()
     }
 }
 
