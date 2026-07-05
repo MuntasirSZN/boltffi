@@ -91,12 +91,8 @@ impl Function {
 
     fn record_functions(record: &RecordDecl<Native>, names: &Names) -> Result<Vec<Self>> {
         match record {
-            RecordDecl::Direct(record) => {
-                record.map(|record| Self::direct_record_functions(record, names))
-            }
-            RecordDecl::Encoded(record) => {
-                record.map(|record| Self::encoded_record_functions(record, names))
-            }
+            RecordDecl::Direct(record) => Self::direct_record_functions(record, names),
+            RecordDecl::Encoded(record) => Self::encoded_record_functions(record, names),
             _ => Err(Error::UnexpectedBindingShape {
                 layer: C_BRIDGE_LAYER,
                 shape: "unknown record declaration",
@@ -106,12 +102,8 @@ impl Function {
 
     fn enum_functions(enumeration: &EnumDecl<Native>, names: &Names) -> Result<Vec<Self>> {
         match enumeration {
-            EnumDecl::CStyle(enumeration) => {
-                enumeration.map(|enumeration| Self::c_style_enum_functions(enumeration, names))
-            }
-            EnumDecl::Data(enumeration) => {
-                enumeration.map(|enumeration| Self::data_enum_functions(enumeration, names))
-            }
+            EnumDecl::CStyle(enumeration) => Self::c_style_enum_functions(enumeration, names),
+            EnumDecl::Data(enumeration) => Self::data_enum_functions(enumeration, names),
             _ => Err(Error::UnexpectedBindingShape {
                 layer: C_BRIDGE_LAYER,
                 shape: "unknown enum declaration",

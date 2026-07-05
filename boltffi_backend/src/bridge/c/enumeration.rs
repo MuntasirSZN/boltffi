@@ -42,12 +42,8 @@ impl Enum {
     /// Creates the C enum declaration for a lowered enum.
     pub fn from_decl(enumeration: &EnumDecl<Native>, names: &Names) -> Result<Self> {
         match enumeration {
-            EnumDecl::CStyle(enumeration) => {
-                enumeration.map(|enumeration| Self::c_style(enumeration, names))
-            }
-            EnumDecl::Data(enumeration) => {
-                enumeration.map(|enumeration| Self::data(enumeration, names))
-            }
+            EnumDecl::CStyle(enumeration) => Self::c_style(enumeration, names),
+            EnumDecl::Data(enumeration) => Self::data(enumeration, names),
             _ => Err(Error::UnexpectedBindingShape {
                 layer: C_BRIDGE_LAYER,
                 shape: "unknown enum declaration",

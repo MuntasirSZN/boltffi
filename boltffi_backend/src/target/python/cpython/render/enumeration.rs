@@ -66,12 +66,8 @@ impl Enumeration {
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         match declaration {
-            EnumDecl::CStyle(enumeration) => {
-                enumeration.map(|enumeration| Self::from_c_style(enumeration, bridge, context))
-            }
-            EnumDecl::Data(enumeration) => {
-                enumeration.map(|enumeration| Self::from_data(enumeration, bridge, context))
-            }
+            EnumDecl::CStyle(enumeration) => Self::from_c_style(enumeration, bridge, context),
+            EnumDecl::Data(enumeration) => Self::from_data(enumeration, bridge, context),
             _ => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "unknown enum",
@@ -436,11 +432,9 @@ impl Symbols {
                             target: "python",
                             shape: "c-style enum without C typedef",
                         })?;
-                enumeration.map(|enumeration| Self::from_c_style(enumeration, c_enum))
+                Self::from_c_style(enumeration, c_enum)
             }
-            EnumDecl::Data(enumeration) => {
-                enumeration.map(|enumeration| Self::from_data(enumeration))
-            }
+            EnumDecl::Data(enumeration) => Self::from_data(enumeration),
             _ => Err(Error::UnsupportedTarget {
                 target: "python",
                 shape: "unknown enum declaration",

@@ -89,34 +89,22 @@ impl Names {
     fn insert(&mut self, decl: &Decl<Native>) -> Result<()> {
         match DeclarationRef::from(decl) {
             DeclarationRef::Record(RecordDecl::Direct(record)) => {
-                let (id, name) = record.map(|record| {
-                    Ok::<_, Error>((
-                        record.id(),
-                        Identifier::parse(name::Spelling::new(record.name()).typedef())?,
-                    ))
-                })?;
+                let id = record.id();
+                let name = Identifier::parse(name::Spelling::new(record.name()).typedef())?;
                 self.direct_records.insert(id, name);
             }
             DeclarationRef::Record(RecordDecl::Encoded(_)) => {}
             DeclarationRef::Record(_) => {}
             DeclarationRef::Enum(EnumDecl::CStyle(enumeration)) => {
-                let (id, name, repr) = enumeration.map(|enumeration| {
-                    Ok::<_, Error>((
-                        enumeration.id(),
-                        Identifier::parse(name::Spelling::new(enumeration.name()).typedef())?,
-                        Type::primitive(enumeration.repr().primitive())?,
-                    ))
-                })?;
+                let id = enumeration.id();
+                let name = Identifier::parse(name::Spelling::new(enumeration.name()).typedef())?;
+                let repr = Type::primitive(enumeration.repr().primitive())?;
                 self.enums.insert(id, name);
                 self.c_style_enum_reprs.insert(id, repr);
             }
             DeclarationRef::Enum(EnumDecl::Data(enumeration)) => {
-                let (id, name) = enumeration.map(|enumeration| {
-                    Ok::<_, Error>((
-                        enumeration.id(),
-                        Identifier::parse(name::Spelling::new(enumeration.name()).typedef())?,
-                    ))
-                })?;
+                let id = enumeration.id();
+                let name = Identifier::parse(name::Spelling::new(enumeration.name()).typedef())?;
                 self.enums.insert(id, name);
             }
             DeclarationRef::Enum(enumeration) => {

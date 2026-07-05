@@ -310,13 +310,14 @@ impl<'bindings> Package<'bindings> {
             .enums
             .iter()
             .find(|enumeration| enumeration.id() == enum_id)
-            .map(|enumeration| match enumeration {
-                EnumDecl::CStyle(enumeration) => enumeration
-                    .map(|enumeration| Ok(EnumCodec::CStyle(enumeration.repr().primitive()))),
-                EnumDecl::Data(enumeration) => enumeration.map(|enumeration| {
+            .map(|enumeration| match *enumeration {
+                EnumDecl::CStyle(enumeration) => {
+                    Ok(EnumCodec::CStyle(enumeration.repr().primitive()))
+                }
+                EnumDecl::Data(enumeration) => {
                     Identifier::parse(Name::new(enumeration.name()).class())
                         .map(|class_name| EnumCodec::Data { class_name })
-                }),
+                }
                 _ => Err(Error::UnsupportedTarget {
                     target: "python",
                     shape: "unknown enum wire type",
@@ -393,12 +394,8 @@ impl<'bindings> Package<'bindings> {
             .iter()
             .copied()
             .map(|record| match record {
-                RecordDecl::Direct(record) => {
-                    record.map_role(|record, error| RecordClass::from_direct(record, self, error))
-                }
-                RecordDecl::Encoded(record) => {
-                    record.map_role(|record, error| RecordClass::from_encoded(record, self, error))
-                }
+                RecordDecl::Direct(declared) => RecordClass::from_direct(declared, self),
+                RecordDecl::Encoded(declared) => RecordClass::from_encoded(declared, self),
                 _ => Err(Error::UnsupportedTarget {
                     target: "python",
                     shape: "unknown record package",
@@ -413,11 +410,8 @@ impl<'bindings> Package<'bindings> {
             .iter()
             .copied()
             .map(|enumeration| match enumeration {
-                EnumDecl::CStyle(enumeration) => enumeration.map_role(|enumeration, error| {
-                    EnumClass::from_c_style(enumeration, self, error)
-                }),
-                EnumDecl::Data(enumeration) => enumeration
-                    .map_role(|enumeration, error| EnumClass::from_data(enumeration, self, error)),
+                EnumDecl::CStyle(declared) => EnumClass::from_c_style(declared, self),
+                EnumDecl::Data(declared) => EnumClass::from_data(declared, self),
                 _ => Err(Error::UnsupportedTarget {
                     target: "python",
                     shape: "unknown enum package",

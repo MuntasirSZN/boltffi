@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use boltffi_binding::{Bindings, DeclarationRef, EnumDecl, EnumId, Native, RecordDecl, RecordId};
+use boltffi_binding::{
+    Bindings, CallbackId, DeclarationRef, EnumDecl, EnumId, Native, RecordDecl, RecordId, StreamId,
+};
 
 use crate::core::{
     BridgeCapabilities, BridgeCapability, BridgeContract, Error, FilePath, Result, contract::sealed,
@@ -23,7 +25,9 @@ pub struct CBridgeContract {
     source_c_style_enums: BTreeMap<EnumId, Enum>,
     enums: Vec<Enum>,
     callbacks: Vec<Callback>,
+    source_callbacks: BTreeMap<CallbackId, Callback>,
     streams: Vec<Stream>,
+    source_streams: BTreeMap<StreamId, Stream>,
     functions: Vec<Function>,
 }
 
@@ -38,10 +42,7 @@ impl CBridgeContract {
                 .try_fold(BTreeMap::new(), |mut records, decl| {
                     match DeclarationRef::from(decl) {
                         DeclarationRef::Record(RecordDecl::Direct(record)) => {
-                            let (id, record) = record.map(|record| {
-                                Ok::<_, Error>((record.id(), Record::direct(record, &names)?))
-                            })?;
-                            records.insert(id, record);
+                            records.insert(record.id(), Record::direct(record, &names)?);
                         }
                         DeclarationRef::Record(RecordDecl::Encoded(_)) => {}
                         DeclarationRef::Record(_) => {
@@ -91,12 +92,9 @@ impl CBridgeContract {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .map(|enumeration| {
-                enumeration
-                    .map(|enumeration| Ok((enumeration.id(), Enum::c_style(enumeration, &names)?)))
-            })
+            .map(|enumeration| Ok((enumeration.id(), Enum::c_style(enumeration, &names)?)))
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let callbacks = bindings
+        let source_callbacks = bindings
             .decls()
             .iter()
             .filter_map(|decl| match DeclarationRef::from(decl) {
@@ -109,9 +107,12 @@ impl CBridgeContract {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .map(|callback| Callback::from_decl(callback, &names))
-            .collect::<Result<Vec<_>>>()?;
-        let streams = bindings
+            .map(|callback| {
+                Callback::from_decl(callback, &names).map(|protocol| (callback.id(), protocol))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let callbacks = source_callbacks.values().cloned().collect::<Vec<_>>();
+        let source_streams = bindings
             .decls()
             .iter()
             .filter_map(|decl| match DeclarationRef::from(decl) {
@@ -124,15 +125,15 @@ impl CBridgeContract {
                 | DeclarationRef::Constant(_)
                 | DeclarationRef::CustomType(_) => None,
             })
-            .map(|stream| Stream::from_decl(stream, &names))
-            .collect::<Result<Vec<_>>>()?;
-        let mut stream_protocols = streams.iter();
+            .map(|stream| Stream::from_decl(stream, &names).map(|protocol| (stream.id(), protocol)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let streams = source_streams.values().cloned().collect::<Vec<_>>();
         let functions = bindings
             .decls()
             .iter()
             .map(|decl| match DeclarationRef::from(decl) {
-                DeclarationRef::Stream(_) => stream_protocols
-                    .next()
+                DeclarationRef::Stream(stream) => source_streams
+                    .get(&stream.id())
                     .ok_or(Error::BrokenBridgeContract {
                         bridge: C_BRIDGE_CONTRACT,
                         invariant: "missing typed stream protocol",
@@ -154,7 +155,9 @@ impl CBridgeContract {
             source_c_style_enums,
             enums,
             callbacks,
+            source_callbacks,
             streams,
+            source_streams,
             functions,
         })
     }
@@ -204,9 +207,19 @@ impl CBridgeContract {
         &self.callbacks
     }
 
+    /// Returns the C callback protocol selected for a source callback.
+    pub fn source_callback(&self, callback: CallbackId) -> Option<&Callback> {
+        self.source_callbacks.get(&callback)
+    }
+
     /// Returns C stream protocol declarations.
     pub fn streams(&self) -> &[Stream] {
         &self.streams
+    }
+
+    /// Returns the C stream protocol selected for a source stream.
+    pub fn source_stream(&self, stream: StreamId) -> Option<&Stream> {
+        self.source_streams.get(&stream)
     }
 
     /// Returns C function declarations.

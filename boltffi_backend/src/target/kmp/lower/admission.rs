@@ -129,78 +129,28 @@ impl<'bindings> KmpAdmission<'bindings> {
     fn record(&self, record: &RecordDecl<Native>) -> Vec<KmpAdmissionRecord> {
         let owner_record = self.evaluate_declaration_only(DeclarationRef::Record(record));
         let mut records = vec![owner_record.clone()];
-        match record {
-            RecordDecl::Direct(record) => {
-                records.extend(record.map(|record| {
-                    self.admit_owned_members(
-                        record.name(),
-                        record.initializers(),
-                        record.methods(),
-                        "record initializer",
-                        "record method",
-                        &owner_record,
-                    )
-                }));
-            }
-            RecordDecl::Encoded(record) => {
-                records.extend(record.map(|record| {
-                    self.admit_owned_members(
-                        record.name(),
-                        record.initializers(),
-                        record.methods(),
-                        "record initializer",
-                        "record method",
-                        &owner_record,
-                    )
-                }));
-            }
-            _ => {
-                records.push(self.rejected(
-                    "record",
-                    record.name().as_path_string(),
-                    KmpCapabilitySet::from_iter([KmpCapability::UnknownBindingShapes]),
-                ));
-            }
-        }
+        records.extend(self.admit_owned_members(
+            record.name(),
+            record.initializers(),
+            record.methods(),
+            "record initializer",
+            "record method",
+            &owner_record,
+        ));
         records
     }
 
     fn enumeration(&self, enumeration: &EnumDecl<Native>) -> Vec<KmpAdmissionRecord> {
         let owner_record = self.evaluate_declaration_only(DeclarationRef::Enum(enumeration));
         let mut records = vec![owner_record.clone()];
-        match enumeration {
-            EnumDecl::CStyle(enumeration) => {
-                records.extend(enumeration.map(|enumeration| {
-                    self.admit_owned_members(
-                        enumeration.name(),
-                        enumeration.initializers(),
-                        enumeration.methods(),
-                        "enum initializer",
-                        "enum method",
-                        &owner_record,
-                    )
-                }));
-            }
-            EnumDecl::Data(enumeration) => {
-                records.extend(enumeration.map(|enumeration| {
-                    self.admit_owned_members(
-                        enumeration.name(),
-                        enumeration.initializers(),
-                        enumeration.methods(),
-                        "enum initializer",
-                        "enum method",
-                        &owner_record,
-                    )
-                }));
-            }
-            _ => {
-                records.push(self.rejected(
-                    "enum",
-                    enumeration.name().as_path_string(),
-                    KmpCapabilitySet::from_iter([KmpCapability::UnknownBindingShapes]),
-                ));
-            }
-        }
+        records.extend(self.admit_owned_members(
+            enumeration.name(),
+            enumeration.initializers(),
+            enumeration.methods(),
+            "enum initializer",
+            "enum method",
+            &owner_record,
+        ));
         records
     }
 
@@ -550,9 +500,9 @@ impl<'bindings> KmpAdmission<'bindings> {
     ) -> Vec<KmpCapability> {
         match record {
             RecordDecl::Direct(_) => vec![KmpCapability::DirectRecords],
-            RecordDecl::Encoded(record) => record.map(|record| {
+            RecordDecl::Encoded(record) => {
                 self.encoded_record_capabilities(record.fields().iter().collect(), visiting)
-            }),
+            }
             _ => vec![KmpCapability::UnknownBindingShapes],
         }
     }
@@ -570,9 +520,9 @@ impl<'bindings> KmpAdmission<'bindings> {
     ) -> Vec<KmpCapability> {
         match enumeration {
             EnumDecl::CStyle(_) => vec![KmpCapability::CStyleEnums],
-            EnumDecl::Data(enumeration) => enumeration.map(|enumeration| {
+            EnumDecl::Data(enumeration) => {
                 self.data_enum_capabilities(enumeration.variants().iter().collect(), visiting)
-            }),
+            }
             _ => vec![KmpCapability::UnknownBindingShapes],
         }
     }

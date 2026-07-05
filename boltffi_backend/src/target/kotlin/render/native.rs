@@ -83,33 +83,11 @@ impl<'bridge> NativeMethods<'bridge> {
     }
 
     pub fn record(&self, decl: &RecordDecl<Native>) -> Result<Vec<NativeFunction>> {
-        match decl {
-            RecordDecl::Direct(record) => {
-                record.map(|record| self.associated(record.initializers(), record.methods()))
-            }
-            RecordDecl::Encoded(record) => {
-                record.map(|record| self.associated(record.initializers(), record.methods()))
-            }
-            _ => Err(Error::BrokenBridgeContract {
-                bridge: JNI_BRIDGE,
-                invariant: "unknown record declaration",
-            }),
-        }
+        self.associated(decl.initializers(), decl.methods())
     }
 
     pub fn enumeration(&self, decl: &EnumDecl<Native>) -> Result<Vec<NativeFunction>> {
-        match decl {
-            EnumDecl::CStyle(enumeration) => enumeration.map(|enumeration| {
-                self.associated(enumeration.initializers(), enumeration.methods())
-            }),
-            EnumDecl::Data(enumeration) => enumeration.map(|enumeration| {
-                self.associated(enumeration.initializers(), enumeration.methods())
-            }),
-            _ => Err(Error::BrokenBridgeContract {
-                bridge: JNI_BRIDGE,
-                invariant: "unknown enum declaration",
-            }),
-        }
+        self.associated(decl.initializers(), decl.methods())
     }
 
     pub fn class(&self, decl: &ClassDecl<Native>) -> Result<Vec<NativeFunction>> {
