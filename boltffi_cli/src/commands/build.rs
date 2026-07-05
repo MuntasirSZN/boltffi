@@ -39,6 +39,7 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
         release,
         package: Some(config.library_name().to_string()),
         cargo_args,
+        env: Vec::new(),
         on_output: None,
     };
 

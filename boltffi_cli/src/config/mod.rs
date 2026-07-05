@@ -351,6 +351,20 @@ impl Config {
             .unwrap_or_else(|| to_pascal_case(&self.package.name))
     }
 
+    pub fn swift_bindings_file_stem(&self) -> String {
+        let mut characters = self.library_name().chars();
+        characters.next().map_or_else(
+            || "BoltFFI".to_string(),
+            |first_character| {
+                format!(
+                    "{}{}BoltFFI",
+                    first_character.to_uppercase(),
+                    characters.as_str()
+                )
+            },
+        )
+    }
+
     pub fn xcframework_name(&self) -> String {
         self.targets
             .apple
@@ -655,10 +669,6 @@ impl Config {
 
     pub fn apple_spm_skip_package_swift(&self) -> bool {
         self.targets.apple.spm.skip_package_swift
-    }
-
-    pub fn swift_type_mappings(&self) -> &HashMap<String, TypeMapping> {
-        &self.targets.apple.swift.type_mappings
     }
 
     pub fn android_kotlin_type_mappings(&self) -> &HashMap<String, TypeMapping> {
