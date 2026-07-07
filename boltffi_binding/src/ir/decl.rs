@@ -226,6 +226,25 @@ impl<'a, S: Surface> DeclarationRef<'a, S> {
         }
     }
 
+    /// Returns whether any type in this declaration is or contains an
+    /// [`InternedString`](crate::TypeRef::InternedString).
+    ///
+    /// Used by the capability gate: hosts that do not advertise the
+    /// `InternedString` capability will receive a clear error at generation
+    /// time instead of silently misparsing tagged bytes as plain strings.
+    pub fn contains_interned_string(self) -> bool {
+        match self {
+            Self::Record(record) => record.contains_interned_string(),
+            Self::Enum(enumeration) => enumeration.contains_interned_string(),
+            Self::Function(function) => function.contains_interned_string(),
+            Self::Class(class) => class.contains_interned_string(),
+            Self::Callback(callback) => callback.contains_interned_string(),
+            Self::Stream(stream) => stream.contains_interned_string(),
+            Self::Constant(constant) => constant.contains_interned_string(),
+            Self::CustomType(custom) => custom.contains_interned_string(),
+        }
+    }
+
     /// Returns whether any value crossing in this declaration uses a direct record vector.
     pub fn uses_direct_record_vector(self) -> bool {
         match self {
@@ -511,6 +530,13 @@ impl<S: Surface> RecordDecl<S> {
         }
     }
 
+    fn contains_interned_string(&self) -> bool {
+        match self {
+            Self::Direct(record) => record.contains_interned_string(),
+            Self::Encoded(record) => record.contains_interned_string(),
+        }
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         match self {
             Self::Direct(record) => record.uses_direct_record_vector(),
@@ -638,6 +664,16 @@ impl<S: Surface> DirectRecordDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::contains_interned_string)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::contains_interned_string)
     }
 
     fn uses_direct_record_vector(&self) -> bool {
@@ -788,6 +824,20 @@ impl<S: Surface> EncodedRecordDecl<S> {
                 .any(|method| method.uses_builtin_codec(kind))
     }
 
+    fn contains_interned_string(&self) -> bool {
+        self.fields
+            .iter()
+            .any(|field| field.ty().contains_interned_string())
+            || self
+                .initializers
+                .iter()
+                .any(InitializerDecl::contains_interned_string)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::contains_interned_string)
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         self.initializers
             .iter()
@@ -915,6 +965,10 @@ impl EncodedFieldDecl {
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.codec.uses_builtin(kind)
     }
+
+    fn contains_interned_string(&self) -> bool {
+        self.ty.contains_interned_string()
+    }
 }
 
 /// A user-defined enum after the classifier chose how it crosses.
@@ -1003,6 +1057,13 @@ impl<S: Surface> EnumDecl<S> {
         match self {
             Self::CStyle(enumeration) => enumeration.uses_builtin_codec(kind),
             Self::Data(enumeration) => enumeration.uses_builtin_codec(kind),
+        }
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        match self {
+            Self::CStyle(enumeration) => enumeration.contains_interned_string(),
+            Self::Data(enumeration) => enumeration.contains_interned_string(),
         }
     }
 
@@ -1121,6 +1182,16 @@ impl<S: Surface> CStyleEnumDecl<S> {
                 .methods
                 .iter()
                 .any(|method| method.uses_builtin_codec(kind))
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        self.initializers
+            .iter()
+            .any(InitializerDecl::contains_interned_string)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::contains_interned_string)
     }
 
     fn uses_direct_record_vector(&self) -> bool {
@@ -1296,6 +1367,20 @@ impl<S: Surface> DataEnumDecl<S> {
                 .any(|method| method.uses_builtin_codec(kind))
     }
 
+    fn contains_interned_string(&self) -> bool {
+        self.variants
+            .iter()
+            .any(DataVariantDecl::contains_interned_string)
+            || self
+                .initializers
+                .iter()
+                .any(InitializerDecl::contains_interned_string)
+            || self
+                .methods
+                .iter()
+                .any(MethodDecl::contains_interned_string)
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         self.initializers
             .iter()
@@ -1389,6 +1474,10 @@ impl DataVariantDecl {
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.payload.uses_builtin_codec(kind)
     }
+
+    fn contains_interned_string(&self) -> bool {
+        self.payload.contains_interned_string()
+    }
 }
 
 /// The data carried by one variant of a data enum.
@@ -1418,6 +1507,15 @@ impl DataVariantPayload {
             Self::Tuple(fields) | Self::Struct(fields) => {
                 fields.iter().any(|field| field.uses_builtin_codec(kind))
             }
+            Self::Unit => false,
+        }
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        match self {
+            Self::Tuple(fields) | Self::Struct(fields) => fields
+                .iter()
+                .any(|field| field.ty().contains_interned_string()),
             Self::Unit => false,
         }
     }
@@ -1489,6 +1587,10 @@ impl<S: Surface> FunctionDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        self.callable.contains_interned_string()
     }
 
     fn uses_direct_record_vector(&self) -> bool {
@@ -1681,6 +1783,16 @@ impl<S: Surface> ClassDecl<S> {
                 .any(|method| method.uses_builtin_codec(kind))
     }
 
+    fn contains_interned_string(&self) -> bool {
+        self.initializers()
+            .iter()
+            .any(InitializerDecl::contains_interned_string)
+            || self
+                .methods()
+                .iter()
+                .any(MethodDecl::contains_interned_string)
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         self.initializers()
             .iter()
@@ -1796,6 +1908,15 @@ impl<S: Surface> CallbackDecl<S> {
                 .is_some_and(|protocol| protocol.uses_builtin_codec(kind))
     }
 
+    fn contains_interned_string(&self) -> bool {
+        self.protocol()
+            .method_callables()
+            .any(|callable| callable.contains_interned_string())
+            || self
+                .local_protocol()
+                .is_some_and(|protocol| protocol.contains_interned_string())
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         self.protocol()
             .method_callables()
@@ -1875,6 +1996,12 @@ impl<S: Surface> CallbackLocalProtocol<S> {
             .any(|method| method.uses_builtin_codec(kind))
     }
 
+    fn contains_interned_string(&self) -> bool {
+        self.methods
+            .iter()
+            .any(CallbackLocalMethodDecl::contains_interned_string)
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         self.methods
             .iter()
@@ -1950,6 +2077,10 @@ impl<S: Surface> CallbackLocalMethodDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        self.callable.contains_interned_string()
     }
 
     fn uses_direct_record_vector(&self) -> bool {
@@ -2072,6 +2203,10 @@ impl<S: Surface> StreamDecl<S> {
         self.item.uses_builtin_codec(kind)
     }
 
+    fn contains_interned_string(&self) -> bool {
+        self.item.contains_interned_string()
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         self.item.uses_direct_record_vector()
     }
@@ -2159,6 +2294,13 @@ impl<S: Surface> StreamItemPlan<S> {
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         match self {
             Self::Encoded { read, .. } => read.uses_builtin(kind),
+            Self::Direct { .. } => false,
+        }
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        match self {
+            Self::Encoded { ty, .. } => ty.contains_interned_string(),
             Self::Direct { .. } => false,
         }
     }
@@ -2317,6 +2459,10 @@ impl<S: Surface> ConstantDecl<S> {
         self.value.uses_builtin_codec(kind)
     }
 
+    fn contains_interned_string(&self) -> bool {
+        self.value.contains_interned_string()
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         self.value.uses_direct_record_vector()
     }
@@ -2384,6 +2530,13 @@ impl<S: Surface> ConstantValueDecl<S> {
         }
     }
 
+    fn contains_interned_string(&self) -> bool {
+        match self {
+            Self::Accessor { callable, .. } => callable.contains_interned_string(),
+            Self::Inline { ty, .. } => ty.contains_interned_string(),
+        }
+    }
+
     fn uses_direct_record_vector(&self) -> bool {
         match self {
             Self::Accessor { callable, .. } => callable.uses_direct_record_vector(),
@@ -2446,6 +2599,10 @@ impl CustomTypeDecl {
     /// Returns the Rust converters used by generated wrappers.
     pub fn converters(&self) -> &CustomTypeConverters {
         &self.converters
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        self.representation.contains_interned_string()
     }
 }
 
@@ -2529,6 +2686,10 @@ where
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        self.callable.contains_interned_string()
     }
 
     fn uses_direct_record_vector(&self) -> bool {
@@ -2627,6 +2788,10 @@ impl<S: Surface> InitializerDecl<S> {
 
     fn uses_builtin_codec(&self, kind: BuiltinType) -> bool {
         self.callable.uses_builtin_codec(kind)
+    }
+
+    fn contains_interned_string(&self) -> bool {
+        self.callable.contains_interned_string()
     }
 
     fn uses_direct_record_vector(&self) -> bool {
