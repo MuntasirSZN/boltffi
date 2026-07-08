@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use boltffi_backend::core::{CoverageMode, bridge, host};
 use boltffi_backend::target::{
-    kmp::KmpHost,
+    kmp::{DEFAULT_KMP_MODULE_NAME, DEFAULT_KMP_PACKAGE_NAME, KmpHost, KmpSupportMode},
     kotlin::{KotlinApiStyle, KotlinDesktopLoader, KotlinFactoryStyle, KotlinHost},
     python::PythonCExtHost,
     swift::SwiftHost,
@@ -13,6 +13,8 @@ use boltffi_binding::{BindingMetadataSurface, Bindings, Native, Surface};
 use thiserror::Error;
 
 use crate::metadata::{BindingMetadataBuild, BindingMetadataBuildError};
+use crate::render::kmp::delegate::KmpJvmDelegateAdapter;
+use crate::render::kotlin::KotlinOptions;
 use crate::target::Target;
 
 /// Drives one BoltFFI generation from a compiled crate's embedded metadata
@@ -47,6 +49,10 @@ pub struct Generation {
     swift_ffi_module: Option<String>,
     swift_file: Option<String>,
     swift_c_header: Option<PathBuf>,
+    kmp_package_name: Option<String>,
+    kmp_module_name: Option<String>,
+    kmp_min_sdk: Option<u32>,
+    kmp_support_mode: KmpSupportMode,
 }
 
 impl Generation {
@@ -75,6 +81,10 @@ impl Generation {
             swift_ffi_module: None,
             swift_file: None,
             swift_c_header: None,
+            kmp_package_name: None,
+            kmp_module_name: None,
+            kmp_min_sdk: None,
+            kmp_support_mode: KmpSupportMode::Strict,
         }
     }
 
@@ -210,6 +220,30 @@ impl Generation {
         self
     }
 
+    /// Sets the generated Kotlin Multiplatform package name.
+    pub fn kmp_package_name(mut self, package_name: impl Into<String>) -> Self {
+        self.kmp_package_name = Some(package_name.into());
+        self
+    }
+
+    /// Sets the generated Kotlin Multiplatform module/source class name.
+    pub fn kmp_module_name(mut self, module_name: impl Into<String>) -> Self {
+        self.kmp_module_name = Some(module_name.into());
+        self
+    }
+
+    /// Sets the Android minSdk written into generated KMP Gradle output.
+    pub fn kmp_min_sdk(mut self, min_sdk: u32) -> Self {
+        self.kmp_min_sdk = Some(min_sdk);
+        self
+    }
+
+    /// Sets the KMP support mode recorded in generated support metadata.
+    pub fn kmp_support_mode(mut self, support_mode: KmpSupportMode) -> Self {
+        self.kmp_support_mode = support_mode;
+        self
+    }
+
     /// Reads the embedded metadata, selects the target surface contract, and renders it.
     pub fn render(&self, target: Target) -> Result<GeneratedOutput, GenerationError> {
         match target {
@@ -295,7 +329,7 @@ impl Generation {
 
     fn render_kmp(&self) -> Result<GeneratedOutput, GenerationError> {
         let bindings = self.bindings::<Native>()?;
-        let target = KmpHost::new().into_target();
+        let target = self.kmp_host(&bindings)?.into_target();
         self.render_backend(&target, &bindings)
     }
 
@@ -361,6 +395,39 @@ impl Generation {
             .fold(host, |host, header| host.c_header(header.clone())))
     }
 
+    fn kmp_host(&self, bindings: &Bindings<Native>) -> Result<KmpHost, GenerationError> {
+        let package_name = self.effective_kmp_package_name();
+        let module_name = self.effective_kmp_module_name();
+        let delegate = KmpJvmDelegateAdapter::new(
+            package_name.clone(),
+            module_name.clone(),
+            KotlinOptions::default(),
+        )
+        .adapt_bindings(bindings)
+        .map_err(|source| GenerationError::KmpJvmDelegate {
+            message: source.to_string(),
+        })?;
+        let host = KmpHost::new().support_mode(self.kmp_support_mode);
+        let host = host.package_name(package_name).module_name(module_name);
+        let host = self
+            .kmp_min_sdk
+            .iter()
+            .fold(host, |host, min_sdk| host.min_sdk(*min_sdk));
+        Ok(host.jvm_delegate(delegate))
+    }
+
+    fn effective_kmp_package_name(&self) -> String {
+        self.kmp_package_name
+            .clone()
+            .unwrap_or_else(|| DEFAULT_KMP_PACKAGE_NAME.to_string())
+    }
+
+    fn effective_kmp_module_name(&self) -> String {
+        self.kmp_module_name
+            .clone()
+            .unwrap_or_else(|| DEFAULT_KMP_MODULE_NAME.to_string())
+    }
+
     /// Writes generated output to a directory.
     pub fn write_output(
         output: GeneratedOutput,
@@ -410,6 +477,12 @@ pub enum GenerationError {
     /// The target backend failed to render the bindings.
     #[error("render bindings: {0}")]
     Render(boltffi_backend::Error),
+    /// The Kotlin/JNI delegate adapter failed before backend rendering.
+    #[error("adapt KMP JVM delegate: {message}")]
+    KmpJvmDelegate {
+        /// Adapter failure message.
+        message: String,
+    },
     /// The target is not wired to the IR generation pipeline.
     #[error("IR generation is not available for {target}")]
     UnsupportedTarget {
@@ -437,4 +510,190 @@ fn write_file(path: &Path, contents: &str) -> Result<(), GenerationError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use boltffi_ast::{
+        CanonicalName as SourceCanonicalName, FunctionDef as SourceFunctionDef,
+        FunctionId as SourceFunctionId, PackageInfo as SourcePackageInfo,
+        ParameterDef as SourceParameterDef, Primitive as SourcePrimitive,
+        ReturnDef as SourceReturnDef, SourceContract, SourceName, TypeExpr as SourceTypeExpr,
+    };
+
+    use super::*;
+
+    fn primitive_function_bindings() -> Bindings<Native> {
+        bindings_for_functions(vec![primitive_function(
+            "demo::add",
+            "add",
+            vec![
+                ("left", SourcePrimitive::I32),
+                ("right", SourcePrimitive::I32),
+            ],
+            SourcePrimitive::I32,
+        )])
+    }
+
+    fn bindings_for_functions(functions: Vec<SourceFunctionDef>) -> Bindings<Native> {
+        let mut source = SourceContract::new(SourcePackageInfo::new("demo", None));
+        source.functions = functions;
+        boltffi_binding::lower::<Native>(&source).expect("primitive function should lower")
+    }
+
+    fn primitive_function(
+        id: &str,
+        name: &str,
+        params: Vec<(&str, SourcePrimitive)>,
+        returns: SourcePrimitive,
+    ) -> SourceFunctionDef {
+        let mut function = SourceFunctionDef::new(SourceFunctionId::new(id), source_name(name));
+        function.parameters = params
+            .into_iter()
+            .map(|(name, primitive)| {
+                SourceParameterDef::value(source_name(name), SourceTypeExpr::Primitive(primitive))
+            })
+            .collect();
+        function.returns = SourceReturnDef::value(SourceTypeExpr::Primitive(returns));
+        function
+    }
+
+    fn source_name(part: &str) -> SourceName {
+        SourceName::from_canonical(SourceCanonicalName::single(part))
+    }
+
+    fn name(part: &str) -> SourceName {
+        source_name(part)
+    }
+
+    fn file<'output>(output: &'output GeneratedOutput, path: &str) -> &'output str {
+        output
+            .files()
+            .iter()
+            .find(|file| file.path().as_path() == Path::new(path))
+            .unwrap_or_else(|| panic!("missing generated file {path}"))
+            .contents()
+    }
+
+    #[test]
+    fn kmp_generation_wires_jni_delegate_for_sync_primitive_bindings() {
+        let bindings = primitive_function_bindings();
+        let generation = Generation::new("Cargo.toml")
+            .kmp_package_name("com.boltffi.demo")
+            .kmp_module_name("Demo");
+        let target = generation
+            .kmp_host(&bindings)
+            .expect("KMP host should adapt primitive bindings")
+            .into_target();
+
+        let output = generation
+            .render_backend(&target, &bindings)
+            .expect("primitive KMP bindings should render through the production host");
+
+        assert!(
+            file(&output, "src/commonMain/kotlin/com/boltffi/demo/Demo.kt")
+                .contains("expect fun add(left: Int, right: Int): Int")
+        );
+        assert!(
+            file(
+                &output,
+                "src/jvmMain/kotlin/com/boltffi/demo/DemoJvmActual.kt"
+            )
+            .contains("return com.boltffi.demo.jvm.add(left, right)")
+        );
+        assert!(
+            file(&output, "src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt")
+                .contains("external fun boltffi_function_demo_add(left: Int, right: Int): Int")
+        );
+        assert!(
+            file(&output, "src/jvmMain/c/jni_glue.c")
+                .contains("_result = boltffi_function_demo_add(left, right);")
+        );
+    }
+
+    #[test]
+    fn kmp_generation_uses_backend_planned_kotlin_name_for_delegate_matching() {
+        let bindings = bindings_for_functions(vec![primitive_function(
+            "demo::DoTheThing",
+            "DoTheThing",
+            vec![("value", SourcePrimitive::I32)],
+            SourcePrimitive::I32,
+        )]);
+        let generation = Generation::new("Cargo.toml")
+            .kmp_package_name("com.boltffi.demo")
+            .kmp_module_name("Demo");
+        let target = generation
+            .kmp_host(&bindings)
+            .expect("KMP host should adapt primitive bindings")
+            .into_target();
+
+        let output = generation
+            .render_backend(&target, &bindings)
+            .expect("backend-planned Kotlin names should be covered by the delegate");
+
+        let common = file(&output, "src/commonMain/kotlin/com/boltffi/demo/Demo.kt");
+        assert!(
+            common.contains("expect fun dothething(`value`: Int): Int"),
+            "{common}"
+        );
+        assert!(
+            file(
+                &output,
+                "src/jvmMain/kotlin/com/boltffi/demo/DemoJvmActual.kt"
+            )
+            .contains("return com.boltffi.demo.jvm.dothething(`value`)")
+        );
+        assert!(
+            file(&output, "src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt")
+                .contains("fun dothething(`value`: Int): Int")
+        );
+        assert!(
+            file(&output, "src/jvmMain/c/jni_glue.c")
+                .contains("_result = boltffi_function_demo_do_the_thing(value);")
+        );
+    }
+
+    #[test]
+    fn kmp_generation_preserves_distinct_backend_symbols_for_same_public_name_overloads() {
+        let bindings = bindings_for_functions(vec![
+            primitive_function(
+                "demo::signed::read",
+                "read",
+                vec![("value", SourcePrimitive::I32)],
+                SourcePrimitive::I32,
+            ),
+            primitive_function(
+                "demo::wide::read",
+                "read",
+                vec![("value", SourcePrimitive::I64)],
+                SourcePrimitive::I64,
+            ),
+        ]);
+        let generation = Generation::new("Cargo.toml")
+            .kmp_package_name("com.boltffi.demo")
+            .kmp_module_name("Demo");
+        let target = generation
+            .kmp_host(&bindings)
+            .expect("KMP host should adapt primitive overloads")
+            .into_target();
+
+        let output = generation
+            .render_backend(&target, &bindings)
+            .expect("same-name overloads with distinct signatures should keep both delegates");
+        let jni = file(&output, "src/jvmMain/c/jni_glue.c");
+
+        let common = file(&output, "src/commonMain/kotlin/com/boltffi/demo/Demo.kt");
+        assert!(
+            common.contains("expect fun read(`value`: Int): Int"),
+            "{common}"
+        );
+        assert!(
+            common.contains("expect fun read(`value`: Long): Long"),
+            "{common}"
+        );
+        assert!(jni.contains("_result = boltffi_function_demo_signed_read(value);"));
+        assert!(jni.contains("_result = boltffi_function_demo_wide_read(value);"));
+    }
 }
