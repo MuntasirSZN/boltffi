@@ -40,8 +40,30 @@ impl PackageScan {
     pub fn root_with_support(&self) -> SourceContract {
         let root = self.root_crate();
         let mut source = self.root.clone();
-        source.records = self.complete.records.clone();
-        source.enums = self.complete.enums.clone();
+        source.records = self
+            .complete
+            .records
+            .iter()
+            .cloned()
+            .map(|mut record| {
+                if !self.exposes_support_methods(&root, record.id.as_str()) {
+                    record.methods.clear();
+                }
+                record
+            })
+            .collect();
+        source.enums = self
+            .complete
+            .enums
+            .iter()
+            .cloned()
+            .map(|mut enumeration| {
+                if !self.exposes_support_methods(&root, enumeration.id.as_str()) {
+                    enumeration.methods.clear();
+                }
+                enumeration
+            })
+            .collect();
         source.classes = self.complete.classes.clone();
         source.traits = self.complete.traits.clone();
         source.customs = self.complete.customs.clone();
@@ -64,6 +86,10 @@ impl PackageScan {
 
     fn root_crate(&self) -> RootCrate {
         RootCrate::new(&self.root.package.name)
+    }
+
+    fn exposes_support_methods(&self, root: &RootCrate, id: &str) -> bool {
+        root.owns(id) || self.root_visible_paths.contains_key(id)
     }
 }
 
@@ -1233,7 +1259,22 @@ mod tests {
                 PackageInfo::new("demo", None),
             )
             .expect("complete scans"),
-            root_visible_paths: HashMap::new(),
+            root_visible_paths: HashMap::from([
+                (
+                    "model::ForeignPoint".to_owned(),
+                    Path::new(
+                        PathRoot::Relative,
+                        vec![PathSegment::new("model"), PathSegment::new("ForeignPoint")],
+                    ),
+                ),
+                (
+                    "model::ForeignKind".to_owned(),
+                    Path::new(
+                        PathRoot::Relative,
+                        vec![PathSegment::new("model"), PathSegment::new("ForeignKind")],
+                    ),
+                ),
+            ]),
         };
         let source = scan.root_with_support();
         let point = source
@@ -1251,6 +1292,55 @@ mod tests {
         assert_eq!(point.methods[0].id.as_str(), "model::ForeignPoint::origin");
         assert_eq!(kind.methods.len(), 1);
         assert_eq!(kind.methods[0].id.as_str(), "model::ForeignKind::guest");
+    }
+
+    #[test]
+    fn root_with_support_removes_dependency_data_impl_methods_without_visible_paths() {
+        let model = source_tree(
+            "model",
+            "#[data] pub struct ForeignPoint { pub x: f64 } \
+             #[data] pub enum ForeignKind { Guest, Member }",
+        );
+        let root = source_tree(
+            "demo",
+            "use model::{ForeignKind, ForeignPoint}; \
+             #[data(impl)] impl ForeignPoint { pub fn origin() -> Self { todo!() } } \
+             #[data(impl)] impl ForeignKind { pub fn guest() -> Self { todo!() } }",
+        );
+        let complete = SourceTree::combine([model, root.clone()]);
+        let root_marked = MarkedItems::collect(&root).expect("root marked items");
+        let complete_marked = MarkedItems::collect(&complete).expect("complete marked items");
+        let declared_types =
+            DeclaredTypes::index(&complete, &complete_marked).expect("declared types");
+        let scan = PackageScan {
+            root: scan_marked_with_declarations(
+                &root_marked,
+                &declared_types,
+                PackageInfo::new("demo", None),
+            )
+            .expect("root scans"),
+            complete: scan_marked_with_declarations(
+                &complete_marked,
+                &declared_types,
+                PackageInfo::new("demo", None),
+            )
+            .expect("complete scans"),
+            root_visible_paths: HashMap::new(),
+        };
+        let source = scan.root_with_support();
+        let point = source
+            .records
+            .iter()
+            .find(|record| record.id == RecordId::new("model::ForeignPoint"))
+            .expect("dependency record stays in root support contract");
+        let kind = source
+            .enums
+            .iter()
+            .find(|enumeration| enumeration.id == EnumId::new("model::ForeignKind"))
+            .expect("dependency enum stays in root support contract");
+
+        assert!(point.methods.is_empty());
+        assert!(kind.methods.is_empty());
     }
 
     #[test]
