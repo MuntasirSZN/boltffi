@@ -8,11 +8,11 @@ Restart the KMP implementation around a Python-style architecture:
 - Packaging pipeline: `plan -> layout -> build/stage/package`
 - Strict support contract: every API emitted into `commonMain` must compile and run on every selected KMP target.
 
-The current KMP branch contains useful lessons, tests, naming helpers, target mapping, Gradle snippets, and JVM/Android delegation ideas. It should not be kept as the owner of the new design. In particular, the Apple path should be deleted or quarantined until it can be rebuilt around explicit capability admission and real Kotlin/Native actuals.
+The pre-reset KMP branch contained useful lessons, tests, naming helpers, target mapping, Gradle snippets, and JVM/Android delegation ideas. It should not be kept as the owner of the new design. In particular, Apple support should stay deleted or quarantined until it can be rebuilt around explicit capability admission and real Kotlin/Native actuals.
 
 ## Why Reset
 
-The current KMP path grew through several PRs:
+The previous KMP path grew through several PRs:
 
 - Apple cinterop scaffolding
 - Native data/function actuals
@@ -21,7 +21,7 @@ The current KMP path grew through several PRs:
 - Class-member support pruning
 - Support-surface refactoring
 
-That work proved important details, but it also left the implementation with the wrong shape. Today `boltffi_bindgen/src/render/kmp/mod.rs` mixes support admission, common API rendering, JVM/Android actuals, Apple actuals, Gradle files, cinterop files, JNI reuse, source filtering, and tests. `boltffi_bindgen/src/render/kmp/apple.rs` then carries a large inline Kotlin/Native runtime and still emits `NotImplementedError` paths for unsupported shapes. `boltffi_cli/src/pack/kmp.rs` packages Android and JVM resources but does not stage or link Apple static libraries.
+That work proved important details, but it also left the implementation with the wrong shape. Before the M0/M1 reset, `boltffi_bindgen/src/render/kmp/mod.rs` mixed support admission, common API rendering, JVM/Android actuals, Apple actuals, Gradle files, cinterop files, JNI reuse, source filtering, and tests. The old `boltffi_bindgen/src/render/kmp/apple.rs` carried a large inline Kotlin/Native runtime and emitted `NotImplementedError` paths for unsupported shapes. The old single-file `boltffi_cli/src/pack/kmp.rs` packaged Android and JVM resources but did not stage or link Apple static libraries.
 
 By contrast, the newer Python backend is cleaner:
 
@@ -52,20 +52,16 @@ M0 is complete:
 - `pack kmp` verifies generated support metadata against the effective config.
 - Production KMP generation has no `NotImplementedError` or `NativeRuntimeNotImplemented` fallback path for admitted APIs.
 
-M1a through M1c are complete:
+M1 is complete:
 
 - M1a introduced the new IR KMP backend skeleton under `boltffi_backend/src/target/kmp`.
 - M1b introduced the KMP plan/lower/admission model, support reports, platform capability intersection, and plan-level tests.
 - M1c introduced emit/file-list parity for the default JVM/Android KMP project skeleton from the IR plan.
+- M1d introduced the KMP packaging plan/layout foundation under `boltffi_cli/src/pack/kmp`.
 - M1c keeps behavior intentionally strict: unsupported or currently unrenderable APIs fail in strict mode and are omitted only in explicit preview-prune mode.
 - Empty or fully pruned JVM/Android source sets remain package-only skeletons; they do not emit runtime declarations for APIs that were not admitted.
 - M1c does not provide real JVM/Android API body parity. That starts in M2.
-
-Remaining M1 work, if kept before M2, is packaging foundation only:
-
-- Add `KmpPackagingPlan` and `KmpPackageLayout`.
-- Move KMP packaging path calculation behind layout-owned helpers.
-- Do not expand generated API behavior in this step.
+- M1d keeps behavior unchanged: KMP packaging still reuses the existing JVM/Android packagers, while generated-project paths now live behind `KmpPackageLayout`.
 
 ## Target Architecture
 
@@ -107,13 +103,19 @@ Suggested core structs:
 
 ### CLI Packaging Layout
 
-Split `boltffi_cli/src/pack/kmp.rs` into a package:
+M1d split the old `boltffi_cli/src/pack/kmp.rs` into the current package foundation:
 
 ```text
 boltffi_cli/src/pack/kmp/
   mod.rs
   plan.rs
   layout.rs
+```
+
+Future packaging slices can continue splitting orchestration by responsibility:
+
+```text
+boltffi_cli/src/pack/kmp/
   generate.rs
   jvm.rs
   android.rs
@@ -134,7 +136,7 @@ Goal: remove the ambiguous half-supported Apple state.
 
 Work:
 
-- Decide whether to delete current `render/kmp/apple.rs` outright or move it behind a quarantined reference module outside the production path.
+- Decide whether to delete the old production `render/kmp/apple.rs` outright or move it behind a quarantined reference module outside the production path.
 - Replace current KMP docs that promise runtime throws for unsupported Apple shapes.
 - Write the support contract in `BOLTFFI_TOML_SPEC.md` and user docs.
 - Add a failing/diagnostic test proving admitted APIs cannot emit `NotImplementedError`.
@@ -167,10 +169,11 @@ Completed:
 - M1a: IR KMP backend skeleton.
 - M1b: KMP plan/lower/admission, platform modules, support report, capability intersection, and plan-level tests.
 - M1c: emit/file-list parity skeleton for common/JVM/Android from the IR plan.
+- M1d: KMP packaging plan/layout foundation under `boltffi_cli/src/pack/kmp`.
 
 Remaining:
 
-- M1d: KMP packaging plan/layout foundation. This should calculate paths and validation state only; it should not add new generated API behavior.
+- None.
 
 Exit criteria:
 
@@ -194,6 +197,13 @@ Verification:
   - `cargo fmt --check`
   - `git diff --check`
   - `rg "NotImplementedError|NativeRuntimeNotImplemented" boltffi_bindgen/src/render/kmp boltffi_backend/src/target/kmp`
+- M1d exit check passed:
+  - `cargo test -p boltffi_cli -- --quiet`
+  - `cargo test -p boltffi_backend kmp -- --nocapture`
+  - `cargo test -p boltffi_bindgen kmp`
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `rg "NotImplementedError|NativeRuntimeNotImplemented" boltffi_bindgen/src/render/kmp boltffi_backend/src/target/kmp`
 
 ### M2: JVM And Android Parity
 
@@ -207,7 +217,7 @@ Work:
 - Keep Android `jniLibs` packaging through the existing Android packager.
 - Keep JVM native resources through the existing JVM packager.
 - Delete the old monolithic `KMPEmitter` production flow after JVM/Android parity is proven.
-- Delete the old single-file `pack/kmp.rs` shape after the new `pack/kmp/*` orchestration owns JVM/Android packaging.
+- Keep JVM/Android packaging on the new `pack/kmp/*` orchestration while production parity moves over.
 - Retain only migrated helpers, snippets, and tests with clear ownership in the new modules.
 
 Exit criteria:
@@ -379,8 +389,8 @@ Verification:
 
 1. Done: reset docs and support contract.
 2. Done: introduce KMP plan/lower/emit skeleton and support report.
-3. Next: move packaging to `pack/kmp/*` with no feature expansion.
-4. Rebuild JVM/Android KMP generation and packaging.
+3. Done: move packaging to `pack/kmp/*` with no feature expansion.
+4. Next: rebuild JVM/Android KMP generation and packaging.
 5. Add Apple target/layout planning and static library staging.
 6. Add Apple sync value actuals.
 7. Add Apple classes/handles.
@@ -392,7 +402,7 @@ Verification:
 
 Reuse:
 
-- Target enums and Apple target selection logic from `target.rs` and current KMP generator.
+- Target enums and Apple target selection logic from `target.rs` and the legacy KMP generator.
 - JVM/Android delegation concept.
 - Existing Android and JVM packagers.
 - Naming helpers where they match generated Kotlin conventions.
@@ -400,7 +410,7 @@ Reuse:
 
 Reference only:
 
-- Apple runtime snippets in `render/kmp/apple.rs`.
+- Apple runtime snippets formerly in `render/kmp/apple.rs`.
 - cinterop Gradle snippets.
 - Support-surface pruning tests.
 
