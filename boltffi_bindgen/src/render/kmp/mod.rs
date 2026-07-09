@@ -1281,7 +1281,8 @@ fn type_rejection_reason(ty: &ir::types::TypeExpr, support: &KmpSurfaceSupport) 
     match ty {
         ir::types::TypeExpr::Void
         | ir::types::TypeExpr::Primitive(_)
-        | ir::types::TypeExpr::String => None,
+        | ir::types::TypeExpr::String
+        | ir::types::TypeExpr::Str => None,
         ir::types::TypeExpr::Vec(inner) => {
             type_rejection_reason(inner, support).map(|reason| format!("Vec element: {reason}"))
         }
@@ -1645,7 +1646,8 @@ fn type_supported_with_sets(
     match ty {
         ir::types::TypeExpr::Void
         | ir::types::TypeExpr::Primitive(_)
-        | ir::types::TypeExpr::String => true,
+        | ir::types::TypeExpr::String
+        | ir::types::TypeExpr::Str => true,
         ir::types::TypeExpr::Vec(inner) | ir::types::TypeExpr::Option(inner) => {
             type_supported_with_sets(inner, contract, records, enums, custom_types)
         }
@@ -1715,7 +1717,7 @@ fn common_type_name(ty: &ir::types::TypeExpr) -> String {
     match ty {
         ir::types::TypeExpr::Void => "Unit".to_string(),
         ir::types::TypeExpr::Primitive(primitive) => primitive_type_name(*primitive),
-        ir::types::TypeExpr::String => "String".to_string(),
+        ir::types::TypeExpr::String | ir::types::TypeExpr::Str => "String".to_string(),
         ir::types::TypeExpr::Vec(inner) => vec_type_name(inner),
         ir::types::TypeExpr::Option(inner) => format!("{}?", common_type_name(inner)),
         ir::types::TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
@@ -1747,7 +1749,7 @@ fn common_type_name_with_disambiguation(
             let name = primitive_type_name(*primitive);
             disambiguated_kotlin_type_name(&name, reserved_names, "kotlin")
         }
-        ir::types::TypeExpr::String => {
+        ir::types::TypeExpr::String | ir::types::TypeExpr::Str => {
             disambiguated_kotlin_type_name("String", reserved_names, "kotlin")
         }
         ir::types::TypeExpr::Vec(inner) => match inner.as_ref() {

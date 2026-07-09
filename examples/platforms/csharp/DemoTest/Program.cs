@@ -209,6 +209,7 @@ public static class DemoTest
         Require(RepeatString("ab", 3u) == "ababab", "case:primitives.strings.string.should_repeat_value repeatString(ab, 3)");
         Require(RepeatString("x", 0u) == "", "repeatString(x, 0)");
         Require(RepeatString("🌟", 2u) == "🌟🌟", "repeatString(emoji, 2)");
+        Require(BorrowedStaticString() == "borrowed static", "case:primitives.strings.borrowed_static_string.should_return_value");
         Console.WriteLine("  PASS\n");
     }
 

@@ -116,6 +116,7 @@ class DemoValueTypesTest {
         assertEquals(5u, stringLength("café"), "case:primitives.strings.string.should_report_utf8_byte_length")
         assertEquals(true, stringIsEmpty(""), "case:primitives.strings.string.should_detect_empty")
         assertEquals("ababab", repeatString("ab", 3u), "case:primitives.strings.string.should_repeat_value")
+        assertEquals("borrowed static", borrowedStaticString(), "case:primitives.strings.borrowed_static_string.should_return_value")
 
         assertContentEquals(byteArrayOf(1, 2, 3, 4), echoBytes(byteArrayOf(1, 2, 3, 4)), "case:bytes.bytes.should_roundtrip_values")
         assertEquals(3u, bytesLength(byteArrayOf(9, 8, 7)), "case:bytes.bytes.should_report_length")

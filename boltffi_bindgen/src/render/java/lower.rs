@@ -170,7 +170,7 @@ impl<'a> JavaLowerer<'a> {
 
     fn is_leaf_supported(ffi: &FfiContract, ty: &TypeExpr, supported: &HashSet<String>) -> bool {
         match ty {
-            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Void => true,
+            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Str | TypeExpr::Void => true,
             TypeExpr::Record(id) => supported.contains(id.as_str()),
             TypeExpr::Enum(id) => supported.contains(id.as_str()),
             TypeExpr::Custom(id) => ffi
@@ -195,9 +195,11 @@ impl<'a> JavaLowerer<'a> {
         supported: &HashSet<String>,
     ) -> bool {
         match ty {
-            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Void | TypeExpr::Builtin(_) => {
-                true
-            }
+            TypeExpr::Primitive(_)
+            | TypeExpr::String
+            | TypeExpr::Str
+            | TypeExpr::Void
+            | TypeExpr::Builtin(_) => true,
             TypeExpr::Option(inner) | TypeExpr::Vec(inner) => {
                 Self::is_wire_result_branch_supported(ffi, inner, supported)
             }
@@ -406,7 +408,9 @@ impl<'a> JavaLowerer<'a> {
         visit: &mut WireEncodableVisit,
     ) -> bool {
         match ty {
-            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Builtin(_) => true,
+            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Str | TypeExpr::Builtin(_) => {
+                true
+            }
             TypeExpr::Option(inner) | TypeExpr::Vec(inner) => {
                 self.is_wire_encodable_result_param_branch(inner, visit)
             }
@@ -1092,9 +1096,11 @@ impl<'a> JavaLowerer<'a> {
                 format!("Double.compare({left}, {right}) == 0")
             }
             TypeExpr::Primitive(_) => format!("{left} == {right}"),
-            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Builtin(_) => {
-                format!("java.util.Objects.equals({left}, {right})")
-            }
+            TypeExpr::String
+            | TypeExpr::Str
+            | TypeExpr::Record(_)
+            | TypeExpr::Enum(_)
+            | TypeExpr::Builtin(_) => format!("java.util.Objects.equals({left}, {right})"),
             TypeExpr::Result { .. } => format!("java.util.Objects.equals({left}, {right})"),
             TypeExpr::Option(inner) => {
                 let left_is_null = format!("({left}) == null");
@@ -1154,9 +1160,11 @@ impl<'a> JavaLowerer<'a> {
             | TypeExpr::Primitive(PrimitiveType::USize) => format!("Long.hashCode({value})"),
             TypeExpr::Primitive(PrimitiveType::F32) => format!("Float.hashCode({value})"),
             TypeExpr::Primitive(PrimitiveType::F64) => format!("Double.hashCode({value})"),
-            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Builtin(_) => {
-                format!("java.util.Objects.hashCode({value})")
-            }
+            TypeExpr::String
+            | TypeExpr::Str
+            | TypeExpr::Record(_)
+            | TypeExpr::Enum(_)
+            | TypeExpr::Builtin(_) => format!("java.util.Objects.hashCode({value})"),
             TypeExpr::Result { .. } => format!("java.util.Objects.hashCode({value})"),
             TypeExpr::Option(inner) => {
                 let inner_value = format!("({value}).get()");
@@ -1288,7 +1296,7 @@ impl<'a> JavaLowerer<'a> {
         }
 
         let (native_type, native_expr) = match ty {
-            TypeExpr::String => {
+            TypeExpr::String | TypeExpr::Str => {
                 if let Some(binding_name) = input_bindings.binding_name_for(source_name) {
                     (
                         "ByteBuffer".to_string(),
@@ -1542,8 +1550,7 @@ impl<'a> JavaLowerer<'a> {
             _ => self.emit_reader_read(ok_seq),
         };
         let err_decode_expr = self.emit_reader_read(err_seq);
-        let err_is_string =
-            matches!(returns, ReturnDef::Result { err, .. } if matches!(err, TypeExpr::String));
+        let err_is_string = matches!(returns, ReturnDef::Result { err, .. } if matches!(err, TypeExpr::String | TypeExpr::Str));
         let (err_exception_class, err_throw_direct) = match returns {
             ReturnDef::Result {
                 err: TypeExpr::Enum(id),
@@ -1681,7 +1688,7 @@ impl<'a> JavaLowerer<'a> {
 
     fn java_decode_return_plan(&self, ty: &TypeExpr, ret_shape: &ReturnShape) -> JavaReturnPlan {
         let decode_expr = match ty {
-            TypeExpr::String => "reader.readString()".to_string(),
+            TypeExpr::String | TypeExpr::Str => "reader.readString()".to_string(),
             TypeExpr::Custom(_) => match &ret_shape.decode_ops {
                 Some(decode_seq) => self.emit_reader_read(decode_seq),
                 None => {
@@ -2230,7 +2237,7 @@ impl<'a> JavaLowerer<'a> {
         match ty {
             TypeExpr::Void => "void".to_string(),
             TypeExpr::Primitive(p) => mappings::java_type(*p).to_string(),
-            TypeExpr::String => "String".to_string(),
+            TypeExpr::String | TypeExpr::Str => "String".to_string(),
             TypeExpr::Builtin(id) => mappings::java_builtin_type(id).to_string(),
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Custom(id) => self.java_type(self.custom_repr_type(id)),
@@ -2263,7 +2270,7 @@ impl<'a> JavaLowerer<'a> {
         match ty {
             TypeExpr::Void => "Void".to_string(),
             TypeExpr::Primitive(p) => mappings::java_boxed_type(*p).to_string(),
-            TypeExpr::String => "String".to_string(),
+            TypeExpr::String | TypeExpr::Str => "String".to_string(),
             TypeExpr::Builtin(id) => mappings::java_builtin_type(id).to_string(),
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Custom(id) => self.java_boxed_type(self.custom_repr_type(id)),
@@ -3140,7 +3147,7 @@ impl<'a> JavaLowerer<'a> {
 
         JavaCallbackErrorCapture {
             exception_class,
-            is_string: matches!(err, TypeExpr::String),
+            is_string: matches!(err, TypeExpr::String | TypeExpr::Str),
         }
     }
 

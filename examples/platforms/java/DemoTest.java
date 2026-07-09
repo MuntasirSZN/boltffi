@@ -206,6 +206,7 @@ public final class DemoTest {
         assert Demo.stringLength("🌍") == 4 : "stringLength(emoji 4 bytes)";
         assert Demo.stringIsEmpty("") : "case:primitives.strings.string.should_detect_empty stringIsEmpty(empty)";
         assert Demo.repeatString("ab", 3).equals("ababab") : "case:primitives.strings.string.should_repeat_value repeatString(ab, 3)";
+        assert Demo.borrowedStaticString().equals("borrowed static") : "case:primitives.strings.borrowed_static_string.should_return_value";
         System.out.println("  PASS\n");
     }
 
