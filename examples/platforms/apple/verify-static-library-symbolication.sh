@@ -42,7 +42,7 @@ dsym_uuid="$(xcrun dwarfdump --uuid "$dsym" | awk 'NR == 1 { print $2 }')"
 [[ -n "$executable_uuid" ]] || { printf 'missing executable UUID\n' >&2; exit 1; }
 [[ "$executable_uuid" == "$dsym_uuid" ]] || { printf 'executable and dSYM UUIDs differ\n' >&2; exit 1; }
 
-symbol_address="$(xcrun nm "$dsym_binary" | awk -v expected="_$symbol" '$3 == expected { print "0x" $1; exit }')"
+symbol_address="$(xcrun nm "$dsym_binary" | awk -v expected="_$symbol" '$3 == expected && address == "" { address = "0x" $1 } END { print address }')"
 [[ -n "$symbol_address" ]] || { printf 'Rust export missing from dSYM\n' >&2; exit 1; }
 
 symbolicated="$(xcrun atos -arch "$(uname -m)" -o "$dsym_binary" "$symbol_address")"
