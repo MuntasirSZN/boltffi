@@ -51,20 +51,28 @@ impl<'a> Scanner<'a> {
         match output {
             syn::ReturnType::Default => Ok(ReturnDef::Void),
             syn::ReturnType::Type(_, ty) if is_unit(ty) => Ok(ReturnDef::Void),
-            syn::ReturnType::Type(_, ty) => Ok(ReturnDef::Value(self.scan_return_type(ty)?)),
+            syn::ReturnType::Type(_, ty) => Ok(ReturnDef::Value(self.scan(ty)?)),
         }
     }
 
-    fn scan_return_type(&self, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
+    pub fn scan_export_return(&self, output: &syn::ReturnType) -> Result<ReturnDef, ScanError> {
+        match output {
+            syn::ReturnType::Default => Ok(ReturnDef::Void),
+            syn::ReturnType::Type(_, ty) if is_unit(ty) => Ok(ReturnDef::Void),
+            syn::ReturnType::Type(_, ty) => Ok(ReturnDef::Value(self.scan_export_return_type(ty)?)),
+        }
+    }
+
+    fn scan_export_return_type(&self, ty: &syn::Type) -> Result<TypeExpr, ScanError> {
         match unwrapped(ty) {
             syn::Type::Reference(reference) if reference.mutability.is_none() => {
-                self.borrowed_return(reference, ty)
+                self.borrowed_export_return(reference, ty)
             }
             _ => self.scan(ty),
         }
     }
 
-    fn borrowed_return(
+    fn borrowed_export_return(
         &self,
         reference: &syn::TypeReference,
         source: &syn::Type,
@@ -920,5 +928,12 @@ mod tests {
                 FnSig::new(vec![TypeExpr::Primitive(Primitive::U32)], ReturnDef::Void)
             ))))
         );
+    }
+
+    #[test]
+    fn rejects_borrowed_string_closure_returns() {
+        assert!(scan("fn() -> &'static str").is_err());
+        assert!(scan("impl Fn() -> &'static str").is_err());
+        assert!(scan("Box<dyn Fn() -> &'static str>").is_err());
     }
 }

@@ -955,7 +955,7 @@ impl<'a> JniLowerer<'a> {
 
         match ty {
             TypeExpr::Primitive(p) => self.primitive_jni_type(*p).to_string(),
-            TypeExpr::String => "jstring".to_string(),
+            TypeExpr::String | TypeExpr::Str => "jstring".to_string(),
             TypeExpr::Handle(_) | TypeExpr::Callback(_) => "jlong".to_string(),
             TypeExpr::Enum(_) => "jint".to_string(),
             _ => "jlong".to_string(),
@@ -1151,7 +1151,7 @@ impl<'a> JniLowerer<'a> {
         record_info: Option<RecordParamInfo>,
         data_enum_info: Option<DataEnumParamInfo>,
     ) -> String {
-        if matches!(ty, TypeExpr::String) {
+        if matches!(ty, TypeExpr::String | TypeExpr::Str) {
             return format!(
                 "(const uint8_t*)_{}_c, (_{}_c != NULL) ? strlen(_{}_c) : 0",
                 name, name, name
@@ -1244,12 +1244,14 @@ impl<'a> JniLowerer<'a> {
                 jni_return: self.primitive_return_jni_type(*p),
                 is_void: false,
             },
-            TypeExpr::String | TypeExpr::Vec(_) | TypeExpr::Option(_) | TypeExpr::Result { .. } => {
-                JniFunctionReturn {
-                    jni_return: "jobject".to_string(),
-                    is_void: false,
-                }
-            }
+            TypeExpr::String
+            | TypeExpr::Str
+            | TypeExpr::Vec(_)
+            | TypeExpr::Option(_)
+            | TypeExpr::Result { .. } => JniFunctionReturn {
+                jni_return: "jobject".to_string(),
+                is_void: false,
+            },
             TypeExpr::Enum(id) => self
                 .contract
                 .catalog
@@ -1291,7 +1293,7 @@ impl<'a> JniLowerer<'a> {
         ret_shape: &ReturnShape,
     ) -> JniReturnMeta {
         if self.supports_direct_utf8_string_return()
-            && matches!(returns, ReturnDef::Value(TypeExpr::String))
+            && matches!(returns, ReturnDef::Value(TypeExpr::String | TypeExpr::Str))
             && Self::is_utf8_string_return(ret_shape)
         {
             return Self::utf8_string_return_meta();
@@ -1366,6 +1368,7 @@ impl<'a> JniLowerer<'a> {
                     }
                 }
                 TypeExpr::String
+                | TypeExpr::Str
                 | TypeExpr::Record(_)
                 | TypeExpr::Enum(_)
                 | TypeExpr::Vec(_)
@@ -1463,7 +1466,7 @@ impl<'a> JniLowerer<'a> {
         ret_shape: &ReturnShape,
     ) -> JniAsyncCompleteKind {
         if self.supports_direct_utf8_string_return()
-            && matches!(returns, ReturnDef::Value(TypeExpr::String))
+            && matches!(returns, ReturnDef::Value(TypeExpr::String | TypeExpr::Str))
             && Self::is_utf8_string_return(ret_shape)
         {
             return JniAsyncCompleteKind::WireEncoded;
@@ -1527,7 +1530,7 @@ impl<'a> JniLowerer<'a> {
                 c_type: self.primitive_c_type(*p),
                 jni_type: self.primitive_return_jni_type(*p),
             },
-            TypeExpr::String => JniResultVariant::String,
+            TypeExpr::String | TypeExpr::Str => JniResultVariant::String,
             TypeExpr::Record(id) => JniResultVariant::Record {
                 c_type: self.jvm_class_name(id.as_str()),
                 jni_type: "jobject".to_string(),
@@ -1608,14 +1611,14 @@ impl<'a> JniLowerer<'a> {
                     JniOptionInnerKind::Primitive32
                 }
             }
-            TypeExpr::String => JniOptionInnerKind::String,
+            TypeExpr::String | TypeExpr::Str => JniOptionInnerKind::String,
             TypeExpr::Record(_) => JniOptionInnerKind::Record,
             TypeExpr::Enum(_) if is_data_enum => JniOptionInnerKind::Enum,
             TypeExpr::Enum(_) => JniOptionInnerKind::Enum,
             TypeExpr::Vec(vec_inner) => match vec_inner.as_ref() {
                 TypeExpr::Primitive(_) => JniOptionInnerKind::VecPrimitive,
                 TypeExpr::Record(_) => JniOptionInnerKind::VecRecord,
-                TypeExpr::String => JniOptionInnerKind::VecString,
+                TypeExpr::String | TypeExpr::Str => JniOptionInnerKind::VecString,
                 TypeExpr::Enum(_) => JniOptionInnerKind::VecEnum,
                 _ => JniOptionInnerKind::VecPrimitive,
             },

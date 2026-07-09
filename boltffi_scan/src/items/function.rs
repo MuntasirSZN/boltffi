@@ -33,7 +33,7 @@ fn build(
     function.source_span = function.source.span.clone();
     function.execution = signature::execution(&item.sig);
     function.parameters = parameters(&item.sig, &scanner)?;
-    function.returns = scanner.scan_return(&item.sig.output)?;
+    function.returns = scanner.scan_export_return(&item.sig.output)?;
     function.doc = attrs.doc();
     function.deprecated = attrs.deprecated()?;
     function.user_attrs = attrs.user_attrs();
