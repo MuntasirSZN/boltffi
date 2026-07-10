@@ -508,7 +508,7 @@ fn primitive_has_direct_jvm_carrier(primitive: Primitive) -> bool {
 #[cfg(test)]
 mod tests {
     use boltffi_ast::PackageInfo;
-    use boltffi_binding::{Bindings, Native, lower as lower_bindings};
+    use boltffi_binding::{Bindings, Decl, Native, lower as lower_bindings};
 
     use super::{
         super::plan::{KmpPlatform, KmpSupportMode},
@@ -519,9 +519,13 @@ mod tests {
     };
 
     fn bindings(source: &str) -> Bindings<Native> {
+        bindings_for_package("demo", source)
+    }
+
+    fn bindings_for_package(package_name: &str, source: &str) -> Bindings<Native> {
         let source = boltffi_scan::scan_file(
             syn::parse_str(source).expect("valid source fixture"),
-            PackageInfo::new("demo", None),
+            PackageInfo::new(package_name, None),
         )
         .expect("source should scan");
         lower_bindings::<Native>(&source).expect("source should lower")
@@ -645,6 +649,34 @@ mod tests {
         assert_eq!(module.support_report().admitted_apis().len(), 1);
         assert!(module.support_report().rejected_apis().is_empty());
         assert!(module.jvm_delegate().is_some());
+    }
+
+    #[test]
+    fn native_function_plan_replaces_hyphenated_package_segments() {
+        let bindings = bindings_for_package(
+            "my-crate",
+            r#"
+            #[export]
+            pub fn add(left: i32, right: i32) -> i32 {
+                left + right
+            }
+            "#,
+        );
+        let function = bindings
+            .decls()
+            .iter()
+            .find_map(|decl| match decl {
+                Decl::Function(function) => Some(function.as_ref()),
+                _ => None,
+            })
+            .expect("function should lower");
+        let function_plan =
+            super::lower_native_function_plan(function).expect("primitive sync function");
+
+        assert_eq!(
+            function_plan.native_symbol(),
+            "boltffi_function_my_crate_add"
+        );
     }
 
     #[test]
