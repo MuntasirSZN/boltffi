@@ -1638,7 +1638,7 @@ final class StreamSubscription<T> implements AutoCloseable {
         cancelAction.run();
     }
 
-{%- if module.java_version.supports_flow_api() %}
+{%- if module.supports_flow_api() %}
     /**
      * Exposes a batch subscription as a live {@link java.util.concurrent.Flow.Publisher}.
      *

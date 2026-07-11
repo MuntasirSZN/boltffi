@@ -59,6 +59,12 @@ pub struct JavaModule {
 }
 
 impl JavaModule {
+    pub fn supports_flow_api(&self) -> bool {
+        self.java_version.supports_flow_api()
+    }
+}
+
+impl JavaModule {
     pub fn package_path(&self) -> String {
         self.package_name.replace('.', "/")
     }

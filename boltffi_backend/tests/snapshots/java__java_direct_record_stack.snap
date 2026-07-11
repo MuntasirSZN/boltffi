@@ -1,0 +1,120 @@
+---
+source: boltffi_backend/tests/java.rs
+expression: "format!(\"===== Demo.java =====\\n{}\\n===== Point.java =====\\n{}\",\njava_source(&output, \"com.boltffi.demo\", \"Demo\"),\njava_source(&output, \"com.boltffi.demo\", \"Point\"),)"
+---
+===== Demo.java =====
+package com.boltffi.demo;
+
+final class Native {
+    static {
+        String virtualMachineName = System.getProperty("java.vm.name", "")
+            .toLowerCase(java.util.Locale.ROOT);
+        boolean androidRuntime = virtualMachineName.contains("dalvik")
+            || virtualMachineName.contains("art");
+        if (androidRuntime) {
+            System.loadLibrary("boltffi");
+        }
+    }
+
+    private Native() {}
+
+    static native byte[] boltffi_function_demo_echo_point(java.nio.ByteBuffer point);
+}
+
+public final class Demo {
+    private Demo() {}
+
+    public static Point echoPoint(Point point) {
+        return Point.fromByteArray(Native.boltffi_function_demo_echo_point(point.toDirectBuffer()));
+    }
+}
+===== Point.java =====
+package com.boltffi.demo;
+
+public final class Point {
+    public final double x;
+    public final double y;
+    public final boolean visible;
+    public final int color;
+
+    public Point(double x, double y, boolean visible, int color) {
+        this.x = x;
+        this.y = y;
+        this.visible = visible;
+        this.color = color;
+    }
+
+
+    public double x() {
+        return x;
+    }
+
+    public double y() {
+        return y;
+    }
+
+    public boolean visible() {
+        return visible;
+    }
+
+    public int color() {
+        return color;
+    }
+
+
+    @Override
+    public boolean equals(Object value) {
+        if (this == value) return true;
+        if (value == null || getClass() != value.getClass()) return false;
+        Point other = (Point) value;
+        return Double.compare(this.x, other.x) == 0 && Double.compare(this.y, other.y) == 0 && this.visible == other.visible && this.color == other.color;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = 1;
+        result = 31 * result + Double.hashCode(this.x);
+        result = 31 * result + Double.hashCode(this.y);
+        result = 31 * result + Boolean.hashCode(this.visible);
+        result = 31 * result + Integer.hashCode(this.color);
+        return result;
+    }
+
+    @Override
+    public String toString() {
+        return "Point{" +
+            "x=" + x +
+            ", y=" + y +
+            ", visible=" + visible +
+            ", color=" + color
+            + '}';
+    }
+
+
+    static final int STRUCT_SIZE = 24;
+
+    java.nio.ByteBuffer toDirectBuffer() {
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer
+            .allocateDirect(STRUCT_SIZE)
+            .order(java.nio.ByteOrder.nativeOrder());
+        buffer.putDouble(0, x);
+        buffer.putDouble(8, y);
+        buffer.put(16, (byte) ((visible ? 1 : 0)));
+        buffer.putInt(20, color);
+        return buffer;
+    }
+
+    static Point fromByteArray(byte[] bytes) {
+        if (bytes.length != STRUCT_SIZE) {
+            throw new IllegalArgumentException("invalid Point byte size");
+        }
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer
+            .wrap(bytes)
+            .order(java.nio.ByteOrder.nativeOrder());
+        return fromDirectBuffer(buffer);
+    }
+
+    static Point fromDirectBuffer(java.nio.ByteBuffer buffer) {
+        return new Point(buffer.getDouble(0), buffer.getDouble(8), buffer.get(16) != 0, buffer.getInt(20));
+    }
+}

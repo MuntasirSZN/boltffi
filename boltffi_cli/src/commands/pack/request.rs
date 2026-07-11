@@ -47,9 +47,16 @@ pub struct PackWasmOptions {
     pub execution: PackExecutionOptions,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JavaBindingMode<Ir = ()> {
+    Legacy,
+    Ir(Ir),
+}
+
 pub struct PackJavaOptions {
     pub execution: PackExecutionOptions,
     pub experimental: bool,
+    pub bindings: JavaBindingMode,
 }
 
 pub struct PackPythonOptions {

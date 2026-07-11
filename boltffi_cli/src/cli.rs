@@ -9,9 +9,9 @@ use crate::commands::doctor::{ConfigSummary, DoctorOptions};
 use crate::commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use crate::commands::init::InitOptions;
 use crate::commands::pack::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCSharpOptions, PackCommand,
-    PackDartOptions, PackExecutionOptions, PackJavaOptions, PackKmpOptions, PackPythonOptions,
-    PackWasmOptions, check_java_packaging_prereqs,
+    JavaBindingMode, PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCSharpOptions,
+    PackCommand, PackDartOptions, PackExecutionOptions, PackJavaOptions, PackKmpOptions,
+    PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
 };
 use crate::commands::verify::VerifyOptions;
 use crate::commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -306,11 +306,20 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         release: bool,
 
-        #[arg(long, default_value = "true")]
+        #[arg(
+            long,
+            default_value = "true",
+            default_missing_value = "true",
+            num_args = 0..=1,
+            action = clap::ArgAction::Set
+        )]
         regenerate: bool,
 
         #[arg(long)]
         no_build: bool,
+
+        #[arg(long, help = "Generate and build the Java package through Binding IR")]
+        ir: bool,
     },
 
     #[command(
@@ -601,6 +610,7 @@ pub(crate) fn execute_command(
                     release,
                     regenerate,
                     no_build,
+                    ir,
                 } => PackCommand::Java(PackJavaOptions {
                     execution: pack_execution_options(
                         release,
@@ -609,6 +619,10 @@ pub(crate) fn execute_command(
                         cargo_args.clone(),
                     ),
                     experimental: false,
+                    bindings: match ir {
+                        true => JavaBindingMode::Ir(()),
+                        false => JavaBindingMode::Legacy,
+                    },
                 }),
                 PackTargetArg::Python {
                     release,
@@ -954,6 +968,7 @@ fn release_pack_commands(
                 commands.push(PackCommand::Java(PackJavaOptions {
                     execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
                     experimental: false,
+                    bindings: JavaBindingMode::Legacy,
                 }));
             }
 
@@ -993,7 +1008,7 @@ mod tests {
         resolve_init_options,
     };
     use crate::commands::doctor::ConfigSummary;
-    use crate::commands::pack::PackCommand;
+    use crate::commands::pack::{JavaBindingMode, PackCommand};
     use crate::target::RustTarget;
     use crate::{cli::CliError, config::Config};
     use clap::Parser;
@@ -1182,6 +1197,7 @@ enabled = true
                     && options.execution.release
                     && options.execution.regenerate
                     && !options.experimental
+                    && matches!(options.bindings, JavaBindingMode::Legacy)
         ));
     }
 
@@ -1399,6 +1415,65 @@ enabled = true
     }
 
     #[test]
+    fn cli_parses_java_regeneration_selection() {
+        let default =
+            Cli::try_parse_from(["boltffi", "pack", "java"]).expect("cli parse should succeed");
+        let enabled = Cli::try_parse_from(["boltffi", "pack", "java", "--regenerate"])
+            .expect("cli parse should succeed");
+        let disabled = Cli::try_parse_from(["boltffi", "pack", "java", "--regenerate", "false"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            default.command,
+            Commands::Pack {
+                target: PackTargetArg::Java {
+                    regenerate: true,
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            enabled.command,
+            Commands::Pack {
+                target: PackTargetArg::Java {
+                    regenerate: true,
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            disabled.command,
+            Commands::Pack {
+                target: PackTargetArg::Java {
+                    regenerate: false,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_java_ir_packaging_selection() {
+        let legacy =
+            Cli::try_parse_from(["boltffi", "pack", "java"]).expect("cli parse should succeed");
+        let binding_ir = Cli::try_parse_from(["boltffi", "pack", "java", "--ir"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            legacy.command,
+            Commands::Pack {
+                target: PackTargetArg::Java { ir: false, .. }
+            }
+        ));
+        assert!(matches!(
+            binding_ir.command,
+            Commands::Pack {
+                target: PackTargetArg::Java { ir: true, .. }
+            }
+        ));
+    }
+
+    #[test]
     fn cli_parses_pack_android_experimental_flag() {
         let cli = Cli::try_parse_from(["boltffi", "pack", "android", "--experimental"])
             .expect("cli parse should succeed");
@@ -1518,6 +1593,9 @@ enabled = true
 
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
+    #[error(transparent)]
+    LibraryCargoArgs(#[from] boltffi_bindgen::cargo::LibraryCargoArgsError),
+
     #[error("config error: {0}")]
     Config(Box<ConfigError>),
 

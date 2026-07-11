@@ -1,6 +1,7 @@
 mod generator;
 mod header;
 mod ir;
+pub(crate) mod java;
 mod languages;
 
 use std::path::{Path, PathBuf};
@@ -151,6 +152,15 @@ pub fn run_generate_java_with_output_from_source_dir(
     JavaGenerator::generate_from_source_directory(config, output, source_directory, crate_name)
 }
 
+pub fn run_generate_java_with_generations(
+    config: &Config,
+    output: Option<PathBuf>,
+    artifact_name: &str,
+    generations: impl IntoIterator<Item = java::TargetGeneration>,
+) -> Result<()> {
+    ir::run_java_generations(config, output, artifact_name, generations)
+}
+
 #[cfg(test)]
 pub fn run_generate_header_with_output_from_source_dir(
     config: &Config,
@@ -184,8 +194,16 @@ pub fn run_generate_python_with_manifest(
     manifest_path: PathBuf,
     artifact_name: String,
     cargo_args: Vec<String>,
+    toolchain_selector: Option<String>,
 ) -> Result<()> {
-    ir::run_python_generation(config, output, manifest_path, artifact_name, cargo_args)
+    ir::run_python_generation(
+        config,
+        output,
+        manifest_path,
+        artifact_name,
+        cargo_args,
+        toolchain_selector,
+    )
 }
 
 pub fn run_generate_kmp_with_manifest(

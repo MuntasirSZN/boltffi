@@ -1,0 +1,812 @@
+use askama::Template as AskamaTemplate;
+use boltffi_binding::{
+    ClosureReturn, DirectValueType, DirectVectorElementType, Direction, ErrorChannel,
+    ErrorPlacement, ExportedCallable, ExportedMethodDecl, FunctionDecl, HandlePresence,
+    HandleTarget, InitializerDecl, IntoRust, Native, NativeSymbol, OutOfRust, ParamDecl,
+    ParamPlanRender, Primitive as BindingPrimitive, ReadPlan, Receive, ReturnPlanRender,
+    ReturnValueSlot, TypeRef, native,
+};
+
+use crate::{
+    bridge::jni::JniBridgeContract,
+    core::{AuxChunk, Emitted, RenderContext, Result},
+    target::java::{
+        JavaHost, JavaVersion,
+        admission::{FunctionShape, ReceiverSupport},
+        codec::{Reader, Runtime, WireBuffer},
+        name_style::Name,
+        primitive::Primitive,
+        render::{
+            native::Method,
+            record::Record,
+            signature::{CallSignature, Parameter, ReturnType, ValueType},
+            type_name::JavaType,
+        },
+        syntax::{
+            ArgumentList, Expression, Identifier, Javadoc, Statement, TypeIdentifier, TypeName,
+        },
+    },
+};
+
+#[derive(AskamaTemplate)]
+#[template(path = "target/java/function.java", escape = "none")]
+struct FunctionTemplate<'call> {
+    call: &'call Call,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Call {
+    signature: CallSignature,
+    native: Method,
+    doc: Option<Javadoc>,
+    body: Vec<Statement>,
+    runtime: RuntimeRequirement,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Receiver {
+    ty: TypeIdentifier,
+    native: NativeArgument,
+    mutation: Option<ReceiverMutation>,
+    support: ReceiverSupport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ReceiverMutation {
+    Direct(Identifier),
+    Encoded,
+}
+
+struct BoundParameter {
+    signature: Parameter<ValueType>,
+    native: NativeArgument,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct NativeArgument {
+    acquire: Vec<Statement>,
+    prepare: Vec<Statement>,
+    expressions: Vec<Expression>,
+    cleanup: Vec<Statement>,
+    runtime: RuntimeRequirement,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum RuntimeRequirement {
+    #[default]
+    None,
+    Wire,
+}
+
+struct NativeArgumentRender {
+    source: Name,
+    name: Identifier,
+    version: JavaVersion,
+}
+
+enum ReturnConversion {
+    Void,
+    Direct,
+    DirectRecord(TypeIdentifier),
+    Encoded(ReadPlan),
+    ScalarOption(Primitive),
+}
+
+struct CallReturn {
+    ty: ReturnType,
+    conversion: ReturnConversion,
+}
+
+struct CallReturnRender<'context> {
+    version: JavaVersion,
+    context: &'context RenderContext<'context, Native>,
+}
+
+#[derive(Clone, Copy)]
+struct CallScope<'scope, 'bindings> {
+    bridge: &'scope JniBridgeContract,
+    native_owner: &'scope TypeIdentifier,
+    version: JavaVersion,
+    context: &'scope RenderContext<'bindings, Native>,
+}
+
+enum ErrorConversion {
+    None,
+    Status,
+    Encoded { ty: TypeRef, codec: ReadPlan },
+}
+
+impl Call {
+    pub fn from_function(
+        declaration: &FunctionDecl<Native>,
+        bridge: &JniBridgeContract,
+        native_owner: &TypeIdentifier,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        FunctionShape::classify(declaration).require_supported()?;
+        Self::build(
+            Name::new(declaration.name()).function(version)?,
+            declaration.symbol(),
+            declaration.callable(),
+            declaration.meta().doc().map(Javadoc::new),
+            None,
+            CallScope::new(bridge, native_owner, version, context),
+        )
+    }
+
+    pub fn from_initializer(
+        declaration: &InitializerDecl<Native>,
+        bridge: &JniBridgeContract,
+        native_owner: &TypeIdentifier,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        FunctionShape::classify_callable(declaration.callable(), ReceiverSupport::Direct)
+            .require_supported()?;
+        Self::build(
+            Name::new(declaration.name()).function(version)?,
+            declaration.symbol(),
+            declaration.callable(),
+            declaration.meta().doc().map(Javadoc::new),
+            None,
+            CallScope::new(bridge, native_owner, version, context),
+        )
+    }
+
+    pub fn from_method(
+        declaration: &ExportedMethodDecl<Native, NativeSymbol>,
+        receiver: Option<Receiver>,
+        bridge: &JniBridgeContract,
+        native_owner: &TypeIdentifier,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        FunctionShape::classify_callable(
+            declaration.callable(),
+            receiver
+                .as_ref()
+                .map_or(ReceiverSupport::Direct, |receiver| receiver.support),
+        )
+        .require_supported()?;
+        Self::build(
+            Name::new(declaration.name()).function(version)?,
+            declaration.target(),
+            declaration.callable(),
+            declaration.meta().doc().map(Javadoc::new),
+            receiver,
+            CallScope::new(bridge, native_owner, version, context),
+        )
+    }
+
+    pub fn render(&self) -> Result<Emitted> {
+        let emitted = Emitted::primary(FunctionTemplate { call: self }.render()?)
+            .with_aux(AuxChunk::ForwardDecl(self.native.render()?.into()));
+        match self.runtime {
+            RuntimeRequirement::None => Ok(emitted),
+            RuntimeRequirement::Wire => Ok(emitted.with_aux(Runtime::helper()?)),
+        }
+    }
+
+    pub fn native_forward(&self) -> Result<AuxChunk> {
+        Ok(AuxChunk::ForwardDecl(self.native.render()?.into()))
+    }
+
+    pub fn signature(&self) -> &CallSignature {
+        &self.signature
+    }
+
+    pub fn name(&self) -> &Identifier {
+        self.signature.name()
+    }
+
+    pub fn parameters(&self) -> &[Parameter<ValueType>] {
+        self.signature.parameters()
+    }
+
+    pub fn returns(&self) -> &ReturnType {
+        self.signature.returns()
+    }
+
+    pub fn doc(&self) -> Option<&Javadoc> {
+        self.doc.as_ref()
+    }
+
+    pub fn body(&self) -> &[Statement] {
+        &self.body
+    }
+
+    pub fn requires_wire_runtime(&self) -> bool {
+        self.runtime == RuntimeRequirement::Wire
+    }
+
+    fn build(
+        name: Identifier,
+        symbol: &NativeSymbol,
+        callable: &ExportedCallable<Native>,
+        doc: Option<Javadoc>,
+        receiver: Option<Receiver>,
+        scope: CallScope<'_, '_>,
+    ) -> Result<Self> {
+        let parameters = callable
+            .params()
+            .iter()
+            .map(|parameter| {
+                BoundParameter::from_declaration(parameter, scope.version, scope.context)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let declared_return = callable
+            .returns()
+            .plan()
+            .render_with(&mut CallReturnRender {
+                version: scope.version,
+                context: scope.context,
+            })?;
+        let native = Method::from_symbol(symbol, scope.bridge, scope.version)?;
+        let receiver_arguments = receiver
+            .iter()
+            .flat_map(|receiver| receiver.native.expressions.iter().cloned());
+        let parameter_arguments = parameters
+            .iter()
+            .flat_map(|parameter| parameter.native.expressions.iter().cloned());
+        let native_call = native.call(
+            scope.native_owner,
+            receiver_arguments.chain(parameter_arguments),
+        )?;
+        let (returns, native_returns, success) = match receiver
+            .as_ref()
+            .and_then(|receiver| receiver.mutation.as_ref())
+        {
+            Some(ReceiverMutation::Direct(buffer)) => {
+                declared_return.ty.require_void()?;
+                let ty = receiver
+                    .as_ref()
+                    .map(|receiver| receiver.ty.clone())
+                    .ok_or(JavaHost::broken_bridge_contract(
+                        "direct receiver mutation has no receiver",
+                    ))?;
+                (
+                    ReturnType::Value(ValueType::Record(ty.clone())),
+                    ReturnType::Void,
+                    vec![
+                        Statement::expression(native_call),
+                        Statement::return_value(Expression::static_call(
+                            TypeName::named(ty),
+                            Identifier::known("fromDirectBuffer"),
+                            [Expression::identifier(buffer.clone())]
+                                .into_iter()
+                                .collect(),
+                        )),
+                    ],
+                )
+            }
+            Some(ReceiverMutation::Encoded) => {
+                declared_return.ty.require_void()?;
+                let ty = receiver
+                    .as_ref()
+                    .map(|receiver| receiver.ty.clone())
+                    .ok_or(JavaHost::broken_bridge_contract(
+                        "encoded receiver mutation has no receiver",
+                    ))?;
+                (
+                    ReturnType::Value(ValueType::Record(ty.clone())),
+                    ReturnType::Value(ValueType::Record(ty.clone())),
+                    CallReturn::encoded_record_statements(ty, native_call),
+                )
+            }
+            None => (
+                declared_return.ty.clone(),
+                declared_return.ty.clone(),
+                declared_return.statements(native_call, scope.version, scope.context)?,
+            ),
+        };
+        native.validate_return(&native_returns)?;
+        let error = ErrorConversion::from_channel(callable.error().channel())?;
+        let runtime = receiver
+            .iter()
+            .map(|receiver| receiver.native.runtime)
+            .chain(parameters.iter().map(|parameter| parameter.native.runtime))
+            .fold(declared_return.runtime(), RuntimeRequirement::merge)
+            .merge(error.runtime());
+        let success = error.wrap(success, scope.version, scope.context)?;
+        let protected = receiver
+            .iter()
+            .flat_map(|receiver| receiver.native.prepare.iter().cloned())
+            .chain(
+                parameters
+                    .iter()
+                    .flat_map(|parameter| parameter.native.prepare.iter().cloned()),
+            )
+            .chain(success)
+            .collect::<Vec<_>>();
+        let cleanup = parameters
+            .iter()
+            .flat_map(|parameter| parameter.native.cleanup.iter().cloned())
+            .chain(
+                receiver
+                    .iter()
+                    .flat_map(|receiver| receiver.native.cleanup.iter().cloned()),
+            )
+            .collect::<Vec<_>>();
+        let protected = match cleanup.is_empty() {
+            true => protected,
+            false => vec![Statement::try_finally(protected, cleanup)],
+        };
+        let body = receiver
+            .iter()
+            .flat_map(|receiver| receiver.native.acquire.iter().cloned())
+            .chain(
+                parameters
+                    .iter()
+                    .flat_map(|parameter| parameter.native.acquire.iter().cloned()),
+            )
+            .chain(protected)
+            .collect();
+        Ok(Self {
+            signature: CallSignature::new(
+                name,
+                parameters
+                    .into_iter()
+                    .map(|parameter| parameter.signature)
+                    .collect(),
+                returns,
+            )?,
+            native,
+            doc,
+            body,
+            runtime,
+        })
+    }
+}
+
+impl<'scope, 'bindings> CallScope<'scope, 'bindings> {
+    fn new(
+        bridge: &'scope JniBridgeContract,
+        native_owner: &'scope TypeIdentifier,
+        version: JavaVersion,
+        context: &'scope RenderContext<'bindings, Native>,
+    ) -> Self {
+        Self {
+            bridge,
+            native_owner,
+            version,
+            context,
+        }
+    }
+}
+
+impl BoundParameter {
+    fn from_declaration(
+        parameter: &ParamDecl<Native, IntoRust>,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let source = Name::new(parameter.name());
+        let name = source.parameter(version)?;
+        let plan = parameter
+            .payload()
+            .as_value()
+            .ok_or_else(FunctionShape::unexpected_shape)?;
+        Ok(Self {
+            signature: Parameter::from_declaration(parameter, version, context)?,
+            native: plan.render_with(&mut NativeArgumentRender {
+                source,
+                name,
+                version,
+            })?,
+        })
+    }
+}
+
+impl NativeArgument {
+    fn direct(expression: Expression) -> Self {
+        Self {
+            acquire: Vec::new(),
+            prepare: Vec::new(),
+            expressions: vec![expression],
+            cleanup: Vec::new(),
+            runtime: RuntimeRequirement::None,
+        }
+    }
+
+    fn encoded(write: crate::target::java::codec::EncodedWrite) -> Self {
+        let (acquire, prepare, expressions, cleanup) = write.into_parts();
+        Self {
+            acquire,
+            prepare,
+            expressions,
+            cleanup,
+            runtime: RuntimeRequirement::Wire,
+        }
+    }
+}
+
+impl RuntimeRequirement {
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Wire, _) | (_, Self::Wire) => Self::Wire,
+            (Self::None, Self::None) => Self::None,
+        }
+    }
+}
+
+impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender {
+    type Output = Result<NativeArgument>;
+
+    fn direct(&mut self, ty: &'plan DirectValueType, _receive: Receive) -> Self::Output {
+        let value = Expression::identifier(self.name.clone());
+        match ty {
+            DirectValueType::Primitive(_) => Ok(NativeArgument::direct(value)),
+            DirectValueType::Record(_) => Ok(NativeArgument::direct(
+                value.call(Identifier::known("toDirectBuffer"), ArgumentList::default()),
+            )),
+            _ => Err(JavaHost::unsupported("unknown direct function parameter")),
+        }
+    }
+
+    fn encoded(
+        &mut self,
+        _ty: &'plan TypeRef,
+        codec: &'plan <IntoRust as Direction>::Codec,
+        _shape: native::BufferShape,
+        receive: Receive,
+    ) -> Self::Output {
+        if receive == Receive::ByMutRef {
+            return Err(JavaHost::unsupported("mutable encoded parameter"));
+        }
+        WireBuffer::new(&self.source, self.version)
+            .and_then(|buffer| buffer.write(codec, Expression::identifier(self.name.clone())))
+            .map(NativeArgument::encoded)
+    }
+
+    fn handle(
+        &mut self,
+        _target: &'plan HandleTarget,
+        _carrier: native::HandleCarrier,
+        _presence: HandlePresence,
+        _receive: Receive,
+    ) -> Self::Output {
+        Err(JavaHost::unsupported("handle function parameter"))
+    }
+
+    fn scalar_option(&mut self, primitive: BindingPrimitive) -> Self::Output {
+        let primitive = Primitive::try_from(primitive)?;
+        let value = Expression::identifier(self.name.clone());
+        let writer = self.source.generated("writer", self.version)?;
+        let payload = self.source.generated("value", self.version)?;
+        WireBuffer::new(&self.source, self.version)
+            .and_then(|buffer| {
+                buffer.write_statements(
+                    Expression::integer(1).add(
+                        value
+                            .clone()
+                            .call(Identifier::known("isPresent"), ArgumentList::default())
+                            .conditional(
+                                Expression::integer(primitive.wire_size()),
+                                Expression::integer(0),
+                            ),
+                    ),
+                    vec![Statement::expression(
+                        Expression::identifier(writer.clone()).call(
+                            Identifier::known("writeOptional"),
+                            [
+                                value,
+                                Expression::lambda_statement(
+                                    [payload.clone()],
+                                    Statement::expression(Expression::identifier(writer).call(
+                                        Identifier::parse_for(
+                                            format!("write{}", primitive.wire_method_suffix()),
+                                            self.version,
+                                        )?,
+                                        [Expression::identifier(payload)].into_iter().collect(),
+                                    )),
+                                ),
+                            ]
+                            .into_iter()
+                            .collect(),
+                        ),
+                    )],
+                )
+            })
+            .map(NativeArgument::encoded)
+    }
+
+    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
+        Err(JavaHost::unsupported("direct vector function parameter"))
+    }
+}
+
+impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for CallReturnRender<'_> {
+    type Output = Result<CallReturn>;
+
+    fn void(&mut self) -> Self::Output {
+        Ok(CallReturn {
+            ty: ReturnType::Void,
+            conversion: ReturnConversion::Void,
+        })
+    }
+
+    fn direct(&mut self, _slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output {
+        match ty {
+            DirectValueType::Primitive(primitive) => Ok(CallReturn {
+                ty: ReturnType::Value(ValueType::Primitive(Primitive::try_from(*primitive)?)),
+                conversion: ReturnConversion::Direct,
+            }),
+            DirectValueType::Record(record) => {
+                let record = Record::type_name_for(*record, self.context, self.version)?;
+                Ok(CallReturn {
+                    ty: ReturnType::Value(ValueType::Record(record.clone())),
+                    conversion: ReturnConversion::DirectRecord(record),
+                })
+            }
+            _ => Err(JavaHost::unsupported("unknown direct function return")),
+        }
+    }
+
+    fn encoded(
+        &mut self,
+        _slot: ReturnValueSlot,
+        ty: &'plan TypeRef,
+        codec: &'plan <OutOfRust as Direction>::Codec,
+        _shape: native::BufferShape,
+    ) -> Self::Output {
+        Ok(CallReturn {
+            ty: ReturnType::Value(ValueType::Reference(JavaType::type_ref(
+                ty,
+                self.version,
+                self.context,
+            )?)),
+            conversion: ReturnConversion::Encoded(codec.clone()),
+        })
+    }
+
+    fn handle(
+        &mut self,
+        _slot: ReturnValueSlot,
+        _target: &'plan HandleTarget,
+        _carrier: native::HandleCarrier,
+        _presence: HandlePresence,
+    ) -> Self::Output {
+        Err(JavaHost::unsupported("handle function return"))
+    }
+
+    fn scalar_option(&mut self, primitive: BindingPrimitive) -> Self::Output {
+        let primitive = Primitive::try_from(primitive)?;
+        Ok(CallReturn {
+            ty: ReturnType::Value(ValueType::Reference(JavaType::optional_primitive(
+                primitive,
+                self.version,
+            ))),
+            conversion: ReturnConversion::ScalarOption(primitive),
+        })
+    }
+
+    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
+        Err(JavaHost::unsupported("direct vector function return"))
+    }
+
+    fn closure(&mut self, _closure: &'plan ClosureReturn<Native, OutOfRust>) -> Self::Output {
+        Err(JavaHost::unsupported("closure function return"))
+    }
+}
+
+impl CallReturn {
+    fn runtime(&self) -> RuntimeRequirement {
+        match self.conversion {
+            ReturnConversion::Encoded(_) | ReturnConversion::ScalarOption(_) => {
+                RuntimeRequirement::Wire
+            }
+            ReturnConversion::Void
+            | ReturnConversion::Direct
+            | ReturnConversion::DirectRecord(_) => RuntimeRequirement::None,
+        }
+    }
+
+    fn statements(
+        &self,
+        call: Expression,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        match &self.conversion {
+            ReturnConversion::Void => Ok(vec![Statement::expression(call)]),
+            ReturnConversion::Direct => Ok(vec![Statement::return_value(call)]),
+            ReturnConversion::DirectRecord(record) => {
+                Ok(Self::encoded_record_statements(record.clone(), call))
+            }
+            ReturnConversion::Encoded(codec) => {
+                let result = Identifier::known("__boltffi_result");
+                let reader = Identifier::known("__boltffi_reader");
+                let decoded = codec
+                    .render_with(&mut Reader::new(reader.clone(), version, context))?
+                    .into_expression();
+                Ok(vec![
+                    Statement::value(Self::byte_array(), result.clone(), call),
+                    Statement::value(
+                        TypeName::named(TypeIdentifier::known("WireReader", version)),
+                        reader,
+                        Expression::construct(
+                            TypeName::named(TypeIdentifier::known("WireReader", version)),
+                            [Expression::identifier(result)].into_iter().collect(),
+                        ),
+                    ),
+                    Statement::return_value(decoded),
+                ])
+            }
+            ReturnConversion::ScalarOption(primitive) => {
+                let result = Identifier::known("__boltffi_result");
+                let reader = Identifier::known("__boltffi_reader");
+                let reader_value = Expression::identifier(reader.clone());
+                let decoded = reader_value.clone().call(
+                    Identifier::known("readOptional"),
+                    [Expression::lambda(
+                        [],
+                        reader_value.call(
+                            Identifier::parse_for(
+                                format!("read{}", primitive.wire_method_suffix()),
+                                version,
+                            )?,
+                            ArgumentList::default(),
+                        ),
+                    )]
+                    .into_iter()
+                    .collect(),
+                );
+                Ok(vec![
+                    Statement::value(Self::byte_array(), result.clone(), call),
+                    Statement::value(
+                        TypeName::named(TypeIdentifier::known("WireReader", version)),
+                        reader,
+                        Expression::construct(
+                            TypeName::named(TypeIdentifier::known("WireReader", version)),
+                            [Expression::identifier(result)].into_iter().collect(),
+                        ),
+                    ),
+                    Statement::return_value(decoded),
+                ])
+            }
+        }
+    }
+
+    fn encoded_record_statements(record: TypeIdentifier, call: Expression) -> Vec<Statement> {
+        vec![Statement::return_value(Expression::static_call(
+            TypeName::named(record),
+            Identifier::known("fromByteArray"),
+            [call].into_iter().collect(),
+        ))]
+    }
+
+    fn byte_array() -> TypeName {
+        TypeName::array(TypeName::primitive(Primitive::Byte))
+    }
+}
+
+impl ErrorConversion {
+    fn runtime(&self) -> RuntimeRequirement {
+        match self {
+            Self::Encoded { .. } => RuntimeRequirement::Wire,
+            Self::None | Self::Status => RuntimeRequirement::None,
+        }
+    }
+
+    fn from_channel(channel: ErrorChannel<'_, Native, OutOfRust>) -> Result<Self> {
+        match channel {
+            ErrorChannel::None => Ok(Self::None),
+            ErrorChannel::Status => Ok(Self::Status),
+            ErrorChannel::Encoded {
+                placement: ErrorPlacement::ReturnSlot,
+                ty,
+                codec,
+                ..
+            } => Ok(Self::Encoded {
+                ty: ty.clone(),
+                codec: codec.clone(),
+            }),
+            ErrorChannel::Encoded { .. } => Err(JavaHost::unsupported("encoded error out-pointer")),
+            _ => Err(JavaHost::unsupported("unknown function error channel")),
+        }
+    }
+
+    fn wrap(
+        self,
+        success: Vec<Statement>,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        match self {
+            Self::None | Self::Status => Ok(success),
+            Self::Encoded { ty, codec } => {
+                let error = Identifier::known("__boltffi_error");
+                let reader = Identifier::known("__boltffi_error_reader");
+                let decoded = codec
+                    .render_with(&mut Reader::new(reader.clone(), version, context))?
+                    .into_expression();
+                let thrown = match ty {
+                    TypeRef::String => Expression::construct(
+                        TypeName::named(TypeIdentifier::known("RuntimeException", version)),
+                        [decoded].into_iter().collect(),
+                    ),
+                    TypeRef::Record(_) | TypeRef::Enum(_) => decoded,
+                    _ => return Err(JavaHost::unsupported("Java throwable error type")),
+                };
+                Ok(vec![Statement::try_catch(
+                    success,
+                    TypeName::named(TypeIdentifier::known(
+                        "BoltFfiErrorBufferException",
+                        version,
+                    )),
+                    error.clone(),
+                    vec![
+                        Statement::value(
+                            TypeName::named(TypeIdentifier::known("WireReader", version)),
+                            reader,
+                            Expression::construct(
+                                TypeName::named(TypeIdentifier::known("WireReader", version)),
+                                [Expression::identifier(error)
+                                    .call(Identifier::known("bytes"), ArgumentList::default())]
+                                .into_iter()
+                                .collect(),
+                            ),
+                        ),
+                        Statement::throw_value(thrown),
+                    ],
+                )])
+            }
+        }
+    }
+}
+
+impl Receiver {
+    pub fn direct(ty: TypeIdentifier, receive: Receive) -> Result<Self> {
+        let value =
+            Expression::this().call(Identifier::known("toDirectBuffer"), Default::default());
+        match receive {
+            Receive::ByMutRef => {
+                let buffer = Identifier::known("__boltffi_receiver");
+                Ok(Self {
+                    ty,
+                    native: NativeArgument {
+                        expressions: vec![Expression::identifier(buffer.clone())],
+                        acquire: Vec::new(),
+                        prepare: vec![Statement::value(
+                            TypeName::qualified(
+                                [Identifier::known("java"), Identifier::known("nio")].into(),
+                                TypeIdentifier::known("ByteBuffer", JavaVersion::JAVA_8),
+                            ),
+                            buffer.clone(),
+                            value,
+                        )],
+                        cleanup: Vec::new(),
+                        runtime: RuntimeRequirement::None,
+                    },
+                    mutation: Some(ReceiverMutation::Direct(buffer)),
+                    support: ReceiverSupport::Direct,
+                })
+            }
+            Receive::ByRef | Receive::ByValue => Ok(Self {
+                ty,
+                native: NativeArgument::direct(value),
+                mutation: None,
+                support: ReceiverSupport::Direct,
+            }),
+            _ => Err(JavaHost::unsupported("record method receiver")),
+        }
+    }
+
+    pub fn encoded(
+        ty: TypeIdentifier,
+        receive: Receive,
+        codec: &boltffi_binding::WritePlan,
+        version: JavaVersion,
+    ) -> Result<Self> {
+        WireBuffer::receiver(version)
+            .and_then(|buffer| buffer.write(codec, Expression::this()))
+            .map(NativeArgument::encoded)
+            .map(|native| Self {
+                ty,
+                native,
+                mutation: (receive == Receive::ByMutRef).then_some(ReceiverMutation::Encoded),
+                support: ReceiverSupport::Encoded,
+            })
+    }
+}

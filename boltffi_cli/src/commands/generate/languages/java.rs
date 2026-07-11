@@ -6,8 +6,9 @@ use boltffi_bindgen::render::jni::{JniEmitter, JniLowerer, JvmBindingStyle};
 use boltffi_bindgen::target::Target;
 
 use crate::cli::{CliError, Result};
-use crate::commands::generate::generator::{
-    GenerateRequest, LanguageGenerator, ScanPointerWidth, SourceCrate,
+use crate::commands::generate::{
+    generator::{GenerateRequest, LanguageGenerator, ScanPointerWidth, SourceCrate},
+    java::Output as ManagedJavaOutput,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +128,7 @@ impl LanguageGenerator for JavaGenerator {
             });
         let java_directory = output_directory.join(&package_path);
         let jni_directory = output_directory.join("jni");
+        let legacy_lease = ManagedJavaOutput::lock_legacy(&output_directory)?;
 
         request.ensure_output_directory(&java_directory)?;
         request.ensure_output_directory(&jni_directory)?;
@@ -171,6 +173,8 @@ impl LanguageGenerator for JavaGenerator {
         let jni_source = JniEmitter::emit(&jni_module);
         let jni_path = jni_directory.join("jni_glue.c");
 
-        request.write_output(&jni_path, jni_source)
+        let result = request.write_output(&jni_path, jni_source);
+        drop(legacy_lease);
+        result
     }
 }

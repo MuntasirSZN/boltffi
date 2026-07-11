@@ -44,6 +44,14 @@ where
     pub fn as_slice(&self) -> &[T] {
         &self.0
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 #[cfg(test)]
