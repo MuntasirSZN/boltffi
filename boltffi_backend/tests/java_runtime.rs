@@ -284,9 +284,8 @@ double boltffi_function_demo_round_trip_f64(double value) {
 
 static uint32_t observed_void_calls = 0;
 
-FfiStatus boltffi_function_demo_observe_void(void) {
+void boltffi_function_demo_observe_void(void) {
     observed_void_calls += 1;
-    return FFI_STATUS_OK;
 }
 
 uint32_t boltffi_function_demo_observed_void_calls(void) {

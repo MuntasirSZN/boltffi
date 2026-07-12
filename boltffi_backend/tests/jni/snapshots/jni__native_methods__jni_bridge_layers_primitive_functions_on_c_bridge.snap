@@ -6,13 +6,12 @@ expression: "rendered_fixture(\"exports/primitive_functions\")"
 <c abi support declarations>
 int32_t boltffi_function_demo_add(int32_t left, int32_t right);
 bool boltffi_function_demo_enabled(bool flag);
-FfiStatus boltffi_function_demo_refresh(void);
+void boltffi_function_demo_refresh(void);
 FfiBuf_u8 boltffi_function_demo_echo_bytes(const uint8_t *bytes_ptr, uintptr_t bytes_len);
 
 ===== jni/jni_glue.c =====
 <jni source includes>
 <jni exception helpers>
-<jni status helper>
 <jni byte-array helpers>
 static bool boltffi_jni_direct_buffer_address(JNIEnv *env, jobject buffer, jlong required_capacity, void **address) {
     if (buffer == NULL) {
@@ -61,12 +60,8 @@ JNIEXPORT jboolean JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_
 JNIEXPORT void JNICALL Java_com_boltffi_demo_Native_boltffi_1function_1demo_1refresh(JNIEnv *env, jclass cls) {
     (void)cls;
 
-    FfiStatus __boltffi_status = boltffi_function_demo_refresh();
-
-    if (__boltffi_status.code != 0) {
-        boltffi_jni_throw_status(env, __boltffi_status);
-        return;
-    }
+    (void)env;
+    boltffi_function_demo_refresh();
 
     return;
 }

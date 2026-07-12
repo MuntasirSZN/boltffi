@@ -362,7 +362,7 @@ where
     type Output = Result<Type>;
 
     fn void(&mut self) -> Self::Output {
-        Ok(Type::Status)
+        Ok(Type::Void)
     }
 
     fn direct(&mut self, slot: ReturnValueSlot, ty: &'plan DirectValueType) -> Self::Output {
@@ -690,7 +690,7 @@ impl Signature {
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Native>,
     ) -> Result<Function> {
-        let params = self
+        let params: Vec<Parameter> = self
             .receiver
             .clone()
             .into_iter()
@@ -698,7 +698,15 @@ impl Signature {
             .chain(self.return_params(callable.returns().plan(), callable.error())?)
             .chain(self.error_params(callable.error())?)
             .collect();
-        let returns = self.return_type(callable.returns().plan(), callable.error())?;
+        let returns = match (
+            callable.returns().plan(),
+            callable.error(),
+            params.is_empty(),
+        ) {
+            (ReturnPlan::Void, ErrorDecl::None(_), true) => Type::Void,
+            (ReturnPlan::Void, ErrorDecl::None(_), false) => Type::Status,
+            (plan, error, _) => self.return_type(plan, error)?,
+        };
         Function::exported_with_channel(
             declaration,
             symbol,
