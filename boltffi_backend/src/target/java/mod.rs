@@ -31,7 +31,7 @@ use crate::{
 
 pub use crate::target::jvm::DesktopLoader as JavaDesktopLoader;
 pub use name_style::{JavaFile, JavaPackage};
-use render::{Call, Class, Enumeration, ErasedSignature, Module, Record};
+use render::{Call, Callback, Class, Enumeration, ErasedSignature, Module, Record};
 use syntax::{Syntax, TypeIdentifier};
 pub use version::JavaVersion;
 
@@ -291,6 +291,15 @@ impl JavaHost {
         )
     }
 
+    fn callback_plan(
+        &self,
+        declaration: &CallbackDecl<Native>,
+        bridge: &JniBridgeContract,
+        context: &RenderContext<Native>,
+    ) -> Result<Callback> {
+        Callback::from_declaration(declaration, bridge, self.java_version, context)
+    }
+
     fn validate_signatures(
         &self,
         bindings: &Bindings<Native>,
@@ -348,6 +357,26 @@ impl JavaHost {
                         &signatures,
                     )
                 }
+                DeclarationRef::Callback(declaration) => {
+                    let callback = self.callback_plan(declaration, bridge, context)?;
+                    let signatures = callback
+                        .methods()
+                        .iter()
+                        .map(|method| {
+                            ErasedSignature::new(
+                                method.name().clone(),
+                                method
+                                    .public_parameters()
+                                    .iter()
+                                    .map(|parameter| parameter.ty().clone()),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    ErasedSignature::validate_owner(
+                        &Callback::file_for(declaration, self.java_version)?,
+                        &signatures,
+                    )
+                }
                 _ => Ok(()),
             }
         })
@@ -359,10 +388,7 @@ impl JavaHost {
             .stable(BindingCapability::Records)
             .stable(BindingCapability::Enums)
             .stable(BindingCapability::Classes)
-            .unsupported(
-                BindingCapability::Callbacks,
-                "Java callback migration is pending",
-            )
+            .stable(BindingCapability::Callbacks)
             .unsupported(
                 BindingCapability::Streams,
                 "Java stream migration is pending",
@@ -446,11 +472,12 @@ impl host::HostBackend for JavaHost {
 
     fn callback(
         &self,
-        _: &CallbackDecl<Self::Surface>,
-        _: &Self::Bridge,
-        _: &RenderContext<Self::Surface>,
+        declaration: &CallbackDecl<Self::Surface>,
+        bridge: &Self::Bridge,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Self::unsupported("callback declaration"))
+        self.callback_plan(declaration, bridge, context)?
+            .render(self.package())
     }
 
     fn stream(
@@ -484,10 +511,10 @@ impl host::HostBackend for JavaHost {
         &self,
         _: &Bindings<Self::Surface>,
         bridge: &Self::Bridge,
-        _: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
-        Module::new(self, bridge, declarations).render()
+        Module::new(self, bridge, context, declarations).render()
     }
 }
 

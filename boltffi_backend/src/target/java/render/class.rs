@@ -159,6 +159,10 @@ impl Class {
             true => emitted.with_aux(crate::target::java::codec::Runtime::helper()?),
             false => emitted,
         };
+        let emitted = match self.calls().any(Call::requires_direct_vector_runtime) {
+            true => emitted.with_aux(crate::target::java::codec::Runtime::direct_vector_helper()?),
+            false => emitted,
+        };
         self.calls().try_fold(emitted, |emitted, call| {
             Ok(emitted.with_aux(call.native_forward()?))
         })
@@ -331,6 +335,17 @@ impl ClassHandle {
                     ),
                 ])
             }
+            _ => Err(JavaHost::unsupported("class handle presence")),
+        }
+    }
+
+    pub fn value_expression(&self, value: Expression) -> Result<Expression> {
+        let wrapped = Expression::construct(self.ty.clone(), [value.clone()].into_iter().collect());
+        match self.presence {
+            HandlePresence::Required => Ok(wrapped),
+            HandlePresence::Nullable => Ok(value
+                .equal(Expression::long(0))
+                .conditional(Expression::null(), wrapped)),
             _ => Err(JavaHost::unsupported("class handle presence")),
         }
     }

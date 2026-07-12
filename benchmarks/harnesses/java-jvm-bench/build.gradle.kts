@@ -31,8 +31,8 @@ val nativePath = if (boltffiJavaComparisonSuite != null && boltffiJavaPreparedDi
 if (boltffiJavaGenerator.get() !in setOf("legacy", "ir")) {
     throw GradleException("boltffiJavaGenerator must be 'legacy' or 'ir'")
 }
-if (boltffiJavaComparisonSuite != null && boltffiJavaComparisonSuite !in setOf("primitive", "record", "enum", "class")) {
-    throw GradleException("boltffiJavaComparisonSuite must be 'primitive', 'record', 'enum', or 'class'")
+if (boltffiJavaComparisonSuite != null && boltffiJavaComparisonSuite !in setOf("primitive", "record", "enum", "class", "callback")) {
+    throw GradleException("boltffiJavaComparisonSuite must be 'primitive', 'record', 'enum', 'class', or 'callback'")
 }
 if (boltffiJavaPreparedDir != null) {
     val actualGenerator = boltffiJavaPreparedDir
@@ -156,6 +156,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
                 }
                 "record" -> {
                     java.exclude("com/example/bench_compare/UniffiJavaBench.java")
@@ -163,6 +164,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaPrimitiveBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
                 }
                 "enum" -> {
                     java.exclude("com/example/bench_compare/UniffiJavaBench.java")
@@ -170,6 +172,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaPrimitiveBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
                 }
                 "class" -> {
                     java.exclude("com/example/bench_compare/UniffiJavaBench.java")
@@ -177,12 +180,22 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaPrimitiveBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
+                }
+                "callback" -> {
+                    java.exclude("com/example/bench_compare/UniffiJavaBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaPrimitiveBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
                 }
                 else -> {
                     java.exclude("com/example/bench_compare/BoltffiJavaPrimitiveBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
                 }
             }
         }

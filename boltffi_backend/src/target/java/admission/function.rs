@@ -17,21 +17,18 @@ pub enum FunctionShape {
     Supported,
     Receiver,
     Asynchronous,
-    ClosureParameter,
     ParameterSlots,
     PrimitiveParameter,
     UnknownDirectParameter,
     EncodedParameter,
     MutableEncodedParameter,
     HandleParameter,
-    DirectVectorParameter,
     PrimitiveReturn,
     OutPointerPrimitiveReturn,
     DirectEnumReturn,
     UnknownDirectReturn,
     HandleReturn,
     ScalarOptionReturn,
-    DirectVectorReturn,
     ClosureReturn,
 }
 
@@ -66,37 +63,37 @@ impl FunctionShape {
         receiver_support: ReceiverSupport,
     ) -> Self {
         let receiver = callable.receiver();
-        let parameter = receiver
-            .filter(|_| !matches!(receiver_support, ReceiverSupport::Forbidden))
-            .map(|_| {
-                Ok(match receiver_support {
-                    ReceiverSupport::Direct => vec![CarrierWidth(SlotWidth::Single)],
-                    ReceiverSupport::Encoded => vec![
-                        CarrierWidth(SlotWidth::Single),
-                        CarrierWidth(SlotWidth::Single),
-                    ],
-                    ReceiverSupport::Handle(carrier) => {
-                        return Primitive::from_handle_carrier(carrier)
-                            .map(|primitive| vec![CarrierWidth(primitive.slot_width())])
-                            .map_err(|_| Self::HandleParameter);
-                    }
-                    ReceiverSupport::Forbidden => Vec::new(),
+        let parameter =
+            receiver
+                .filter(|_| !matches!(receiver_support, ReceiverSupport::Forbidden))
+                .map(|_| {
+                    Ok(match receiver_support {
+                        ReceiverSupport::Direct => vec![CarrierWidth(SlotWidth::Single)],
+                        ReceiverSupport::Encoded => vec![
+                            CarrierWidth(SlotWidth::Single),
+                            CarrierWidth(SlotWidth::Single),
+                        ],
+                        ReceiverSupport::Handle(carrier) => {
+                            return Primitive::from_handle_carrier(carrier)
+                                .map(|primitive| vec![CarrierWidth(primitive.slot_width())])
+                                .map_err(|_| Self::HandleParameter);
+                        }
+                        ReceiverSupport::Forbidden => Vec::new(),
+                    })
                 })
-            })
-            .into_iter()
-            .chain(callable.params().iter().map(|parameter| {
-                parameter
-                    .payload()
-                    .as_value()
-                    .ok_or(Self::ClosureParameter)
-                    .and_then(|plan| plan.render_with(&mut ParameterShape))
-            }))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .and_then(|parameters| {
-                JvmParameters::for_static(parameters.into_iter().flatten().collect())
-                    .map_err(|_| Self::ParameterSlots)
-            })
-            .err();
+                .into_iter()
+                .chain(callable.params().iter().map(
+                    |parameter| match parameter.payload().as_value() {
+                        Some(plan) => plan.render_with(&mut ParameterShape),
+                        None => Ok(vec![CarrierWidth(SlotWidth::Double)]),
+                    },
+                ))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .and_then(|parameters| {
+                    JvmParameters::for_static(parameters.into_iter().flatten().collect())
+                        .map_err(|_| Self::ParameterSlots)
+                })
+                .err();
         let returns = callable.returns().plan().render_with(&mut ReturnShape);
         [
             (receiver.is_some() && matches!(receiver_support, ReceiverSupport::Forbidden))
@@ -137,21 +134,18 @@ impl FunctionShape {
             Self::Supported => None,
             Self::Receiver => Some("free function receiver"),
             Self::Asynchronous => Some("asynchronous function"),
-            Self::ClosureParameter => Some("closure function parameter"),
             Self::ParameterSlots => Some("method parameter slots exceed 255 units"),
             Self::PrimitiveParameter => Some("primitive Java representation"),
             Self::UnknownDirectParameter => Some("unknown direct function parameter"),
             Self::EncodedParameter => Some("encoded function parameter"),
             Self::MutableEncodedParameter => Some("mutable encoded function parameter"),
             Self::HandleParameter => Some("handle function parameter"),
-            Self::DirectVectorParameter => Some("direct vector function parameter"),
             Self::PrimitiveReturn => Some("primitive Java representation"),
             Self::OutPointerPrimitiveReturn => Some("out-pointer primitive function return"),
             Self::DirectEnumReturn => Some("direct enum function return"),
             Self::UnknownDirectReturn => Some("unknown direct function return"),
             Self::HandleReturn => Some("handle function return"),
             Self::ScalarOptionReturn => Some("scalar option function return"),
-            Self::DirectVectorReturn => Some("direct vector function return"),
             Self::ClosureReturn => Some("closure function return"),
         }
     }
@@ -202,11 +196,12 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterShape {
         _: Receive,
     ) -> Self::Output {
         match (target, presence) {
-            (HandleTarget::Class(_), HandlePresence::Required | HandlePresence::Nullable) => {
-                Primitive::from_handle_carrier(carrier)
-                    .map(|primitive| vec![CarrierWidth(primitive.slot_width())])
-                    .map_err(|_| FunctionShape::HandleParameter)
-            }
+            (
+                HandleTarget::Class(_) | HandleTarget::Callback(_),
+                HandlePresence::Required | HandlePresence::Nullable,
+            ) => Primitive::from_handle_carrier(carrier)
+                .map(|primitive| vec![CarrierWidth(primitive.slot_width())])
+                .map_err(|_| FunctionShape::HandleParameter),
             _ => Err(FunctionShape::HandleParameter),
         }
     }
@@ -219,7 +214,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterShape {
     }
 
     fn direct_vector(&mut self, _: &'plan DirectVectorElementType) -> Self::Output {
-        Err(FunctionShape::DirectVectorParameter)
+        Ok(vec![CarrierWidth(SlotWidth::Single)])
     }
 }
 
@@ -278,7 +273,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for ReturnShape {
         match (slot, target, presence) {
             (
                 ReturnValueSlot::ReturnSlot | ReturnValueSlot::OutPointer,
-                HandleTarget::Class(_),
+                HandleTarget::Class(_) | HandleTarget::Callback(_),
                 HandlePresence::Required | HandlePresence::Nullable,
             ) if Primitive::from_handle_carrier(carrier).is_ok() => FunctionShape::Supported,
             _ => FunctionShape::HandleReturn,
@@ -293,7 +288,7 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for ReturnShape {
     }
 
     fn direct_vector(&mut self, _: &'plan DirectVectorElementType) -> Self::Output {
-        FunctionShape::DirectVectorReturn
+        FunctionShape::Supported
     }
 
     fn closure(&mut self, _: &'plan ClosureReturn<Native, OutOfRust>) -> Self::Output {
@@ -411,8 +406,8 @@ mod tests {
                 ("primitive", None),
                 ("record_parameter", None),
                 ("record_return", None),
-                ("vector_parameter", Some("direct vector function parameter")),
-                ("vector_return", Some("direct vector function return")),
+                ("vector_parameter", None),
+                ("vector_return", None),
             ])
         );
     }

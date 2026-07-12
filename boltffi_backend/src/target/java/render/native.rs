@@ -5,7 +5,9 @@ use boltffi_binding::NativeSymbol;
 
 use crate::{
     bridge::jni::{
-        JniBridgeContract, NativeMethod, NativeParameter, NativeParameterKind, NativeReturn,
+        CallbackCompletionInvoker, CallbackCompletionPayload, CallbackCompletionPayloadValue,
+        CallbackHandleLifecycle, CallbackHandleMethod, JniBridgeContract, NativeMethod,
+        NativeParameter, NativeParameterKind, NativeReturn, SuccessOutValue, SuccessOutWriter,
     },
     core::{Error, Result},
     target::java::{
@@ -33,6 +35,7 @@ pub struct Method {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Carrier {
     Primitive(Primitive),
+    PrimitiveArray(Primitive),
     ByteArray,
     DirectBuffer,
 }
@@ -69,13 +72,115 @@ impl Method {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        Parameter::validate_unique(name.as_str(), &parameters)?;
-        let parameters = JvmParameters::for_static(parameters)?;
-        Ok(Self {
+        Self::new(
             name,
             parameters,
-            returns: MethodReturn::from_contract(method.returns())?,
+            MethodReturn::from_contract(method.returns())?,
+        )
+    }
+
+    pub fn from_callback_handle_method(
+        method: &CallbackHandleMethod,
+        version: JavaVersion,
+    ) -> Result<Self> {
+        let returns = match method.synchronous_return() {
+            Some(returns) => MethodReturn::from_contract(returns)?,
+            None if method.returns_closure() => {
+                MethodReturn::Value(Carrier::Primitive(Primitive::Long))
+            }
+            None => MethodReturn::Void,
+        };
+        let parameters = std::iter::once(Parameter::new(
+            Identifier::known("handle"),
+            Carrier::Primitive(Primitive::Long),
+        ))
+        .chain(
+            method
+                .parameters()
+                .iter()
+                .map(|parameter| Self::parameter_from_contract(parameter, version))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
+        )
+        .collect();
+        Self::new(
+            Identifier::parse_for(method.method().as_str(), version)?,
+            parameters,
+            returns,
+        )
+    }
+
+    pub fn from_callback_handle_lifecycle(
+        lifecycle: &CallbackHandleLifecycle,
+        version: JavaVersion,
+    ) -> Result<Vec<Self>> {
+        [
+            (
+                lifecycle.clone_method().as_str(),
+                MethodReturn::Value(Carrier::Primitive(Primitive::Long)),
+            ),
+            (lifecycle.release_method().as_str(), MethodReturn::Void),
+        ]
+        .into_iter()
+        .map(|(name, returns)| {
+            Self::new(
+                Identifier::parse_for(name, version)?,
+                vec![Parameter::new(
+                    Identifier::known("handle"),
+                    Carrier::Primitive(Primitive::Long),
+                )],
+                returns,
+            )
         })
+        .collect()
+    }
+
+    pub fn from_callback_completion(
+        invoker: &CallbackCompletionInvoker,
+        version: JavaVersion,
+    ) -> Result<Vec<Self>> {
+        Ok([
+            Some(Self::callback_completion_method(
+                invoker.success_method().as_str(),
+                invoker.payload(),
+                version,
+            )?),
+            Some(Self::callback_completion_method(
+                invoker.failure_method().as_str(),
+                None,
+                version,
+            )?),
+            invoker
+                .error_method()
+                .map(|method| {
+                    Self::callback_completion_method(method.as_str(), invoker.payload(), version)
+                })
+                .transpose()?,
+        ]
+        .into_iter()
+        .flatten()
+        .collect())
+    }
+
+    pub fn from_success_out_writer(
+        writer: &SuccessOutWriter,
+        version: JavaVersion,
+    ) -> Result<Self> {
+        Self::new(
+            Identifier::parse_for(writer.method().as_str(), version)?,
+            vec![
+                Parameter::new(
+                    Identifier::known("returnOut"),
+                    Carrier::Primitive(Primitive::Long),
+                ),
+                Parameter::new(
+                    Identifier::known("value"),
+                    Carrier::from_success_out(writer.value()),
+                ),
+            ],
+            MethodReturn::Void,
+        )
     }
 
     pub fn validate_return(&self, returns: &ReturnType) -> Result<()> {
@@ -140,11 +245,65 @@ impl Method {
                 Identifier::escape_for(parameter.name().as_str(), version)?,
                 Carrier::DirectBuffer,
             )]),
-            _ => Err(Error::UnsupportedTarget {
-                target: "java",
-                shape: "non-scalar JNI native method parameter",
-            }),
+            NativeParameterKind::DirectVector(vector) => Ok(vec![Parameter::new(
+                Identifier::escape_for(vector.name().as_str(), version)?,
+                Carrier::PrimitiveArray(Primitive::from(vector.jni_type())),
+            )]),
+            NativeParameterKind::Callback(callback) => Ok(vec![Parameter::new(
+                Identifier::escape_for(callback.name().as_str(), version)?,
+                Carrier::Primitive(Primitive::Long),
+            )]),
+            NativeParameterKind::Closure(closure) => Ok(vec![Parameter::new(
+                Identifier::escape_for(closure.name().as_str(), version)?,
+                Carrier::Primitive(Primitive::Long),
+            )]),
+            NativeParameterKind::Continuation(continuation) => Ok(vec![Parameter::new(
+                Identifier::escape_for(continuation.name().as_str(), version)?,
+                Carrier::Primitive(Primitive::Long),
+            )]),
         }
+    }
+
+    fn new(
+        name: Identifier,
+        parameters: Vec<Parameter<Carrier>>,
+        returns: MethodReturn,
+    ) -> Result<Self> {
+        Parameter::validate_unique(name.as_str(), &parameters)?;
+        Ok(Self {
+            name,
+            parameters: JvmParameters::for_static(parameters)?,
+            returns,
+        })
+    }
+
+    fn callback_completion_method(
+        name: &str,
+        payload: Option<&CallbackCompletionPayload>,
+        version: JavaVersion,
+    ) -> Result<Self> {
+        Self::new(
+            Identifier::parse_for(name, version)?,
+            [
+                Parameter::new(
+                    Identifier::known("callback"),
+                    Carrier::Primitive(Primitive::Long),
+                ),
+                Parameter::new(
+                    Identifier::known("context"),
+                    Carrier::Primitive(Primitive::Long),
+                ),
+            ]
+            .into_iter()
+            .chain(payload.map(|payload| {
+                Parameter::new(
+                    Identifier::known("result"),
+                    Carrier::from_completion(payload.value()),
+                )
+            }))
+            .collect(),
+            MethodReturn::Void,
+        )
     }
 }
 
@@ -156,15 +315,12 @@ impl MethodReturn {
             NativeReturn::Value(scalar) => Ok(Self::Value(Carrier::Primitive(Primitive::from(
                 scalar.jni_type(),
             )))),
+            NativeReturn::Callback(_) => Ok(Self::Value(Carrier::Primitive(Primitive::Long))),
             NativeReturn::Bytes | NativeReturn::Record(_) | NativeReturn::StatusWriteback(_) => {
                 Ok(Self::Value(Carrier::ByteArray))
             }
             NativeReturn::StatusValue(value) => Self::from_contract(value.value()),
             NativeReturn::EncodedErrorValue(value) => Self::from_contract(value.success().value()),
-            _ => Err(Error::UnsupportedTarget {
-                target: "java",
-                shape: "non-scalar JNI native method return",
-            }),
         }
     }
 
@@ -193,6 +349,23 @@ impl fmt::Display for MethodReturn {
 }
 
 impl Carrier {
+    fn from_completion(value: CallbackCompletionPayloadValue) -> Self {
+        match value {
+            CallbackCompletionPayloadValue::Scalar(ty) => Self::Primitive(Primitive::from(ty)),
+            CallbackCompletionPayloadValue::Bytes | CallbackCompletionPayloadValue::Record => {
+                Self::ByteArray
+            }
+            CallbackCompletionPayloadValue::CallbackHandle => Self::Primitive(Primitive::Long),
+        }
+    }
+
+    fn from_success_out(value: &SuccessOutValue) -> Self {
+        match value {
+            SuccessOutValue::Scalar { jni_type, .. } => Self::Primitive(Primitive::from(*jni_type)),
+            SuccessOutValue::Bytes | SuccessOutValue::Record { .. } => Self::ByteArray,
+        }
+    }
+
     fn matches(self, value: &ValueType) -> bool {
         match (self, value) {
             (Self::Primitive(native), ValueType::Primitive(public)) => native == *public,
@@ -205,7 +378,7 @@ impl Carrier {
     fn slot_width(self) -> SlotWidth {
         match self {
             Self::Primitive(primitive) => primitive.slot_width(),
-            Self::ByteArray | Self::DirectBuffer => SlotWidth::Single,
+            Self::PrimitiveArray(_) | Self::ByteArray | Self::DirectBuffer => SlotWidth::Single,
         }
     }
 }
@@ -214,6 +387,7 @@ impl fmt::Display for Carrier {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Primitive(primitive) => primitive.fmt(formatter),
+            Self::PrimitiveArray(primitive) => write!(formatter, "{primitive}[]"),
             Self::ByteArray => formatter.write_str("byte[]"),
             Self::DirectBuffer => formatter.write_str("java.nio.ByteBuffer"),
         }

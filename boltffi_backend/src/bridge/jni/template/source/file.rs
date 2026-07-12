@@ -37,6 +37,7 @@ struct SourceFileTemplate {
     class_name: LookupText,
     error_buffer_exception_class: Literal,
     free_buffer: Identifier,
+    buffer_with_len: Identifier,
     uses_limits: bool,
     checks_status: bool,
     checks_error_buffer: bool,
@@ -138,6 +139,7 @@ impl SourceFile {
             )
             .literal(),
             free_buffer: contract.free_buffer().clone(),
+            buffer_with_len: contract.buffer_with_len().clone(),
             uses_limits: features.uses_limits,
             checks_status: features.checks_status,
             checks_error_buffer: features.checks_error_buffer,

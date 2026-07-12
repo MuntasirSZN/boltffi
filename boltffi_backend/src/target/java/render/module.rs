@@ -4,19 +4,18 @@ use std::{
 };
 
 use askama::Template as AskamaTemplate;
-use boltffi_binding::DeclarationRef;
-use boltffi_binding::Native;
+use boltffi_binding::{DeclarationRef, Native};
 
 use crate::{
     bridge::jni::{JniBridgeContract, JvmClassPath},
     core::{
         AuxChunk, Diagnostic, FilePath, GeneratedFile, GeneratedOutput, HelperId, ImportDirective,
-        RenderedDeclaration, Result, TextChunk,
+        RenderContext, RenderedDeclaration, Result, TextChunk,
     },
     target::java::{JavaFile, JavaHost, JavaPackage, runtime::Loader, syntax::TypeIdentifier},
 };
 
-use super::{Class, Enumeration, Record, ResultClass};
+use super::{Callback, Class, Closures, Enumeration, Record, ResultClass};
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/java/module.java", escape = "none")]
@@ -37,6 +36,7 @@ struct MemberSource(TextChunk);
 pub struct Module<'host, 'bridge, 'decl> {
     host: &'host JavaHost,
     bridge: &'bridge JniBridgeContract,
+    context: &'decl RenderContext<'decl, Native>,
     declarations: Vec<RenderedDeclaration<'decl, Native>>,
 }
 
@@ -54,11 +54,13 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
     pub fn new(
         host: &'host JavaHost,
         bridge: &'bridge JniBridgeContract,
+        context: &'decl RenderContext<'decl, Native>,
         declarations: Vec<RenderedDeclaration<'decl, Native>>,
     ) -> Self {
         Self {
             host,
             bridge,
+            context,
             declarations,
         }
     }
@@ -68,15 +70,33 @@ impl<'host, 'bridge, 'decl> Module<'host, 'bridge, 'decl> {
         let native_owner = host.native_owner();
         let runtime_owner = host.runtime_owner();
         self.validate_bridge_owner(&native_owner)?;
+        let closures = Closures::from_declarations(
+            &self.declarations,
+            self.bridge,
+            host.java_version(),
+            self.context,
+        )?;
         let uses_result = self.declarations.iter().any(|declaration| {
             !declaration.emitted().primary_chunk().is_empty()
                 && declaration.declaration().uses_result_codec()
         });
-        let (chunks, mut declaration_files) = ModuleChunks::from_declarations(
+        let (mut chunks, mut declaration_files) = ModuleChunks::from_declarations(
             self.declarations,
             host.package(),
             host.java_version(),
         )?;
+        closures
+            .render(host.package(), host.java_version())?
+            .into_iter()
+            .try_for_each(|(file, emitted)| {
+                let (primary, aux, diagnostics) = emitted.into_parts();
+                declaration_files.push(GeneratedFile::new(
+                    FilePath::new(file.path(host.package()))?,
+                    primary.as_str(),
+                ));
+                chunks.diagnostics.extend(diagnostics);
+                aux.into_iter().try_for_each(|aux| chunks.push_aux(aux))
+            })?;
         let loader = Loader::new(
             native_owner.identifier().clone(),
             runtime_owner.identifier().clone(),
@@ -151,6 +171,12 @@ impl ModuleChunks {
                     DeclarationRef::Class(class) if !primary.is_empty() => {
                         files.push(GeneratedFile::new(
                             FilePath::new(Class::file_for(class, version)?.path(package))?,
+                            primary.as_str(),
+                        ));
+                    }
+                    DeclarationRef::Callback(callback) if !primary.is_empty() => {
+                        files.push(GeneratedFile::new(
+                            FilePath::new(Callback::file_for(callback, version)?.path(package))?,
                             primary.as_str(),
                         ));
                     }

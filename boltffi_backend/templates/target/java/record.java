@@ -86,12 +86,30 @@ package {{ package }};
 {% endif %}{% if record.direct() %}
     static final int STRUCT_SIZE = {{ record.size() }};
 
+{% if !record.codec_payload() %}    byte[] toByteArray() {
+        byte[] bytes = new byte[STRUCT_SIZE];
+        writeToDirectBuffer(
+            java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.nativeOrder()),
+            0
+        );
+        return bytes;
+    }
+
+{% endif %}
     java.nio.ByteBuffer toDirectBuffer() {
         java.nio.ByteBuffer buffer = java.nio.ByteBuffer
             .allocateDirect(STRUCT_SIZE)
             .order(java.nio.ByteOrder.nativeOrder());
-{% for field in record.fields() %}{% if let Some(write) = field.write() %}        {{ write }};
-{% endif %}{% endfor %}        return buffer;
+        writeToDirectBuffer(buffer, 0);
+        return buffer;
+    }
+
+    void writeToDirectBuffer(java.nio.ByteBuffer buffer, int offset) {
+{% for field in record.fields() %}{% if let Some(write) = field.direct_write() %}        {{ write }};
+{% endif %}{% endfor %}    }
+
+    static {{ record.name() }} fromDirectBuffer(java.nio.ByteBuffer buffer, int offset) {
+        return new {{ record.name() }}({% for field in record.fields() %}{% if let Some(read) = field.direct_read() %}{{ read }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %});
     }
 
     static {{ record.name() }} fromByteArray(byte[] bytes) {
@@ -105,7 +123,7 @@ package {{ package }};
     }
 
     static {{ record.name() }} fromDirectBuffer(java.nio.ByteBuffer buffer) {
-        return new {{ record.name() }}({% for field in record.fields() %}{% if let Some(read) = field.read() %}{{ read }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %});
+        return fromDirectBuffer(buffer, 0);
     }
 {% else %}
     static {{ record.name() }} fromByteArray(byte[] bytes) {

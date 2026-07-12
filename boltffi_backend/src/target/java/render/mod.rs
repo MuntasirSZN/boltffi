@@ -1,6 +1,9 @@
 mod call;
+mod callback;
 mod class;
+mod closure;
 mod default_value;
+mod direct_vector;
 mod enumeration;
 mod identity;
 mod module;
@@ -11,7 +14,10 @@ mod signature;
 mod type_name;
 
 pub use call::Call;
+pub use callback::Callback;
 pub use class::Class;
+pub use closure::{ClosureHandle, Closures};
+pub use direct_vector::DirectVector;
 pub use enumeration::Enumeration;
 pub use identity::ValueIdentity;
 pub use module::Module;

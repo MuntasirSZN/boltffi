@@ -20,7 +20,7 @@ use crate::{
 
 use super::{
     ClosureBytesArgumentView, ClosureCParameterView, ClosureDirectVectorArgumentView,
-    ClosureHandleArgumentView,
+    ClosureHandleArgumentView, ClosureRecordArgumentView,
 };
 
 pub struct ClosureRegistrationView {
@@ -45,12 +45,14 @@ pub struct ClosureRegistrationView {
     pub c_parameters: Vec<ClosureCParameterView>,
     pub byte_arrays: Vec<ClosureBytesArgumentView>,
     pub direct_vectors: Vec<ClosureDirectVectorArgumentView>,
+    pub records: Vec<ClosureRecordArgumentView>,
     pub closure_handles: Vec<ClosureHandleArgumentView>,
     pub jni_arguments: ArgumentList,
     pub has_jni_arguments: bool,
     pub handle_parameters: Vec<ClosureCParameterView>,
     pub handle_byte_arrays: Vec<ClosureBytesArgumentView>,
     pub handle_direct_vectors: Vec<ClosureDirectVectorArgumentView>,
+    pub handle_records: Vec<ClosureRecordArgumentView>,
     pub rust_arguments: ArgumentList,
     pub has_rust_arguments: bool,
 }
@@ -97,6 +99,11 @@ impl ClosureRegistrationView {
                 .filter_map(ClosureArgument::call_direct_vector)
                 .map(ClosureDirectVectorArgumentView::from_argument)
                 .collect::<Result<Vec<_>>>()?,
+            records: arguments
+                .iter()
+                .filter_map(ClosureArgument::call_record)
+                .map(ClosureRecordArgumentView::from_argument)
+                .collect(),
             closure_handles: arguments
                 .iter()
                 .filter_map(ClosureArgument::call_closure)
@@ -119,6 +126,11 @@ impl ClosureRegistrationView {
                 .filter_map(ClosureArgument::handle_direct_vector)
                 .map(ClosureDirectVectorArgumentView::from_argument)
                 .collect::<Result<Vec<_>>>()?,
+            handle_records: arguments
+                .iter()
+                .filter_map(ClosureArgument::handle_record)
+                .map(ClosureRecordArgumentView::from_argument)
+                .collect(),
             rust_arguments: ClosureArgument::rust_argument_list(arguments),
             has_rust_arguments: !arguments.is_empty(),
         })

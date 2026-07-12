@@ -34,6 +34,10 @@ impl Expression {
         Self(format!("new {ty}({arguments})"))
     }
 
+    pub fn array(element: TypeName, length: Self) -> Self {
+        Self(format!("new {element}[{length}]"))
+    }
+
     pub fn member(self, member: Identifier) -> Self {
         Self(format!("{self}.{member}"))
     }

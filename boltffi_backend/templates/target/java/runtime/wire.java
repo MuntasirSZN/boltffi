@@ -355,11 +355,20 @@ final class WireLease implements AutoCloseable {
         this.owner = owner;
         this.buffer = buffer;
         this.writer = new WireWriter(buffer);
+        reopen();
     }
 
     WireWriter writer() { return writer; }
     java.nio.ByteBuffer directBuffer() { return buffer; }
     int size() { return writer.size(); }
+    int capacity() { return buffer.capacity(); }
+
+    WireLease reopen() {
+        buffer.clear();
+        buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        closed = false;
+        return this;
+    }
 
     byte[] bytes() {
         java.nio.ByteBuffer source = buffer.duplicate();
@@ -373,38 +382,30 @@ final class WireLease implements AutoCloseable {
     public void close() {
         if (!closed) {
             closed = true;
-            owner.release(buffer);
+            owner.release(this);
         }
     }
 }
 
 final class WireWriterPoolState {
     private static final int CACHE_SIZE = 4;
-    private final java.util.ArrayDeque<java.nio.ByteBuffer> buffers = new java.util.ArrayDeque<>(CACHE_SIZE);
+    private final java.util.ArrayDeque<WireLease> leases = new java.util.ArrayDeque<>(CACHE_SIZE);
 
     WireLease acquire(int capacity) {
         int required = Math.max(capacity, 1);
-        java.nio.ByteBuffer selected = null;
-        java.util.Iterator<java.nio.ByteBuffer> candidates = buffers.iterator();
-        while (candidates.hasNext()) {
-            java.nio.ByteBuffer candidate = candidates.next();
-            if (candidate.capacity() >= required) {
-                selected = candidate;
-                candidates.remove();
-                break;
-            }
+        int remaining = leases.size();
+        while (remaining > 0) {
+            WireLease candidate = leases.pollFirst();
+            if (candidate.capacity() >= required) return candidate.reopen();
+            leases.offerLast(candidate);
+            remaining -= 1;
         }
-        if (selected == null) {
-            selected = java.nio.ByteBuffer.allocateDirect(required);
-        }
-        selected.clear();
-        selected.order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        return new WireLease(this, selected);
+        return new WireLease(this, java.nio.ByteBuffer.allocateDirect(required));
     }
 
-    void release(java.nio.ByteBuffer buffer) {
-        if (buffers.size() < CACHE_SIZE) {
-            buffers.addFirst(buffer);
+    void release(WireLease lease) {
+        if (leases.size() < CACHE_SIZE) {
+            leases.addFirst(lease);
         }
     }
 }

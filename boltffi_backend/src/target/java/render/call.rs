@@ -17,7 +17,8 @@ use crate::{
         name_style::Name,
         primitive::Primitive,
         render::{
-            Enumeration,
+            ClosureHandle, DirectVector, Enumeration,
+            callback::CallbackHandle,
             class::ClassHandle,
             native::Method,
             record::Record,
@@ -104,6 +105,8 @@ enum RuntimeRequirement {
     #[default]
     None,
     Wire,
+    DirectVector,
+    WireAndDirectVector,
 }
 
 struct NativeArgumentRender<'context> {
@@ -119,8 +122,10 @@ enum ReturnConversion {
     DirectRecord(TypeName),
     DirectEnum(TypeName),
     ClassHandle(ClassHandle),
+    CallbackHandle(CallbackHandle),
     Encoded(ReadPlan),
     ScalarOption(Primitive),
+    DirectVector(DirectVector),
 }
 
 #[derive(Clone, Copy)]
@@ -251,9 +256,13 @@ impl Call {
     pub fn render(&self) -> Result<Emitted> {
         let emitted = Emitted::primary(FunctionTemplate { call: self }.render()?)
             .with_aux(AuxChunk::ForwardDecl(self.native.render()?.into()));
-        match self.runtime {
-            RuntimeRequirement::None => Ok(emitted),
-            RuntimeRequirement::Wire => Ok(emitted.with_aux(Runtime::helper()?)),
+        let emitted = match self.runtime.requires_wire() {
+            true => emitted.with_aux(Runtime::helper()?),
+            false => emitted,
+        };
+        match self.runtime.requires_direct_vector() {
+            true => Ok(emitted.with_aux(Runtime::direct_vector_helper()?)),
+            false => Ok(emitted),
         }
     }
 
@@ -286,7 +295,11 @@ impl Call {
     }
 
     pub fn requires_wire_runtime(&self) -> bool {
-        self.runtime == RuntimeRequirement::Wire
+        self.runtime.requires_wire()
+    }
+
+    pub fn requires_direct_vector_runtime(&self) -> bool {
+        self.runtime.requires_direct_vector()
     }
 
     fn build(
@@ -303,6 +316,7 @@ impl Call {
             .map(|parameter| {
                 BoundParameter::from_declaration(
                     parameter,
+                    scope.bridge,
                     scope.version,
                     scope.context,
                     scope.package,
@@ -624,24 +638,34 @@ impl<'scope, 'bindings> CallScope<'scope, 'bindings> {
 impl BoundParameter {
     fn from_declaration(
         parameter: &ParamDecl<Native, IntoRust>,
+        bridge: &JniBridgeContract,
         version: JavaVersion,
         context: &RenderContext<Native>,
         package: Option<&JavaPackage>,
     ) -> Result<Self> {
         let source = Name::new(parameter.name());
         let name = source.parameter(version)?;
-        let plan = parameter
-            .payload()
-            .as_value()
-            .ok_or_else(FunctionShape::unexpected_shape)?;
-        Ok(Self {
-            signature: Parameter::from_declaration(parameter, version, context, package)?,
-            native: plan.render_with(&mut NativeArgumentRender {
+        let native = match parameter.payload().as_value() {
+            Some(plan) => plan.render_with(&mut NativeArgumentRender {
                 source,
-                name,
+                name: name.clone(),
                 version,
                 context,
             })?,
+            None => ClosureHandle::new(
+                parameter
+                    .payload()
+                    .as_closure()
+                    .ok_or_else(FunctionShape::unexpected_shape)?,
+                bridge,
+                version,
+            )?
+            .native_argument(Expression::identifier(name.clone()))
+            .map(NativeArgument::direct)?,
+        };
+        Ok(Self {
+            signature: Parameter::from_declaration(parameter, version, context, package)?,
+            native,
         })
     }
 }
@@ -671,10 +695,23 @@ impl NativeArgument {
 
 impl RuntimeRequirement {
     fn merge(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Wire, _) | (_, Self::Wire) => Self::Wire,
-            (Self::None, Self::None) => Self::None,
+        match (
+            self.requires_wire() || other.requires_wire(),
+            self.requires_direct_vector() || other.requires_direct_vector(),
+        ) {
+            (false, false) => Self::None,
+            (true, false) => Self::Wire,
+            (false, true) => Self::DirectVector,
+            (true, true) => Self::WireAndDirectVector,
         }
+    }
+
+    fn requires_wire(self) -> bool {
+        matches!(self, Self::Wire | Self::WireAndDirectVector)
+    }
+
+    fn requires_direct_vector(self) -> bool {
+        matches!(self, Self::DirectVector | Self::WireAndDirectVector)
     }
 }
 
@@ -735,6 +772,16 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
                     })
                     .map(NativeArgument::direct)
             }
+            HandleTarget::Callback(callback) => CallbackHandle::new(
+                *callback,
+                carrier,
+                presence,
+                self.version,
+                self.context,
+                None,
+            )
+            .and_then(|handle| handle.native_argument(Expression::identifier(self.name.clone())))
+            .map(NativeArgument::direct),
             _ => Err(JavaHost::unsupported("handle function parameter")),
         }
     }
@@ -781,8 +828,15 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
             .map(NativeArgument::encoded)
     }
 
-    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
-        Err(JavaHost::unsupported("direct vector function parameter"))
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        let vector = DirectVector::from_element(element, self.version, self.context)?;
+        Ok(NativeArgument {
+            acquire: Vec::new(),
+            prepare: Vec::new(),
+            expressions: vec![vector.native_argument(Expression::identifier(self.name.clone()))],
+            cleanup: Vec::new(),
+            runtime: RuntimeRequirement::DirectVector,
+        })
     }
 }
 
@@ -851,36 +905,58 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for CallReturnRender<'_> 
         carrier: native::HandleCarrier,
         presence: HandlePresence,
     ) -> Self::Output {
-        let HandleTarget::Class(class) = target else {
-            return Err(JavaHost::unsupported("handle function return"));
-        };
-        let handle = ClassHandle::new(
-            *class,
-            carrier,
-            presence,
-            self.version,
-            self.context,
-            self.package,
-        )?;
-        let carrier = ReturnType::Value(ValueType::Primitive(handle.carrier()));
-        match self.return_context {
-            ReturnContext::Api => Ok(CallReturn {
-                ty: ReturnType::Value(ValueType::Reference(handle.ty().clone())),
-                native: carrier,
-                conversion: ReturnConversion::ClassHandle(handle),
-            }),
-            ReturnContext::ClassInitializer(expected)
-                if expected == *class && presence == HandlePresence::Required =>
-            {
-                Ok(CallReturn {
-                    ty: carrier.clone(),
-                    native: carrier,
-                    conversion: ReturnConversion::Direct,
-                })
+        match target {
+            HandleTarget::Class(class) => {
+                let handle = ClassHandle::new(
+                    *class,
+                    carrier,
+                    presence,
+                    self.version,
+                    self.context,
+                    self.package,
+                )?;
+                let carrier = ReturnType::Value(ValueType::Primitive(handle.carrier()));
+                match self.return_context {
+                    ReturnContext::Api => Ok(CallReturn {
+                        ty: ReturnType::Value(ValueType::Reference(handle.ty().clone())),
+                        native: carrier,
+                        conversion: ReturnConversion::ClassHandle(handle),
+                    }),
+                    ReturnContext::ClassInitializer(expected)
+                        if expected == *class && presence == HandlePresence::Required =>
+                    {
+                        Ok(CallReturn {
+                            ty: carrier.clone(),
+                            native: carrier,
+                            conversion: ReturnConversion::Direct,
+                        })
+                    }
+                    ReturnContext::ClassInitializer(_) => Err(JavaHost::broken_bridge_contract(
+                        "class initializer returns its owner",
+                    )),
+                }
             }
-            ReturnContext::ClassInitializer(_) => Err(JavaHost::broken_bridge_contract(
-                "class initializer returns its owner",
-            )),
+            HandleTarget::Callback(callback) => {
+                let handle = CallbackHandle::new(
+                    *callback,
+                    carrier,
+                    presence,
+                    self.version,
+                    self.context,
+                    self.package,
+                )?;
+                match self.return_context {
+                    ReturnContext::Api => Ok(CallReturn {
+                        ty: ReturnType::Value(ValueType::Reference(handle.ty().clone())),
+                        native: ReturnType::Value(ValueType::Primitive(handle.carrier())),
+                        conversion: ReturnConversion::CallbackHandle(handle),
+                    }),
+                    ReturnContext::ClassInitializer(_) => Err(JavaHost::broken_bridge_contract(
+                        "class initializer returns its owner",
+                    )),
+                }
+            }
+            _ => Err(JavaHost::unsupported("handle function return")),
         }
     }
 
@@ -899,8 +975,13 @@ impl<'plan> ReturnPlanRender<'plan, Native, OutOfRust> for CallReturnRender<'_> 
         })
     }
 
-    fn direct_vector(&mut self, _element: &'plan DirectVectorElementType) -> Self::Output {
-        Err(JavaHost::unsupported("direct vector function return"))
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        let vector = DirectVector::from_element(element, self.version, self.context)?;
+        Ok(CallReturn {
+            ty: ReturnType::Value(ValueType::Reference(vector.ty().clone())),
+            native: ReturnType::Value(ValueType::Reference(CallReturn::byte_array())),
+            conversion: ReturnConversion::DirectVector(vector),
+        })
     }
 
     fn closure(&mut self, _closure: &'plan ClosureReturn<Native, OutOfRust>) -> Self::Output {
@@ -930,11 +1011,13 @@ impl CallReturn {
             ReturnConversion::Encoded(_) | ReturnConversion::ScalarOption(_) => {
                 RuntimeRequirement::Wire
             }
+            ReturnConversion::DirectVector(_) => RuntimeRequirement::DirectVector,
             ReturnConversion::Void
             | ReturnConversion::Direct
             | ReturnConversion::DirectRecord(_)
             | ReturnConversion::DirectEnum(_)
-            | ReturnConversion::ClassHandle(_) => RuntimeRequirement::None,
+            | ReturnConversion::ClassHandle(_)
+            | ReturnConversion::CallbackHandle(_) => RuntimeRequirement::None,
         }
     }
 
@@ -959,6 +1042,7 @@ impl CallReturn {
                 ))])
             }
             ReturnConversion::ClassHandle(handle) => handle.value_statements(call),
+            ReturnConversion::CallbackHandle(handle) => handle.value_statements(call),
             ReturnConversion::Encoded(codec) => {
                 let result = Identifier::known("__boltffi_result");
                 let reader = Identifier::known("__boltffi_reader");
@@ -1010,6 +1094,15 @@ impl CallReturn {
                         ),
                     ),
                     Statement::return_value(decoded),
+                ])
+            }
+            ReturnConversion::DirectVector(vector) => {
+                let result = Identifier::known("__boltffi_result");
+                Ok(vec![
+                    Statement::value(Self::byte_array(), result.clone(), call),
+                    Statement::return_value(
+                        vector.returned_expression(Expression::identifier(result)),
+                    ),
                 ])
             }
         }

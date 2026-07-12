@@ -137,6 +137,11 @@ FfiBuf_u8 boltffi_buf_from_bytes(const uint8_t *pointer, uintptr_t length) {
     return (FfiBuf_u8){bytes, length, length, 1};
 }
 
+FfiBuf_u8 boltffi_buf_with_len(uintptr_t length) {
+    uint8_t *bytes = length == 0 ? NULL : calloc(length, 1);
+    return (FfiBuf_u8){bytes, length, length, 1};
+}
+
 FfiStatus boltffi_last_error_message(FfiString *output) {
     if (output != NULL) {
         *output = (FfiString){NULL, 0, 0};

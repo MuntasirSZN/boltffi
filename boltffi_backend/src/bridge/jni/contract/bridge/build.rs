@@ -90,6 +90,7 @@ impl JniBridgeContract {
                 .stable(BridgeCapability::Jni),
             c_header: HeaderInclude::from_files(&source_path, c_bridge.header_path())?,
             free_buffer: Identifier::parse(c_bridge.support().buffer_free()?.name())?,
+            buffer_with_len: Identifier::parse(c_bridge.support().buffer_with_len()?.name())?,
             callback_handle_lifecycle,
             callbacks,
             callback_completions,

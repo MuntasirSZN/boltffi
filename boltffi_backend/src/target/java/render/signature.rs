@@ -12,7 +12,10 @@ use crate::{
         admission::FunctionShape,
         name_style::Name,
         primitive::Primitive,
-        render::{Enumeration, class::ClassHandle, record::Record, type_name::JavaType},
+        render::{
+            ClosureHandle, DirectVector, Enumeration, callback::CallbackHandle, class::ClassHandle,
+            record::Record, type_name::JavaType,
+        },
         syntax::{Identifier, TypeIdentifier, TypeName},
     },
     target::jvm::method::{Parameter as JvmParameter, Parameters as JvmParameters, SlotWidth},
@@ -92,16 +95,24 @@ impl Parameter<ValueType> {
         package: Option<&JavaPackage>,
     ) -> Result<Self> {
         let name = Name::new(parameter.name()).parameter(version)?;
-        parameter
-            .payload()
-            .as_value()
-            .ok_or_else(FunctionShape::unexpected_shape)?
-            .render_with(&mut ParameterRender {
+        match parameter.payload().as_value() {
+            Some(plan) => plan.render_with(&mut ParameterRender {
                 name,
                 version,
                 context,
                 package,
-            })
+            }),
+            None => ClosureHandle::type_name(
+                parameter
+                    .payload()
+                    .as_closure()
+                    .ok_or_else(FunctionShape::unexpected_shape)?,
+                version,
+                package,
+            )
+            .map(ValueType::Reference)
+            .map(|ty| Parameter::new(name, ty)),
+        }
     }
 }
 
@@ -322,6 +333,17 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterRender<'_, '_>
             .map(|handle| {
                 Parameter::new(self.name.clone(), ValueType::Reference(handle.ty().clone()))
             }),
+            HandleTarget::Callback(callback) => CallbackHandle::new(
+                *callback,
+                carrier,
+                presence,
+                self.version,
+                self.context,
+                self.package,
+            )
+            .map(|handle| {
+                Parameter::new(self.name.clone(), ValueType::Reference(handle.ty().clone()))
+            }),
             _ => Err(FunctionShape::unexpected_shape()),
         }
     }
@@ -334,8 +356,10 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterRender<'_, '_>
         ))
     }
 
-    fn direct_vector(&mut self, _: &'plan DirectVectorElementType) -> Self::Output {
-        Err(FunctionShape::unexpected_shape())
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+        DirectVector::from_element(element, self.version, self.context).map(|vector| {
+            Parameter::new(self.name.clone(), ValueType::Reference(vector.ty().clone()))
+        })
     }
 }
 

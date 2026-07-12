@@ -318,6 +318,14 @@ impl Data {
         )
         .with_aux(Runtime::helper()?);
         let emitted = match self
+            .calls()
+            .iter()
+            .any(|call| call.requires_direct_vector_runtime())
+        {
+            true => emitted.with_aux(Runtime::direct_vector_helper()?),
+            false => emitted,
+        };
+        let emitted = match self
             .variants
             .iter()
             .flat_map(|variant| &variant.fields)

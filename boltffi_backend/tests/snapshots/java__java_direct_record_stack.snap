@@ -93,15 +93,33 @@ public final class Point {
 
     static final int STRUCT_SIZE = 24;
 
+    byte[] toByteArray() {
+        byte[] bytes = new byte[STRUCT_SIZE];
+        writeToDirectBuffer(
+            java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.nativeOrder()),
+            0
+        );
+        return bytes;
+    }
+
+
     java.nio.ByteBuffer toDirectBuffer() {
         java.nio.ByteBuffer buffer = java.nio.ByteBuffer
             .allocateDirect(STRUCT_SIZE)
             .order(java.nio.ByteOrder.nativeOrder());
-        buffer.putDouble(0, x);
-        buffer.putDouble(8, y);
-        buffer.put(16, (byte) ((visible ? 1 : 0)));
-        buffer.putInt(20, color);
+        writeToDirectBuffer(buffer, 0);
         return buffer;
+    }
+
+    void writeToDirectBuffer(java.nio.ByteBuffer buffer, int offset) {
+        buffer.putDouble((offset + 0), this.x);
+        buffer.putDouble((offset + 8), this.y);
+        buffer.put((offset + 16), (byte) ((this.visible ? 1 : 0)));
+        buffer.putInt((offset + 20), this.color);
+    }
+
+    static Point fromDirectBuffer(java.nio.ByteBuffer buffer, int offset) {
+        return new Point(buffer.getDouble((offset + 0)), buffer.getDouble((offset + 8)), buffer.get((offset + 16)) != 0, buffer.getInt((offset + 20)));
     }
 
     static Point fromByteArray(byte[] bytes) {
@@ -115,6 +133,6 @@ public final class Point {
     }
 
     static Point fromDirectBuffer(java.nio.ByteBuffer buffer) {
-        return new Point(buffer.getDouble(0), buffer.getDouble(8), buffer.get(16) != 0, buffer.getInt(20));
+        return fromDirectBuffer(buffer, 0);
     }
 }

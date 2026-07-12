@@ -278,6 +278,18 @@ CLASS_CASES = (
         "boltffi_function_demo_classes_borrowed_describe_counter",
     ),
 )
+CALLBACK_CASES = (
+    BenchmarkCase(
+        "callback_100",
+        "boltffi_data_consumer_compute_sum",
+        "boltffi_method_class_demo_callbacks_sync_traits_data_consumer_compute_sum",
+    ),
+    BenchmarkCase(
+        "callback_1k",
+        "boltffi_data_consumer_compute_sum",
+        "boltffi_method_class_demo_callbacks_sync_traits_data_consumer_compute_sum",
+    ),
+)
 SUITES = {
     suite.name: suite
     for suite in (
@@ -285,6 +297,7 @@ SUITES = {
         BenchmarkSuite("record", "BoltffiJavaRecordBench", RECORD_CASES),
         BenchmarkSuite("enum", "BoltffiJavaEnumBench", ENUM_CASES),
         BenchmarkSuite("class", "BoltffiJavaClassBench", CLASS_CASES),
+        BenchmarkSuite("callback", "BoltffiJavaCallbackBench", CALLBACK_CASES),
     )
 }
 ALL_CASES = tuple(case for suite in SUITES.values() for case in suite.cases)

@@ -311,6 +311,123 @@ const CLASSES: &str = r#"
     }
 "#;
 
+const CALLBACKS: &str = r#"
+    #[repr(C)]
+    #[data]
+    pub struct DataPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    #[export]
+    pub trait DataProvider: Send + Sync {
+        fn get_count(&self) -> u32;
+        fn get_item(&self, index: u32) -> DataPoint;
+    }
+
+    #[export]
+    pub fn consume(provider: Box<dyn DataProvider>) -> u32 {
+        provider.get_count()
+    }
+
+    #[export]
+    pub trait ValueCallback {
+        fn apply(&self, value: i32) -> i32;
+    }
+
+    struct Increment {
+        delta: i32,
+    }
+
+    impl ValueCallback for Increment {
+        fn apply(&self, value: i32) -> i32 { value + self.delta }
+    }
+
+    #[export]
+    pub fn make_callback(delta: i32) -> Box<dyn ValueCallback> {
+        Box::new(Increment { delta })
+    }
+
+    #[export]
+    pub fn invoke_callback(callback: Box<dyn ValueCallback>, value: i32) -> i32 {
+        callback.apply(value)
+    }
+"#;
+
+const ENCODED_CALLBACKS: &str = r#"
+    #[error]
+    pub enum MathError {
+        Invalid,
+    }
+
+    #[export]
+    pub trait MessageFormatter {
+        fn format(&self, value: String) -> String;
+    }
+
+    #[export]
+    pub trait OptionCallback {
+        fn find(&self, key: i32) -> Option<i32>;
+    }
+
+    #[export]
+    pub trait ResultCallback {
+        fn compute(&self, value: i32) -> Result<i32, MathError>;
+    }
+
+    #[export]
+    pub fn format_value(callback: impl MessageFormatter, value: String) -> String {
+        callback.format(value)
+    }
+
+    #[export]
+    pub fn find_value(callback: impl OptionCallback, key: i32) -> Option<i32> {
+        callback.find(key)
+    }
+
+    #[export]
+    pub fn compute_value(callback: impl ResultCallback, value: i32) -> Result<i32, MathError> {
+        callback.compute(value)
+    }
+"#;
+
+const CLOSURES: &str = r#"
+    #[repr(C)]
+    #[data]
+    pub struct Point {
+        pub x: i32,
+        pub y: i32,
+    }
+
+    #[error]
+    pub enum MathError {
+        Invalid,
+    }
+
+    #[export]
+    pub fn apply(callback: impl Fn(i32) -> i32, value: i32) -> i32 {
+        callback(value)
+    }
+
+    #[export]
+    pub fn apply_point(callback: impl Fn(Point) -> Point, value: Point) -> Point {
+        callback(value)
+    }
+
+    #[export]
+    pub fn apply_text(callback: impl Fn(String) -> String, value: String) -> String {
+        callback(value)
+    }
+
+    #[export]
+    pub fn apply_fallible(
+        callback: impl Fn(i32) -> Result<i32, MathError>,
+        value: i32,
+    ) -> Result<i32, MathError> {
+        callback(value)
+    }
+"#;
+
 fn bindings(source: &str) -> boltffi_binding::Bindings<Native> {
     let file = syn::parse_str(source).expect("valid Java source fixture");
     let source = boltffi_scan::scan_file(file, PackageInfo::new("demo", None))
@@ -352,7 +469,16 @@ fn java_source<'output>(
         .files()
         .iter()
         .find(|generated| generated.path().as_path() == path)
-        .expect("Java target should emit source")
+        .unwrap_or_else(|| {
+            panic!(
+                "Java target should emit {path:?}; emitted {:?}",
+                output
+                    .files()
+                    .iter()
+                    .map(|file| file.path().as_path())
+                    .collect::<Vec<_>>()
+            )
+        })
         .contents()
 }
 
@@ -604,6 +730,117 @@ fn java_target_renders_class_ownership_and_handle_calls_from_binding_ir() {
     assert!(module.contains("public static Counter makeCounter(int value)"));
     assert!(module.contains("public static Counter maybeCounter(int value)"));
     assert!(module.contains("static native long"));
+}
+
+#[test]
+fn java_target_renders_jvm_owned_callbacks_from_binding_ir() {
+    let output = render(CALLBACKS, CoverageMode::Complete);
+    let callback = java_source(&output, "com.boltffi.demo", "DataProvider");
+    let returned = java_source(&output, "com.boltffi.demo", "ValueCallback");
+    let module = java_source(&output, "com.boltffi.demo", "Demo");
+
+    assert!(callback.contains("public interface DataProvider"));
+    assert!(callback.contains("int getCount()"));
+    assert!(callback.contains("DataPoint getItem(int index)"));
+    assert!(callback.contains("static int get_count(long handle)"));
+    assert!(callback.contains("static byte[] get_item(long handle, int index)"));
+    assert!(callback.contains("implementation.getItem(index).toByteArray()"));
+    assert!(module.contains("public static int consume(DataProvider provider)"));
+    assert!(module.contains("DataProviderBridge.create(provider)"));
+    assert!(module.contains("static native int"));
+    assert!(
+        returned
+            .contains("final class ValueCallbackHandle implements ValueCallback, AutoCloseable")
+    );
+    assert!(returned.contains("return Native.boltffi_callback_handle_clone"));
+    assert!(returned.contains("Native.boltffi_callback_handle_release(handle)"));
+    assert!(returned.contains(
+        "return Native.boltffi_callback_handle_demo_value_callback_apply(this.handle, value)"
+    ));
+    assert!(module.contains("public static ValueCallback makeCallback(int delta)"));
+    assert!(module.contains("return ValueCallbackBridge.wrap"));
+}
+
+#[test]
+fn java_target_renders_encoded_and_fallible_callbacks_through_codec_plans() {
+    let output = render(ENCODED_CALLBACKS, CoverageMode::Complete);
+    let formatter = java_source(&output, "com.boltffi.demo", "MessageFormatter");
+    let option = java_source(&output, "com.boltffi.demo", "OptionCallback");
+    let result = java_source(&output, "com.boltffi.demo", "ResultCallback");
+    let module = java_source(&output, "com.boltffi.demo", "Demo");
+
+    assert!(formatter.contains("String format(String value)"));
+    assert!(formatter.contains("WireReader __boltffi_value_reader"));
+    assert!(formatter.contains("writer.writeString(__boltffi_result)"));
+    assert!(option.contains("java.util.Optional<Integer> find(int key)"));
+    assert!(option.contains("writer.writeOptional"));
+    assert!(result.contains("byte[] compute(long handle, long return_out, int value)"));
+    assert!(result.contains("Native.boltffi_success_i32(return_out, __boltffi_result)"));
+    assert!(result.contains("catch (MathError.Exception __boltffi_error)"));
+    assert!(result.contains("__boltffi_error.getError()"));
+    assert!(module.contains("static native void boltffi_success_i32(long returnOut, int value)"));
+}
+
+#[test]
+fn generated_callback_sources_compile_for_java_eight_when_available() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
+
+    let source = format!("{CALLBACKS}\n{ENCODED_CALLBACKS}");
+    compile_generated_java(
+        &compiler,
+        &render_with_host(
+            &source,
+            CoverageMode::Complete,
+            JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+        ),
+        "boltffi-java-callbacks",
+    );
+}
+
+#[test]
+fn java_target_renders_closures_from_shared_signatures_and_jni_registrations() {
+    let output = render(CLOSURES, CoverageMode::Complete);
+    let module = java_source(&output, "com.boltffi.demo", "Demo");
+    let scalar = java_source(&output, "com.boltffi.demo", "ClosureI32ToI32");
+    let record = java_source(&output, "com.boltffi.demo", "ClosureDemoPointToDemoPoint");
+    let text = java_source(&output, "com.boltffi.demo", "ClosureStringToString");
+    let fallible = java_source(
+        &output,
+        "com.boltffi.demo",
+        "ClosureI32ToResultI32ErrDemoMathError",
+    );
+
+    assert!(scalar.contains("public interface ClosureI32ToI32"));
+    assert!(scalar.contains("int invoke(int arg0)"));
+    assert!(scalar.contains("static int call(long handle, int arg0)"));
+    assert!(module.contains("public static int apply(ClosureI32ToI32 callback, int value)"));
+    assert!(module.contains("ClosureI32ToI32Callbacks.insert(callback)"));
+    assert!(
+        record.contains("return implementation.invoke(Point.fromByteArray(arg0)).toByteArray()")
+    );
+    assert!(text.contains("WireReader __boltffi_arg0_reader"));
+    assert!(text.contains("writer.writeString(__boltffi_result)"));
+    assert!(fallible.contains("Native.boltffi_success_i32(return_out, __boltffi_result)"));
+    assert!(fallible.contains("catch (MathError.Exception __boltffi_error)"));
+}
+
+#[test]
+fn generated_closure_sources_compile_for_java_eight_when_available() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
+
+    compile_generated_java(
+        &compiler,
+        &render_with_host(
+            CLOSURES,
+            CoverageMode::Complete,
+            JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+        ),
+        "boltffi-java-closures",
+    );
 }
 
 #[test]

@@ -68,6 +68,7 @@ impl SourceFeatures {
             || streams.returns_direct_batches;
         let uses_record_arrays = methods.uses_record_arrays
             || callbacks.uses_record_arrays
+            || closures.uses_records
             || closures.returns_records
             || callbacks.returns_records
             || completions.uses_record_arrays
@@ -79,6 +80,7 @@ impl SourceFeatures {
                 || uses_record_arrays
                 || callbacks.uses_direct_vectors
                 || closures.uses_direct_vectors
+                || closures.uses_records
                 || methods.checks_error_buffer
                 || callbacks.checks_error_buffer,
             checks_status: methods.checks_status || callbacks.checks_status,

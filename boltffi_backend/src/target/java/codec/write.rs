@@ -19,6 +19,7 @@ use crate::{
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EncodedWrite {
+    lease: Identifier,
     acquire: Vec<Statement>,
     prepare: Vec<Statement>,
     arguments: Vec<Expression>,
@@ -56,6 +57,16 @@ impl EncodedWrite {
         Vec<Statement>,
     ) {
         (self.acquire, self.prepare, self.arguments, self.cleanup)
+    }
+
+    pub fn into_bytes_parts(self) -> (Vec<Statement>, Vec<Statement>, Expression, Vec<Statement>) {
+        (
+            self.acquire,
+            self.prepare,
+            Expression::identifier(self.lease)
+                .call(Identifier::known("bytes"), ArgumentList::default()),
+            self.cleanup,
+        )
     }
 }
 
@@ -133,6 +144,7 @@ impl WireBuffer {
             lease.call(Identifier::known("close"), ArgumentList::default()),
         )];
         Ok(EncodedWrite {
+            lease: self.lease,
             acquire,
             prepare,
             arguments,

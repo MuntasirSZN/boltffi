@@ -41,7 +41,7 @@ enum Body {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum FieldStorage {
-    Direct { read: Expression, write: Expression },
+    Direct { primitive: Primitive, offset: u64 },
     Encoded,
 }
 
@@ -125,6 +125,16 @@ impl Record {
             true => emitted.with_aux(Runtime::helper()?),
             false => emitted,
         };
+        let emitted = match self
+            .initializers
+            .iter()
+            .chain(&self.static_methods)
+            .chain(&self.instance_methods)
+            .any(Call::requires_direct_vector_runtime)
+        {
+            true => emitted.with_aux(Runtime::direct_vector_helper()?),
+            false => emitted,
+        };
         self.initializers
             .iter()
             .chain(&self.static_methods)
@@ -151,6 +161,18 @@ impl Record {
                 "record type was not found in render context",
             ))
             .and_then(|record| Name::new(record.name()).type_name(version))
+    }
+
+    pub fn direct_size_for(id: RecordId, context: &RenderContext<Native>) -> Result<u64> {
+        match context.record(id) {
+            Some(RecordDecl::Direct(record)) => Ok(record.layout().size().get()),
+            Some(_) => Err(JavaHost::broken_bridge_contract(
+                "direct vector record has an encoded declaration",
+            )),
+            None => Err(JavaHost::broken_bridge_contract(
+                "direct vector record was not found in render context",
+            )),
+        }
     }
 
     pub fn name(&self) -> &TypeIdentifier {
@@ -350,16 +372,33 @@ impl Field {
         &self.ty
     }
 
-    pub fn read(&self) -> Option<&Expression> {
+    pub fn direct_read(&self) -> Option<Expression> {
         match &self.storage {
-            FieldStorage::Direct { read, .. } => Some(read),
+            FieldStorage::Direct {
+                primitive, offset, ..
+            } => Some(
+                (*primitive).buffer_read_at(
+                    Expression::identifier(Identifier::known("buffer")),
+                    Expression::identifier(Identifier::known("offset"))
+                        .add(Expression::integer(*offset)),
+                ),
+            ),
             FieldStorage::Encoded => None,
         }
     }
 
-    pub fn write(&self) -> Option<&Expression> {
+    pub fn direct_write(&self) -> Option<Expression> {
         match &self.storage {
-            FieldStorage::Direct { write, .. } => Some(write),
+            FieldStorage::Direct {
+                primitive, offset, ..
+            } => Some(
+                (*primitive).buffer_write_at(
+                    Expression::identifier(Identifier::known("buffer")),
+                    Expression::identifier(Identifier::known("offset"))
+                        .add(Expression::integer(*offset)),
+                    Expression::this().member(self.name.clone()),
+                ),
+            ),
             FieldStorage::Encoded => None,
         }
     }
@@ -411,10 +450,8 @@ impl Field {
             .offset()
             .get();
         let primitive = Primitive::try_from(field.ty().primitive())?;
-        let buffer = Expression::identifier(Identifier::known("buffer"));
         let reader = Expression::identifier(Identifier::known("reader"));
         let writer = Expression::identifier(Identifier::known("writer"));
-        let value = Expression::identifier(name.clone());
         let current = Expression::this().member(name.clone());
         let left = Expression::this().member(name.clone());
         let right = Expression::identifier(Identifier::known("other")).member(name.clone());
@@ -432,10 +469,7 @@ impl Field {
         Ok(Self {
             name,
             ty: TypeName::primitive(primitive),
-            storage: FieldStorage::Direct {
-                read: primitive.buffer_read(buffer.clone(), offset),
-                write: primitive.buffer_write(buffer, offset, value),
-            },
+            storage: FieldStorage::Direct { primitive, offset },
             wire_read: reader.call(
                 Identifier::parse_for(format!("read{}", primitive.wire_method_suffix()), version)?,
                 ArgumentList::default(),

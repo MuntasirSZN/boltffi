@@ -28,6 +28,7 @@ HEADER_SUPPORT_SYMBOLS = frozenset(
         "boltffi_atomic_u64_load",
         "boltffi_atomic_u8_cas",
         "boltffi_buf_from_bytes",
+        "boltffi_buf_with_len",
         "boltffi_clear_last_error",
         "boltffi_free_buf",
         "boltffi_free_string",
@@ -46,6 +47,14 @@ JAVA_NATIVE_PATTERN = re.compile(r"\bnative\b[^;{}]*?\b(boltffi_[A-Za-z0-9_]+)\s
 JNI_EXPORT_PATTERN = re.compile(r"\bJNICALL\s+(Java_[A-Za-z0-9_]+)\s*\(")
 JNI_STATIC_FUNCTION_PATTERN = re.compile(
     r"\bstatic\b[^;{}]*\b(boltffi_jni_[A-Za-z0-9_]+)\s*\("
+)
+BRIDGE_REGISTRATION_PREFIXES = (
+    "boltffi_create_callback_",
+    "boltffi_register_callback_",
+)
+JAVA_HELPER_PREFIXES = (
+    "boltffi_callback_handle_",
+    "boltffi_success_",
 )
 DEFINED_SYMBOL_PATTERN = re.compile(
     r"\b([A-Za-z])\s+_?((?:boltffi_|Java_)[A-Za-z0-9_]+)\b"
@@ -219,8 +228,27 @@ def verify_generation(args: argparse.Namespace) -> None:
     reject_symbols("final JNI exports", library_exports, forbidden_exports)
     if generator == "ir":
         all_exports = frozenset(map(jni_export, java_native_symbols))
-        require_exact_symbols("IR JNI header", header_boundary_symbols, java_native_symbols)
-        require_exact_symbols("IR JNI calls", jni_call_symbols, java_native_symbols)
+        direct_header_symbols = frozenset(
+            symbol
+            for symbol in header_boundary_symbols
+            if not symbol.startswith(BRIDGE_REGISTRATION_PREFIXES)
+        )
+        direct_jni_call_symbols = frozenset(
+            symbol
+            for symbol in jni_call_symbols
+            if not symbol.startswith(BRIDGE_REGISTRATION_PREFIXES)
+        )
+        direct_java_native_symbols = frozenset(
+            symbol
+            for symbol in java_native_symbols
+            if not symbol.startswith(JAVA_HELPER_PREFIXES)
+        )
+        require_exact_symbols(
+            "IR JNI header", direct_header_symbols, direct_java_native_symbols
+        )
+        require_exact_symbols(
+            "IR JNI calls", direct_jni_call_symbols, direct_java_native_symbols
+        )
         require_exact_symbols(
             "IR JNI source exports", jni_source_exports, all_exports
         )

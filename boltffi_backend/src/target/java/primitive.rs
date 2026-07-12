@@ -23,7 +23,9 @@ pub enum Primitive {
 impl Primitive {
     pub fn from_handle_carrier(carrier: native::HandleCarrier) -> Result<Self> {
         match carrier {
-            native::HandleCarrier::U64 | native::HandleCarrier::USize => Ok(Self::Long),
+            native::HandleCarrier::U64
+            | native::HandleCarrier::USize
+            | native::HandleCarrier::CallbackHandle => Ok(Self::Long),
             _ => Err(Self::unsupported("Java class handle carrier")),
         }
     }
@@ -57,9 +59,11 @@ impl Primitive {
     }
 
     pub fn buffer_read(self, buffer: Expression, offset: u64) -> Expression {
-        let offset = [Expression::integer(offset)]
-            .into_iter()
-            .collect::<ArgumentList>();
+        self.buffer_read_at(buffer, Expression::integer(offset))
+    }
+
+    pub fn buffer_read_at(self, buffer: Expression, offset: Expression) -> Expression {
+        let offset = [offset].into_iter().collect::<ArgumentList>();
         match self {
             Self::Boolean => buffer
                 .call(Identifier::known("get"), offset)
@@ -74,6 +78,15 @@ impl Primitive {
     }
 
     pub fn buffer_write(self, buffer: Expression, offset: u64, value: Expression) -> Expression {
+        self.buffer_write_at(buffer, Expression::integer(offset), value)
+    }
+
+    pub fn buffer_write_at(
+        self,
+        buffer: Expression,
+        offset: Expression,
+        value: Expression,
+    ) -> Expression {
         let (method, value) = match self {
             Self::Boolean => (
                 Identifier::known("put"),
@@ -89,10 +102,7 @@ impl Primitive {
             Self::Float => (Identifier::known("putFloat"), value),
             Self::Double => (Identifier::known("putDouble"), value),
         };
-        buffer.call(
-            method,
-            [Expression::integer(offset), value].into_iter().collect(),
-        )
+        buffer.call(method, [offset, value].into_iter().collect())
     }
 
     pub fn equals(self, left: Expression, right: Expression) -> Expression {
