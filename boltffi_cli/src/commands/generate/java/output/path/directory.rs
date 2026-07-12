@@ -52,26 +52,17 @@ impl Directory {
         {
             let directory = self
                 .handle
-                .try_clone()
+                .open(".")
                 .map_err(|source| CliError::WriteFailed {
                     path: self.path.clone(),
                     source,
                 })?;
-            match directory.into_std_file().sync_all() {
-                Ok(()) => Ok(()),
-                Err(source)
-                    if matches!(
-                        source.kind(),
-                        ErrorKind::InvalidInput | ErrorKind::Unsupported
-                    ) =>
-                {
-                    Ok(())
-                }
-                Err(source) => Err(CliError::WriteFailed {
+            directory
+                .sync_all()
+                .map_err(|source| CliError::WriteFailed {
                     path: self.path.clone(),
                     source,
-                }),
-            }
+                })
         }
     }
 }
