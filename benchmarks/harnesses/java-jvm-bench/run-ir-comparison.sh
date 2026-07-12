@@ -8,6 +8,9 @@ case "$SUITE" in
     primitive)
         BENCHMARK_CLASS="BoltffiJavaPrimitiveBench"
         ;;
+    string)
+        BENCHMARK_CLASS="BoltffiJavaStringBench"
+        ;;
     record)
         BENCHMARK_CLASS="BoltffiJavaRecordBench"
         ;;
@@ -33,12 +36,14 @@ case "$SUITE" in
         BENCHMARK_CLASS="BoltffiJavaMutationBench"
         ;;
     *)
-        printf 'Usage: %s [primitive|record|enum|class|callback|async|stream|custom|mutation]\n' "$0" >&2
+        printf 'Usage: %s [primitive|string|record|enum|class|callback|async|stream|custom|mutation]\n' "$0" >&2
         exit 2
         ;;
 esac
 RESULTS_DIR="$SCRIPT_DIR/build/results/jmh-$SUITE"
 RESULTS_ROOT="$SCRIPT_DIR/build/results"
+REVISION="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
+BASELINE_DIR="$ROOT_DIR/benchmarks/baselines/java-ir/$REVISION"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/boltffi-java-ir-bench-XXXXXX")"
 ANALYZER_ROOT="$ROOT_DIR/benchmarks/scripts"
 GENERATED_ROOT="$ROOT_DIR/benchmarks/generated/boltffi"
@@ -176,6 +181,11 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/benchmarks/scripts/jmh_to_benchmark
     --artifact "$RESULTS_DIR/comparison-provenance.json" \
     --artifact "$RESULTS_DIR/prepared/legacy/prepared-provenance.json" \
     --artifact "$RESULTS_DIR/prepared/ir/prepared-provenance.json"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ANALYZER_ROOT" python3 -m java_ir baseline \
+    --provenance "$RESULTS_DIR/comparison-provenance.json" \
+    --results "$RESULTS_DIR/results.json" \
+    --revision "$REVISION" \
+    --output "$BASELINE_DIR/$SUITE.json"
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ANALYZER_ROOT" python3 -m java_ir verdict \
     --provenance "$RESULTS_DIR/comparison-provenance.json"
 

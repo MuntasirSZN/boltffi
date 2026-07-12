@@ -20,6 +20,7 @@ val boltffiJavaComparisonBuildDir = providers.gradleProperty("boltffiJavaCompari
     ?.let(::file)
 val comparisonBenchmarks = mapOf(
     "primitive" to "BoltffiJavaPrimitiveBench.java",
+    "string" to "BoltffiJavaStringBench.java",
     "record" to "BoltffiJavaRecordBench.java",
     "enum" to "BoltffiJavaEnumBench.java",
     "class" to "BoltffiJavaClassBench.java",

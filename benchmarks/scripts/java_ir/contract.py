@@ -137,6 +137,63 @@ PRIMITIVE_CASES = (
         "boltffi_function_demo_primitives_vecs_inc_u64_value",
     ),
 )
+STRING_CASES = (
+    BenchmarkCase(
+        "echo_string_small",
+        "boltffi_echo_string",
+        "boltffi_function_demo_primitives_strings_echo_string",
+    ),
+    BenchmarkCase(
+        "echo_string_200",
+        "boltffi_echo_string",
+        "boltffi_function_demo_primitives_strings_echo_string",
+    ),
+    BenchmarkCase(
+        "echo_string_1k",
+        "boltffi_echo_string",
+        "boltffi_function_demo_primitives_strings_echo_string",
+    ),
+    BenchmarkCase(
+        "echo_string_64k",
+        "boltffi_echo_string",
+        "boltffi_function_demo_primitives_strings_echo_string",
+    ),
+    BenchmarkCase(
+        "echo_string_unicode",
+        "boltffi_echo_string",
+        "boltffi_function_demo_primitives_strings_echo_string",
+    ),
+    BenchmarkCase(
+        "concat_strings",
+        "boltffi_concat_strings",
+        "boltffi_function_demo_primitives_strings_concat_strings",
+    ),
+    BenchmarkCase(
+        "string_length_1k",
+        "boltffi_string_length",
+        "boltffi_function_demo_primitives_strings_string_length",
+    ),
+    BenchmarkCase(
+        "string_is_empty",
+        "boltffi_string_is_empty",
+        "boltffi_function_demo_primitives_strings_string_is_empty",
+    ),
+    BenchmarkCase(
+        "repeat_string",
+        "boltffi_repeat_string",
+        "boltffi_function_demo_primitives_strings_repeat_string",
+    ),
+    BenchmarkCase(
+        "generate_string_1k",
+        "boltffi_generate_string",
+        "boltffi_function_demo_primitives_strings_generate_string",
+    ),
+    BenchmarkCase(
+        "generate_string_64k",
+        "boltffi_generate_string",
+        "boltffi_function_demo_primitives_strings_generate_string",
+    ),
+)
 RECORD_CASES = (
     BenchmarkCase(
         "echo_point",
@@ -332,6 +389,7 @@ SUITES = {
     suite.name: suite
     for suite in (
         BenchmarkSuite("primitive", "BoltffiJavaPrimitiveBench", PRIMITIVE_CASES),
+        BenchmarkSuite("string", "BoltffiJavaStringBench", STRING_CASES),
         BenchmarkSuite("record", "BoltffiJavaRecordBench", RECORD_CASES),
         BenchmarkSuite("enum", "BoltffiJavaEnumBench", ENUM_CASES),
         BenchmarkSuite("class", "BoltffiJavaClassBench", CLASS_CASES),

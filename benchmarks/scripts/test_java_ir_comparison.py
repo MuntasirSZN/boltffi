@@ -21,10 +21,59 @@ from java_ir import (
     validate_result,
 )
 from java_ir.provenance import artifact_record
+from java_ir.baseline import Baseline
 from java_ir.comparison import enforce_verdict
 
 
 class JavaIrComparisonTests(unittest.TestCase):
+    def test_compacts_comparison_into_a_portable_baseline(self) -> None:
+        suite = SUITES["primitive"]
+        cases = tuple(case.name for case in suite.cases)
+        results = [
+            {
+                "benchmark": suite.prefix + case,
+                "jdkVersion": "25",
+                "vmName": "OpenJDK",
+                "vmVersion": "25",
+                "mode": "avgt",
+                "primaryMetric": {"score": 1.0, "scoreUnit": "ns/op"},
+            }
+            for case in cases
+        ] + [
+            {
+                "benchmark": suite.prefix.replace(
+                    ".boltffi_java_", ".boltffi_java_ir_"
+                )
+                + case,
+                "jdkVersion": "25",
+                "vmName": "OpenJDK",
+                "vmVersion": "25",
+                "mode": "avgt",
+                "primaryMetric": {"score": 0.9, "scoreUnit": "ns/op"},
+            }
+            for case in cases
+        ]
+        provenance = {
+            "design": {"suite": "primitive"},
+            "prepared": {
+                generator: {
+                    "native_library": {"sha256": generator + "-native"},
+                    "java_class": {"sha256": generator + "-java"},
+                }
+                for generator in ("legacy", "ir")
+            },
+            "runs": {
+                "cycle-1-legacy-a": {"raw_result": {"sha256": "run"}}
+            },
+            "non_inferiority": {"point_ratios": {case: 0.9 for case in cases}},
+        }
+
+        baseline = Baseline.load(provenance, results, "50ee1836")
+
+        self.assertEqual("50ee1836", baseline.document["revision"])
+        self.assertEqual(0.9, baseline.document["scores_ns"]["ir"]["echo_bool"])
+        self.assertNotIn("prepared", baseline.document)
+
     def test_uses_three_complete_abba_cycles(self) -> None:
         self.assertEqual(
             ["legacy", "ir", "ir", "legacy"] * 3,

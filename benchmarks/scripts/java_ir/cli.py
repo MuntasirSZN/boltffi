@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 
+from .baseline import archive
 from .comparison import compare, enforce_verdict
 from .preparation import prepare
 from .provenance import verify_sources
@@ -55,6 +56,12 @@ def parser() -> argparse.ArgumentParser:
     verdict = commands.add_parser("verdict")
     verdict.add_argument("--provenance", type=pathlib.Path, required=True)
     verdict.set_defaults(operation=enforce_verdict)
+    baseline = commands.add_parser("baseline")
+    baseline.add_argument("--provenance", type=pathlib.Path, required=True)
+    baseline.add_argument("--results", type=pathlib.Path, required=True)
+    baseline.add_argument("--revision", required=True)
+    baseline.add_argument("--output", type=pathlib.Path, required=True)
+    baseline.set_defaults(operation=archive)
     return root
 
 
