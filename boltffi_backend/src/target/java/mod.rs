@@ -390,13 +390,10 @@ impl JavaHost {
             .stable(BindingCapability::Classes)
             .stable(BindingCapability::Callbacks)
             .stable(BindingCapability::Streams)
+            .stable(BindingCapability::CustomTypes)
             .unsupported(
                 BindingCapability::Constants,
                 "Java constant migration is pending",
-            )
-            .unsupported(
-                BindingCapability::CustomTypes,
-                "Java custom type migration is pending",
             )
     }
 }
@@ -502,7 +499,7 @@ impl host::HostBackend for JavaHost {
         _: &Self::Bridge,
         _: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Self::unsupported("custom type declaration"))
+        Ok(Emitted::primary(""))
     }
 
     fn assemble<'decl>(

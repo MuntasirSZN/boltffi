@@ -162,8 +162,8 @@ impl CodecRead for Reader<'_> {
         Self::unsupported("callback handle wire read")
     }
 
-    fn custom(&mut self, _id: CustomTypeId, _representation: Self::Expr) -> Self::Expr {
-        Self::unsupported("custom type wire read")
+    fn custom(&mut self, _id: CustomTypeId, representation: Self::Expr) -> Self::Expr {
+        representation
     }
 
     fn builtin(&mut self, kind: BuiltinType) -> Self::Expr {

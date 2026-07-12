@@ -94,6 +94,52 @@ const RESULT_RECORD: &str = r#"
     }
 "#;
 
+const CUSTOM_TYPES: &str = r#"
+    pub struct Email(String);
+
+    #[custom_ffi]
+    impl CustomFfiConvertible for Email {
+        type FfiRepr = String;
+        type Error = String;
+
+        fn into_ffi(&self) -> String { self.0.clone() }
+        fn try_from_ffi(value: String) -> Result<Self, String> { Ok(Self(value)) }
+    }
+
+    custom_type!(
+        pub TimestampValue,
+        remote = TimestampRust,
+        repr = i64,
+        into_ffi = timestamp_into_ffi,
+        try_from_ffi = timestamp_from_ffi,
+    );
+
+    #[data]
+    pub struct Event {
+        pub email: Email,
+        pub timestamp: TimestampRust,
+        pub attendees: Vec<Email>,
+    }
+
+    #[export]
+    pub fn echo_email(email: Email) -> Email { email }
+
+    #[export]
+    pub fn echo_timestamp(timestamp: TimestampRust) -> TimestampRust { timestamp }
+
+    #[export]
+    pub fn echo_event(event: Event) -> Event { event }
+
+    #[export]
+    pub fn echo_emails(emails: Vec<Email>) -> Vec<Email> { emails }
+
+    #[export]
+    pub fn echo_timestamps(timestamps: Vec<TimestampRust>) -> Vec<TimestampRust> { timestamps }
+
+    #[export]
+    pub fn maybe_timestamp(timestamp: Option<TimestampRust>) -> Option<TimestampRust> { timestamp }
+"#;
+
 const ENCODED_RECORD_CALLS: &str = r#"
     #[data]
     pub struct Point {
@@ -1195,6 +1241,35 @@ fn java_target_emits_one_public_result_type_for_result_records() {
 }
 
 #[test]
+fn java_target_renders_custom_types_through_their_shared_representations() {
+    let output = render(CUSTOM_TYPES, CoverageMode::Complete);
+    let event = java_source(&output, "com.boltffi.demo", "Event");
+    let module = java_source(&output, "com.boltffi.demo", "Demo");
+
+    assert!(event.contains("String email"));
+    assert!(event.contains("long timestamp"));
+    assert!(event.contains("java.util.List<String> attendees"));
+    assert!(event.contains("reader.readString()"));
+    assert!(event.contains("reader.readLong()"));
+    assert!(event.contains("reader.readStringSequence()"));
+    assert!(event.contains("writer.writeString(this.email)"));
+    assert!(event.contains("writer.writeLong(this.timestamp)"));
+    assert!(module.contains("public static String echoEmail(String email)"));
+    assert!(module.contains("public static long echoTimestamp(long timestamp)"));
+    assert!(module.contains("public static Event echoEvent(Event event)"));
+    assert!(module.contains(
+        "public static java.util.List<String> echoEmails(java.util.List<String> emails)"
+    ));
+    assert!(module.contains("public static long[] echoTimestamps(long[] timestamps)"));
+    assert!(module.contains(
+        "public static java.util.Optional<Long> maybeTimestamp(java.util.Optional<Long> timestamp)"
+    ));
+    assert!(module.contains("reader.readLongArray()"));
+    assert!(module.contains("writer.writeLongArray"));
+    assert!(output.coverage().unsupported().is_empty());
+}
+
+#[test]
 fn java_target_rejects_public_result_file_collisions() {
     let bindings = bindings(RESULT_RECORD);
     let error = JavaHost::new("com.boltffi.demo", "BoltFFIResult")
@@ -2286,6 +2361,20 @@ fn generated_encoded_record_compiles_for_java_eight_when_available() {
         JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
     );
     compile_generated_java(&compiler, &output, "boltffi-java-encoded-record");
+}
+
+#[test]
+fn generated_custom_types_compile_for_java_eight_when_available() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
+
+    let output = render_with_host(
+        CUSTOM_TYPES,
+        CoverageMode::Complete,
+        JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+    );
+    compile_generated_java(&compiler, &output, "boltffi-java-custom-types");
 }
 
 #[test]

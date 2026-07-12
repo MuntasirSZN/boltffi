@@ -436,7 +436,6 @@ impl TypeRefRender for JavaTypeRef<'_> {
             .ok_or(JavaHost::unsupported("custom type without declaration"))?
             .representation()
             .render_with(self)
-            .map(|representation| ApiType::reference(representation.value))
     }
 
     fn builtin(&mut self, kind: BuiltinType) -> Self::Output {
