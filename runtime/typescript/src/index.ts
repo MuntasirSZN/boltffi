@@ -1,9 +1,12 @@
 export {
   WireReader,
   WireWriter,
+  utf8ByteCount,
+  wireArraySize,
   wireOk,
   wireErr,
   wireOptionalSize,
+  wireResultSize,
   wireStringSize,
 } from "./wire.js";
 export type { Duration, WireOk, WireErr, WireResult, WasmWireWriterAllocator, WireCodec } from "./wire.js";

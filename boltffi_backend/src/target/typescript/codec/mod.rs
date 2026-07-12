@@ -1,3 +1,4 @@
+mod operation;
 mod read;
 mod size;
 mod value;

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { AsyncFutureManager, BoltFFIModule } from "../src/module.js";
-import { WireReader, WireWriter, wireErr, wireOk, wireOptionalSize } from "../src/wire.js";
+import {
+  WireReader,
+  WireWriter,
+  utf8ByteCount,
+  wireArraySize,
+  wireErr,
+  wireOk,
+  wireOptionalSize,
+  wireResultSize,
+} from "../src/wire.js";
 
 type ExportFunction = (...args: number[]) => number | void;
 
@@ -131,6 +140,19 @@ describe("WireReader and WireWriter", () => {
     expect(wireOptionalSize(33n, () => 8)).toBe(9);
   });
 
+  it("decodes primitive sequences through bulk array readers", () => {
+    const writer = new WireWriter();
+    writer.writeArray([true, false, true], (value) => writer.writeBool(value));
+    writer.writeArray([-7, 12], (value) => writer.writeISize(value));
+    writer.writeArray([9, 14], (value) => writer.writeUSize(value));
+
+    const reader = new WireReader(writer.getBytes().buffer);
+    expect(reader.readBoolArray()).toEqual([true, false, true]);
+    expect(Array.from(reader.readISizeArray())).toEqual([-7, 12]);
+    expect(Array.from(reader.readUSizeArray())).toEqual([9, 14]);
+    expect(wireArraySize(["a", "boltffi"], utf8ByteCount)).toBe(12);
+  });
+
   it("decodes readResult success and error branches", () => {
     const okWriter = new WireWriter();
     okWriter.writeU8(0);
@@ -203,6 +225,8 @@ describe("WireWriter result encoding", () => {
     const errReader = new WireReader(errWriter.getBytes().buffer);
     expect(errReader.readU8()).toBe(1);
     expect(errReader.readU32()).toBe(7);
+    expect(wireResultSize(wireOk(42), () => 4, () => 8)).toBe(5);
+    expect(wireResultSize(wireErr("failure"), () => 4, (error) => error.length)).toBe(8);
   });
 
   it("uses Error objects as err branch fallback", () => {

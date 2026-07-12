@@ -1,9 +1,15 @@
+mod custom_type;
 mod direct_vector;
+mod enumeration;
 mod function;
 mod module;
+mod record;
 mod scalar_option;
 mod type_name;
 
+pub use custom_type::CustomType;
+pub use enumeration::Enumeration;
 pub use function::Function;
 pub use module::Module;
+pub use record::Record;
 pub use type_name::Type;

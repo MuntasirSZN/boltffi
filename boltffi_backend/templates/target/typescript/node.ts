@@ -1,5 +1,5 @@
-import { BoltFFIModule, instantiateBoltFFISync, wireOptionalSize, wireStringSize } from {{ runtime_package }};
-import type { BoltFFIExports } from {{ runtime_package }};
+import { BoltFFIModule, instantiateBoltFFISync, utf8ByteCount, wireArraySize, wireOptionalSize, wireResultSize, wireStringSize } from {{ runtime_package }};
+import type { BoltFFIExports, Duration, WireCodec } from {{ runtime_package }};
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

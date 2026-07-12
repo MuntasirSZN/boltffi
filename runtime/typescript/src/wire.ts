@@ -122,6 +122,13 @@ export class WireReader {
     return result;
   }
 
+  readBoolArray(): boolean[] {
+    const len = this.readU32();
+    const values = new Uint8Array(this.view.buffer, this.offset, len);
+    this.offset += len;
+    return Array.from(values, (value) => value !== 0);
+  }
+
   private readTypedArray<T extends ArrayBufferView>(
     typedArray: TypedArrayConstructor<T>,
     len: number
@@ -154,6 +161,14 @@ export class WireReader {
   readU32Array(): Uint32Array {
     const len = this.readU32();
     return this.readTypedArray(Uint32Array, len);
+  }
+
+  readISizeArray(): Int32Array {
+    return this.readI32Array();
+  }
+
+  readUSizeArray(): Uint32Array {
+    return this.readU32Array();
   }
 
   readI64Array(): BigInt64Array {
@@ -250,6 +265,40 @@ export function wireOk<T>(value: T): WireOk<T> {
 
 export function wireErr<E>(error: E): WireErr<E> {
   return { tag: "err", error };
+}
+
+function matchWireResult<T, E, R>(
+  value: T | WireResult<T, E> | Error,
+  ok: (value: T) => R,
+  err: (error: E) => R
+): R {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "tag" in value &&
+    value.tag === "ok" &&
+    "value" in value
+  ) {
+    return ok(value.value as T);
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "tag" in value &&
+    value.tag === "err" &&
+    "error" in value
+  ) {
+    return err(value.error as E);
+  }
+  if (value instanceof Error) {
+    return err(value as E);
+  }
+  if (typeof value === "object" && value !== null) {
+    throw new Error(
+      "Ambiguous Result object. Pass wireOk(value) or wireErr(error) for object payloads."
+    );
+  }
+  return ok(value as T);
 }
 
 export class WireWriter {
@@ -483,52 +532,29 @@ export class WireWriter {
     }
   }
 
-  writeArray<T>(values: T[], writeElement: (v: T) => void): void {
+  writeArray<T>(values: ArrayLike<T> & Iterable<T>, writeElement: (v: T) => void): void {
     this.writeU32(values.length);
     for (const v of values) {
       writeElement(v);
     }
   }
 
-  writeResult<T, E>(
-    value: T | E | WireResult<T, E>,
+  writeResult<T, E = never>(
+    value: T | WireResult<T, E> | Error,
     writeOk: (v: T) => void,
     writeErr: (e: E) => void
   ): void {
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "tag" in value &&
-      value.tag === "ok" &&
-      "value" in value
-    ) {
-      this.writeU8(0);
-      writeOk(value.value as T);
-      return;
-    }
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "tag" in value &&
-      value.tag === "err" &&
-      "error" in value
-    ) {
-      this.writeU8(1);
-      writeErr(value.error as E);
-      return;
-    }
-    if (value instanceof Error) {
-      this.writeU8(1);
-      writeErr(value as E);
-      return;
-    }
-    if (typeof value === "object" && value !== null) {
-      throw new Error(
-        "Ambiguous Result object. Pass wireOk(value) or wireErr(error) for object payloads."
-      );
-    }
-    this.writeU8(0);
-    writeOk(value as T);
+    matchWireResult(
+      value,
+      (ok) => {
+        this.writeU8(0);
+        writeOk(ok);
+      },
+      (err) => {
+        this.writeU8(1);
+        writeErr(err);
+      }
+    );
   }
 
   writeDuration(value: Duration): void {
@@ -551,14 +577,34 @@ export class WireWriter {
     this.writeU64(hi);
     this.writeU64(lo);
   }
+
+  writeUrl(value: string): void {
+    this.writeString(value);
+  }
 }
 
 export function wireStringSize(value: string): number {
   return 4 + UTF8_ENCODER.encode(value).length;
 }
 
+export function utf8ByteCount(value: string): number {
+  return UTF8_ENCODER.encode(value).length;
+}
+
 export function wireOptionalSize<T>(value: T | null, size: (value: T) => number): number {
   return value === null ? 1 : 1 + size(value);
+}
+
+export function wireArraySize<T>(values: readonly T[], size: (value: T) => number): number {
+  return values.reduce((bytes, value) => bytes + size(value), 4);
+}
+
+export function wireResultSize<T, E = never>(
+  value: T | WireResult<T, E> | Error,
+  ok: (value: T) => number,
+  err: (error: E) => number
+): number {
+  return 1 + matchWireResult(value, ok, err);
 }
 
 export interface WireCodec<T> {

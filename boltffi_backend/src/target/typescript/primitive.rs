@@ -87,4 +87,40 @@ impl Scalar {
             _ => unreachable!(),
         })
     }
+
+    pub fn read_array_method(self) -> Identifier {
+        Identifier::known(match self.primitive {
+            Primitive::Bool => "readBoolArray",
+            Primitive::I8 => "readI8Array",
+            Primitive::U8 => "readU8Array",
+            Primitive::I16 => "readI16Array",
+            Primitive::U16 => "readU16Array",
+            Primitive::I32 => "readI32Array",
+            Primitive::U32 => "readU32Array",
+            Primitive::I64 => "readI64Array",
+            Primitive::U64 => "readU64Array",
+            Primitive::ISize => "readISizeArray",
+            Primitive::USize => "readUSizeArray",
+            Primitive::F32 => "readF32Array",
+            Primitive::F64 => "readF64Array",
+            _ => unreachable!(),
+        })
+    }
+
+    pub fn typed_array(self) -> Option<TypeName> {
+        Some(TypeName::named(match self.primitive {
+            Primitive::Bool => return None,
+            Primitive::I8 => "Int8Array",
+            Primitive::U8 => "Uint8Array",
+            Primitive::I16 => "Int16Array",
+            Primitive::U16 => "Uint16Array",
+            Primitive::I32 | Primitive::ISize => "Int32Array",
+            Primitive::U32 | Primitive::USize => "Uint32Array",
+            Primitive::I64 => "BigInt64Array",
+            Primitive::U64 => "BigUint64Array",
+            Primitive::F32 => "Float32Array",
+            Primitive::F64 => "Float64Array",
+            _ => unreachable!(),
+        }))
+    }
 }

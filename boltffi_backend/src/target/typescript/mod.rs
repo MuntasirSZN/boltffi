@@ -19,7 +19,7 @@ use crate::{
 };
 
 use name_style::ModuleName;
-use render::{Function, Module};
+use render::{CustomType, Enumeration, Function, Module, Record};
 use syntax::{StringLiteral, Syntax};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -102,29 +102,29 @@ impl host::HostBackend for TypeScriptHost {
 
     fn record(
         &self,
-        _decl: &RecordDecl<Self::Surface>,
+        decl: &RecordDecl<Self::Surface>,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Self::unsupported("record"))
+        Record::from_declaration(decl, context)?.render()
     }
 
     fn enumeration(
         &self,
-        _decl: &EnumDecl<Self::Surface>,
+        decl: &EnumDecl<Self::Surface>,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Self::unsupported("enum"))
+        Enumeration::from_declaration(decl, context)?.render()
     }
 
     fn function(
         &self,
         decl: &FunctionDecl<Self::Surface>,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Function::from_declaration(decl)?.render()
+        Function::from_declaration(decl, context)?.render()
     }
 
     fn class(
@@ -165,11 +165,11 @@ impl host::HostBackend for TypeScriptHost {
 
     fn custom_type(
         &self,
-        _decl: &CustomTypeDecl,
+        decl: &CustomTypeDecl,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Self::unsupported("custom type"))
+        CustomType::from_declaration(decl, context)?.render()
     }
 
     fn assemble<'decl>(
@@ -235,6 +235,73 @@ mod tests {
 
                 #[export]
                 pub fn echo_optional_f64(value: Option<f64>) -> Option<f64> { value }
+
+                #[export]
+                pub fn echo_optional_vec_i32(value: Option<Vec<i32>>) -> Option<Vec<i32>> { value }
+
+                #[export]
+                pub fn echo_vec_string(value: Vec<String>) -> Vec<String> { value }
+
+                #[export]
+                pub fn echo_vec_vec_i32(value: Vec<Vec<i32>>) -> Vec<Vec<i32>> { value }
+                "#,
+            )
+            .expect("valid source"),
+            PackageInfo::new("demo", None),
+        )
+        .expect("source scans");
+        lower::<Wasm32>(&source).expect("source lowers")
+    }
+
+    fn record_bindings() -> Bindings<Wasm32> {
+        let source = boltffi_scan::scan_file(
+            syn::parse_str(
+                r#"
+                #[data]
+                #[repr(C)]
+                pub struct Point {
+                    pub x: f64,
+                    pub active: bool,
+                    pub y: f64,
+                }
+
+                #[data]
+                pub struct User {
+                    pub name: String,
+                    pub scores: Vec<i32>,
+                }
+
+                #[data]
+                #[repr(i8)]
+                pub enum Status {
+                    Inactive = -1,
+                    Active = 1,
+                }
+
+                #[data]
+                pub enum Filter {
+                    None,
+                    ByName { name: String },
+                    ByRange(i32, i32),
+                }
+
+                #[data]
+                pub struct Task {
+                    pub title: String,
+                    pub status: Status,
+                }
+
+                #[export]
+                pub fn echo_user(value: User) -> User { value }
+
+                #[export]
+                pub fn echo_status(value: Status) -> Status { value }
+
+                #[export]
+                pub fn echo_task(value: Task) -> Task { value }
+
+                #[export]
+                pub fn echo_filter(value: Filter) -> Filter { value }
                 "#,
             )
             .expect("valid source"),
@@ -341,9 +408,16 @@ mod tests {
         assert!(browser.contents().contains(
             "const __boltffi_value_writer = _module.allocWriter(wireOptionalSize(value, (__boltffiValue0) => 8));"
         ));
-        assert!(browser.contents().contains(
-            "__boltffi_value_writer.writeOptional(value, (__boltffiValue0) => { __boltffi_value_writer.writeI64(__boltffiValue0); });"
-        ));
+        assert!(
+            browser
+                .contents()
+                .contains("__boltffi_value_writer.writeOptional(value, (__boltffiValue0) => {")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("__boltffi_value_writer.writeI64(__boltffiValue0);")
+        );
         assert!(
             browser
                 .contents()
@@ -353,6 +427,115 @@ mod tests {
             browser
                 .contents()
                 .contains("export function echoOptionalF64(value: number | null): number | null")
+        );
+        assert!(browser.contents().contains(
+            "export function echoOptionalVecI32(value: Array<number> | Int32Array | null): Array<number> | Int32Array | null"
+        ));
+        assert!(
+            browser
+                .contents()
+                .contains("__boltffiReader.readOptional(() => __boltffiReader.readI32Array())")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("export function echoVecString(value: Array<string>): Array<string>")
+        );
+        assert!(browser.contents().contains(
+            "wireArraySize(value, (__boltffiValue0) => wireStringSize(__boltffiValue0))"
+        ));
+        assert!(
+            browser
+                .contents()
+                .contains("__boltffiReader.readArray(() => __boltffiReader.readString())")
+        );
+        assert!(browser.contents().contains(
+            "export function echoVecVecI32(value: Array<Array<number> | Int32Array>): Array<Array<number> | Int32Array>"
+        ));
+    }
+
+    #[test]
+    fn renders_record_codecs_from_shared_field_plans() {
+        let output = TypeScriptHost::new("demo")
+            .expect("host constructs")
+            .into_target()
+            .render_partial(&record_bindings())
+            .expect("target renders");
+        let browser = output
+            .files()
+            .iter()
+            .find(|file| file.path().as_path().ends_with("demo.ts"))
+            .expect("browser module");
+
+        assert!(browser.contents().contains("export interface Point"));
+        assert!(browser.contents().contains("size: (value) => 24"));
+        assert!(browser.contents().contains("writer.skip(7);"));
+        assert!(browser.contents().contains("reader.skip(7);"));
+        assert!(browser.contents().contains("export interface User"));
+        assert!(browser.contents().contains(
+            "size: (value) => (wireStringSize(value.name) + (4 + (value.scores.length * 4)))"
+        ));
+        assert!(
+            browser
+                .contents()
+                .contains("writer.writeString(value.name);")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("UserCodec.encode(__boltffi_value_writer, value);")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("UserCodec.decode(__boltffiReader)")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("export function echoUser(value: User): User")
+        );
+        assert!(browser.contents().contains("export const Status ="));
+        assert!(browser.contents().contains("Inactive: -1"));
+        assert!(browser.contents().contains("writer.writeI8(value);"));
+        assert!(
+            browser
+                .contents()
+                .contains("case -1: return Status.Inactive;")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("export function echoStatus(value: Status): Status")
+        );
+        assert!(browser.contents().contains("readonly status: Status;"));
+        assert!(
+            browser
+                .contents()
+                .contains("StatusCodec.encode(writer, value.status);")
+        );
+        assert!(browser.contents().contains("StatusCodec.decode(reader)"));
+        assert!(browser.contents().contains("export type Filter ="));
+        assert!(
+            browser
+                .contents()
+                .contains("| { readonly tag: \"ByName\"; readonly name: string }")
+        );
+        assert!(
+            browser.contents().contains(
+                "| { readonly tag: \"ByRange\"; readonly 0: number; readonly 1: number };"
+            )
+        );
+        assert!(browser.contents().contains("case \"ByName\": return"));
+        assert!(
+            browser
+                .contents()
+                .contains("case 1: return { tag: \"ByName\", name: reader.readString() };")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("export function echoFilter(value: Filter): Filter")
         );
     }
 }

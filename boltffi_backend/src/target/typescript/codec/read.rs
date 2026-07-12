@@ -1,11 +1,12 @@
 use boltffi_binding::{
     BuiltinType, CallbackId, ClassId, CodecRead, CustomTypeId, ElementCount, EnumId, MapKind, Op,
-    Primitive, RecordId,
+    Primitive, RecordId, Wasm32,
 };
 
-use crate::core::{Error, Result};
+use crate::core::{Error, RenderContext, Result};
 
 use super::super::{
+    name_style::Name,
     primitive::Scalar,
     syntax::{ArgumentList, Expression, Identifier},
 };
@@ -22,13 +23,14 @@ pub struct ReadExpression {
     kind: Option<ReadKind>,
 }
 
-pub struct Reader {
+pub struct Reader<'context> {
     reader: Identifier,
+    context: &'context RenderContext<'context, Wasm32>,
 }
 
-impl Reader {
-    pub fn new(reader: Identifier) -> Self {
-        Self { reader }
+impl<'context> Reader<'context> {
+    pub fn new(reader: Identifier, context: &'context RenderContext<'context, Wasm32>) -> Self {
+        Self { reader, context }
     }
 
     fn unsupported(shape: &'static str) -> Result<ReadExpression> {
@@ -36,6 +38,42 @@ impl Reader {
             target: "typescript",
             shape,
         })
+    }
+
+    fn record(&self, id: RecordId) -> Result<ReadExpression> {
+        let codec = self
+            .context
+            .record(id)
+            .map(|record| Name::new(record.name()).codec_identifier())
+            .ok_or(Error::UnsupportedTarget {
+                target: "typescript",
+                shape: "record without declaration",
+            })??;
+        Ok(ReadExpression::dynamic(Expression::call(
+            Expression::identifier(codec),
+            Identifier::known("decode"),
+            [Expression::identifier(self.reader.clone())]
+                .into_iter()
+                .collect::<ArgumentList>(),
+        )))
+    }
+
+    fn enumeration(&self, id: EnumId) -> Result<ReadExpression> {
+        let codec = self
+            .context
+            .enumeration(id)
+            .map(|enumeration| Name::new(enumeration.name()).codec_identifier())
+            .ok_or(Error::UnsupportedTarget {
+                target: "typescript",
+                shape: "enum without declaration",
+            })??;
+        Ok(ReadExpression::dynamic(Expression::call(
+            Expression::identifier(codec),
+            Identifier::known("decode"),
+            [Expression::identifier(self.reader.clone())]
+                .into_iter()
+                .collect::<ArgumentList>(),
+        )))
     }
 }
 
@@ -77,7 +115,7 @@ impl ReadExpression {
     }
 }
 
-impl CodecRead for Reader {
+impl CodecRead for Reader<'_> {
     type Expr = Result<ReadExpression>;
 
     fn primitive(&mut self, primitive: Primitive) -> Self::Expr {
@@ -107,20 +145,20 @@ impl CodecRead for Reader {
         )))
     }
 
-    fn direct_record(&mut self, _id: RecordId) -> Self::Expr {
-        Self::unsupported("direct record codec read")
+    fn direct_record(&mut self, id: RecordId) -> Self::Expr {
+        self.record(id)
     }
 
-    fn encoded_record(&mut self, _id: RecordId) -> Self::Expr {
-        Self::unsupported("encoded record codec read")
+    fn encoded_record(&mut self, id: RecordId) -> Self::Expr {
+        self.record(id)
     }
 
-    fn c_style_enum(&mut self, _id: EnumId) -> Self::Expr {
-        Self::unsupported("C-style enum codec read")
+    fn c_style_enum(&mut self, id: EnumId) -> Self::Expr {
+        self.enumeration(id)
     }
 
-    fn data_enum(&mut self, _id: EnumId) -> Self::Expr {
-        Self::unsupported("data enum codec read")
+    fn data_enum(&mut self, id: EnumId) -> Self::Expr {
+        self.enumeration(id)
     }
 
     fn class_handle(&mut self, _id: ClassId) -> Self::Expr {
@@ -131,12 +169,27 @@ impl CodecRead for Reader {
         Self::unsupported("callback handle codec read")
     }
 
-    fn custom(&mut self, _id: CustomTypeId, _representation: Self::Expr) -> Self::Expr {
-        Self::unsupported("custom codec read")
+    fn custom(&mut self, id: CustomTypeId, representation: Self::Expr) -> Self::Expr {
+        self.context
+            .custom_type(id)
+            .ok_or(Error::UnsupportedTarget {
+                target: "typescript",
+                shape: "custom type without declaration",
+            })?;
+        representation
     }
 
-    fn builtin(&mut self, _kind: BuiltinType) -> Self::Expr {
-        Self::unsupported("builtin codec read")
+    fn builtin(&mut self, kind: BuiltinType) -> Self::Expr {
+        Ok(ReadExpression::dynamic(Expression::call(
+            Expression::identifier(self.reader.clone()),
+            Identifier::known(match kind {
+                BuiltinType::Duration => "readDuration",
+                BuiltinType::SystemTime => "readTimestamp",
+                BuiltinType::Uuid => "readUuid",
+                BuiltinType::Url => "readUrl",
+            }),
+            ArgumentList::default(),
+        )))
     }
 
     fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
@@ -149,16 +202,40 @@ impl CodecRead for Reader {
         )))
     }
 
-    fn sequence(&mut self, _len: &Op<ElementCount>, _element: Self::Expr) -> Self::Expr {
-        Self::unsupported("sequence codec read")
+    fn sequence(&mut self, _len: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {
+        let element = element?;
+        let expression = match element.kind() {
+            Some(ReadKind::Primitive(primitive)) => Expression::call(
+                Expression::identifier(self.reader.clone()),
+                Scalar::new(primitive)?.read_array_method(),
+                ArgumentList::default(),
+            ),
+            _ => Expression::call(
+                Expression::identifier(self.reader.clone()),
+                Identifier::known("readArray"),
+                [Expression::lambda(element.into_expression())]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+            ),
+        };
+        Ok(ReadExpression::dynamic(expression))
     }
 
     fn tuple(&mut self, _elements: Vec<Self::Expr>) -> Self::Expr {
         Self::unsupported("tuple codec read")
     }
 
-    fn result(&mut self, _ok: Self::Expr, _err: Self::Expr) -> Self::Expr {
-        Self::unsupported("result codec read")
+    fn result(&mut self, ok: Self::Expr, err: Self::Expr) -> Self::Expr {
+        Ok(ReadExpression::dynamic(Expression::call(
+            Expression::identifier(self.reader.clone()),
+            Identifier::known("readResult"),
+            [
+                Expression::lambda(ok?.into_expression()),
+                Expression::lambda(err?.into_expression()),
+            ]
+            .into_iter()
+            .collect::<ArgumentList>(),
+        )))
     }
 
     fn map(&mut self, _kind: MapKind, _key: Self::Expr, _value: Self::Expr) -> Self::Expr {

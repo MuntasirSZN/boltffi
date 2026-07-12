@@ -1,13 +1,15 @@
 mod expression;
 mod identifier;
 mod literal;
+mod property;
 mod type_name;
 
 use crate::core::{LanguageSyntax, syntax::sealed};
 
 pub use expression::{ArgumentList, Expression, Statement};
 pub use identifier::Identifier;
-pub use literal::StringLiteral;
+pub use literal::{IntegerLiteral, StringLiteral};
+pub use property::PropertyKey;
 pub use type_name::TypeName;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]

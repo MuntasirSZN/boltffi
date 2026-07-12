@@ -1,5 +1,5 @@
-import { BoltFFIModule, instantiateBoltFFI, wireOptionalSize, wireStringSize } from {{ runtime_package }};
-import type { BoltFFIExports } from {{ runtime_package }};
+import { BoltFFIModule, instantiateBoltFFI, utf8ByteCount, wireArraySize, wireOptionalSize, wireResultSize, wireStringSize } from {{ runtime_package }};
+import type { BoltFFIExports, Duration, WireCodec } from {{ runtime_package }};
 
 let _module: BoltFFIModule;
 let _exports: BoltFFIExports;

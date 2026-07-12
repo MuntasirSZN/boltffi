@@ -1,11 +1,15 @@
 use boltffi_binding::{
-    BinderId, BuiltinType, CallbackId, ClassId, CodecSize, CustomTypeId, ElementCount, EnumId,
-    MapKind, Op, Primitive, RecordId, ValueRef, Wasm32,
+    BinderId, BuiltinType, CallbackId, ClassId, CodecSize, CustomTypeId, ElementCount, EnumDecl,
+    EnumId, MapKind, Op, Primitive, RecordId, ValueRef, Wasm32,
 };
 
-use crate::core::{Error, Result};
+use crate::core::{Error, RenderContext, Result};
 
-use super::super::syntax::{ArgumentList, Expression, Identifier};
+use super::super::{
+    name_style::Name,
+    syntax::{ArgumentList, Expression, Identifier},
+};
+use super::operation::Operation;
 use super::value::ValueExpression;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -20,13 +24,14 @@ pub struct SizeExpression {
     kind: Option<SizeKind>,
 }
 
-pub struct Sizer {
+pub struct Sizer<'context> {
     current: Expression,
+    context: &'context RenderContext<'context, Wasm32>,
 }
 
-impl Sizer {
-    pub fn new(current: Expression) -> Self {
-        Self { current }
+impl<'context> Sizer<'context> {
+    pub fn new(current: Expression, context: &'context RenderContext<'context, Wasm32>) -> Self {
+        Self { current, context }
     }
 
     fn value(&self, value: &ValueRef) -> Result<Expression> {
@@ -38,6 +43,43 @@ impl Sizer {
             target: "typescript",
             shape,
         })
+    }
+
+    fn record_size(&self, id: RecordId, value: &ValueRef) -> Result<SizeExpression> {
+        let codec = self
+            .context
+            .record(id)
+            .map(|record| Name::new(record.name()).codec_identifier())
+            .ok_or(Error::UnsupportedTarget {
+                target: "typescript",
+                shape: "record without declaration",
+            })??;
+        Ok(SizeExpression::dynamic(Expression::call(
+            Expression::identifier(codec),
+            Identifier::known("size"),
+            [self.value(value)?].into_iter().collect::<ArgumentList>(),
+        )))
+    }
+
+    fn enum_size(&self, id: EnumId, value: &ValueRef) -> Result<SizeExpression> {
+        let enumeration = self
+            .context
+            .enumeration(id)
+            .ok_or(Error::UnsupportedTarget {
+                target: "typescript",
+                shape: "enum without declaration",
+            })?;
+        match enumeration {
+            EnumDecl::CStyle(enumeration) => Ok(SizeExpression::dynamic(Expression::integer(
+                enumeration.repr().primitive().byte_size::<Wasm32>().get(),
+            ))),
+            EnumDecl::Data(enumeration) => Ok(SizeExpression::dynamic(Expression::call(
+                Expression::identifier(Name::new(enumeration.name()).codec_identifier()?),
+                Identifier::known("size"),
+                [self.value(value)?].into_iter().collect::<ArgumentList>(),
+            ))),
+            _ => Self::unsupported("unknown enum declaration"),
+        }
     }
 }
 
@@ -79,7 +121,7 @@ impl SizeExpression {
     }
 }
 
-impl CodecSize for Sizer {
+impl CodecSize for Sizer<'_> {
     type Expr = Result<SizeExpression>;
 
     fn primitive(&mut self, primitive: Primitive, _value: &ValueRef) -> Self::Expr {
@@ -99,20 +141,20 @@ impl CodecSize for Sizer {
         )))
     }
 
-    fn direct_record(&mut self, _id: RecordId, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("direct record codec size")
+    fn direct_record(&mut self, id: RecordId, value: &ValueRef) -> Self::Expr {
+        self.record_size(id, value)
     }
 
-    fn encoded_record(&mut self, _id: RecordId, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("encoded record codec size")
+    fn encoded_record(&mut self, id: RecordId, value: &ValueRef) -> Self::Expr {
+        self.record_size(id, value)
     }
 
-    fn c_style_enum(&mut self, _id: EnumId, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("C-style enum codec size")
+    fn c_style_enum(&mut self, id: EnumId, value: &ValueRef) -> Self::Expr {
+        self.enum_size(id, value)
     }
 
-    fn data_enum(&mut self, _id: EnumId, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("data enum codec size")
+    fn data_enum(&mut self, id: EnumId, value: &ValueRef) -> Self::Expr {
+        self.enum_size(id, value)
     }
 
     fn class_handle(&mut self, _id: ClassId, _value: &ValueRef) -> Self::Expr {
@@ -123,15 +165,30 @@ impl CodecSize for Sizer {
         Self::unsupported("callback handle codec size")
     }
 
-    fn custom<F>(&mut self, _id: CustomTypeId, _value: &ValueRef, _representation: F) -> Self::Expr
+    fn custom<F>(&mut self, id: CustomTypeId, value: &ValueRef, representation: F) -> Self::Expr
     where
         F: FnOnce(&mut Self, &ValueRef) -> Self::Expr,
     {
-        Self::unsupported("custom codec size")
+        self.context
+            .custom_type(id)
+            .ok_or(Error::UnsupportedTarget {
+                target: "typescript",
+                shape: "custom type without declaration",
+            })?;
+        representation(self, value)
     }
 
-    fn builtin(&mut self, _kind: BuiltinType, _value: &ValueRef) -> Self::Expr {
-        Self::unsupported("builtin codec size")
+    fn builtin(&mut self, kind: BuiltinType, value: &ValueRef) -> Self::Expr {
+        match kind {
+            BuiltinType::Duration | BuiltinType::SystemTime => {
+                Ok(SizeExpression::dynamic(Expression::integer(12)))
+            }
+            BuiltinType::Uuid => Ok(SizeExpression::dynamic(Expression::integer(16))),
+            BuiltinType::Url => Ok(SizeExpression::dynamic(Expression::invoke(
+                Identifier::known("wireStringSize"),
+                [self.value(value)?].into_iter().collect::<ArgumentList>(),
+            ))),
+        }
     }
 
     fn optional(&mut self, value: &ValueRef, binder: BinderId, inner: Self::Expr) -> Self::Expr {
@@ -151,12 +208,32 @@ impl CodecSize for Sizer {
 
     fn sequence(
         &mut self,
-        _value: &ValueRef,
-        _len: &Op<ElementCount>,
-        _binder: BinderId,
-        _element: Self::Expr,
+        value: &ValueRef,
+        len: &Op<ElementCount>,
+        binder: BinderId,
+        element: Self::Expr,
     ) -> Self::Expr {
-        Self::unsupported("sequence codec size")
+        let element = element?;
+        match element.kind() {
+            Some(SizeKind::Primitive(primitive)) => Ok(SizeExpression::dynamic(
+                Expression::integer(4).add(
+                    len.render_with(&mut Operation::new(self.current.clone(), value)?)?
+                        .multiply(Expression::integer(primitive.byte_size::<Wasm32>().get())),
+                ),
+            )),
+            _ => Ok(SizeExpression::dynamic(Expression::invoke(
+                Identifier::known("wireArraySize"),
+                [
+                    self.value(value)?,
+                    Expression::parameter_lambda(
+                        ValueExpression::binder(binder)?,
+                        element.into_expression(),
+                    ),
+                ]
+                .into_iter()
+                .collect::<ArgumentList>(),
+            ))),
+        }
     }
 
     fn tuple(&mut self, _value: &ValueRef, _elements: Vec<Self::Expr>) -> Self::Expr {
@@ -165,12 +242,22 @@ impl CodecSize for Sizer {
 
     fn result(
         &mut self,
-        _value: &ValueRef,
-        _binder: BinderId,
-        _ok: Self::Expr,
-        _err: Self::Expr,
+        value: &ValueRef,
+        binder: BinderId,
+        ok: Self::Expr,
+        err: Self::Expr,
     ) -> Self::Expr {
-        Self::unsupported("result codec size")
+        let binder = ValueExpression::binder(binder)?;
+        Ok(SizeExpression::dynamic(Expression::invoke(
+            Identifier::known("wireResultSize"),
+            [
+                self.value(value)?,
+                Expression::parameter_lambda(binder.clone(), ok?.into_expression()),
+                Expression::parameter_lambda(binder, err?.into_expression()),
+            ]
+            .into_iter()
+            .collect::<ArgumentList>(),
+        )))
     }
 
     fn map(

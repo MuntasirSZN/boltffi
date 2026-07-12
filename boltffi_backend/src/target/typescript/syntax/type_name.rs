@@ -30,6 +30,17 @@ impl TypeName {
         Self(name.to_string())
     }
 
+    pub fn generic(name: impl fmt::Display, arguments: impl IntoIterator<Item = Self>) -> Self {
+        Self(format!(
+            "{name}<{}>",
+            arguments
+                .into_iter()
+                .map(|argument| argument.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+
     pub fn array(element: Self) -> Self {
         Self(format!("{element}[]"))
     }

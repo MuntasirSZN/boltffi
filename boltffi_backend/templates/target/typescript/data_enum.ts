@@ -1,0 +1,27 @@
+
+
+export type {{ name }} =
+{% for variant in variants %}  | { readonly tag: {{ variant.tag }}{% for field in variant.fields %}; readonly {{ field.key }}: {{ field.ty }}{% endfor %} }{% if loop.last %};{% endif %}
+{% endfor %}
+const {{ codec }}: WireCodec<{{ name }}> = {
+  size: (value) => {
+    switch (value.tag) {
+{% for variant in variants %}      case {{ variant.tag }}: return {{ variant.size }};
+{% endfor %}    }
+  },
+  encode: (writer, value) => {
+    switch (value.tag) {
+{% for variant in variants %}      case {{ variant.tag }}:
+        writer.writeI32({{ variant.wire_tag }});
+{% for statement in variant.writes %}        {{ statement }}
+{% endfor %}        break;
+{% endfor %}    }
+  },
+  decode: (reader) => {
+    const tag = reader.readI32();
+    switch (tag) {
+{% for variant in variants %}      case {{ variant.wire_tag }}: return { tag: {{ variant.tag }}{% for field in variant.reads %}, {{ field.key }}: {{ field.value }}{% endfor %} };
+{% endfor %}      default: throw new Error(`Unknown {{ name }} wire tag: ${tag}`);
+    }
+  },
+};

@@ -5,7 +5,7 @@ use boltffi_binding::{
     TypeRef, Wasm32, wasm32,
 };
 
-use crate::core::{Emitted, Error, Result};
+use crate::core::{Emitted, Error, RenderContext, Result};
 
 use super::super::{
     codec::{ReadKind, Reader, SizeKind, Sizer, WriteKind, Writer},
@@ -57,14 +57,20 @@ enum ReturnConversion {
     },
 }
 
-struct ParameterRenderer {
+struct ParameterRenderer<'context> {
     name: Identifier,
+    context: &'context RenderContext<'context, Wasm32>,
 }
 
-struct ReturnRenderer;
+struct ReturnRenderer<'context> {
+    context: &'context RenderContext<'context, Wasm32>,
+}
 
 impl Function {
-    pub fn from_declaration(declaration: &FunctionDecl<Wasm32>) -> Result<Self> {
+    pub fn from_declaration(
+        declaration: &FunctionDecl<Wasm32>,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
         let callable = declaration.callable();
         if callable.execution().uses_async_execution() {
             return Err(Self::unsupported("asynchronous function"));
@@ -81,10 +87,13 @@ impl Function {
                     .payload()
                     .as_value()
                     .ok_or_else(|| Self::unsupported("closure parameter"))?
-                    .render_with(&mut ParameterRenderer { name })
+                    .render_with(&mut ParameterRenderer { name, context })
             })
             .collect::<Result<Vec<_>>>()?;
-        let returns = callable.returns().plan().render_with(&mut ReturnRenderer)?;
+        let returns = callable
+            .returns()
+            .plan()
+            .render_with(&mut ReturnRenderer { context })?;
         let arguments = parameters
             .iter()
             .flat_map(|parameter| parameter.arguments.iter().cloned())
@@ -138,12 +147,35 @@ impl Parameter {
         })
     }
 
-    fn encoded(name: Identifier, ty: &TypeRef, codec: &boltffi_binding::WritePlan) -> Result<Self> {
+    fn direct_enum(
+        name: Identifier,
+        id: boltffi_binding::EnumId,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        let ty = context
+            .enumeration(id)
+            .map(|enumeration| TypeName::named(Name::new(enumeration.name()).type_name()))
+            .ok_or_else(|| Function::unsupported("enum without declaration"))?;
+        Ok(Self {
+            ty,
+            arguments: vec![Expression::identifier(name.clone())],
+            name,
+            setup: Vec::new(),
+            cleanup: Vec::new(),
+        })
+    }
+
+    fn encoded(
+        name: Identifier,
+        ty: &TypeRef,
+        codec: &boltffi_binding::WritePlan,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
         let value = Expression::identifier(name.clone());
-        let size = codec.size_with(&mut Sizer::new(value.clone()))?;
+        let size = codec.size_with(&mut Sizer::new(value.clone(), context))?;
         let writer = Identifier::parse(format!("__boltffi_{name}_writer"))?;
         let writes = codec
-            .render_with(&mut Writer::new(writer.clone(), value.clone()))
+            .render_with(&mut Writer::new(writer.clone(), value.clone(), context))
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
         let allocation_method = match (size.kind(), writes.as_slice()) {
@@ -165,7 +197,7 @@ impl Parameter {
         let Some(allocation_method) = allocation_method else {
             let writer_value = Expression::identifier(writer.clone());
             return Ok(Self {
-                ty: Type::from_ref(ty)?,
+                ty: Type::from_ref(ty, context)?,
                 setup: std::iter::once(Statement::constant(
                     writer.clone(),
                     Expression::call(
@@ -193,7 +225,7 @@ impl Parameter {
         let allocation = Identifier::parse(format!("__boltffi_{name}_allocation"))?;
         let allocation_value = Expression::identifier(allocation.clone());
         Ok(Self {
-            ty: Type::from_ref(ty)?,
+            ty: Type::from_ref(ty, context)?,
             setup: vec![Statement::constant(
                 allocation.clone(),
                 Expression::call(
@@ -332,7 +364,7 @@ impl Return {
     }
 }
 
-impl<'plan> ParamPlanRender<'plan, Wasm32, IntoRust> for ParameterRenderer {
+impl<'plan> ParamPlanRender<'plan, Wasm32, IntoRust> for ParameterRenderer<'_> {
     type Output = Result<Parameter>;
 
     fn direct(&mut self, ty: &'plan DirectValueType, _receive: Receive) -> Self::Output {
@@ -340,9 +372,10 @@ impl<'plan> ParamPlanRender<'plan, Wasm32, IntoRust> for ParameterRenderer {
             DirectValueType::Primitive(primitive) => {
                 Parameter::direct(self.name.clone(), *primitive)
             }
-            DirectValueType::Record(_) | DirectValueType::Enum(_) => {
-                Err(Function::unsupported("direct aggregate parameter"))
+            DirectValueType::Enum(id) => {
+                Parameter::direct_enum(self.name.clone(), *id, self.context)
             }
+            DirectValueType::Record(_) => Err(Function::unsupported("direct aggregate parameter")),
             _ => Err(Function::unsupported("unknown direct parameter")),
         }
     }
@@ -355,7 +388,9 @@ impl<'plan> ParamPlanRender<'plan, Wasm32, IntoRust> for ParameterRenderer {
         _receive: Receive,
     ) -> Self::Output {
         match shape {
-            wasm32::BufferShape::Slice => Parameter::encoded(self.name.clone(), ty, codec),
+            wasm32::BufferShape::Slice => {
+                Parameter::encoded(self.name.clone(), ty, codec, self.context)
+            }
             wasm32::BufferShape::Packed => Err(Function::unsupported("packed encoded parameter")),
             _ => Err(Function::unsupported("unknown encoded parameter shape")),
         }
@@ -384,7 +419,7 @@ impl<'plan> ParamPlanRender<'plan, Wasm32, IntoRust> for ParameterRenderer {
     }
 }
 
-impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for ReturnRenderer {
+impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for ReturnRenderer<'_> {
     type Output = Result<Return>;
 
     fn void(&mut self) -> Self::Output {
@@ -406,9 +441,15 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                     _ => ReturnConversion::Direct,
                 },
             }),
-            DirectValueType::Record(_) | DirectValueType::Enum(_) => {
-                Err(Function::unsupported("direct aggregate return"))
-            }
+            DirectValueType::Enum(id) => Ok(Return {
+                ty: self
+                    .context
+                    .enumeration(*id)
+                    .map(|enumeration| Name::new(enumeration.name()).type_name())
+                    .ok_or_else(|| Function::unsupported("enum without declaration"))?,
+                conversion: ReturnConversion::Direct,
+            }),
+            DirectValueType::Record(_) => Err(Function::unsupported("direct aggregate return")),
             _ => Err(Function::unsupported("unknown direct return")),
         }
     }
@@ -426,20 +467,20 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
             return Err(Function::unsupported("encoded return placement"));
         }
         let reader = Identifier::known("__boltffiReader");
-        let read = codec.render_with(&mut Reader::new(reader.clone()))?;
+        let read = codec.render_with(&mut Reader::new(reader.clone(), self.context))?;
         let kind = read.kind();
         let decode = read.into_expression();
         match kind {
             Some(ReadKind::String) => Ok(Return {
-                ty: Type::from_ref(ty)?,
+                ty: Type::from_ref(ty, self.context)?,
                 conversion: ReturnConversion::String,
             }),
             Some(ReadKind::Bytes) => Ok(Return {
-                ty: Type::from_ref(ty)?,
+                ty: Type::from_ref(ty, self.context)?,
                 conversion: ReturnConversion::Bytes,
             }),
             Some(ReadKind::Primitive(_)) | None => Ok(Return {
-                ty: Type::from_ref(ty)?,
+                ty: Type::from_ref(ty, self.context)?,
                 conversion: ReturnConversion::Encoded { reader, decode },
             }),
         }

@@ -42,8 +42,11 @@ impl Expression {
         Self(format!("({parameter}) => {expression}"))
     }
 
-    pub fn statement_lambda(parameter: Identifier, statement: Statement) -> Self {
-        Self(format!("({parameter}) => {{ {statement} }}"))
+    pub fn statements_lambda(parameter: Identifier, statements: Vec<Statement>) -> Self {
+        Self(format!(
+            "({parameter}) => {{\n{}\n}}",
+            Statement::indent(statements)
+        ))
     }
 
     pub fn property(receiver: Self, property: Identifier) -> Self {
@@ -58,6 +61,10 @@ impl Expression {
         Self(value.to_string())
     }
 
+    pub fn signed_integer(value: i128) -> Self {
+        Self(value.to_string())
+    }
+
     pub fn null() -> Self {
         Self("null".to_owned())
     }
@@ -68,6 +75,10 @@ impl Expression {
 
     pub fn add(self, other: Self) -> Self {
         Self(format!("({self} + {other})"))
+    }
+
+    pub fn multiply(self, other: Self) -> Self {
+        Self(format!("({self} * {other})"))
     }
 
     pub fn strict_equal(self, other: Self) -> Self {
