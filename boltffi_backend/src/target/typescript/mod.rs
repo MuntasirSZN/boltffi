@@ -19,7 +19,7 @@ use crate::{
 };
 
 use name_style::ModuleName;
-use render::{CustomType, Enumeration, Function, Module, Record};
+use render::{Class, CustomType, Enumeration, Function, Module, Record};
 use syntax::{StringLiteral, Syntax};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -129,11 +129,11 @@ impl host::HostBackend for TypeScriptHost {
 
     fn class(
         &self,
-        _decl: &ClassDecl<Self::Surface>,
+        decl: &ClassDecl<Self::Surface>,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        Err(Self::unsupported("class"))
+        Class::from_declaration(decl, context)?.render()
     }
 
     fn callback(
@@ -331,6 +331,38 @@ mod tests {
 
                 #[export]
                 pub fn point_x(value: Point) -> f64 { value.x }
+                "#,
+            )
+            .expect("valid source"),
+            PackageInfo::new("demo", None),
+        )
+        .expect("source scans");
+        lower::<Wasm32>(&source).expect("source lowers")
+    }
+
+    fn class_bindings() -> Bindings<Wasm32> {
+        let source = boltffi_scan::scan_file(
+            syn::parse_str(
+                r#"
+                pub struct Counter(i32);
+
+                #[export]
+                impl Counter {
+                    pub fn new(initial: i32) -> Self { Self(initial) }
+
+                    pub fn get(&self) -> i32 { self.0 }
+
+                    pub fn add(&self, amount: i32) -> i32 { self.0 + amount }
+
+                    pub fn doubled(value: i32) -> i32 { value * 2 }
+
+                    pub fn duplicate(&self) -> Self { Self(self.0) }
+
+                    pub fn optional(value: Option<Self>) -> Option<Self> { value }
+                }
+
+                #[export]
+                pub fn describe_counter(value: &Counter) -> i32 { value.0 }
                 "#,
             )
             .expect("valid source"),
@@ -601,5 +633,51 @@ mod tests {
         assert!(browser.contents().contains("export const Point ="));
         assert!(browser.contents().contains("origin(): Point"));
         assert!(browser.contents().contains("xValue(self: Point): number"));
+    }
+
+    #[test]
+    fn renders_class_lifetimes_and_handle_calls_from_shared_plans() {
+        let output = TypeScriptHost::new("demo")
+            .expect("host constructs")
+            .into_target()
+            .render_partial(&class_bindings())
+            .expect("target renders");
+        let browser = output
+            .files()
+            .iter()
+            .find(|file| file.path().as_path().ends_with("demo.ts"))
+            .expect("browser module");
+
+        assert!(browser.contents().contains("export class Counter"));
+        assert!(
+            browser
+                .contents()
+                .contains("_CounterFinalizer?.register(this, handle, this);")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("static new(initial: number): Counter")
+        );
+        assert!(browser.contents().contains("get(): number"));
+        assert!(browser.contents().contains("this._borrowHandle()"));
+        assert!(
+            browser
+                .contents()
+                .contains("static doubled(value: number): number")
+        );
+        assert!(browser.contents().contains("duplicate(): Counter"));
+        assert!(browser.contents().contains("Counter._fromHandle("));
+        assert!(
+            browser
+                .contents()
+                .contains("optional(value: Counter | null): Counter | null")
+        );
+        assert!(browser.contents().contains("Counter._toHandle(value)"));
+        assert!(
+            browser
+                .contents()
+                .contains("export function describeCounter(value: Counter): number")
+        );
     }
 }

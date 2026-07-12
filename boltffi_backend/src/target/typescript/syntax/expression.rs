@@ -18,6 +18,10 @@ impl Expression {
         Self(identifier.to_string())
     }
 
+    pub fn this() -> Self {
+        Self("this".to_owned())
+    }
+
     pub fn string(literal: StringLiteral) -> Self {
         Self(literal.to_string())
     }
@@ -51,6 +55,10 @@ impl Expression {
 
     pub fn property(receiver: Self, property: Identifier) -> Self {
         Self(format!("{receiver}.{property}"))
+    }
+
+    pub fn static_call(ty: impl fmt::Display, method: Identifier, arguments: ArgumentList) -> Self {
+        Self(format!("{ty}.{method}({arguments})"))
     }
 
     pub fn index(receiver: Self, index: u32) -> Self {

@@ -4,7 +4,7 @@ use boltffi_binding::CanonicalName;
 
 use crate::core::{Result, name_case};
 
-use super::syntax::{Identifier, TypeName};
+use super::syntax::{Identifier, MemberName, TypeName};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ModuleName(String);
@@ -49,6 +49,10 @@ impl Name {
 
     pub fn type_name(&self) -> TypeName {
         TypeName::named(name_case::upper_camel(&self.0))
+    }
+
+    pub fn member(&self) -> Result<MemberName> {
+        MemberName::parse(name_case::lower_camel(&self.0))
     }
 
     pub fn codec_identifier(&self) -> Result<Identifier> {

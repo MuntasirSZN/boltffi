@@ -1,9 +1,9 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    DirectValueType, DirectVectorElementType, EnumDecl, EnumId, ErrorChannel, ExportedCallable,
-    ExportedMethodDecl, FunctionDecl, HandlePresence, HandleTarget, InitializerDecl, IntoRust,
-    NativeSymbol, ParamPlanRender, Primitive, Receive, RecordDecl, RecordId, ReturnPlanRender,
-    ReturnValueSlot, TypeRef, Wasm32, wasm32,
+    ClassId, DirectValueType, DirectVectorElementType, EnumDecl, EnumId, ErrorChannel,
+    ExportedCallable, ExportedMethodDecl, FunctionDecl, HandlePresence, HandleTarget,
+    InitializerDecl, IntoRust, NativeSymbol, ParamPlanRender, Primitive, Receive, RecordDecl,
+    RecordId, ReturnPlanRender, ReturnValueSlot, TypeRef, Wasm32, wasm32,
 };
 
 use crate::core::{CoverageMode, Diagnostic, Emitted, Error, RenderContext, Result};
@@ -12,13 +12,16 @@ use super::super::{
     codec::{ReadKind, Reader, SizeKind, Sizer, WriteKind, Writer},
     name_style::Name,
     render::{Type, direct_vector::DirectVector, scalar_option::ScalarOption},
-    syntax::{ArgumentList, Expression, Identifier, MethodDeclaration, Statement, TypeName},
+    syntax::{
+        ArgumentList, Expression, Identifier, MemberName, MethodDeclaration, Statement, TypeName,
+    },
 };
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/typescript/function.ts", escape = "none")]
 pub struct Function {
     name: Identifier,
+    member: MemberName,
     parameters: Vec<Parameter>,
     returns: TypeName,
     body: Vec<Statement>,
@@ -63,6 +66,10 @@ enum ReturnConversion {
         writer: Identifier,
         codec: Identifier,
     },
+    ClassHandle {
+        class: TypeName,
+        nullable: bool,
+    },
 }
 
 struct ParameterRenderer<'context> {
@@ -72,6 +79,11 @@ struct ParameterRenderer<'context> {
 
 struct ReturnRenderer<'context> {
     context: &'context RenderContext<'context, Wasm32>,
+}
+
+struct CallReceiver {
+    parameter: Option<Parameter>,
+    arguments: Vec<Expression>,
 }
 
 #[derive(Clone, Copy)]
@@ -116,6 +128,49 @@ impl Function {
         Self::owned_methods(ReceiverOwner::Enum(owner), initializers, methods, context)
     }
 
+    pub fn from_class_initializer(
+        initializer: &InitializerDecl<Wasm32>,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        Self::from_initializer(initializer, context)
+    }
+
+    pub fn from_class_method(
+        method: &ExportedMethodDecl<Wasm32, NativeSymbol>,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        Self::from_callable(
+            method.name(),
+            method.target(),
+            method.callable(),
+            method.callable().receiver().map(|_| CallReceiver::class()),
+            context,
+        )
+    }
+
+    pub fn render_class_method(&self, static_method: bool) -> Result<MethodDeclaration> {
+        #[derive(AskamaTemplate)]
+        #[template(path = "target/typescript/class_method.ts", escape = "none")]
+        struct ClassMethod<'function> {
+            name: &'function MemberName,
+            parameters: &'function [Parameter],
+            returns: &'function TypeName,
+            body: &'function [Statement],
+            static_method: bool,
+        }
+
+        Ok(MethodDeclaration::new(
+            ClassMethod {
+                name: &self.member,
+                parameters: &self.parameters,
+                returns: &self.returns,
+                body: &self.body,
+                static_method,
+            }
+            .render()?,
+        ))
+    }
+
     fn from_initializer(
         initializer: &InitializerDecl<Wasm32>,
         context: &RenderContext<Wasm32>,
@@ -141,7 +196,8 @@ impl Function {
             method
                 .callable()
                 .receiver()
-                .map(|receive| (ReceiverOwner::Record(owner), receive)),
+                .map(|receive| CallReceiver::value(ReceiverOwner::Record(owner), receive, context))
+                .transpose()?,
             context,
         )
     }
@@ -158,7 +214,8 @@ impl Function {
             method
                 .callable()
                 .receiver()
-                .map(|receive| (ReceiverOwner::Enum(owner), receive)),
+                .map(|receive| CallReceiver::value(ReceiverOwner::Enum(owner), receive, context))
+                .transpose()?,
             context,
         )
     }
@@ -167,7 +224,7 @@ impl Function {
         #[derive(AskamaTemplate)]
         #[template(path = "target/typescript/method.ts", escape = "none")]
         struct Method<'function> {
-            name: &'function Identifier,
+            name: &'function MemberName,
             parameters: &'function [Parameter],
             returns: &'function TypeName,
             body: &'function [Statement],
@@ -175,7 +232,7 @@ impl Function {
 
         Ok(MethodDeclaration::new(
             Method {
-                name: &self.name,
+                name: &self.member,
                 parameters: &self.parameters,
                 returns: &self.returns,
                 body: &self.body,
@@ -232,7 +289,7 @@ impl Function {
         name: &boltffi_binding::CanonicalName,
         symbol: &NativeSymbol,
         callable: &ExportedCallable<Wasm32>,
-        receiver: Option<(ReceiverOwner, Receive)>,
+        receiver: Option<CallReceiver>,
         context: &RenderContext<Wasm32>,
     ) -> Result<Self> {
         if callable.execution().uses_async_execution() {
@@ -242,7 +299,9 @@ impl Function {
             return Err(Self::unsupported("fallible function"));
         }
         let parameters = receiver
-            .map(|(owner, receive)| Parameter::receiver(owner, receive, context))
+            .as_ref()
+            .and_then(|receiver| receiver.parameter.clone())
+            .map(Ok)
             .into_iter()
             .chain(callable.params().iter().map(|parameter| {
                 let name = Name::new(parameter.name()).identifier()?;
@@ -257,9 +316,14 @@ impl Function {
             .returns()
             .plan()
             .render_with(&mut ReturnRenderer { context })?;
-        let arguments = parameters
+        let arguments = receiver
             .iter()
-            .flat_map(|parameter| parameter.arguments.iter().cloned())
+            .flat_map(|receiver| receiver.arguments.iter().cloned())
+            .chain(
+                parameters
+                    .iter()
+                    .flat_map(|parameter| parameter.arguments.iter().cloned()),
+            )
             .chain(returns.arguments.iter().cloned())
             .collect::<ArgumentList>();
         let call = Expression::native_call(Identifier::parse(symbol.name().as_str())?, arguments);
@@ -279,8 +343,10 @@ impl Function {
                 false => vec![Statement::try_finally(call, cleanup)],
             })
             .collect();
+        let name = Name::new(name);
         Ok(Self {
-            name: Name::new(name).identifier()?,
+            name: name.identifier()?,
+            member: name.member()?,
             parameters,
             returns: returns.ty,
             body,
@@ -291,6 +357,30 @@ impl Function {
         Error::UnsupportedTarget {
             target: "typescript",
             shape,
+        }
+    }
+}
+
+impl CallReceiver {
+    fn value(
+        owner: ReceiverOwner,
+        receive: Receive,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        Parameter::receiver(owner, receive, context).map(|parameter| Self {
+            parameter: Some(parameter),
+            arguments: Vec::new(),
+        })
+    }
+
+    fn class() -> Self {
+        Self {
+            parameter: None,
+            arguments: vec![Expression::call(
+                Expression::this(),
+                Identifier::known("_borrowHandle"),
+                ArgumentList::default(),
+            )],
         }
     }
 }
@@ -562,6 +652,36 @@ impl Parameter {
             name,
         })
     }
+
+    fn class_handle(
+        name: Identifier,
+        id: ClassId,
+        presence: HandlePresence,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        let class = context
+            .class(id)
+            .map(|class| Name::new(class.name()).type_name())
+            .ok_or_else(|| Function::unsupported("class without declaration"))?;
+        let ty = match presence {
+            HandlePresence::Required => class.clone(),
+            HandlePresence::Nullable => class.clone().nullable(),
+            _ => return Err(Function::unsupported("unknown class handle presence")),
+        };
+        Ok(Self {
+            ty,
+            arguments: vec![Expression::static_call(
+                class,
+                Identifier::known("_toHandle"),
+                [Expression::identifier(name.clone())]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+            )],
+            name,
+            setup: Vec::new(),
+            cleanup: Vec::new(),
+        })
+    }
 }
 
 impl Return {
@@ -680,6 +800,33 @@ impl Return {
                     .collect::<ArgumentList>(),
                 )),
             ],
+            ReturnConversion::ClassHandle { class, nullable } => match nullable {
+                false => vec![Statement::return_value(Expression::static_call(
+                    class,
+                    Identifier::known("_fromHandle"),
+                    [call].into_iter().collect::<ArgumentList>(),
+                ))],
+                true => {
+                    let handle = Identifier::known("__boltffiHandle");
+                    let value = Expression::identifier(handle.clone());
+                    vec![
+                        Statement::constant(handle, call),
+                        Statement::return_value(
+                            value
+                                .clone()
+                                .strict_equal(Expression::integer(0))
+                                .conditional(
+                                    Expression::null(),
+                                    Expression::static_call(
+                                        class,
+                                        Identifier::known("_fromHandle"),
+                                        [value].into_iter().collect::<ArgumentList>(),
+                                    ),
+                                ),
+                        ),
+                    ]
+                }
+            },
         }
     }
 }
@@ -720,12 +867,20 @@ impl<'plan> ParamPlanRender<'plan, Wasm32, IntoRust> for ParameterRenderer<'_> {
 
     fn handle(
         &mut self,
-        _target: &'plan HandleTarget,
-        _carrier: wasm32::HandleCarrier,
-        _presence: HandlePresence,
+        target: &'plan HandleTarget,
+        carrier: wasm32::HandleCarrier,
+        presence: HandlePresence,
         _receive: Receive,
     ) -> Self::Output {
-        Err(Function::unsupported("handle parameter"))
+        if !matches!(carrier, wasm32::HandleCarrier::U32) {
+            return Err(Function::unsupported("unknown handle carrier"));
+        }
+        match target {
+            HandleTarget::Class(id) => {
+                Parameter::class_handle(self.name.clone(), *id, presence, self.context)
+            }
+            _ => Err(Function::unsupported("handle parameter")),
+        }
     }
 
     fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {
@@ -813,12 +968,36 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
 
     fn handle(
         &mut self,
-        _slot: ReturnValueSlot,
-        _target: &'plan HandleTarget,
-        _carrier: wasm32::HandleCarrier,
-        _presence: HandlePresence,
+        slot: ReturnValueSlot,
+        target: &'plan HandleTarget,
+        carrier: wasm32::HandleCarrier,
+        presence: HandlePresence,
     ) -> Self::Output {
-        Err(Function::unsupported("handle return"))
+        if !matches!(slot, ReturnValueSlot::ReturnSlot)
+            || !matches!(carrier, wasm32::HandleCarrier::U32)
+        {
+            return Err(Function::unsupported("handle return placement"));
+        }
+        let HandleTarget::Class(id) = target else {
+            return Err(Function::unsupported("handle return"));
+        };
+        let class = self
+            .context
+            .class(*id)
+            .map(|class| Name::new(class.name()).type_name())
+            .ok_or_else(|| Function::unsupported("class without declaration"))?;
+        let nullable = match presence {
+            HandlePresence::Required => false,
+            HandlePresence::Nullable => true,
+            _ => return Err(Function::unsupported("unknown class handle presence")),
+        };
+        Ok(Return::new(
+            match nullable {
+                true => class.clone().nullable(),
+                false => class.clone(),
+            },
+            ReturnConversion::ClassHandle { class, nullable },
+        ))
     }
 
     fn scalar_option(&mut self, primitive: Primitive) -> Self::Output {

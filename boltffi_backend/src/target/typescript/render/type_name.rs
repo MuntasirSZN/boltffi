@@ -88,8 +88,14 @@ impl TypeRefRender for TypeRefRenderer<'_> {
             })
     }
 
-    fn class(&mut self, _id: ClassId) -> Self::Output {
-        Type::unsupported("class type")
+    fn class(&mut self, id: ClassId) -> Self::Output {
+        self.context
+            .class(id)
+            .map(|class| RenderedType::new(Name::new(class.name()).type_name()))
+            .ok_or(Error::UnsupportedTarget {
+                target: "typescript",
+                shape: "class without declaration",
+            })
     }
 
     fn callback(&mut self, _id: CallbackId) -> Self::Output {

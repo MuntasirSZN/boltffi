@@ -9,7 +9,7 @@ use crate::core::{LanguageSyntax, syntax::sealed};
 
 pub use declaration::MethodDeclaration;
 pub use expression::{ArgumentList, Expression, Statement};
-pub use identifier::Identifier;
+pub use identifier::{Identifier, MemberName};
 pub use literal::{IntegerLiteral, StringLiteral};
 pub use property::PropertyKey;
 pub use type_name::TypeName;

@@ -1,3 +1,4 @@
+mod class;
 mod custom_type;
 mod direct_vector;
 mod enumeration;
@@ -7,6 +8,7 @@ mod record;
 mod scalar_option;
 mod type_name;
 
+pub use class::Class;
 pub use custom_type::CustomType;
 pub use enumeration::Enumeration;
 pub use function::Function;

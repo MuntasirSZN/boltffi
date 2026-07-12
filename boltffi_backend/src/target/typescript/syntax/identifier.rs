@@ -7,6 +7,9 @@ use super::Syntax;
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Identifier(String);
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MemberName(String);
+
 impl Identifier {
     pub fn parse(identifier: impl Into<String>) -> Result<Self> {
         let identifier = identifier.into();
@@ -44,4 +47,21 @@ impl fmt::Display for Identifier {
     }
 }
 
+impl MemberName {
+    pub fn parse(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        match Identifier::valid(&name) {
+            true => Ok(Self(name)),
+            false => Err(Error::InvalidTypeScriptIdentifier { identifier: name }),
+        }
+    }
+}
+
+impl fmt::Display for MemberName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 impl sealed::SyntaxFragment for Identifier {}
+impl sealed::SyntaxFragment for MemberName {}
