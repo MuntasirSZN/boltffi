@@ -500,7 +500,7 @@ impl Failure {
                         Vec::new(),
                         Expression::call(
                             Expression::identifier(Identifier::known("_module")),
-                            Identifier::known("takePackedUtf8String"),
+                            Identifier::known("takePackedWireString"),
                             [error_value.clone()].into_iter().collect::<ArgumentList>(),
                         ),
                     ),
@@ -622,10 +622,10 @@ impl Parameter {
             (Some(SizeKind::String), [write])
                 if matches!(write.kind(), Some(WriteKind::String)) =>
             {
-                Some(Identifier::known("allocString"))
+                Some(Identifier::known("allocWireString"))
             }
             (Some(SizeKind::Bytes), [write]) if matches!(write.kind(), Some(WriteKind::Bytes)) => {
-                Some(Identifier::known("allocBytes"))
+                Some(Identifier::known("allocWireBytes"))
             }
             _ => None,
         };
@@ -1046,14 +1046,14 @@ impl Return {
             ReturnConversion::Boolean => vec![Statement::return_value(call.not_zero())],
             ReturnConversion::String => vec![Statement::return_value(Expression::call(
                 Expression::identifier(Identifier::known("_module")),
-                Identifier::known("takePackedUtf8String"),
+                Identifier::known("takePackedWireString"),
                 [call.cast(TypeName::bigint())]
                     .into_iter()
                     .collect::<ArgumentList>(),
             ))],
             ReturnConversion::Bytes => vec![Statement::return_value(Expression::call(
                 Expression::identifier(Identifier::known("_module")),
-                Identifier::known("takePackedU8Array"),
+                Identifier::known("takePackedWireBytes"),
                 [call.cast(TypeName::bigint())]
                     .into_iter()
                     .collect::<ArgumentList>(),
@@ -1325,12 +1325,12 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                     match kind {
                         Some(ReadKind::String) => vec![Statement::return_value(Expression::call(
                             Expression::identifier(Identifier::known("_module")),
-                            Identifier::known("takePackedUtf8String"),
+                            Identifier::known("takePackedWireString"),
                             [packed].into_iter().collect::<ArgumentList>(),
                         ))],
                         Some(ReadKind::Bytes) => vec![Statement::return_value(Expression::call(
                             Expression::identifier(Identifier::known("_module")),
-                            Identifier::known("takePackedU8Array"),
+                            Identifier::known("takePackedWireBytes"),
                             [packed].into_iter().collect::<ArgumentList>(),
                         ))],
                         Some(ReadKind::Primitive(_)) | None => vec![

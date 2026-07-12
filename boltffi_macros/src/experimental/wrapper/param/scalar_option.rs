@@ -4,7 +4,7 @@ use syn::{Ident, Type};
 
 use crate::experimental::{
     error::Error,
-    wrapper::{Render, names},
+    wrapper::{Render, names, scalar_option::WasmScalar},
 };
 
 use super::Tokens;
@@ -80,7 +80,7 @@ impl Render<Wasm32, Input> for Renderer {
     fn render(self, input: Input) -> Result<Self::Output, Error> {
         let ident = &input.ident;
         let rust_type = &input.rust_type;
-        let value = Scalar::new(input.primitive, ident.clone()).some_value()?;
+        let value = WasmScalar::new(input.primitive, ident.clone()).incoming()?;
         Ok(Tokens {
             items: Vec::new(),
             ffi_parameters: vec![quote! { #ident: f64 }],
@@ -94,37 +94,6 @@ impl Render<Wasm32, Input> for Renderer {
             }],
             writebacks: Vec::new(),
             argument: quote! { #ident },
-        })
-    }
-}
-
-struct Scalar {
-    primitive: Primitive,
-    value: Ident,
-}
-
-impl Scalar {
-    fn new(primitive: Primitive, value: Ident) -> Self {
-        Self { primitive, value }
-    }
-
-    fn some_value(self) -> Result<proc_macro2::TokenStream, Error> {
-        let value = self.value;
-        Ok(match self.primitive {
-            Primitive::Bool => quote! { #value != 0.0 },
-            Primitive::F64 => quote! { #value },
-            Primitive::I8
-            | Primitive::U8
-            | Primitive::I16
-            | Primitive::U16
-            | Primitive::I32
-            | Primitive::U32
-            | Primitive::I64
-            | Primitive::U64
-            | Primitive::ISize
-            | Primitive::USize
-            | Primitive::F32 => quote! { #value as _ },
-            _ => return Err(Error::UnsupportedExpansion("scalar option primitive")),
         })
     }
 }

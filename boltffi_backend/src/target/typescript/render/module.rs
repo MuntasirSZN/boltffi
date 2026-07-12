@@ -1,5 +1,5 @@
 use askama::Template as AskamaTemplate;
-use boltffi_binding::Wasm32;
+use boltffi_binding::{Bindings, Wasm32, WasmImports};
 
 use crate::core::{
     FileLayout, FilePath, FilePlan, GeneratedOutput, RenderedDeclaration, Result, TextChunk,
@@ -11,6 +11,7 @@ use super::super::{name_style::ModuleName, syntax::StringLiteral};
 #[template(path = "target/typescript/browser.ts", escape = "none")]
 struct BrowserPreamble<'module> {
     runtime_package: &'module StringLiteral,
+    imports: &'module [StringLiteral],
 }
 
 #[derive(AskamaTemplate)]
@@ -18,6 +19,7 @@ struct BrowserPreamble<'module> {
 struct NodePreamble<'module> {
     runtime_package: &'module StringLiteral,
     wasm_file: &'module StringLiteral,
+    imports: &'module [StringLiteral],
 }
 
 #[derive(AskamaTemplate)]
@@ -39,13 +41,19 @@ impl<'module> Module<'module> {
 
     pub fn render<'decl>(
         &self,
+        bindings: &Bindings<Wasm32>,
         declarations: Vec<RenderedDeclaration<'decl, Wasm32>>,
     ) -> Result<GeneratedOutput> {
+        let imports = WasmImports::from_bindings(bindings)
+            .iter()
+            .map(|symbol| StringLiteral::new(symbol.name().as_str()))
+            .collect::<Vec<_>>();
         let browser = FileLayout::new()
             .with_file(
                 FilePlan::all(FilePath::new(self.name.browser_path())?).with_preamble(
                     BrowserPreamble {
                         runtime_package: self.runtime_package,
+                        imports: &imports,
                     }
                     .render()?,
                 ),
@@ -59,6 +67,7 @@ impl<'module> Module<'module> {
                         NodePreamble {
                             runtime_package: self.runtime_package,
                             wasm_file: &wasm_file,
+                            imports: &imports,
                         }
                         .render()?,
                     )

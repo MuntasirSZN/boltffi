@@ -174,12 +174,12 @@ impl host::HostBackend for TypeScriptHost {
 
     fn assemble<'decl>(
         &self,
-        _bindings: &Bindings<Self::Surface>,
+        bindings: &Bindings<Self::Surface>,
         _bridge: &Self::Bridge,
         _context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
-        Module::new(&self.module, &self.runtime_package).render(declarations)
+        Module::new(&self.module, &self.runtime_package).render(bindings, declarations)
     }
 }
 
@@ -514,10 +514,10 @@ mod tests {
         assert!(
             browser
                 .contents()
-                .contains("const __boltffi_value_allocation = _module.allocString(value);")
+                .contains("const __boltffi_value_allocation = _module.allocWireString(value);")
         );
         assert!(browser.contents().contains(
-            "return _module.takePackedUtf8String((_exports.boltffi_function_demo_echo_string as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
+            "return _module.takePackedWireString((_exports.boltffi_function_demo_echo_string as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
         ));
         assert!(
             browser
@@ -527,10 +527,10 @@ mod tests {
         assert!(
             browser
                 .contents()
-                .contains("const __boltffi_value_allocation = _module.allocBytes(value);")
+                .contains("const __boltffi_value_allocation = _module.allocWireBytes(value);")
         );
         assert!(browser.contents().contains(
-            "return _module.takePackedU8Array((_exports.boltffi_function_demo_echo_bytes as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
+            "return _module.takePackedWireBytes((_exports.boltffi_function_demo_echo_bytes as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
         ));
         assert!(browser.contents().contains(
             "export function echoVecI32(value: readonly number[] | Int32Array): Int32Array"
@@ -814,7 +814,7 @@ mod tests {
                 .contents()
                 .contains("export async function asyncName(value: string): Promise<string>")
         );
-        assert!(browser.contents().contains("_module.takePackedUtf8String("));
+        assert!(browser.contents().contains("_module.takePackedWireString("));
         assert!(browser.contents().contains(
             "export async function asyncValues(value: readonly number[] | Int32Array): Promise<Int32Array>"
         ));
@@ -870,7 +870,7 @@ mod tests {
         assert!(
             browser
                 .contents()
-                .contains("throw new Error(_module.takePackedUtf8String(__boltffiError))")
+                .contains("throw new Error(_module.takePackedWireString(__boltffiError))")
         );
         assert!(
             browser

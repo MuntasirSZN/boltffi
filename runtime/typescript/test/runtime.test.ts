@@ -383,6 +383,27 @@ describe("BoltFFIModule memory operations", () => {
     expect(reusedWriter.ptr).toBe(pointer);
     expect(reusedWriter.len).toBe(0);
   });
+
+  it("round-trips specialized wire strings and bytes", () => {
+    const { module, freedAllocations } = createHarness();
+    const stringAllocation = module.allocWireString("boltffi");
+    const bytesAllocation = module.allocWireBytes(Uint8Array.from([1, 2, 3]));
+    const packedString =
+      BigInt(stringAllocation.ptr) | (BigInt(stringAllocation.len) << 32n);
+    const packedBytes =
+      BigInt(bytesAllocation.ptr) | (BigInt(bytesAllocation.len) << 32n);
+
+    expect(module.takePackedWireString(packedString)).toBe("boltffi");
+    expect(Array.from(module.takePackedWireBytes(packedBytes))).toEqual([1, 2, 3]);
+    expect(freedAllocations).toContainEqual([
+      stringAllocation.ptr,
+      stringAllocation.len,
+    ]);
+    expect(freedAllocations).toContainEqual([
+      bytesAllocation.ptr,
+      bytesAllocation.len,
+    ]);
+  });
 });
 
 describe("BoltFFIModule async completion", () => {

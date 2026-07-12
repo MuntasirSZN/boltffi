@@ -2875,8 +2875,9 @@ where
         quote! {
             let __boltffi_registry = ::boltffi::__private::AsyncCallbackRegistry::current();
             let __boltffi_request = __boltffi_registry.allocate();
-            let __boltffi_guard =
-                ::boltffi::__private::AsyncCallbackRequestGuard::new(__boltffi_request);
+            let mut __boltffi_guard = Some(
+                ::boltffi::__private::AsyncCallbackRequestGuard::new(__boltffi_request)
+            );
             unsafe {
                 #call;
             }
@@ -2887,7 +2888,7 @@ where
                         if !__boltffi_completion.code.is_success() {
                             panic!("async callback failed");
                         }
-                        drop(__boltffi_guard);
+                        drop(__boltffi_guard.take());
                         std::task::Poll::Ready(())
                     }
                     None => std::task::Poll::Pending,
@@ -2905,8 +2906,9 @@ where
         quote! {
             let __boltffi_registry = ::boltffi::__private::AsyncCallbackRegistry::current();
             let __boltffi_request = __boltffi_registry.allocate();
-            let __boltffi_guard =
-                ::boltffi::__private::AsyncCallbackRequestGuard::new(__boltffi_request);
+            let mut __boltffi_guard = Some(
+                ::boltffi::__private::AsyncCallbackRequestGuard::new(__boltffi_request)
+            );
             unsafe {
                 #call;
             }
@@ -2919,7 +2921,7 @@ where
                         } else {
                             Err(#error)
                         };
-                        drop(__boltffi_guard);
+                        drop(__boltffi_guard.take());
                         std::task::Poll::Ready(__boltffi_return)
                     }
                     None => std::task::Poll::Pending,
@@ -2932,8 +2934,9 @@ where
         quote! {
             let __boltffi_registry = ::boltffi::__private::AsyncCallbackRegistry::current();
             let __boltffi_request = __boltffi_registry.allocate();
-            let __boltffi_guard =
-                ::boltffi::__private::AsyncCallbackRequestGuard::new(__boltffi_request);
+            let mut __boltffi_guard = Some(
+                ::boltffi::__private::AsyncCallbackRequestGuard::new(__boltffi_request)
+            );
             unsafe {
                 #call;
             }
@@ -2944,7 +2947,7 @@ where
                         if !__boltffi_completion.code.is_success() {
                             panic!("async callback failed");
                         }
-                        drop(__boltffi_guard);
+                        drop(__boltffi_guard.take());
                         std::task::Poll::Ready(#value)
                     }
                     None => std::task::Poll::Pending,

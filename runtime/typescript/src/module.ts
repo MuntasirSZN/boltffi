@@ -320,6 +320,21 @@ export class BoltFFIModule {
     return { ptr, len: encoded.length };
   }
 
+  allocWireString(value: string): StringAlloc {
+    return this.allocWireBytes(this._encoder.encode(value));
+  }
+
+  allocWireBytes(value: Uint8Array): StringAlloc {
+    const len = 4 + value.length;
+    const ptr = this.exports.boltffi_wasm_alloc(len);
+    if (ptr === 0) {
+      throw new Error("Failed to allocate memory for wire value");
+    }
+    this.getView().setUint32(ptr, value.length, true);
+    this.getBytes().set(value, ptr + 4);
+    return { ptr, len };
+  }
+
   freeAlloc(alloc: StringAlloc): void {
     if (alloc.ptr !== 0 && alloc.len !== 0) {
       this.exports.boltffi_wasm_free(alloc.ptr, alloc.len);
@@ -806,6 +821,40 @@ export class BoltFFIModule {
     const bytes = new Uint8Array(this._memory.buffer, pointer, length);
     try {
       return this._decoder.decode(bytes);
+    } finally {
+      this.freePacked(pointer, length);
+    }
+  }
+
+  takePackedWireString(packed: bigint): string {
+    const { pointer, length } = this.unpackPacked(packed);
+    if (pointer === 0 || length < 4) {
+      throw new Error("Invalid packed wire string");
+    }
+    try {
+      const payloadLength = this.getView().getUint32(pointer, true);
+      if (payloadLength !== length - 4) {
+        throw new Error("Invalid packed wire string length");
+      }
+      return this._decoder.decode(
+        new Uint8Array(this._memory.buffer, pointer + 4, payloadLength)
+      );
+    } finally {
+      this.freePacked(pointer, length);
+    }
+  }
+
+  takePackedWireBytes(packed: bigint): Uint8Array {
+    const { pointer, length } = this.unpackPacked(packed);
+    if (pointer === 0 || length < 4) {
+      throw new Error("Invalid packed wire bytes");
+    }
+    try {
+      const payloadLength = this.getView().getUint32(pointer, true);
+      if (payloadLength !== length - 4) {
+        throw new Error("Invalid packed wire bytes length");
+      }
+      return new Uint8Array(this._memory.buffer, pointer + 4, payloadLength).slice();
     } finally {
       this.freePacked(pointer, length);
     }

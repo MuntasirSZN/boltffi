@@ -82,6 +82,7 @@ mod direction;
 mod error;
 mod error_payloads;
 mod ids;
+mod imports;
 mod layout;
 mod metadata;
 mod name;
@@ -129,6 +130,7 @@ pub use ids::{
     CallbackId, ClassId, ConstantId, CustomTypeId, DeclarationId, EnumId, FunctionId,
     InitializerId, MethodId, RecordId, StreamId, SymbolId,
 };
+pub use imports::WasmImports;
 pub use layout::{AlignmentError, ByteAlignment, ByteOffset, ByteSize, FieldLayout, RecordLayout};
 pub use metadata::{
     DeclMeta, DefaultValue, DeprecationInfo, DocComment, ElementMeta, FloatValue, IntegerValue,
