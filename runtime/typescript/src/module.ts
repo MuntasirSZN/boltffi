@@ -459,6 +459,44 @@ export class BoltFFIModule {
     }
   }
 
+  copyPrimitiveBufferInto(
+    allocation: PrimitiveBufferAlloc,
+    target: Int8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array,
+    elementType: Exclude<PrimitiveBufferElementType, "bool" | "u8">
+  ): void {
+    const { ptr, len } = allocation;
+    switch (elementType) {
+      case "i8":
+        (target as Int8Array).set(this.getI8().subarray(ptr, ptr + len));
+        return;
+      case "i16":
+        (target as Int16Array).set(this.getI16().subarray(ptr >>> 1, (ptr >>> 1) + len));
+        return;
+      case "u16":
+        (target as Uint16Array).set(this.getU16().subarray(ptr >>> 1, (ptr >>> 1) + len));
+        return;
+      case "i32":
+      case "isize":
+        (target as Int32Array).set(this.getI32().subarray(ptr >>> 2, (ptr >>> 2) + len));
+        return;
+      case "u32":
+      case "usize":
+        (target as Uint32Array).set(this.getU32().subarray(ptr >>> 2, (ptr >>> 2) + len));
+        return;
+      case "i64":
+        (target as BigInt64Array).set(this.getI64().subarray(ptr >>> 3, (ptr >>> 3) + len));
+        return;
+      case "u64":
+        (target as BigUint64Array).set(this.getU64().subarray(ptr >>> 3, (ptr >>> 3) + len));
+        return;
+      case "f32":
+        (target as Float32Array).set(this.getF32().subarray(ptr >>> 2, (ptr >>> 2) + len));
+        return;
+      case "f64":
+        (target as Float64Array).set(this.getF64().subarray(ptr >>> 3, (ptr >>> 3) + len));
+    }
+  }
+
   allocWriter(size: number): WriterAlloc {
     const requestedCapacity = Math.max(size, MIN_WRITER_CAPACITY);
     const pooled = this._writerPool.get(requestedCapacity);

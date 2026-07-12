@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AsyncFutureManager, BoltFFIModule } from "../src/module.js";
-import { WireReader, WireWriter, wireErr, wireOk } from "../src/wire.js";
+import { WireReader, WireWriter, wireErr, wireOk, wireOptionalSize } from "../src/wire.js";
 
 type ExportFunction = (...args: number[]) => number | void;
 
@@ -92,8 +92,8 @@ describe("WireReader and WireWriter", () => {
     writer.writeU32(3_456_789_012);
     writer.writeI64(-9_000_000_000n);
     writer.writeU64(18_000_000_000n);
-    writer.writeISize(-17n);
-    writer.writeUSize(23n);
+    writer.writeISize(-17);
+    writer.writeUSize(23);
     writer.writeF32(Math.PI);
     writer.writeF64(Math.E);
     writer.writeString("boltffi");
@@ -109,8 +109,8 @@ describe("WireReader and WireWriter", () => {
     expect(reader.readU32()).toBe(3_456_789_012);
     expect(reader.readI64()).toBe(-9_000_000_000n);
     expect(reader.readU64()).toBe(18_000_000_000n);
-    expect(reader.readISize()).toBe(-17n);
-    expect(reader.readUSize()).toBe(23n);
+    expect(reader.readISize()).toBe(-17);
+    expect(reader.readUSize()).toBe(23);
     expect(reader.readF32()).toBeCloseTo(Math.PI, 5);
     expect(reader.readF64()).toBeCloseTo(Math.E, 12);
     expect(reader.readString()).toBe("boltffi");
@@ -127,6 +127,8 @@ describe("WireReader and WireWriter", () => {
     expect(reader.readOptional(() => reader.readI32())).toBeNull();
     expect(reader.readOptional(() => reader.readI32())).toBe(33);
     expect(reader.readArray(() => reader.readU32())).toEqual([4, 5, 6]);
+    expect(wireOptionalSize(null, () => 8)).toBe(1);
+    expect(wireOptionalSize(33n, () => 8)).toBe(9);
   });
 
   it("decodes readResult success and error branches", () => {
@@ -329,6 +331,21 @@ describe("BoltFFIModule memory operations", () => {
 
     module.freePrimitiveBuffer(allocation);
     expect(freedAllocations).toContainEqual([allocation.ptr, allocation.allocationSize]);
+  });
+
+  it("copies mutable primitive buffers back with typed-array bulk operations", () => {
+    const { module } = createHarness();
+    const allocation = module.allocU64Array(BigUint64Array.from([1n, 2n]));
+    const updated = BigUint64Array.from([9n, 10n]);
+    module.writeToMemory(
+      allocation.ptr,
+      new Uint8Array(updated.buffer, updated.byteOffset, updated.byteLength)
+    );
+    const target = new BigUint64Array(2);
+
+    module.copyPrimitiveBufferInto(allocation, target, "u64");
+
+    expect(Array.from(target)).toEqual([9n, 10n]);
   });
 
   it("reuses pooled writers when capacity matches", () => {

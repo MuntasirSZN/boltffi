@@ -721,6 +721,31 @@ mod tests {
     }
 
     #[test]
+    fn wasm32_lossy_scalar_options_use_encoded_returns() {
+        [
+            Primitive::I64,
+            Primitive::U64,
+            Primitive::F32,
+            Primitive::F64,
+        ]
+        .into_iter()
+        .for_each(|primitive| {
+            let bindings = TestContract::new()
+                .with_function(returning(
+                    "demo::maybe_value",
+                    "maybe_value",
+                    TypeExpr::option(TypeExpr::Primitive(primitive)),
+                ))
+                .lower_ok::<Wasm32>();
+
+            assert!(matches!(
+                first_function(&bindings).callable().returns().plan(),
+                ReturnPlan::EncodedViaReturnSlot { .. }
+            ));
+        });
+    }
+
+    #[test]
     fn option_string_return_stays_encoded() {
         let bindings = TestContract::new()
             .with_function(returning(
@@ -919,6 +944,32 @@ mod tests {
                 primitive: BindingPrimitive::I32,
             }
         );
+    }
+
+    #[test]
+    fn wasm32_lossy_scalar_options_use_encoded_parameters() {
+        [
+            Primitive::I64,
+            Primitive::U64,
+            Primitive::F32,
+            Primitive::F64,
+        ]
+        .into_iter()
+        .for_each(|primitive| {
+            let bindings = TestContract::new()
+                .with_function(taking(
+                    "demo::set_value",
+                    "set_value",
+                    "value",
+                    TypeExpr::option(TypeExpr::Primitive(primitive)),
+                ))
+                .lower_ok::<Wasm32>();
+
+            assert!(matches!(
+                first_param_lower(&bindings),
+                ParamPlan::Encoded { .. }
+            ));
+        });
     }
 
     #[test]

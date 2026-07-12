@@ -141,24 +141,24 @@ enum ValueSpecialization {
 }
 
 impl ValueSpecialization {
-    fn from_type_expr(
+    fn from_type_expr<S: SurfaceLower>(
         index: &Index,
         ids: &DeclarationIds,
         type_expr: &TypeExpr,
     ) -> Result<Option<Self>, LowerError> {
-        Self::from_parameter(index, ids, type_expr, Receive::ByValue)
+        Self::from_parameter::<S>(index, ids, type_expr, Receive::ByValue)
     }
 
-    fn from_parameter(
+    fn from_parameter<S: SurfaceLower>(
         index: &Index,
         ids: &DeclarationIds,
         type_expr: &TypeExpr,
         receive: Receive,
     ) -> Result<Option<Self>, LowerError> {
         match (type_expr, receive) {
-            (TypeExpr::Option(inner), Receive::ByValue) => {
-                Ok(Self::primitive(inner).map(Self::ScalarOption))
-            }
+            (TypeExpr::Option(inner), Receive::ByValue) => Ok(Self::primitive(inner)
+                .and_then(S::scalar_option)
+                .map(Self::ScalarOption)),
             (TypeExpr::Vec(inner), Receive::ByValue) => {
                 Self::direct_vector_element(index, ids, inner)
                     .map(|element| element.map(Self::DirectVector))

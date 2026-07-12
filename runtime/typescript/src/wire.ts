@@ -74,12 +74,12 @@ export class WireReader {
     return value;
   }
 
-  readISize(): bigint {
-    return this.readI64();
+  readISize(): number {
+    return this.readI32();
   }
 
-  readUSize(): bigint {
-    return this.readU64();
+  readUSize(): number {
+    return this.readU32();
   }
 
   readF32(): number {
@@ -439,12 +439,12 @@ export class WireWriter {
     this.offset += 8;
   }
 
-  writeISize(value: bigint): void {
-    this.writeI64(value);
+  writeISize(value: number): void {
+    this.writeI32(value);
   }
 
-  writeUSize(value: bigint): void {
-    this.writeU64(value);
+  writeUSize(value: number): void {
+    this.writeU32(value);
   }
 
   writeF32(value: number): void {
@@ -555,6 +555,10 @@ export class WireWriter {
 
 export function wireStringSize(value: string): number {
   return 4 + UTF8_ENCODER.encode(value).length;
+}
+
+export function wireOptionalSize<T>(value: T | null, size: (value: T) => number): number {
+  return value === null ? 1 : 1 + size(value);
 }
 
 export interface WireCodec<T> {

@@ -3,6 +3,7 @@ export {
   WireWriter,
   wireOk,
   wireErr,
+  wireOptionalSize,
   wireStringSize,
 } from "./wire.js";
 export type { Duration, WireOk, WireErr, WireResult, WasmWireWriterAllocator, WireCodec } from "./wire.js";
