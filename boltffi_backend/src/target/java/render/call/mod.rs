@@ -1,10 +1,13 @@
+mod asynchronous;
+
 use askama::Template as AskamaTemplate;
+use asynchronous::{AsyncCall, BoundArguments};
 use boltffi_binding::{
     ClassId, ClosureReturn, DataVariantPayload, DirectValueType, DirectVectorElementType,
-    Direction, EnumDecl, ErrorChannel, ExportedCallable, ExportedMethodDecl, FunctionDecl,
-    HandlePresence, HandleTarget, InitializerDecl, IntoRust, Native, NativeSymbol, OutOfRust,
-    ParamDecl, ParamPlanRender, Primitive as BindingPrimitive, ReadPlan, Receive, ReturnPlanRender,
-    ReturnValueSlot, TypeRef, native,
+    Direction, EnumDecl, ErrorChannel, ExecutionDecl, ExportedCallable, ExportedMethodDecl,
+    FunctionDecl, HandlePresence, HandleTarget, InitializerDecl, IntoRust, Native, NativeSymbol,
+    OutOfRust, ParamDecl, ParamPlanRender, Primitive as BindingPrimitive, ReadPlan, Receive,
+    ReturnPlanRender, ReturnValueSlot, TypeRef, native,
 };
 
 use crate::{
@@ -40,10 +43,18 @@ struct FunctionTemplate<'call> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Call {
     signature: CallSignature,
-    native: Method,
     doc: Option<Javadoc>,
-    body: Vec<Statement>,
+    execution: CallExecution,
     runtime: RuntimeRequirement,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CallExecution {
+    Synchronous {
+        native: Method,
+        body: Vec<Statement>,
+    },
+    Asynchronous(AsyncCall),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,7 +97,7 @@ enum ReceiverMutation {
     Encoded,
 }
 
-struct BoundParameter {
+pub struct BoundParameter {
     signature: Parameter<ValueType>,
     native: NativeArgument,
 }
@@ -134,7 +145,7 @@ enum ReturnContext {
     ClassInitializer(ClassId),
 }
 
-struct CallReturn {
+pub struct CallReturn {
     ty: ReturnType,
     native: ReturnType,
     conversion: ReturnConversion,
@@ -148,7 +159,7 @@ struct CallReturnRender<'context> {
 }
 
 #[derive(Clone, Copy)]
-struct CallScope<'scope, 'bindings> {
+pub struct CallScope<'scope, 'bindings> {
     bridge: &'scope JniBridgeContract,
     native_owner: &'scope TypeIdentifier,
     version: JavaVersion,
@@ -157,7 +168,8 @@ struct CallScope<'scope, 'bindings> {
     return_context: ReturnContext,
 }
 
-enum ErrorConversion {
+#[derive(Clone)]
+pub enum ErrorConversion {
     None,
     Status,
     Encoded { ty: TypeRef, codec: ReadPlan },
@@ -190,6 +202,9 @@ impl Call {
         version: JavaVersion,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
+        if declaration.callable().execution().uses_async_execution() {
+            return Err(JavaHost::unsupported("asynchronous initializer"));
+        }
         FunctionShape::classify_callable(declaration.callable(), ReceiverSupport::Direct)
             .require_supported()?;
         Self::build(
@@ -208,6 +223,9 @@ impl Call {
         name: Identifier,
         scope: AssociatedCallContext<'_, '_>,
     ) -> Result<Self> {
+        if declaration.callable().execution().uses_async_execution() {
+            return Err(JavaHost::unsupported("asynchronous initializer"));
+        }
         FunctionShape::classify_callable(declaration.callable(), ReceiverSupport::Forbidden)
             .require_supported()?;
         Self::build(
@@ -254,20 +272,26 @@ impl Call {
     }
 
     pub fn render(&self) -> Result<Emitted> {
-        let emitted = Emitted::primary(FunctionTemplate { call: self }.render()?)
-            .with_aux(AuxChunk::ForwardDecl(self.native.render()?.into()));
+        let emitted = self.native_forwards()?.into_iter().fold(
+            Emitted::primary(FunctionTemplate { call: self }.render()?),
+            Emitted::with_aux,
+        );
         let emitted = match self.runtime.requires_wire() {
             true => emitted.with_aux(Runtime::helper()?),
             false => emitted,
         };
-        match self.runtime.requires_direct_vector() {
-            true => Ok(emitted.with_aux(Runtime::direct_vector_helper()?)),
+        let emitted = match self.runtime.requires_direct_vector() {
+            true => emitted.with_aux(Runtime::direct_vector_helper()?),
+            false => emitted,
+        };
+        match self.requires_async_runtime() {
+            true => Ok(emitted.with_aux(Runtime::async_helper()?)),
             false => Ok(emitted),
         }
     }
 
-    pub fn native_forward(&self) -> Result<AuxChunk> {
-        Ok(AuxChunk::ForwardDecl(self.native.render()?.into()))
+    pub fn native_forwards(&self) -> Result<Vec<AuxChunk>> {
+        self.execution.native_forwards()
     }
 
     pub fn signature(&self) -> &CallSignature {
@@ -291,7 +315,17 @@ impl Call {
     }
 
     pub fn body(&self) -> &[Statement] {
-        &self.body
+        match &self.execution {
+            CallExecution::Synchronous { body, .. } => body,
+            CallExecution::Asynchronous(_) => &[],
+        }
+    }
+
+    pub fn async_call(&self) -> Option<&AsyncCall> {
+        match &self.execution {
+            CallExecution::Synchronous { .. } => None,
+            CallExecution::Asynchronous(call) => Some(call),
+        }
     }
 
     pub fn requires_wire_runtime(&self) -> bool {
@@ -300,6 +334,10 @@ impl Call {
 
     pub fn requires_direct_vector_runtime(&self) -> bool {
         self.runtime.requires_direct_vector()
+    }
+
+    pub fn requires_async_runtime(&self) -> bool {
+        matches!(self.execution, CallExecution::Asynchronous(_))
     }
 
     fn build(
@@ -343,6 +381,40 @@ impl Call {
             scope.native_owner,
             receiver_arguments.chain(parameter_arguments),
         )?;
+        let error = ErrorConversion::from_channel(callable.error().channel())?;
+        let runtime = receiver
+            .iter()
+            .map(|receiver| receiver.native.runtime)
+            .chain(parameters.iter().map(|parameter| parameter.native.runtime))
+            .fold(declared_return.runtime(), RuntimeRequirement::merge)
+            .merge(error.runtime());
+        if let ExecutionDecl::Asynchronous(protocol) = callable.execution() {
+            let asynchronous = AsyncCall::new(
+                protocol,
+                native,
+                native_call,
+                &declared_return,
+                &error,
+                BoundArguments::new(receiver.as_ref(), &parameters),
+                scope,
+            )?;
+            return Ok(Self {
+                signature: CallSignature::new(
+                    name,
+                    parameters
+                        .into_iter()
+                        .map(|parameter| parameter.signature)
+                        .collect(),
+                    declared_return.ty.future(scope.version),
+                )?,
+                doc,
+                execution: CallExecution::Asynchronous(asynchronous),
+                runtime,
+            });
+        }
+        if !matches!(callable.execution(), ExecutionDecl::Synchronous(_)) {
+            return Err(JavaHost::unsupported("function execution"));
+        }
         let (returns, native_returns, success) = match receiver
             .as_ref()
             .and_then(|receiver| receiver.mutation.as_ref())
@@ -396,13 +468,6 @@ impl Call {
             ),
         };
         native.validate_return(&native_returns)?;
-        let error = ErrorConversion::from_channel(callable.error().channel())?;
-        let runtime = receiver
-            .iter()
-            .map(|receiver| receiver.native.runtime)
-            .chain(parameters.iter().map(|parameter| parameter.native.runtime))
-            .fold(declared_return.runtime(), RuntimeRequirement::merge)
-            .merge(error.runtime());
         let success = error.wrap(success, scope.version, scope.context, scope.package)?;
         let protected = receiver
             .iter()
@@ -446,11 +511,24 @@ impl Call {
                     .collect(),
                 returns,
             )?,
-            native,
             doc,
-            body,
+            execution: CallExecution::Synchronous { native, body },
             runtime,
         })
+    }
+}
+
+impl CallExecution {
+    fn native_forwards(&self) -> Result<Vec<AuxChunk>> {
+        let methods = match self {
+            Self::Synchronous { native, .. } => std::slice::from_ref(native),
+            Self::Asynchronous(call) => call.native_methods(),
+        };
+        methods
+            .iter()
+            .map(|method| method.render().map(Into::into).map(AuxChunk::ForwardDecl))
+            .chain(matches!(self, Self::Asynchronous(_)).then(Runtime::async_callback))
+            .collect()
     }
 }
 

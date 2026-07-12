@@ -1,3 +1,4 @@
+mod completion;
 mod handle;
 mod method;
 
@@ -15,6 +16,7 @@ use boltffi_binding::{
 
 use crate::{
     bridge::jni::{
+        CallbackCompletionPayloadValue, CallbackHandleCompletion,
         CallbackHandleMethod as JniCallbackHandleMethod, CallbackMethod as JniCallbackMethod,
         ClosureRegistration, JniBridgeContract, SuccessOutArgument,
     },
@@ -85,7 +87,9 @@ impl Callback {
         let methods = methods
             .iter()
             .zip(registration.methods())
-            .map(|(source, method)| Method::from_declaration(source, method, version, context))
+            .map(|(source, method)| {
+                Method::from_declaration(source, method, bridge, version, context)
+            })
             .collect::<Result<Vec<_>>>()?;
         if !registration.handle_methods().is_empty()
             && registration.handle_methods().len()
@@ -185,6 +189,18 @@ impl Callback {
         };
         let emitted = match self.direct_vector_runtime {
             true => emitted.with_aux(Runtime::direct_vector_helper()?),
+            false => emitted,
+        };
+        let emitted = match self.methods.iter().any(Method::is_asynchronous) {
+            true => emitted.with_aux(Runtime::callback_failure_helper()?),
+            false => emitted,
+        };
+        let emitted = match self
+            .handle_methods
+            .iter()
+            .any(HandleMethod::is_asynchronous)
+        {
+            true => emitted.with_aux(Runtime::callback_future_helper()?),
             false => emitted,
         };
         self.native_methods

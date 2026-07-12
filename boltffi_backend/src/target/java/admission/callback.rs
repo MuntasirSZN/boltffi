@@ -1,4 +1,4 @@
-use boltffi_binding::{CallbackDecl, ExecutionDecl, Native};
+use boltffi_binding::{CallbackDecl, ExecutionDecl, Native, native};
 
 use crate::{
     core::{Error, Result},
@@ -8,7 +8,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum CallbackShape {
     Supported,
-    Asynchronous,
+    AsyncProtocol,
     ClosureParameter,
 }
 
@@ -22,8 +22,12 @@ impl CallbackShape {
             .find_map(|method| {
                 let callable = method.callable();
                 [
-                    (!matches!(callable.execution(), ExecutionDecl::Synchronous(_)))
-                        .then_some(Self::Asynchronous),
+                    matches!(
+                        callable.execution(),
+                        ExecutionDecl::Asynchronous(protocol)
+                            if !matches!(protocol, native::AsyncProtocol::CallbackCompletion)
+                    )
+                    .then_some(Self::AsyncProtocol),
                     callable
                         .params()
                         .iter()
@@ -49,7 +53,7 @@ impl CallbackShape {
     pub const fn unsupported_reason(self) -> Option<&'static str> {
         match self {
             Self::Supported => None,
-            Self::Asynchronous => Some("asynchronous callback method"),
+            Self::AsyncProtocol => Some("asynchronous callback protocol"),
             Self::ClosureParameter => Some("callback closure parameter"),
         }
     }

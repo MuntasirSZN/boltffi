@@ -53,6 +53,7 @@ BRIDGE_REGISTRATION_PREFIXES = (
     "boltffi_register_callback_",
 )
 JAVA_HELPER_PREFIXES = (
+    "boltffi_async_callback_complete_",
     "boltffi_callback_handle_",
     "boltffi_success_",
 )

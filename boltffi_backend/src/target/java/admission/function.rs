@@ -1,7 +1,8 @@
 use boltffi_binding::{
-    ClosureReturn, DirectValueType, DirectVectorElementType, Direction, ExportedCallable,
-    FunctionDecl, HandlePresence, HandleTarget, IntoRust, Native, OutOfRust, ParamPlanRender,
-    Primitive as BindingPrimitive, Receive, ReturnPlanRender, ReturnValueSlot, TypeRef, native,
+    ClosureReturn, DirectValueType, DirectVectorElementType, Direction, ExecutionDecl,
+    ExportedCallable, FunctionDecl, HandlePresence, HandleTarget, IntoRust, Native, OutOfRust,
+    ParamPlanRender, Primitive as BindingPrimitive, Receive, ReturnPlanRender, ReturnValueSlot,
+    TypeRef, native,
 };
 
 use crate::{
@@ -16,7 +17,7 @@ use crate::{
 pub enum FunctionShape {
     Supported,
     Receiver,
-    Asynchronous,
+    AsyncProtocol,
     ParameterSlots,
     PrimitiveParameter,
     UnknownDirectParameter,
@@ -98,10 +99,12 @@ impl FunctionShape {
         [
             (receiver.is_some() && matches!(receiver_support, ReceiverSupport::Forbidden))
                 .then_some(Self::Receiver),
-            callable
-                .execution()
-                .uses_async_execution()
-                .then_some(Self::Asynchronous),
+            matches!(
+                callable.execution(),
+                ExecutionDecl::Asynchronous(protocol)
+                    if !matches!(protocol, native::AsyncProtocol::PollHandle { .. })
+            )
+            .then_some(Self::AsyncProtocol),
             parameter,
             (!returns.is_supported()).then_some(returns),
         ]
@@ -133,7 +136,7 @@ impl FunctionShape {
         match self {
             Self::Supported => None,
             Self::Receiver => Some("free function receiver"),
-            Self::Asynchronous => Some("asynchronous function"),
+            Self::AsyncProtocol => Some("asynchronous function protocol"),
             Self::ParameterSlots => Some("method parameter slots exceed 255 units"),
             Self::PrimitiveParameter => Some("primitive Java representation"),
             Self::UnknownDirectParameter => Some("unknown direct function parameter"),

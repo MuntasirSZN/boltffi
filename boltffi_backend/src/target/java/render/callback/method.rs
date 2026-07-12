@@ -1,5 +1,7 @@
 use super::*;
 
+use super::completion::Completion;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Method {
     name: Identifier,
@@ -10,9 +12,19 @@ pub struct Method {
     jvm_return: ReturnType,
     setup: Vec<Statement>,
     body: Vec<Statement>,
+    asynchronous: Option<AsyncBody>,
     doc: Option<Javadoc>,
     wire_runtime: bool,
     direct_vector_runtime: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsyncBody {
+    call: Expression,
+    success: Vec<Statement>,
+    error_type: Option<TypeName>,
+    error: Vec<Statement>,
+    failure: Statement,
 }
 
 struct InvocationParameter {
@@ -78,10 +90,21 @@ enum SuccessOutOrder {
     Last,
 }
 
+struct MethodPlan {
+    source: Name,
+    name: Identifier,
+    jvm_name: Identifier,
+    success_out: Option<SuccessOutArgument>,
+    success_out_order: SuccessOutOrder,
+    doc: Option<Javadoc>,
+    completion: Option<Completion>,
+}
+
 impl Method {
     pub fn from_declaration(
         source: &ImportedMethodDecl<Native, VTableSlot>,
         method: &JniCallbackMethod,
+        bridge: &JniBridgeContract,
         version: JavaVersion,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -90,17 +113,27 @@ impl Method {
                 "callback method matches the JNI registration",
             ));
         }
-        if !matches!(source.callable().execution(), ExecutionDecl::Synchronous(_)) {
-            return Err(JavaHost::unsupported("asynchronous callback method"));
-        }
+        let completion = match source.callable().execution() {
+            ExecutionDecl::Synchronous(_) => None,
+            ExecutionDecl::Asynchronous(native::AsyncProtocol::CallbackCompletion) => {
+                Some(Completion::from_method(method, bridge, version)?)
+            }
+            ExecutionDecl::Asynchronous(_) => {
+                return Err(JavaHost::unsupported("asynchronous callback protocol"));
+            }
+            _ => return Err(JavaHost::unsupported("callback method execution")),
+        };
         Self::build(
             source.callable(),
-            Name::new(source.name()),
-            Name::new(source.name()).function(version)?,
-            Identifier::parse_for(method.method().as_str(), version)?,
-            method.success_out(),
-            SuccessOutOrder::First,
-            source.meta().doc().map(Javadoc::new),
+            MethodPlan {
+                source: Name::new(source.name()),
+                name: Name::new(source.name()).function(version)?,
+                jvm_name: Identifier::parse_for(method.method().as_str(), version)?,
+                success_out: method.success_out(),
+                success_out_order: SuccessOutOrder::First,
+                doc: source.meta().doc().map(Javadoc::new),
+                completion,
+            },
             version,
             context,
         )
@@ -122,12 +155,15 @@ impl Method {
         }
         Self::build(
             closure.invoke(),
-            Name::new(&CanonicalName::single("closure")),
-            Identifier::known("invoke"),
-            Identifier::known("call"),
-            registration.success_out(),
-            SuccessOutOrder::Last,
-            None,
+            MethodPlan {
+                source: Name::new(&CanonicalName::single("closure")),
+                name: Identifier::known("invoke"),
+                jvm_name: Identifier::known("call"),
+                success_out: registration.success_out(),
+                success_out_order: SuccessOutOrder::Last,
+                doc: None,
+                completion: None,
+            },
             version,
             context,
         )
@@ -135,15 +171,19 @@ impl Method {
 
     fn build(
         callable: &CallableDecl<Native, ForeignBody>,
-        source: Name,
-        name: Identifier,
-        jvm_name: Identifier,
-        success_out: Option<SuccessOutArgument>,
-        success_out_order: SuccessOutOrder,
-        doc: Option<Javadoc>,
+        plan: MethodPlan,
         version: JavaVersion,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
+        let MethodPlan {
+            source,
+            name,
+            jvm_name,
+            success_out,
+            success_out_order,
+            doc,
+            completion,
+        } = plan;
         let fallible =
             FallibleReturn::from_channel(source.clone(), callable.error().channel(), success_out)?;
         let parameters = callable
@@ -178,7 +218,7 @@ impl Method {
                 ))
             })
             .transpose()?;
-        let jvm_parameters = match success_out_order {
+        let jvm_parameters: Vec<_> = match success_out_order {
             SuccessOutOrder::First => success_out
                 .into_iter()
                 .chain(parameters.iter().map(|parameter| parameter.jvm.clone()))
@@ -189,6 +229,29 @@ impl Method {
                 .chain(success_out)
                 .collect(),
         };
+        let jvm_parameters = jvm_parameters
+            .into_iter()
+            .chain(
+                completion
+                    .as_ref()
+                    .map(Completion::parameters)
+                    .into_iter()
+                    .flatten(),
+            )
+            .collect();
+        let asynchronous = completion
+            .as_ref()
+            .map(|completion| {
+                AsyncBody::new(
+                    call.clone(),
+                    &returned,
+                    fallible.as_ref(),
+                    completion,
+                    version,
+                    context,
+                )
+            })
+            .transpose()?;
         Ok(Self {
             name,
             jvm_name,
@@ -197,21 +260,29 @@ impl Method {
                 .map(|parameter| parameter.public.clone())
                 .collect(),
             jvm_parameters,
-            public_return: returned.public.clone(),
-            jvm_return: match fallible {
-                Some(_) => {
+            public_return: match completion.as_ref() {
+                Some(_) => returned.public.future(version),
+                None => returned.public.clone(),
+            },
+            jvm_return: match (&completion, &fallible) {
+                (Some(_), _) => ReturnType::Void,
+                (None, Some(_)) => {
                     ReturnType::Value(ValueType::Reference(InvocationParameterRender::byte_array()))
                 }
-                None => returned.jvm.clone(),
+                (None, None) => returned.jvm.clone(),
             },
             setup: parameters
                 .iter()
                 .flat_map(|parameter| parameter.setup.iter().cloned())
                 .collect(),
-            body: match &fallible {
-                Some(fallible) => returned.fallible_statements(call, fallible, version, context)?,
-                None => returned.statements(call, version, context)?,
+            body: match (&completion, &fallible) {
+                (Some(_), _) => Vec::new(),
+                (None, Some(fallible)) => {
+                    returned.fallible_statements(call, fallible, version, context)?
+                }
+                (None, None) => returned.statements(call, version, context)?,
             },
+            asynchronous,
             doc,
             wire_runtime: returned.wire_runtime
                 || parameters.iter().any(|parameter| parameter.wire_runtime),
@@ -254,6 +325,14 @@ impl Method {
         &self.body
     }
 
+    pub fn asynchronous(&self) -> Option<&AsyncBody> {
+        self.asynchronous.as_ref()
+    }
+
+    pub fn is_asynchronous(&self) -> bool {
+        self.asynchronous.is_some()
+    }
+
     pub fn doc(&self) -> Option<&Javadoc> {
         self.doc.as_ref()
     }
@@ -264,6 +343,53 @@ impl Method {
 
     pub fn requires_direct_vector_runtime(&self) -> bool {
         self.direct_vector_runtime
+    }
+}
+
+impl AsyncBody {
+    pub fn call(&self) -> &Expression {
+        &self.call
+    }
+
+    pub fn success(&self) -> &[Statement] {
+        &self.success
+    }
+
+    pub fn error_type(&self) -> Option<&TypeName> {
+        self.error_type.as_ref()
+    }
+
+    pub fn error(&self) -> &[Statement] {
+        &self.error
+    }
+
+    pub fn failure(&self) -> &Statement {
+        &self.failure
+    }
+
+    fn new(
+        call: Expression,
+        returned: &InvocationReturn,
+        fallible: Option<&FallibleReturn>,
+        completion: &Completion,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let result = Expression::identifier(Identifier::known("__boltffi_result"));
+        let error = Expression::identifier(Identifier::known("__boltffi_error"));
+        Ok(Self {
+            call,
+            success: returned
+                .completion_statements(result, fallible, completion, version, context)?,
+            error_type: fallible
+                .map(|fallible| fallible.catch_type(version, context))
+                .transpose()?,
+            error: fallible
+                .map(|fallible| fallible.completion_statements(error, completion, version, context))
+                .transpose()?
+                .unwrap_or_default(),
+            failure: completion.failure(),
+        })
     }
 }
 
@@ -684,6 +810,214 @@ impl<'plan> ReturnPlanRender<'plan, Native, boltffi_binding::IntoRust>
 }
 
 impl InvocationReturn {
+    fn completion_statements(
+        &self,
+        value: Expression,
+        fallible: Option<&FallibleReturn>,
+        completion: &Completion,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        if fallible.is_some()
+            && matches!(
+                completion.payload(),
+                Some(CallbackCompletionPayloadValue::Bytes)
+            )
+        {
+            return self.fallible_completion_statements(value, completion, version, context);
+        }
+        let statements = match (&self.conversion, completion.payload()) {
+            (InvocationReturnConversion::Void, None) => vec![completion.success(None)],
+            (InvocationReturnConversion::Void, Some(CallbackCompletionPayloadValue::Bytes)) => {
+                vec![completion.success(Some(Self::empty_bytes()))]
+            }
+            (
+                InvocationReturnConversion::Direct,
+                Some(CallbackCompletionPayloadValue::Scalar(_)),
+            ) => vec![completion.success(Some(value))],
+            (
+                InvocationReturnConversion::DirectRecord,
+                Some(CallbackCompletionPayloadValue::Record),
+            ) => vec![completion.success(Some(
+                value.call(Identifier::known("toByteArray"), ArgumentList::default()),
+            ))],
+            (
+                InvocationReturnConversion::DirectEnum,
+                Some(CallbackCompletionPayloadValue::Scalar(_)),
+            ) => vec![completion.success(Some(
+                value.call(Identifier::known("nativeValue"), ArgumentList::default()),
+            ))],
+            (
+                InvocationReturnConversion::DirectVector(vector),
+                Some(CallbackCompletionPayloadValue::Bytes),
+            ) => vec![completion.success(Some(vector.callback_return_expression(value)))],
+            (
+                InvocationReturnConversion::ClassHandle(handle),
+                Some(CallbackCompletionPayloadValue::Scalar(_)),
+            ) => vec![completion.success(Some(handle.native_argument(value)?))],
+            (
+                InvocationReturnConversion::CallbackHandle(handle),
+                Some(CallbackCompletionPayloadValue::CallbackHandle),
+            ) => vec![completion.success(Some(handle.native_argument(value)?))],
+            (
+                InvocationReturnConversion::Encoded { source, codec, .. },
+                Some(CallbackCompletionPayloadValue::Bytes),
+            ) => Self::completion_bytes(
+                WireBuffer::new(source, version)?.write(codec, value, context)?,
+                completion,
+            ),
+            (
+                InvocationReturnConversion::ScalarOption { source, primitive },
+                Some(CallbackCompletionPayloadValue::Bytes),
+            ) => {
+                let writer = source.generated("writer", version)?;
+                let payload = source.generated("value", version)?;
+                let present = value
+                    .clone()
+                    .call(Identifier::known("isPresent"), ArgumentList::default());
+                let write = WireBuffer::new(source, version)?.write_statements(
+                    Expression::integer(1).add(present.conditional(
+                        Expression::integer(primitive.wire_size()),
+                        Expression::integer(0),
+                    )),
+                    vec![Statement::expression(
+                        Expression::identifier(writer.clone()).call(
+                            Identifier::known("writeOptional"),
+                            [
+                                value,
+                                Expression::lambda_statement(
+                                    [payload.clone()],
+                                    Statement::expression(Expression::identifier(writer).call(
+                                        Identifier::parse_for(
+                                            format!("write{}", primitive.wire_method_suffix()),
+                                            version,
+                                        )?,
+                                        [Expression::identifier(payload)].into_iter().collect(),
+                                    )),
+                                ),
+                            ]
+                            .into_iter()
+                            .collect(),
+                        ),
+                    )],
+                )?;
+                Self::completion_bytes(write, completion)
+            }
+            _ => {
+                return Err(JavaHost::broken_bridge_contract(
+                    "async callback return matches its completion payload",
+                ));
+            }
+        };
+        Ok(statements)
+    }
+
+    fn fallible_completion_statements(
+        &self,
+        value: Expression,
+        completion: &Completion,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        match &self.conversion {
+            InvocationReturnConversion::Void => {
+                Ok(vec![completion.success(Some(Self::empty_bytes()))])
+            }
+            InvocationReturnConversion::Direct => {
+                let ReturnType::Value(ValueType::Primitive(primitive)) = &self.public else {
+                    return Err(JavaHost::broken_bridge_contract(
+                        "direct callback return has a primitive Java type",
+                    ));
+                };
+                Self::primitive_completion_bytes(
+                    &Name::new(&CanonicalName::single("callback_result")),
+                    *primitive,
+                    value,
+                    completion,
+                    version,
+                )
+            }
+            InvocationReturnConversion::DirectEnum => {
+                let ReturnType::Value(ValueType::Primitive(primitive)) = &self.jvm else {
+                    return Err(JavaHost::broken_bridge_contract(
+                        "direct enum callback return has a primitive JNI type",
+                    ));
+                };
+                Self::primitive_completion_bytes(
+                    &Name::new(&CanonicalName::single("callback_result")),
+                    *primitive,
+                    value.call(Identifier::known("nativeValue"), ArgumentList::default()),
+                    completion,
+                    version,
+                )
+            }
+            InvocationReturnConversion::DirectRecord => Ok(vec![completion.success(Some(
+                value.call(Identifier::known("toByteArray"), ArgumentList::default()),
+            ))]),
+            InvocationReturnConversion::DirectVector(vector) => Ok(vec![
+                completion.success(Some(vector.callback_return_expression(value))),
+            ]),
+            InvocationReturnConversion::Encoded { source, codec, .. } => {
+                Ok(Self::completion_bytes(
+                    WireBuffer::new(source, version)?.write(codec, value, context)?,
+                    completion,
+                ))
+            }
+            InvocationReturnConversion::ScalarOption { .. } => {
+                self.completion_statements(value, None, completion, version, context)
+            }
+            InvocationReturnConversion::ClassHandle(handle) => Self::primitive_completion_bytes(
+                &Name::new(&CanonicalName::single("callback_result")),
+                handle.carrier(),
+                handle.native_argument(value)?,
+                completion,
+                version,
+            ),
+            InvocationReturnConversion::CallbackHandle(handle) => Self::primitive_completion_bytes(
+                &Name::new(&CanonicalName::single("callback_result")),
+                handle.carrier(),
+                handle.native_argument(value)?,
+                completion,
+                version,
+            ),
+        }
+    }
+
+    fn primitive_completion_bytes(
+        source: &Name,
+        primitive: Primitive,
+        value: Expression,
+        completion: &Completion,
+        version: JavaVersion,
+    ) -> Result<Vec<Statement>> {
+        let writer = source.generated("writer", version)?;
+        let write = WireBuffer::new(source, version)?.write_statements(
+            Expression::integer(primitive.wire_size()),
+            vec![Statement::expression(Expression::identifier(writer).call(
+                Identifier::parse_for(format!("write{}", primitive.wire_method_suffix()), version)?,
+                [value].into_iter().collect(),
+            ))],
+        )?;
+        Ok(Self::completion_bytes(write, completion))
+    }
+
+    fn completion_bytes(
+        write: crate::target::java::codec::EncodedWrite,
+        completion: &Completion,
+    ) -> Vec<Statement> {
+        let (acquire, prepare, bytes, cleanup) = write.into_bytes_parts();
+        acquire
+            .into_iter()
+            .chain(std::iter::once(Statement::try_finally(
+                prepare
+                    .into_iter()
+                    .chain(std::iter::once(completion.success(Some(bytes))))
+                    .collect(),
+                cleanup,
+            )))
+            .collect()
+    }
+
     fn fallible_statements(
         &self,
         call: Expression,
@@ -1032,7 +1366,48 @@ impl FallibleReturn {
         version: JavaVersion,
         context: &RenderContext<Native>,
     ) -> Result<Vec<Statement>> {
-        let payload = match &self.error_ty {
+        WireBuffer::new(&self.source, version)
+            .and_then(|buffer| {
+                buffer.write(&self.error_codec, self.payload(error, context)?, context)
+            })
+            .map(InvocationReturn::bytes_return)
+    }
+
+    fn completion_statements(
+        &self,
+        error: Expression,
+        completion: &Completion,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        if !matches!(
+            completion.payload(),
+            Some(CallbackCompletionPayloadValue::Bytes)
+        ) {
+            return Err(JavaHost::broken_bridge_contract(
+                "fallible async callback completion carries encoded bytes",
+            ));
+        }
+        let write = WireBuffer::new(&self.source, version)?.write(
+            &self.error_codec,
+            self.payload(error, context)?,
+            context,
+        )?;
+        let (acquire, prepare, bytes, cleanup) = write.into_bytes_parts();
+        Ok(acquire
+            .into_iter()
+            .chain(std::iter::once(Statement::try_finally(
+                prepare
+                    .into_iter()
+                    .chain(std::iter::once(completion.error(bytes)?))
+                    .collect(),
+                cleanup,
+            )))
+            .collect())
+    }
+
+    fn payload(&self, error: Expression, context: &RenderContext<Native>) -> Result<Expression> {
+        Ok(match &self.error_ty {
             TypeRef::String => error.call(Identifier::known("getMessage"), ArgumentList::default()),
             TypeRef::Record(_) => error,
             TypeRef::Enum(enumeration) => {
@@ -1056,9 +1431,6 @@ impl FallibleReturn {
                 }
             }
             _ => return Err(JavaHost::unsupported("callback error type")),
-        };
-        WireBuffer::new(&self.source, version)
-            .and_then(|buffer| buffer.write(&self.error_codec, payload, context))
-            .map(InvocationReturn::bytes_return)
+        })
     }
 }

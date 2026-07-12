@@ -135,12 +135,25 @@ impl Record {
             true => emitted.with_aux(Runtime::direct_vector_helper()?),
             false => emitted,
         };
+        let emitted = match self
+            .initializers
+            .iter()
+            .chain(&self.static_methods)
+            .chain(&self.instance_methods)
+            .any(Call::requires_async_runtime)
+        {
+            true => emitted.with_aux(Runtime::async_helper()?),
+            false => emitted,
+        };
         self.initializers
             .iter()
             .chain(&self.static_methods)
             .chain(&self.instance_methods)
             .try_fold(emitted, |emitted, call| {
-                Ok(emitted.with_aux(call.native_forward()?))
+                Ok(call
+                    .native_forwards()?
+                    .into_iter()
+                    .fold(emitted, Emitted::with_aux))
             })
     }
 

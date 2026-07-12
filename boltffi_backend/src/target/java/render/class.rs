@@ -163,8 +163,15 @@ impl Class {
             true => emitted.with_aux(crate::target::java::codec::Runtime::direct_vector_helper()?),
             false => emitted,
         };
+        let emitted = match self.calls().any(Call::requires_async_runtime) {
+            true => emitted.with_aux(crate::target::java::codec::Runtime::async_helper()?),
+            false => emitted,
+        };
         self.calls().try_fold(emitted, |emitted, call| {
-            Ok(emitted.with_aux(call.native_forward()?))
+            Ok(call
+                .native_forwards()?
+                .into_iter()
+                .fold(emitted, Emitted::with_aux))
         })
     }
 

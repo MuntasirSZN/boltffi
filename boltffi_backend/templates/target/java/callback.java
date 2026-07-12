@@ -39,9 +39,48 @@ final class {{ callback.callbacks_name() }} {
         {{ callback.name() }} implementation = VALUES.get(handle);
         if (implementation == null) throw new IllegalStateException("invalid callback handle");
 {% for statement in method.setup() %}        {{ statement }}
-{% endfor %}{% for statement in method.body() %}        {{ statement }}
+{% endfor %}{% if let Some(asynchronous) = method.asynchronous() %}        {{ method.public_return() }} __boltffi_future;
+        try {
+            __boltffi_future = {{ asynchronous.call() }};
+        } catch (Throwable __boltffi_failure) {
+            __boltffi_future = BoltFfiCallbackFailure.failed(__boltffi_failure);
+        }
+        if (__boltffi_future == null) {
+            {{ asynchronous.failure() }}
+            return;
+        }
+        __boltffi_future.whenComplete((__boltffi_result, __boltffi_failure) -> {
+            if (__boltffi_failure != null) {
+                Throwable __boltffi_cause = BoltFfiCallbackFailure.unwrap(__boltffi_failure);
+{% if let Some(error_type) = asynchronous.error_type() %}                if (__boltffi_cause instanceof {{ error_type }}) {
+                    {{ error_type }} __boltffi_error = ({{ error_type }}) __boltffi_cause;
+                    try {
+{% for statement in asynchronous.error() %}                        {{ statement }}
+{% endfor %}                    } catch (Throwable __boltffi_completion_failure) {
+                        {{ asynchronous.failure() }}
+                    }
+                    return;
+                }
+{% endif %}                {{ asynchronous.failure() }}
+                return;
+            }
+            try {
+{% for statement in asynchronous.success() %}                {{ statement }}
+{% endfor %}            } catch (Throwable __boltffi_completion_failure) {
+                {{ asynchronous.failure() }}
+            }
+        });
+{% else %}{% for statement in method.body() %}        {{ statement }}
+{% endfor %}{% endif %}    }
+{% endfor %}{% for method in callback.handle_methods() %}{% if let Some(asynchronous) = method.asynchronous() %}
+    static void {{ asynchronous.success() }}(long callbackData{% if let Some(result) = asynchronous.result() %}, {{ result.ty() }} {{ result.name() }}{% endif %}) {
+{% for statement in asynchronous.completion() %}        {{ statement }}
 {% endfor %}    }
-{% endfor %}}
+
+    static void {{ asynchronous.failure() }}(long callbackData) {
+        BoltFfiCallbackFutures.failure(callbackData, new RuntimeException("callback failed"));
+    }
+{% endif %}{% endfor %}}
 {% if !callback.handle_methods().is_empty() %}
 final class {{ callback.handle_name() }} implements {{ callback.name() }}, AutoCloseable {
     private final long handle;

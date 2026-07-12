@@ -290,6 +290,13 @@ CALLBACK_CASES = (
         "boltffi_method_class_demo_callbacks_sync_traits_data_consumer_compute_sum",
     ),
 )
+ASYNC_CASES = (
+    BenchmarkCase(
+        "async_add",
+        "boltffi_async_add",
+        "boltffi_function_demo_async_fns_async_add",
+    ),
+)
 SUITES = {
     suite.name: suite
     for suite in (
@@ -298,6 +305,7 @@ SUITES = {
         BenchmarkSuite("enum", "BoltffiJavaEnumBench", ENUM_CASES),
         BenchmarkSuite("class", "BoltffiJavaClassBench", CLASS_CASES),
         BenchmarkSuite("callback", "BoltffiJavaCallbackBench", CALLBACK_CASES),
+        BenchmarkSuite("async", "BoltffiJavaAsyncBench", ASYNC_CASES),
     )
 }
 ALL_CASES = tuple(case for suite in SUITES.values() for case in suite.cases)

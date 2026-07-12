@@ -112,6 +112,7 @@ JNIEXPORT jint JNICALL Java_com_boltffi_demo_Native_boltffi_1callback_1closure_1
         }
         __boltffi_arg0_needs_release = true;
     }
+
     uint32_t result = closure->call(closure->context, (const uint32_t *)arg0_ptr, (uintptr_t)arg0_len);
 
     if (arg0_ptr != NULL) {

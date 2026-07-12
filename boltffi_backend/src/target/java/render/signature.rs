@@ -240,6 +240,23 @@ impl ReturnType {
             Self::Value(_) => Err(FunctionShape::unexpected_shape()),
         }
     }
+
+    pub fn future(&self, version: JavaVersion) -> Self {
+        let value = match self {
+            Self::Void => TypeName::named(TypeIdentifier::known("Void", version)),
+            Self::Value(value) => value.boxed(version),
+        };
+        Self::Value(ValueType::Reference(TypeName::parameterized(
+            TypeName::qualified(
+                ["java", "util", "concurrent"]
+                    .into_iter()
+                    .map(Identifier::known)
+                    .collect(),
+                TypeIdentifier::known("CompletableFuture", version),
+            ),
+            [value],
+        )))
+    }
 }
 
 impl fmt::Display for ReturnType {
@@ -256,6 +273,14 @@ impl ValueType {
         match self {
             Self::Primitive(primitive) => primitive.slot_width(),
             Self::Record(_) | Self::Reference(_) => SlotWidth::Single,
+        }
+    }
+
+    fn boxed(&self, version: JavaVersion) -> TypeName {
+        match self {
+            Self::Primitive(primitive) => TypeName::boxed_primitive(*primitive, version),
+            Self::Record(record) => TypeName::named(record.clone()),
+            Self::Reference(reference) => reference.clone(),
         }
     }
 }

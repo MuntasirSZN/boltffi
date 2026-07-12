@@ -15,7 +15,7 @@ use crate::{
         primitive::Primitive,
         render::{
             ValueIdentity,
-            call::{AssociatedCallContext, ValueCalls, ValueReceiver},
+            call::{AssociatedCallContext, Call, ValueCalls, ValueReceiver},
             record::Field,
         },
         syntax::{Expression, Identifier, Javadoc, Statement, TypeIdentifier, TypeName},
@@ -220,16 +220,23 @@ impl CStyle {
     }
 
     fn render(&self, package: &JavaPackage) -> Result<Emitted> {
-        self.calls.iter().try_fold(
-            Emitted::primary(
-                CStyleTemplate {
-                    package,
-                    enumeration: self,
-                }
-                .render()?,
-            ),
-            |emitted, call| Ok(emitted.with_aux(call.native_forward()?)),
-        )
+        let emitted = Emitted::primary(
+            CStyleTemplate {
+                package,
+                enumeration: self,
+            }
+            .render()?,
+        );
+        let emitted = match self.calls.iter().any(Call::requires_async_runtime) {
+            true => emitted.with_aux(Runtime::async_helper()?),
+            false => emitted,
+        };
+        self.calls.iter().try_fold(emitted, |emitted, call| {
+            Ok(call
+                .native_forwards()?
+                .into_iter()
+                .fold(emitted, Emitted::with_aux))
+        })
     }
 }
 
@@ -326,6 +333,14 @@ impl Data {
             false => emitted,
         };
         let emitted = match self
+            .calls()
+            .iter()
+            .any(|call| call.requires_async_runtime())
+        {
+            true => emitted.with_aux(Runtime::async_helper()?),
+            false => emitted,
+        };
+        let emitted = match self
             .variants
             .iter()
             .flat_map(|variant| &variant.fields)
@@ -335,7 +350,10 @@ impl Data {
             false => emitted,
         };
         self.calls.iter().try_fold(emitted, |emitted, call| {
-            Ok(emitted.with_aux(call.native_forward()?))
+            Ok(call
+                .native_forwards()?
+                .into_iter()
+                .fold(emitted, Emitted::with_aux))
         })
     }
 }

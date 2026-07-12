@@ -428,6 +428,341 @@ const CLOSURES: &str = r#"
     }
 "#;
 
+const ASYNC_FUNCTIONS: &str = r#"
+    #[data]
+    pub struct AsyncPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    #[error]
+    pub enum AsyncError {
+        Unavailable,
+    }
+
+    #[export]
+    pub async fn refresh() {}
+
+    #[export]
+    pub async fn load_count(value: u32) -> u32 { value }
+
+    #[export]
+    pub async fn load_name() -> String { "ready".to_owned() }
+
+    #[export]
+    pub async fn load_point() -> AsyncPoint { AsyncPoint { x: 1.0, y: 2.0 } }
+
+    #[export]
+    pub async fn check(available: bool) -> Result<bool, AsyncError> {
+        if available { Ok(true) } else { Err(AsyncError::Unavailable) }
+    }
+
+    pub struct Worker;
+
+    #[export]
+    impl Worker {
+        pub fn new() -> Self { Self }
+        pub async fn run(&self, value: i32) -> i32 { value }
+    }
+"#;
+
+const ASYNC_RUNTIME_PROBE: &str = r#"
+    package com.boltffi.demo;
+
+    import java.util.concurrent.CompletableFuture;
+    import java.util.concurrent.CompletionException;
+    import java.util.concurrent.CountDownLatch;
+    import java.util.concurrent.atomic.AtomicInteger;
+    import java.util.concurrent.atomic.AtomicLong;
+
+    public final class AsyncRuntimeProbe {
+        private AsyncRuntimeProbe() {}
+
+        public static void main(String[] arguments) {
+            immediateReady();
+            asynchronousPending();
+            startFailure();
+            pollFailure();
+            completionFailure();
+            panicTranslation();
+            cancellation();
+            lifecycleFailure();
+            readyCancellationRace();
+        }
+
+        private static void immediateReady() {
+            AtomicInteger completed = new AtomicInteger();
+            AtomicInteger cancelled = new AtomicInteger();
+            AtomicInteger freed = new AtomicInteger();
+            CompletableFuture<Integer> result = BoltFfiAsync.call(
+                () -> 11L,
+                (future, continuation) -> BoltFfiAsync.resume(continuation, (byte) 0),
+                future -> {
+                    completed.incrementAndGet();
+                    return 42;
+                },
+                future -> cancelled.incrementAndGet(),
+                future -> freed.incrementAndGet()
+            );
+            require(result.join() == 42, "immediate value");
+            require(completed.get() == 1, "immediate completion");
+            require(cancelled.get() == 0, "immediate cancellation");
+            require(freed.get() == 1, "immediate free");
+        }
+
+        private static void asynchronousPending() {
+            AtomicInteger polls = new AtomicInteger();
+            AtomicInteger freed = new AtomicInteger();
+            AtomicLong continuation = new AtomicLong();
+            CompletableFuture<Integer> result = BoltFfiAsync.call(
+                () -> 12L,
+                (future, handle) -> {
+                    polls.incrementAndGet();
+                    continuation.set(handle);
+                },
+                future -> 73,
+                future -> fail("pending cancellation"),
+                future -> freed.incrementAndGet()
+            );
+            require(!result.isDone(), "pending result");
+            BoltFfiAsync.resume(continuation.get(), (byte) 1);
+            require(polls.get() == 2, "pending repoll");
+            require(!result.isDone(), "repoll result");
+            BoltFfiAsync.resume(continuation.get(), (byte) 0);
+            require(result.join() == 73, "pending value");
+            require(freed.get() == 1, "pending free");
+        }
+
+        private static void startFailure() {
+            AtomicInteger cancelled = new AtomicInteger();
+            AtomicInteger freed = new AtomicInteger();
+            CompletableFuture<Integer> result = BoltFfiAsync.call(
+                () -> { throw new IllegalStateException("start"); },
+                (future, continuation) -> fail("start poll"),
+                future -> failValue("start complete"),
+                future -> cancelled.incrementAndGet(),
+                future -> freed.incrementAndGet()
+            );
+            requireFailure(result, "start");
+            require(cancelled.get() == 0, "start cancellation");
+            require(freed.get() == 0, "start free");
+        }
+
+        private static void pollFailure() {
+            AtomicInteger cancelled = new AtomicInteger();
+            AtomicInteger freed = new AtomicInteger();
+            CompletableFuture<Integer> result = BoltFfiAsync.call(
+                () -> 13L,
+                (future, continuation) -> { throw new IllegalStateException("poll"); },
+                future -> failValue("poll complete"),
+                future -> cancelled.incrementAndGet(),
+                future -> freed.incrementAndGet()
+            );
+            requireFailure(result, "poll");
+            require(cancelled.get() == 1, "poll cancellation");
+            require(freed.get() == 1, "poll free");
+        }
+
+        private static void completionFailure() {
+            AtomicInteger cancelled = new AtomicInteger();
+            AtomicInteger freed = new AtomicInteger();
+            CompletableFuture<Integer> result = BoltFfiAsync.call(
+                () -> 14L,
+                (future, continuation) -> BoltFfiAsync.resume(continuation, (byte) 0),
+                future -> { throw new IllegalStateException("complete"); },
+                future -> cancelled.incrementAndGet(),
+                future -> freed.incrementAndGet()
+            );
+            requireFailure(result, "complete");
+            require(cancelled.get() == 0, "completion cancellation");
+            require(freed.get() == 1, "completion free");
+        }
+
+        private static void panicTranslation() {
+            IllegalStateException original = new IllegalStateException("complete");
+            RuntimeException translated = BoltFfiAsync.failure(
+                original,
+                () -> "native panic".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            );
+            require("native panic".equals(translated.getMessage()), "panic message");
+            require(translated.getCause() == original, "panic cause");
+            require(
+                BoltFfiAsync.failure(original, () -> new byte[0]) == original,
+                "empty panic message"
+            );
+            require(
+                BoltFfiAsync.failure(
+                    original,
+                    () -> { throw new IllegalStateException("panic lookup"); }
+                ) == original,
+                "panic lookup failure"
+            );
+        }
+
+        private static void cancellation() {
+            AtomicInteger cancelled = new AtomicInteger();
+            AtomicInteger freed = new AtomicInteger();
+            AtomicLong continuation = new AtomicLong();
+            CompletableFuture<Integer> result = BoltFfiAsync.call(
+                () -> 15L,
+                (future, handle) -> continuation.set(handle),
+                future -> failValue("cancel complete"),
+                future -> cancelled.incrementAndGet(),
+                future -> freed.incrementAndGet()
+            );
+            require(result.cancel(false), "cancel accepted");
+            require(result.isCancelled(), "cancel state");
+            require(cancelled.get() == 1, "cancel callback");
+            require(freed.get() == 1, "cancel free");
+            BoltFfiAsync.resume(continuation.get(), (byte) 0);
+            require(cancelled.get() == 1, "late cancel callback");
+            require(freed.get() == 1, "late cancel free");
+        }
+
+        private static void lifecycleFailure() {
+            CompletableFuture<Integer> result = BoltFfiAsync.call(
+                () -> 16L,
+                (future, continuation) -> {},
+                future -> failValue("lifecycle complete"),
+                future -> { throw new IllegalStateException("cancel lifecycle"); },
+                future -> { throw new IllegalStateException("free lifecycle"); }
+            );
+            require(result.cancel(false), "lifecycle cancel accepted");
+            require(result.isCancelled(), "lifecycle cancel state");
+        }
+
+        private static void readyCancellationRace() {
+            java.util.stream.IntStream.range(0, 500).forEach(iteration -> {
+                AtomicInteger completed = new AtomicInteger();
+                AtomicInteger cancelled = new AtomicInteger();
+                AtomicInteger freed = new AtomicInteger();
+                AtomicLong continuation = new AtomicLong();
+                CompletableFuture<Integer> result = BoltFfiAsync.call(
+                    () -> 17L,
+                    (future, handle) -> continuation.set(handle),
+                    future -> {
+                        completed.incrementAndGet();
+                        return 99;
+                    },
+                    future -> cancelled.incrementAndGet(),
+                    future -> freed.incrementAndGet()
+                );
+                CountDownLatch start = new CountDownLatch(1);
+                Thread cancellation = new Thread(() -> {
+                    await(start);
+                    result.cancel(false);
+                });
+                Thread readiness = new Thread(() -> {
+                    await(start);
+                    BoltFfiAsync.resume(continuation.get(), (byte) 0);
+                });
+                cancellation.start();
+                readiness.start();
+                start.countDown();
+                join(cancellation);
+                join(readiness);
+                require(freed.get() == 1, "race free " + iteration);
+                require(completed.get() + cancelled.get() == 1, "race owner " + iteration);
+                if (result.isCancelled()) {
+                    require(cancelled.get() == 1, "race cancellation " + iteration);
+                } else {
+                    require(result.join() == 99, "race value " + iteration);
+                    require(completed.get() == 1, "race completion " + iteration);
+                }
+            });
+        }
+
+        private static void await(CountDownLatch latch) {
+            try {
+                latch.await();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(error);
+            }
+        }
+
+        private static void join(Thread thread) {
+            try {
+                thread.join();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(error);
+            }
+        }
+
+        private static void requireFailure(CompletableFuture<?> result, String message) {
+            try {
+                result.join();
+                fail("missing " + message + " failure");
+            } catch (CompletionException error) {
+                require(error.getCause().getMessage().equals(message), message + " failure");
+            }
+        }
+
+        private static Integer failValue(String message) {
+            fail(message);
+            return 0;
+        }
+
+        private static void require(boolean condition, String message) {
+            if (!condition) fail(message);
+        }
+
+        private static void fail(String message) {
+            throw new AssertionError(message);
+        }
+    }
+"#;
+
+const ASYNC_CALLBACKS: &str = r#"
+    #[repr(C)]
+    #[data]
+    pub struct AsyncCallbackPoint {
+        pub x: i32,
+        pub y: i32,
+    }
+
+    #[repr(i32)]
+    #[data]
+    pub enum AsyncCallbackError {
+        Unavailable = 1,
+    }
+
+    #[export]
+    pub trait AsyncListener {
+        async fn refresh(&self);
+        async fn value(&self, key: u32) -> u32;
+        async fn point(&self, point: AsyncCallbackPoint) -> AsyncCallbackPoint;
+        async fn values(&self, count: u32) -> Vec<u32>;
+        async fn try_load(&self, key: u32) -> Result<String, AsyncCallbackError>;
+        async fn check_enabled(&self, key: u32) -> Result<bool, AsyncCallbackError>;
+    }
+"#;
+
+const ASYNC_RETURNED_CALLBACKS: &str = r#"
+    #[repr(C)]
+    #[data]
+    pub struct ReturnedPoint {
+        pub x: i32,
+        pub y: i32,
+    }
+
+    #[export]
+    pub trait ReturnedChild {
+        fn on_value(&self, value: u32) -> u32;
+    }
+
+    #[export]
+    pub trait ReturnedListener {
+        async fn name(&self) -> String;
+        async fn point(&self) -> ReturnedPoint;
+        async fn child(&self) -> Box<dyn ReturnedChild>;
+    }
+
+    #[export]
+    pub fn make_returned_listener() -> Box<dyn ReturnedListener> { loop {} }
+"#;
+
 fn bindings(source: &str) -> boltffi_binding::Bindings<Native> {
     let file = syn::parse_str(source).expect("valid Java source fixture");
     let source = boltffi_scan::scan_file(file, PackageInfo::new("demo", None))
@@ -844,71 +1179,141 @@ fn generated_closure_sources_compile_for_java_eight_when_available() {
 }
 
 #[test]
-fn java_partial_target_reports_unsupported_async_classes_before_building_the_bridge() {
-    let source = r#"
-        pub struct Counter { value: i32 }
+fn generated_async_sources_compile_for_java_eight_when_available() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
 
-        #[export]
-        impl Counter {
-            pub fn new(value: i32) -> Self { Self { value } }
-            pub fn get(&self) -> i32 { self.value }
-        }
+    compile_generated_java(
+        &compiler,
+        &render_with_host(
+            ASYNC_FUNCTIONS,
+            CoverageMode::Complete,
+            JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+        ),
+        "boltffi-java-async",
+    );
+}
 
-        pub struct Worker;
+#[test]
+fn generated_async_runtime_obeys_completion_and_ownership_contracts() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
 
-        #[export]
-        impl Worker {
-            pub fn new() -> Self { Self }
-            pub async fn run(&self) -> i32 { 1 }
-        }
-    "#;
-    let bindings = bindings(source);
-    let worker_symbols = bindings
-        .decls()
-        .iter()
-        .find_map(|declaration| match DeclarationRef::from(declaration) {
-            DeclarationRef::Class(class) if class.name().source_spelling() == Some("Worker") => {
-                Some(
-                    std::iter::once(class.release().name().as_str())
-                        .chain(
-                            class
-                                .initializers()
-                                .iter()
-                                .map(|initializer| initializer.symbol().name().as_str()),
-                        )
-                        .chain(
-                            class
-                                .methods()
-                                .iter()
-                                .map(|method| method.target().name().as_str()),
-                        )
-                        .collect::<Vec<_>>(),
-                )
-            }
-            _ => None,
-        })
-        .expect("Worker binding symbols");
-    let output = host()
-        .render_with_coverage(&bindings, CoverageMode::Partial)
-        .expect("partial Java target should reject an asynchronous class");
-    let unsupported = output.coverage().unsupported();
+    compile_and_run_generated_java(
+        &compiler,
+        &render_with_host(
+            ASYNC_FUNCTIONS,
+            CoverageMode::Complete,
+            JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+        ),
+        "boltffi-java-async-runtime",
+        &[(
+            "com/boltffi/demo/AsyncRuntimeProbe.java",
+            ASYNC_RUNTIME_PROBE,
+        )],
+        "com.boltffi.demo.AsyncRuntimeProbe",
+    );
+}
+
+#[test]
+fn java_target_renders_async_callbacks_from_completion_protocols() {
+    let output = render(ASYNC_CALLBACKS, CoverageMode::Complete);
+    let callback = java_source(&output, "com.boltffi.demo", "AsyncListener");
+    let module = java_source(&output, "com.boltffi.demo", "Demo");
+
+    assert!(callback.contains("java.util.concurrent.CompletableFuture<Void> refresh()"));
+    assert!(callback.contains("java.util.concurrent.CompletableFuture<Integer> value(int key)"));
+    assert!(callback.contains(
+        "static void value(long handle, int key, long callbackToken, long callbackContext)"
+    ));
+    assert!(callback.contains("__boltffi_future.whenComplete"));
+    assert!(callback.contains("BoltFfiCallbackFailure.unwrap"));
+    assert!(callback.contains("instanceof AsyncCallbackError.Exception"));
+    assert!(module.contains("boltffi_async_callback_complete_U32"));
+    assert!(module.contains("boltffi_async_callback_complete_Bytes_error"));
+    assert!(output.coverage().unsupported().is_empty());
+}
+
+#[test]
+fn generated_async_callback_sources_compile_for_java_eight_when_available() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
+
+    compile_generated_java(
+        &compiler,
+        &render_with_host(
+            ASYNC_CALLBACKS,
+            CoverageMode::Complete,
+            JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+        ),
+        "boltffi-java-async-callbacks",
+    );
+}
+
+#[test]
+fn java_target_renders_async_rust_owned_callback_handles() {
+    let output = render(ASYNC_RETURNED_CALLBACKS, CoverageMode::Complete);
+    let callback = java_source(&output, "com.boltffi.demo", "ReturnedListener");
+
+    assert!(callback.contains("final class ReturnedListenerHandle"));
+    assert!(callback.contains("public java.util.concurrent.CompletableFuture<String> name()"));
+    assert!(callback.contains("long callback_data = BoltFfiCallbackFutures.insert"));
+    assert!(callback.contains("Native.boltffi_callback_handle_demo_returned_listener_name"));
+    assert!(callback.contains("static void complete_name(long callbackData, byte[] result)"));
+    assert!(callback.contains("static void fail_name(long callbackData)"));
+    assert!(callback.contains("BoltFfiCallbackFutures.success"));
+    assert!(output.coverage().unsupported().is_empty());
+}
+
+#[test]
+fn generated_async_rust_owned_callback_sources_compile_for_java_eight_when_available() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
+
+    compile_generated_java(
+        &compiler,
+        &render_with_host(
+            ASYNC_RETURNED_CALLBACKS,
+            CoverageMode::Complete,
+            JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+        ),
+        "boltffi-java-async-returned-callbacks",
+    );
+}
+
+#[test]
+fn java_target_renders_async_functions_and_methods_from_poll_handle_protocols() {
+    let output = render(ASYNC_FUNCTIONS, CoverageMode::Complete);
+    let module = java_source(&output, "com.boltffi.demo", "Demo");
+    let worker = java_source(&output, "com.boltffi.demo", "Worker");
 
     assert!(
-        output
-            .files()
-            .iter()
-            .any(|file| { file.path().as_path() == Path::new("com/boltffi/demo/Counter.java") })
+        module.contains("public static java.util.concurrent.CompletableFuture<Void> refresh()")
     );
-    assert!(output.files().iter().all(|file| {
-        file.path().as_path() != Path::new("com/boltffi/demo/Worker.java")
-            && worker_symbols
-                .iter()
-                .all(|symbol| !file.contents().contains(symbol))
-    }));
-    assert_eq!(unsupported.len(), 1);
-    assert_eq!(unsupported[0].declaration().kind(), "class");
-    assert_eq!(unsupported[0].declaration().name(), "worker");
-    assert_eq!(unsupported[0].reason(), "asynchronous function");
+    assert!(module.contains(
+        "public static java.util.concurrent.CompletableFuture<Integer> loadCount(int value)"
+    ));
+    assert!(
+        module.contains("public static java.util.concurrent.CompletableFuture<String> loadName()")
+    );
+    assert!(module.contains("return BoltFfiAsync.call("));
+    assert!(module.contains("boltffi_async_function_demo_refresh_panic_message(future)"));
+    assert!(module.contains("BoltFfiAsync.failure(__boltffi_failure, () -> Native."));
+    assert!(module.contains("(future, continuation) -> Native."));
+    assert!(
+        module.contains(
+            "static void boltffiFutureContinuationCallback(long handle, byte pollResult)"
+        )
+    );
+    assert!(
+        worker.contains("public java.util.concurrent.CompletableFuture<Integer> run(int value)")
+    );
+    assert!(worker.contains("this.rawHandle()"));
+    assert!(output.coverage().unsupported().is_empty());
 }
 
 #[test]
@@ -1075,7 +1480,7 @@ fn java_partial_target_retains_dependency_closed_direct_records() {
 }
 
 #[test]
-fn java_partial_target_rejects_unsupported_functions_before_building_the_bridge() {
+fn java_partial_target_rejects_async_closure_returns_before_building_the_bridge() {
     let source = r#"
         #[export]
         pub fn add(left: i32, right: i32) -> i32 { left + right }
@@ -1136,7 +1541,7 @@ fn java_partial_target_rejects_unsupported_functions_before_building_the_bridge(
     assert_eq!(coverage.len(), 1);
     assert_eq!(coverage[0].declaration().kind(), "function");
     assert_eq!(coverage[0].declaration().name(), "make::counter");
-    assert_eq!(coverage[0].reason(), "asynchronous function");
+    assert_eq!(coverage[0].reason(), "closure function return");
 }
 
 #[test]
@@ -1686,6 +2091,41 @@ fn compile_generated_java_with_release(
     additional_sources: &[(&str, &str)],
     release: Option<u16>,
 ) {
+    compile_generated_java_with_release_and_main(
+        compiler,
+        output,
+        prefix,
+        additional_sources,
+        release,
+        None,
+    );
+}
+
+fn compile_and_run_generated_java(
+    compiler: &JavaCompiler,
+    output: &boltffi_backend::GeneratedOutput,
+    prefix: &str,
+    additional_sources: &[(&str, &str)],
+    main_class: &str,
+) {
+    compile_generated_java_with_release_and_main(
+        compiler,
+        output,
+        prefix,
+        additional_sources,
+        None,
+        Some(main_class),
+    );
+}
+
+fn compile_generated_java_with_release_and_main(
+    compiler: &JavaCompiler,
+    output: &boltffi_backend::GeneratedOutput,
+    prefix: &str,
+    additional_sources: &[(&str, &str)],
+    release: Option<u16>,
+    main_class: Option<&str>,
+) {
     assert!(output.files().iter().any(|file| {
         file.path().as_path() == Path::new("com/boltffi/demo/BoltFFINativeRuntime.java")
     }));
@@ -1737,14 +2177,26 @@ fn compile_generated_java_with_release(
         .args(&sources)
         .output()
         .expect("javac should execute");
-    let cleanup = fs::remove_dir_all(&directory);
 
     assert!(
         compilation.status.success(),
         "generated Java failed to compile:\n{}",
         String::from_utf8_lossy(&compilation.stderr)
     );
-    cleanup.expect("remove generated Java test directory");
+    if let Some(main_class) = main_class {
+        let execution = Command::new("java")
+            .arg("-cp")
+            .arg(&classes)
+            .arg(main_class)
+            .output()
+            .expect("generated Java should execute");
+        assert!(
+            execution.status.success(),
+            "generated Java failed to execute:\n{}",
+            String::from_utf8_lossy(&execution.stderr)
+        );
+    }
+    fs::remove_dir_all(&directory).expect("remove generated Java test directory");
 }
 
 #[test]

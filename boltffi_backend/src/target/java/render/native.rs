@@ -90,6 +90,15 @@ impl Method {
             }
             None => MethodReturn::Void,
         };
+        let completion = method
+            .completion()
+            .map(|completion| -> Result<_> {
+                Ok(Parameter::new(
+                    Identifier::escape_for(completion.context().as_str(), version)?,
+                    Carrier::Primitive(Primitive::Long),
+                ))
+            })
+            .transpose()?;
         let parameters = std::iter::once(Parameter::new(
             Identifier::known("handle"),
             Carrier::Primitive(Primitive::Long),
@@ -103,6 +112,7 @@ impl Method {
                 .into_iter()
                 .flatten(),
         )
+        .chain(completion)
         .collect();
         Self::new(
             Identifier::parse_for(method.method().as_str(), version)?,

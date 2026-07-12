@@ -138,7 +138,7 @@ fn normalized_source(contents: &str) -> String {
     [
         SourceBlock::new(
             "static JavaVM *boltffi_jni_vm",
-            "static void boltffi_jni_exit",
+            "static inline void boltffi_jni_exit",
             "<jni thread runtime>",
         ),
         SourceBlock::new(
@@ -158,7 +158,7 @@ fn normalized_source(contents: &str) -> String {
         ),
         SourceBlock::new(
             "static jbyteArray boltffi_jni_buffer_to_byte_array",
-            "static FfiBuf_u8 boltffi_jni_byte_array_to_buffer",
+            "static inline FfiBuf_u8 boltffi_jni_byte_array_to_buffer",
             "<jni byte-array helpers>",
         ),
         SourceBlock::new(

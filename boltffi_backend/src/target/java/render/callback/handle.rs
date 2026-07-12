@@ -6,8 +6,17 @@ pub struct HandleMethod {
     parameters: Vec<Parameter<ValueType>>,
     returns: ReturnType,
     body: Vec<Statement>,
+    asynchronous: Option<AsyncHandleMethod>,
     wire_runtime: bool,
     direct_vector_runtime: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsyncHandleMethod {
+    success: Identifier,
+    failure: Identifier,
+    result: Option<Parameter<ValueType>>,
+    completion: Vec<Statement>,
 }
 
 struct HandleParameter {
@@ -71,9 +80,25 @@ impl HandleMethod {
                 "callback handle method matches the callback declaration",
             ));
         }
-        if !matches!(source.callable().execution(), ExecutionDecl::Synchronous(_)) {
-            return Err(JavaHost::unsupported("asynchronous callback handle method"));
-        }
+        let completion = match source.callable().execution() {
+            ExecutionDecl::Synchronous(_) if method.completion().is_none() => None,
+            ExecutionDecl::Asynchronous(native::AsyncProtocol::CallbackCompletion) => {
+                Some(method.completion().ok_or(JavaHost::broken_bridge_contract(
+                    "asynchronous callback handle method has a JNI completion",
+                ))?)
+            }
+            ExecutionDecl::Synchronous(_) => {
+                return Err(JavaHost::broken_bridge_contract(
+                    "synchronous callback handle method has no JNI completion",
+                ));
+            }
+            ExecutionDecl::Asynchronous(_) => {
+                return Err(JavaHost::unsupported(
+                    "asynchronous callback handle protocol",
+                ));
+            }
+            _ => return Err(JavaHost::unsupported("callback handle method execution")),
+        };
         if !matches!(source.callable().error().channel(), ErrorChannel::None) {
             return Err(JavaHost::unsupported("fallible callback handle method"));
         }
@@ -89,18 +114,30 @@ impl HandleMethod {
             .plan()
             .render_with(&mut HandleReturnRender { version, context })?;
         let native = NativeMethod::from_callback_handle_method(method, version)?;
+        let callback_data = completion
+            .map(|completion| Identifier::parse_for(completion.context().as_str(), version))
+            .transpose()?;
         let call = native.call(
             &TypeIdentifier::known("Native", version),
-            std::iter::once(Expression::this().member(Identifier::known("handle"))).chain(
-                parameters
-                    .iter()
-                    .flat_map(|parameter| parameter.arguments.iter().cloned()),
-            ),
+            std::iter::once(Expression::this().member(Identifier::known("handle")))
+                .chain(
+                    parameters
+                        .iter()
+                        .flat_map(|parameter| parameter.arguments.iter().cloned()),
+                )
+                .chain(
+                    callback_data
+                        .as_ref()
+                        .map(|name| Expression::identifier(name.clone())),
+                ),
         )?;
         let protected = parameters
             .iter()
             .flat_map(|parameter| parameter.prepare.iter().cloned())
-            .chain(returned.statements(call, version, context)?)
+            .chain(match completion {
+                Some(_) => vec![Statement::expression(call)],
+                None => returned.statements(call, version, context)?,
+            })
             .collect::<Vec<_>>();
         let cleanup = parameters
             .iter()
@@ -110,18 +147,80 @@ impl HandleMethod {
             true => protected,
             false => vec![Statement::try_finally(protected, cleanup)],
         };
+        let asynchronous = completion
+            .map(|completion| AsyncHandleMethod::new(completion, &returned, version, context))
+            .transpose()?;
+        let body = match (&asynchronous, callback_data) {
+            (Some(_), Some(callback_data)) => {
+                let future = Identifier::known("__boltffi_future");
+                let failure = Identifier::known("__boltffi_failure");
+                let ReturnType::Value(ValueType::Reference(future_type)) =
+                    returned.public.future(version)
+                else {
+                    return Err(JavaHost::broken_bridge_contract(
+                        "asynchronous callback handle return is a future",
+                    ));
+                };
+                parameters
+                    .iter()
+                    .flat_map(|parameter| parameter.acquire.iter().cloned())
+                    .chain([
+                        Statement::value(
+                            future_type.clone(),
+                            future.clone(),
+                            Expression::construct(future_type, ArgumentList::default()),
+                        ),
+                        Statement::value(
+                            TypeName::primitive(Primitive::Long),
+                            callback_data.clone(),
+                            Expression::static_call(
+                                TypeName::named(TypeIdentifier::known(
+                                    "BoltFfiCallbackFutures",
+                                    version,
+                                )),
+                                Identifier::known("insert"),
+                                [Expression::identifier(future.clone())]
+                                    .into_iter()
+                                    .collect(),
+                            ),
+                        ),
+                        Statement::try_catch(
+                            protected,
+                            TypeName::named(TypeIdentifier::known("Throwable", version)),
+                            failure.clone(),
+                            vec![Self::failure_statement(
+                                Expression::identifier(callback_data),
+                                Expression::identifier(failure),
+                                version,
+                            )],
+                        ),
+                        Statement::return_value(Expression::identifier(future)),
+                    ])
+                    .collect()
+            }
+            (None, None) => parameters
+                .iter()
+                .flat_map(|parameter| parameter.acquire.iter().cloned())
+                .chain(protected)
+                .collect(),
+            _ => {
+                return Err(JavaHost::broken_bridge_contract(
+                    "callback handle completion and context agree",
+                ));
+            }
+        };
         Ok(Self {
             name: Name::new(source.name()).function(version)?,
             parameters: parameters
                 .iter()
                 .map(|parameter| parameter.public.clone())
                 .collect(),
-            returns: returned.public.clone(),
-            body: parameters
-                .iter()
-                .flat_map(|parameter| parameter.acquire.iter().cloned())
-                .chain(protected)
-                .collect(),
+            returns: match asynchronous.as_ref() {
+                Some(_) => returned.public.future(version),
+                None => returned.public.clone(),
+            },
+            body,
+            asynchronous,
             wire_runtime: returned.wire_runtime
                 || parameters.iter().any(|parameter| parameter.wire_runtime),
             direct_vector_runtime: returned.direct_vector_runtime
@@ -147,12 +246,87 @@ impl HandleMethod {
         &self.body
     }
 
+    pub fn asynchronous(&self) -> Option<&AsyncHandleMethod> {
+        self.asynchronous.as_ref()
+    }
+
+    pub fn is_asynchronous(&self) -> bool {
+        self.asynchronous.is_some()
+    }
+
     pub fn requires_wire_runtime(&self) -> bool {
         self.wire_runtime
     }
 
     pub fn requires_direct_vector_runtime(&self) -> bool {
         self.direct_vector_runtime
+    }
+
+    fn failure_statement(
+        callback_data: Expression,
+        failure: Expression,
+        version: JavaVersion,
+    ) -> Statement {
+        Statement::expression(Expression::static_call(
+            TypeName::named(TypeIdentifier::known("BoltFfiCallbackFutures", version)),
+            Identifier::known("failure"),
+            [callback_data, failure].into_iter().collect(),
+        ))
+    }
+}
+
+impl AsyncHandleMethod {
+    pub fn success(&self) -> &Identifier {
+        &self.success
+    }
+
+    pub fn failure(&self) -> &Identifier {
+        &self.failure
+    }
+
+    pub fn result(&self) -> Option<&Parameter<ValueType>> {
+        self.result.as_ref()
+    }
+
+    pub fn completion(&self) -> &[Statement] {
+        &self.completion
+    }
+
+    fn new(
+        completion: &CallbackHandleCompletion,
+        returned: &HandleReturn,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Self> {
+        let result = completion.payload().map(|payload| {
+            Parameter::new(
+                Identifier::known("result"),
+                Self::payload_type(payload.value()),
+            )
+        });
+        Ok(Self {
+            success: Identifier::parse_for(completion.success_method().as_str(), version)?,
+            failure: Identifier::parse_for(completion.failure_method().as_str(), version)?,
+            completion: returned.completion_statements(
+                result
+                    .as_ref()
+                    .map(|result| Expression::identifier(result.name().clone())),
+                completion.payload().map(|payload| payload.value()),
+                version,
+                context,
+            )?,
+            result,
+        })
+    }
+
+    fn payload_type(payload: CallbackCompletionPayloadValue) -> ValueType {
+        match payload {
+            CallbackCompletionPayloadValue::Scalar(ty) => ValueType::Primitive(Primitive::from(ty)),
+            CallbackCompletionPayloadValue::Bytes | CallbackCompletionPayloadValue::Record => {
+                ValueType::Reference(TypeName::array(TypeName::primitive(Primitive::Byte)))
+            }
+            CallbackCompletionPayloadValue::CallbackHandle => ValueType::Primitive(Primitive::Long),
+        }
     }
 }
 
@@ -518,6 +692,142 @@ impl<'plan> ReturnPlanRender<'plan, Native, IntoRust> for HandleReturnRender<'_>
 }
 
 impl HandleReturn {
+    fn completion_statements(
+        &self,
+        value: Option<Expression>,
+        payload: Option<CallbackCompletionPayloadValue>,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Vec<Statement>> {
+        let required = || {
+            value.clone().ok_or(JavaHost::broken_bridge_contract(
+                "callback handle completion has its result parameter",
+            ))
+        };
+        match (&self.conversion, payload) {
+            (HandleReturnConversion::Void, None) => {
+                Ok(vec![Self::complete(Expression::null(), version)])
+            }
+            (HandleReturnConversion::Direct, Some(CallbackCompletionPayloadValue::Scalar(_))) => {
+                Ok(vec![Self::complete(required()?, version)])
+            }
+            (
+                HandleReturnConversion::DirectRecord(record),
+                Some(CallbackCompletionPayloadValue::Record),
+            ) => Ok(vec![Self::complete(
+                Expression::static_call(
+                    record.clone(),
+                    Identifier::known("fromByteArray"),
+                    [required()?].into_iter().collect(),
+                ),
+                version,
+            )]),
+            (
+                HandleReturnConversion::DirectEnum(enumeration),
+                Some(CallbackCompletionPayloadValue::Scalar(_)),
+            ) => Ok(vec![Self::complete(
+                Expression::static_call(
+                    enumeration.clone(),
+                    Identifier::known("fromValue"),
+                    [required()?].into_iter().collect(),
+                ),
+                version,
+            )]),
+            (
+                HandleReturnConversion::Encoded(codec),
+                Some(CallbackCompletionPayloadValue::Bytes),
+            ) => {
+                let reader = Identifier::known("__boltffi_reader");
+                let decoded = codec
+                    .render_with(&mut Reader::new(reader.clone(), version, context))?
+                    .into_expression();
+                Ok(vec![
+                    Statement::value(
+                        TypeName::named(TypeIdentifier::known("WireReader", version)),
+                        reader,
+                        Expression::construct(
+                            TypeName::named(TypeIdentifier::known("WireReader", version)),
+                            [required()?].into_iter().collect(),
+                        ),
+                    ),
+                    Self::complete(decoded, version),
+                ])
+            }
+            (
+                HandleReturnConversion::ScalarOption(primitive),
+                Some(CallbackCompletionPayloadValue::Bytes),
+            ) => {
+                let reader = Identifier::known("__boltffi_reader");
+                let reader_value = Expression::identifier(reader.clone());
+                Ok(vec![
+                    Statement::value(
+                        TypeName::named(TypeIdentifier::known("WireReader", version)),
+                        reader,
+                        Expression::construct(
+                            TypeName::named(TypeIdentifier::known("WireReader", version)),
+                            [required()?].into_iter().collect(),
+                        ),
+                    ),
+                    Self::complete(
+                        reader_value.clone().call(
+                            Identifier::known("readOptional"),
+                            [Expression::lambda(
+                                [],
+                                reader_value.call(
+                                    Identifier::parse_for(
+                                        format!("read{}", primitive.wire_method_suffix()),
+                                        version,
+                                    )?,
+                                    ArgumentList::default(),
+                                ),
+                            )]
+                            .into_iter()
+                            .collect(),
+                        ),
+                        version,
+                    ),
+                ])
+            }
+            (
+                HandleReturnConversion::DirectVector(vector),
+                Some(CallbackCompletionPayloadValue::Bytes),
+            ) => Ok(vec![Self::complete(
+                vector.returned_expression(required()?),
+                version,
+            )]),
+            (
+                HandleReturnConversion::ClassHandle(handle),
+                Some(CallbackCompletionPayloadValue::Scalar(_)),
+            ) => Ok(vec![Self::complete(
+                handle.value_expression(required()?)?,
+                version,
+            )]),
+            (
+                HandleReturnConversion::CallbackHandle(handle),
+                Some(CallbackCompletionPayloadValue::CallbackHandle),
+            ) => Ok(vec![Self::complete(
+                handle.value_expression(required()?)?,
+                version,
+            )]),
+            _ => Err(JavaHost::broken_bridge_contract(
+                "callback handle return matches its completion payload",
+            )),
+        }
+    }
+
+    fn complete(value: Expression, version: JavaVersion) -> Statement {
+        Statement::expression(Expression::static_call(
+            TypeName::named(TypeIdentifier::known("BoltFfiCallbackFutures", version)),
+            Identifier::known("success"),
+            [
+                Expression::identifier(Identifier::known("callbackData")),
+                value,
+            ]
+            .into_iter()
+            .collect(),
+        ))
+    }
+
     fn statements(
         &self,
         call: Expression,

@@ -31,8 +31,8 @@ val nativePath = if (boltffiJavaComparisonSuite != null && boltffiJavaPreparedDi
 if (boltffiJavaGenerator.get() !in setOf("legacy", "ir")) {
     throw GradleException("boltffiJavaGenerator must be 'legacy' or 'ir'")
 }
-if (boltffiJavaComparisonSuite != null && boltffiJavaComparisonSuite !in setOf("primitive", "record", "enum", "class", "callback")) {
-    throw GradleException("boltffiJavaComparisonSuite must be 'primitive', 'record', 'enum', 'class', or 'callback'")
+if (boltffiJavaComparisonSuite != null && boltffiJavaComparisonSuite !in setOf("primitive", "record", "enum", "class", "callback", "async")) {
+    throw GradleException("boltffiJavaComparisonSuite must be 'primitive', 'record', 'enum', 'class', 'callback', or 'async'")
 }
 if (boltffiJavaPreparedDir != null) {
     val actualGenerator = boltffiJavaPreparedDir
@@ -157,6 +157,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaAsyncBench.java")
                 }
                 "record" -> {
                     java.exclude("com/example/bench_compare/UniffiJavaBench.java")
@@ -165,6 +166,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaAsyncBench.java")
                 }
                 "enum" -> {
                     java.exclude("com/example/bench_compare/UniffiJavaBench.java")
@@ -173,6 +175,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaAsyncBench.java")
                 }
                 "class" -> {
                     java.exclude("com/example/bench_compare/UniffiJavaBench.java")
@@ -181,6 +184,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaAsyncBench.java")
                 }
                 "callback" -> {
                     java.exclude("com/example/bench_compare/UniffiJavaBench.java")
@@ -189,6 +193,16 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaAsyncBench.java")
+                }
+                "async" -> {
+                    java.exclude("com/example/bench_compare/UniffiJavaBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaPrimitiveBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaRecordBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
                 }
                 else -> {
                     java.exclude("com/example/bench_compare/BoltffiJavaPrimitiveBench.java")
@@ -196,6 +210,7 @@ java {
                     java.exclude("com/example/bench_compare/BoltffiJavaEnumBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaClassBench.java")
                     java.exclude("com/example/bench_compare/BoltffiJavaCallbackBench.java")
+                    java.exclude("com/example/bench_compare/BoltffiJavaAsyncBench.java")
                 }
             }
         }

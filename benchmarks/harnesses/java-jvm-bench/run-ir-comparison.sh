@@ -20,8 +20,11 @@ case "$SUITE" in
     callback)
         BENCHMARK_CLASS="BoltffiJavaCallbackBench"
         ;;
+    async)
+        BENCHMARK_CLASS="BoltffiJavaAsyncBench"
+        ;;
     *)
-        printf 'Usage: %s [primitive|record|enum|class|callback]\n' "$0" >&2
+        printf 'Usage: %s [primitive|record|enum|class|callback|async]\n' "$0" >&2
         exit 2
         ;;
 esac
