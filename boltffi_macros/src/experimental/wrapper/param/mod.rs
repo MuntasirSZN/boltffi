@@ -1,5 +1,6 @@
 use boltffi_binding::{
-    DirectValueType, IncomingParam, IntoRust, ParamDecl, ParamPlan, Receive, TypeRef,
+    DirectValueType, DirectVectorElementType, IncomingParam, IntoRust, ParamDecl, ParamPlan,
+    Receive, TypeRef,
 };
 use proc_macro2::TokenStream;
 
@@ -31,8 +32,15 @@ pub fn requires_failure_return<S: RenderSurface>(param: &ParamDecl<S, IntoRust>)
         IncomingParam::Value(ParamPlan::Encoded { .. })
         | IncomingParam::Value(ParamPlan::Handle { .. })
         | IncomingParam::Value(ParamPlan::ScalarOption { .. })
-        | IncomingParam::Value(ParamPlan::DirectVec { .. })
         | IncomingParam::Closure(_) => true,
+        IncomingParam::Value(ParamPlan::DirectVec {
+            element: DirectVectorElementType::Record(_),
+            ..
+        }) => true,
+        IncomingParam::Value(ParamPlan::DirectVec {
+            element: DirectVectorElementType::Primitive(_),
+            ..
+        }) => false,
         IncomingParam::Value(_) => true,
     }
 }
@@ -156,11 +164,12 @@ where
                     ),
                 )
             }
-            IncomingParam::Value(ParamPlan::DirectVec { element }) => {
+            IncomingParam::Value(ParamPlan::DirectVec { element, receive }) => {
                 <direct_vec::Renderer as Render<S, _>>::render(
                     direct_vec::Renderer,
                     direct_vec::Input::new(
                         element,
+                        *receive,
                         input.source.direct_vec_element_type()?,
                         ident,
                         input.failure,

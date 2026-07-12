@@ -457,7 +457,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for ClosureTypeName<'_> {
         primitive_name(primitive).map(|name| format!("Opt{name}"))
     }
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType, _: ()) -> Self::Output {
         self.direct_vector_type(element)
     }
 }

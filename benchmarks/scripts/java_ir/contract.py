@@ -321,6 +321,13 @@ CUSTOM_CASES = (
         "boltffi_function_demo_custom_types_echo_event",
     ),
 )
+MUTATION_CASES = (
+    BenchmarkCase(
+        "inc_u64",
+        "boltffi_inc_u64",
+        "boltffi_function_demo_primitives_vecs_inc_u64",
+    ),
+)
 SUITES = {
     suite.name: suite
     for suite in (
@@ -332,6 +339,7 @@ SUITES = {
         BenchmarkSuite("async", "BoltffiJavaAsyncBench", ASYNC_CASES),
         BenchmarkSuite("stream", "BoltffiJavaStreamBench", STREAM_CASES),
         BenchmarkSuite("custom", "BoltffiJavaCustomBench", CUSTOM_CASES),
+        BenchmarkSuite("mutation", "BoltffiJavaMutationBench", MUTATION_CASES),
     )
 }
 ALL_CASES = tuple(case for suite in SUITES.values() for case in suite.cases)

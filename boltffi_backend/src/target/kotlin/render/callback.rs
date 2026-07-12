@@ -923,7 +923,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
         })
     }
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType, _: ()) -> Self::Output {
         let vector = DirectVector::from_element(element, self.context)?;
         Ok(HandleParameter {
             public: Parameter::new(self.name.clone(), vector.ty().clone()),

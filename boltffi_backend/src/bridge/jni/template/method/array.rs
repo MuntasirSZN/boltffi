@@ -31,6 +31,7 @@ pub struct BorrowedArrayParameterView {
     pub element_type: TypeFragment,
     pub getter: &'static str,
     pub releaser: &'static str,
+    pub release_mode: &'static str,
     pub stack_copy: Option<BorrowedArrayStackCopyView>,
 }
 
@@ -56,6 +57,7 @@ impl BorrowedArrayParameterView {
             element_type: parameter.element_type(),
             getter: parameter.getter(),
             releaser: parameter.releaser(),
+            release_mode: parameter.release_mode(),
             stack_copy: parameter
                 .stack_copy()
                 .map(|stack_copy| -> Result<BorrowedArrayStackCopyView> {

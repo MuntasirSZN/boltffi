@@ -526,6 +526,7 @@ impl<'plan> ParamPlanRender<'plan, Native, OutOfRust> for HandleParameterRender<
     fn direct_vector(
         &mut self,
         element: &'plan boltffi_binding::DirectVectorElementType,
+        _: (),
     ) -> Self::Output {
         let vector = DirectVector::from_element(element, self.version, self.context)?;
         Ok(HandleParameter {

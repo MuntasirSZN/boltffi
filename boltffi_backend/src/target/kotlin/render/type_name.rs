@@ -1,7 +1,7 @@
 use boltffi_binding::{
     BuiltinType, CallbackId, ClassId, CustomTypeId, DirectValueType, DirectVectorElementType,
     Direction, EnumId, HandlePresence, HandleTarget, IntoRust, Native, ParamPlanRender, Primitive,
-    RecordId, Surface, TypeRef, TypeRefRender,
+    Receive, RecordId, Surface, TypeRef, TypeRefRender,
 };
 
 use crate::{
@@ -310,7 +310,11 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterType<'_> {
         ScalarOption::new(primitive).ty()
     }
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+    fn direct_vector(
+        &mut self,
+        element: &'plan DirectVectorElementType,
+        _: Receive,
+    ) -> Self::Output {
         KotlinType::direct_vector_element(element, self.context)
     }
 }

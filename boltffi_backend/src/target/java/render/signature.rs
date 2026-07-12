@@ -381,7 +381,11 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterRender<'_, '_>
         ))
     }
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+    fn direct_vector(
+        &mut self,
+        element: &'plan DirectVectorElementType,
+        _: Receive,
+    ) -> Self::Output {
         DirectVector::from_element(element, self.version, self.context).map(|vector| {
             Parameter::new(self.name.clone(), ValueType::Reference(vector.ty().clone()))
         })

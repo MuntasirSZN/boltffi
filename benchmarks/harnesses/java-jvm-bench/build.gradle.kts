@@ -27,6 +27,7 @@ val comparisonBenchmarks = mapOf(
     "async" to "BoltffiJavaAsyncBench.java",
     "stream" to "BoltffiJavaStreamBench.java",
     "custom" to "BoltffiJavaCustomBench.java",
+    "mutation" to "BoltffiJavaMutationBench.java",
 )
 if (boltffiJavaComparisonBuildDir != null) {
     layout.buildDirectory.set(boltffiJavaComparisonBuildDir)

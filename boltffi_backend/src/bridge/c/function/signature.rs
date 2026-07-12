@@ -43,10 +43,15 @@ struct AsyncCallbackPayloadType {
 
 struct FallibleAsyncCallbackSuccess;
 
-trait EncodedWritebackReceive {
+trait ReceiveAbi {
     fn needs_encoded_writeback(self) -> bool;
     fn needs_mutable_pointer(self) -> bool;
     fn direct_param_type(self, ty: &DirectValueType, value: Type) -> Type;
+    fn direct_vector_pointer(
+        self,
+        name: &str,
+        element: DirectVectorElementAbi,
+    ) -> Result<Parameter>;
 }
 
 /// C ABI projection for the callable body behind a closure handle.
@@ -60,7 +65,7 @@ where
     ) -> Result<Vec<Parameter>>;
 }
 
-impl EncodedWritebackReceive for Receive {
+impl ReceiveAbi for Receive {
     fn needs_encoded_writeback(self) -> bool {
         self == Receive::ByMutRef
     }
@@ -76,9 +81,20 @@ impl EncodedWritebackReceive for Receive {
             _ => value,
         }
     }
+
+    fn direct_vector_pointer(
+        self,
+        name: &str,
+        element: DirectVectorElementAbi,
+    ) -> Result<Parameter> {
+        match self {
+            Receive::ByMutRef => Parameter::mutable_direct_vector_pointer(name, element),
+            _ => Parameter::direct_vector_pointer(name, element),
+        }
+    }
 }
 
-impl EncodedWritebackReceive for () {
+impl ReceiveAbi for () {
     fn needs_encoded_writeback(self) -> bool {
         false
     }
@@ -89,6 +105,14 @@ impl EncodedWritebackReceive for () {
 
     fn direct_param_type(self, _: &DirectValueType, value: Type) -> Type {
         value
+    }
+
+    fn direct_vector_pointer(
+        self,
+        name: &str,
+        element: DirectVectorElementAbi,
+    ) -> Result<Parameter> {
+        Parameter::direct_vector_pointer(name, element)
     }
 }
 
@@ -161,7 +185,7 @@ impl CallableReturnType {
 impl<'plan, D> ParamPlanRender<'plan, Native, D> for ValueParameter
 where
     D: Direction,
-    D::Receive: EncodedWritebackReceive,
+    D::Receive: ReceiveAbi,
 {
     type Output = Result<Vec<Parameter>>;
 
@@ -230,8 +254,13 @@ where
         ])
     }
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        self.signature.direct_vec_param(&self.name, element)
+    fn direct_vector(
+        &mut self,
+        element: &'plan DirectVectorElementType,
+        receive: D::Receive,
+    ) -> Self::Output {
+        self.signature
+            .direct_vec_param(&self.name, element, receive)
     }
 }
 
@@ -775,7 +804,7 @@ impl Signature {
     fn value_param<D>(&self, name: &str, plan: &ParamPlan<Native, D>) -> Result<Vec<Parameter>>
     where
         D: Direction,
-        D::Receive: EncodedWritebackReceive,
+        D::Receive: ReceiveAbi,
     {
         plan.render_with(&mut ValueParameter {
             signature: self.clone(),
@@ -787,10 +816,11 @@ impl Signature {
         &self,
         name: &str,
         element: &DirectVectorElementType,
+        receive: impl ReceiveAbi,
     ) -> Result<Vec<Parameter>> {
         let element = DirectVectorElementAbi::from_binding(element)?;
         Ok(vec![
-            Parameter::direct_vector_pointer(name, element.clone())?,
+            receive.direct_vector_pointer(name, element.clone())?,
             Parameter::direct_vector_length(name, &element)?,
         ])
     }

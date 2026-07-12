@@ -216,7 +216,7 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for ParameterShape {
         ])
     }
 
-    fn direct_vector(&mut self, _: &'plan DirectVectorElementType) -> Self::Output {
+    fn direct_vector(&mut self, _: &'plan DirectVectorElementType, _: Receive) -> Self::Output {
         Ok(vec![CarrierWidth(SlotWidth::Single)])
     }
 }

@@ -45,6 +45,13 @@ const PRIMITIVE_FUNCTIONS: &str = r#"
     pub fn refresh() {}
 "#;
 
+const MUTABLE_PARAMETERS: &str = r#"
+    #[export]
+    pub fn increment(values: &mut [u64]) {
+        values.iter_mut().for_each(|value| *value += 1);
+    }
+"#;
+
 const DIRECT_RECORD_FUNCTIONS: &str = r#"
     #[repr(C)]
     #[data]
@@ -1168,6 +1175,18 @@ fn java_target_renders_primitive_function_stack() {
 }
 
 #[test]
+fn java_target_carries_mutable_primitive_slices_as_direct_vectors() {
+    let output = render(MUTABLE_PARAMETERS, CoverageMode::Complete);
+    let module = java_source(&output, "com.boltffi.demo", "Demo");
+
+    assert!(module.contains("public static void increment(long[] values)"));
+    assert!(module.contains("static native void boltffi_function_demo_increment(long[] values)"));
+    assert!(!module.contains("java.nio.ByteBuffer values"));
+    assert!(!module.contains("System.arraycopy"));
+    assert!(output.coverage().unsupported().is_empty());
+}
+
+#[test]
 fn java_target_renders_direct_record_stack() {
     let output = render(DIRECT_RECORD_FUNCTIONS, CoverageMode::Complete);
     insta::assert_snapshot!(
@@ -1867,14 +1886,11 @@ fn java_partial_target_reports_backend_coverage() {
     assert!(java.contains(&format!(
         "static native int {add_symbol}(int left, int right)"
     )));
-    assert!(!java.contains("increment"));
-    assert_eq!(unsupported.len(), 1);
-    assert_eq!(unsupported[0].declaration().kind(), "function");
-    assert_eq!(unsupported[0].declaration().name(), "increment");
-    assert_eq!(
-        unsupported[0].reason(),
-        "mutable encoded function parameter"
-    );
+    assert!(java.contains("public static void increment(long[] values)"));
+    assert!(java.contains(&format!(
+        "static native void {increment_symbol}(long[] values)"
+    )));
+    assert!(unsupported.is_empty());
     assert!(
         output
             .files()
@@ -1885,7 +1901,7 @@ fn java_partial_target_reports_backend_coverage() {
         output
             .files()
             .iter()
-            .all(|file| !file.contents().contains(increment_symbol))
+            .any(|file| file.contents().contains(increment_symbol))
     );
 }
 
@@ -2319,6 +2335,20 @@ fn generated_primitive_java_compiles_for_java_eight_when_available() {
         JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
     );
     compile_generated_java(&compiler, &output, "boltffi-java-primitives");
+}
+
+#[test]
+fn generated_mutable_parameters_compile_for_java_eight_when_available() {
+    let Some(compiler) = JavaCompiler::discover() else {
+        return;
+    };
+
+    let output = render_with_host(
+        MUTABLE_PARAMETERS,
+        CoverageMode::Complete,
+        JavaHost::new("com.boltffi.demo", "Demo").expect("Java host"),
+    );
+    compile_generated_java(&compiler, &output, "boltffi-java-mutable-parameters");
 }
 
 #[test]

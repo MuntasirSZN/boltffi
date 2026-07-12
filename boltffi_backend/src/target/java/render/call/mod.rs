@@ -906,7 +906,11 @@ impl<'plan> ParamPlanRender<'plan, Native, IntoRust> for NativeArgumentRender<'_
             .map(NativeArgument::encoded)
     }
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
+    fn direct_vector(
+        &mut self,
+        element: &'plan DirectVectorElementType,
+        _: Receive,
+    ) -> Self::Output {
         let vector = DirectVector::from_element(element, self.version, self.context)?;
         Ok(NativeArgument {
             acquire: Vec::new(),

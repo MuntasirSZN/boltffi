@@ -587,7 +587,7 @@ impl<'plan, S: Surface> ParamPlanRender<'plan, S, IntoRust> for DeclarationRefer
 
     fn scalar_option(&mut self, _: Primitive) {}
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) {
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType, _: Receive) {
         self.insert_direct_vector(element);
     }
 }
@@ -616,7 +616,7 @@ impl<'plan, S: Surface> ParamPlanRender<'plan, S, OutOfRust> for DeclarationRefe
 
     fn scalar_option(&mut self, _: Primitive) {}
 
-    fn direct_vector(&mut self, element: &'plan DirectVectorElementType) {
+    fn direct_vector(&mut self, element: &'plan DirectVectorElementType, _: ()) {
         self.insert_direct_vector(element);
     }
 }

@@ -379,7 +379,7 @@ impl<'plan, S: Surface> ParamPlanRender<'plan, S, IntoRust> for ErrorPayloadType
 
     fn scalar_option(&mut self, _: Primitive) {}
 
-    fn direct_vector(&mut self, _: &'plan DirectVectorElementType) {}
+    fn direct_vector(&mut self, _: &'plan DirectVectorElementType, _: Receive) {}
 }
 
 impl<'plan, S: Surface> ParamPlanRender<'plan, S, OutOfRust> for ErrorPayloadTypes {
@@ -396,7 +396,7 @@ impl<'plan, S: Surface> ParamPlanRender<'plan, S, OutOfRust> for ErrorPayloadTyp
 
     fn scalar_option(&mut self, _: Primitive) {}
 
-    fn direct_vector(&mut self, _: &'plan DirectVectorElementType) {}
+    fn direct_vector(&mut self, _: &'plan DirectVectorElementType, _: ()) {}
 }
 
 impl<'plan, S: Surface> ReturnPlanRender<'plan, S, IntoRust> for ErrorPayloadTypes {

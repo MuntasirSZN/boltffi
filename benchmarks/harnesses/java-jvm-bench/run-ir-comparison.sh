@@ -29,8 +29,11 @@ case "$SUITE" in
     custom)
         BENCHMARK_CLASS="BoltffiJavaCustomBench"
         ;;
+    mutation)
+        BENCHMARK_CLASS="BoltffiJavaMutationBench"
+        ;;
     *)
-        printf 'Usage: %s [primitive|record|enum|class|callback|async|stream|custom]\n' "$0" >&2
+        printf 'Usage: %s [primitive|record|enum|class|callback|async|stream|custom|mutation]\n' "$0" >&2
         exit 2
         ;;
 esac
