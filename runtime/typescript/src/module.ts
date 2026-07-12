@@ -121,6 +121,7 @@ export interface BoltFFIExports {
   boltffi_wasm_free_buf: (ptr: number, size: number, align: number) => void;
   boltffi_wasm_realloc: (ptr: number, oldSize: number, newSize: number) => number;
   boltffi_wasm_free_string_return: (ptr: number, len: number) => void;
+  boltffi_wasm_alloc_owned_bytes: (len: number) => number;
   boltffi_wasm_return_slot_addr: () => number;
   [key: string]: WebAssembly.ExportValue;
 }
@@ -318,6 +319,27 @@ export class BoltFFIModule {
     }
     this.getBytes().set(encoded, ptr);
     return { ptr, len: encoded.length };
+  }
+
+  allocOwnedBytes(value: Uint8Array): StringAlloc {
+    const ptr = this.exports.boltffi_wasm_alloc_owned_bytes(value.length);
+    if (ptr === 0 && value.length > 0) {
+      throw new Error("Failed to allocate owned bytes");
+    }
+    this.getBytes().set(value, ptr);
+    return { ptr, len: value.length };
+  }
+
+  allocOwnedString(value: string): StringAlloc {
+    return this.allocOwnedBytes(this._encoder.encode(value));
+  }
+
+  allocOwnedWireString(value: string): StringAlloc {
+    const encoded = this._encoder.encode(value);
+    const allocation = this.allocOwnedBytes(new Uint8Array(4 + encoded.length));
+    this.getView().setUint32(allocation.ptr, encoded.length, true);
+    this.getBytes().set(encoded, allocation.ptr + 4);
+    return allocation;
   }
 
   allocWireString(value: string): StringAlloc {
@@ -533,6 +555,19 @@ export class BoltFFIModule {
     return WireWriter.withWasmAllocation(requestedCapacity, allocator);
   }
 
+  allocOwnedWriter(size: number): WriterAlloc {
+    const allocator: WasmWireWriterAllocator = {
+      alloc: (allocationSize) => this.exports.boltffi_wasm_alloc_owned_bytes(allocationSize),
+      realloc: () => {
+        throw new Error("Owned writer exceeded its size plan");
+      },
+      free: (ptr, allocationSize) =>
+        this.exports.boltffi_wasm_free_string_return(ptr, allocationSize),
+      buffer: () => this._memory.buffer,
+    };
+    return WireWriter.withWasmAllocation(size, allocator);
+  }
+
   freeWriter(writer: WriterAlloc): void {
     const capacity = writer.capacity;
     writer.reset();
@@ -683,8 +718,17 @@ export class BoltFFIModule {
     this.getBytes().set(data, ptr);
   }
 
+  writeI32(ptr: number, value: number): void {
+    this.getView().setInt32(ptr, value, true);
+  }
+
   readFromMemory(ptr: number, len: number): Uint8Array {
     return this.getBytes().slice(ptr, ptr + len);
+  }
+
+  readerFromMemory(ptr: number, len: number): WireReader {
+    const bytes = this.readFromMemory(ptr, len);
+    return new WireReader(bytes.buffer as ArrayBuffer, bytes.byteOffset);
   }
 
   private unpackPacked(packed: bigint): { pointer: number; length: number } {

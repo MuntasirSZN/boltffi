@@ -130,7 +130,7 @@ pub use ids::{
     CallbackId, ClassId, ConstantId, CustomTypeId, DeclarationId, EnumId, FunctionId,
     InitializerId, MethodId, RecordId, StreamId, SymbolId,
 };
-pub use imports::WasmImports;
+pub use imports::{WasmImports, WasmIncomingClosure};
 pub use layout::{AlignmentError, ByteAlignment, ByteOffset, ByteSize, FieldLayout, RecordLayout};
 pub use metadata::{
     DeclMeta, DefaultValue, DeprecationInfo, DocComment, ElementMeta, FloatValue, IntegerValue,

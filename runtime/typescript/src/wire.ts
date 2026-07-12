@@ -267,7 +267,7 @@ export function wireErr<E>(error: E): WireErr<E> {
   return { tag: "err", error };
 }
 
-function matchWireResult<T, E, R>(
+export function matchWireResult<T, E, R>(
   value: T | WireResult<T, E> | Error,
   ok: (value: T) => R,
   err: (error: E) => R

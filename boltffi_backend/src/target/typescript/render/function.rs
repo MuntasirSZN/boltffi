@@ -4,7 +4,7 @@ use boltffi_binding::{
     ErrorPlacement, ExecutionDecl, ExportedCallable, ExportedMethodDecl, FunctionDecl,
     HandlePresence, HandleTarget, InitializerDecl, IntoRust, NativeSymbol, ParamPlanRender,
     Primitive, Receive, RecordDecl, RecordId, ReturnPlanRender, ReturnValueSlot, TypeRef, Wasm32,
-    wasm32,
+    WasmIncomingClosure, wasm32,
 };
 
 use crate::core::{CoverageMode, Diagnostic, Emitted, Error, RenderContext, Result};
@@ -18,6 +18,7 @@ use super::super::{
         ArgumentList, Expression, Identifier, MemberName, MethodDeclaration, Statement, TypeName,
     },
 };
+use super::closure::ClosureAdapter;
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/typescript/function.ts", escape = "none")]
@@ -330,11 +331,14 @@ impl Function {
             .into_iter()
             .chain(callable.params().iter().map(|parameter| {
                 let name = Name::new(parameter.name()).identifier()?;
-                parameter
-                    .payload()
-                    .as_value()
-                    .ok_or_else(|| Self::unsupported("closure parameter"))?
-                    .render_with(&mut ParameterRenderer { name, context })
+                match parameter.payload() {
+                    boltffi_binding::IncomingParam::Value(plan) => {
+                        plan.render_with(&mut ParameterRenderer { name, context })
+                    }
+                    boltffi_binding::IncomingParam::Closure(closure) => {
+                        Parameter::closure(name, closure, context)
+                    }
+                }
             }))
             .collect::<Result<Vec<_>>>()?;
         let returns = callable
@@ -538,6 +542,32 @@ impl Failure {
 }
 
 impl Parameter {
+    fn closure(
+        name: Identifier,
+        closure: &boltffi_binding::ClosureParameter<Wasm32, IntoRust>,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        let adapter =
+            ClosureAdapter::from_closure(WasmIncomingClosure::Parameter(closure), context)?
+                .ok_or_else(|| Function::unsupported("closure parameter"))?;
+        let handle = Identifier::parse(format!("__boltffi_{name}_handle"))?;
+        Ok(Self {
+            ty: adapter.parameter_type(),
+            setup: vec![Statement::constant(
+                handle.clone(),
+                Expression::invoke(
+                    adapter.register(),
+                    [Expression::identifier(name.clone())]
+                        .into_iter()
+                        .collect::<ArgumentList>(),
+                ),
+            )],
+            arguments: vec![Expression::identifier(handle)],
+            cleanup: Vec::new(),
+            name,
+        })
+    }
+
     fn receiver(
         owner: ReceiverOwner,
         receive: Receive,

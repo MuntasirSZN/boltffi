@@ -3,6 +3,7 @@ export {
   WireWriter,
   utf8ByteCount,
   wireArraySize,
+  matchWireResult,
   wireOk,
   wireErr,
   wireOptionalSize,
@@ -10,6 +11,7 @@ export {
   wireStringSize,
 } from "./wire.js";
 export type { Duration, WireOk, WireErr, WireResult, WasmWireWriterAllocator, WireCodec } from "./wire.js";
+export { CallbackRegistry } from "./callback.js";
 export {
   BoltFFIModule,
   BoltFFIExports,

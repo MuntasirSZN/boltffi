@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AsyncFutureManager, BoltFFIModule } from "../src/module.js";
+import { CallbackRegistry } from "../src/callback.js";
 import {
   WireReader,
   WireWriter,
@@ -420,5 +421,21 @@ describe("BoltFFIModule async completion", () => {
     ).toThrow("invalid argument");
 
     expect(freedAllocations).toContainEqual([256, 4]);
+  });
+});
+
+describe("CallbackRegistry", () => {
+  it("retains callback values until the final release", () => {
+    const registry = new CallbackRegistry<(value: number) => number>("Transform");
+    const callback = (value: number): number => value * 2;
+    const handle = registry.register(callback);
+
+    expect(handle).toBe(0x80000000);
+    expect(registry.get(handle)(3)).toBe(6);
+    expect(registry.retain(handle)).toBe(handle);
+    registry.release(handle);
+    expect(registry.get(handle)).toBe(callback);
+    registry.release(handle);
+    expect(() => registry.get(handle)).toThrow("Transform callback handle");
   });
 });

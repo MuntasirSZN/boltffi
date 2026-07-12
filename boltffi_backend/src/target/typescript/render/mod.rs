@@ -1,4 +1,5 @@
 mod class;
+mod closure;
 mod custom_type;
 mod direct_vector;
 mod enumeration;
@@ -9,6 +10,7 @@ mod scalar_option;
 mod type_name;
 
 pub use class::Class;
+pub use closure::ClosureAdapter;
 pub use custom_type::CustomType;
 pub use enumeration::Enumeration;
 pub use function::Function;

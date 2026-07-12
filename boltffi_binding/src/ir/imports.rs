@@ -1,12 +1,48 @@
 use crate::{
-    Bindings, Decl, ExportedCallable, ImportSymbol, ImportedCallable, IncomingParam, OutgoingParam,
-    ReturnPlan, Wasm32,
+    Bindings, ClosureParameter, ClosureReturn, ClosureSignature, Decl, ExportedCallable,
+    ImportSymbol, ImportedCallable, IncomingParam, IntoRust, OutgoingParam, ReturnPlan, Wasm32,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A foreign closure implementation Rust may invoke through Wasm imports.
+pub enum WasmIncomingClosure<'bindings> {
+    /// A closure passed into a Rust callable.
+    Parameter(&'bindings ClosureParameter<Wasm32, IntoRust>),
+    /// A closure returned by a foreign callable.
+    Return(&'bindings ClosureReturn<Wasm32, IntoRust>),
+}
+
+impl<'bindings> WasmIncomingClosure<'bindings> {
+    /// Returns the stable closure signature.
+    pub fn signature(self) -> &'bindings ClosureSignature {
+        match self {
+            Self::Parameter(closure) => closure.signature(),
+            Self::Return(closure) => closure.signature(),
+        }
+    }
+
+    /// Returns the Wasm registration shape.
+    pub fn registration(self) -> &'bindings crate::wasm32::IncomingClosureRegistration {
+        match self {
+            Self::Parameter(closure) => closure.registration().shape(),
+            Self::Return(closure) => closure.registration().shape(),
+        }
+    }
+
+    /// Returns the closure invocation contract.
+    pub fn invoke(self) -> &'bindings ImportedCallable<Wasm32> {
+        match self {
+            Self::Parameter(closure) => closure.invoke(),
+            Self::Return(closure) => closure.invoke(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 /// The imports required to instantiate one Wasm binding contract.
 pub struct WasmImports<'bindings> {
     symbols: Vec<&'bindings ImportSymbol>,
+    closures: Vec<WasmIncomingClosure<'bindings>>,
 }
 
 impl<'bindings> WasmImports<'bindings> {
@@ -40,9 +76,15 @@ impl<'bindings> WasmImports<'bindings> {
         self.symbols.iter().copied()
     }
 
+    /// Returns foreign closure crossings in first-use order.
+    pub fn closures(&self) -> impl Iterator<Item = WasmIncomingClosure<'bindings>> + '_ {
+        self.closures.iter().copied()
+    }
+
     fn insert_exported(&mut self, callable: &'bindings ExportedCallable<Wasm32>) {
         callable.params().iter().for_each(|parameter| {
             if let IncomingParam::Closure(closure) = parameter.payload() {
+                self.insert_closure(WasmIncomingClosure::Parameter(closure));
                 let registration = closure.registration().shape();
                 self.insert(registration.call());
                 self.insert(registration.free());
@@ -62,6 +104,7 @@ impl<'bindings> WasmImports<'bindings> {
         });
         if let ReturnPlan::ClosureViaOutPointer(closure) = callable.returns().plan() {
             let registration = closure.registration().shape();
+            self.insert_closure(WasmIncomingClosure::Return(closure));
             self.insert(registration.call());
             self.insert(registration.free());
             self.insert_imported(closure.invoke());
@@ -74,6 +117,16 @@ impl<'bindings> WasmImports<'bindings> {
                 && existing.name().as_str() == symbol.name().as_str()
         }) {
             self.symbols.push(symbol);
+        }
+    }
+
+    fn insert_closure(&mut self, closure: WasmIncomingClosure<'bindings>) {
+        if !self
+            .closures
+            .iter()
+            .any(|existing| existing.signature() == closure.signature())
+        {
+            self.closures.push(closure);
         }
     }
 }

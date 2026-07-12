@@ -176,10 +176,10 @@ impl host::HostBackend for TypeScriptHost {
         &self,
         bindings: &Bindings<Self::Surface>,
         _bridge: &Self::Bridge,
-        _context: &RenderContext<Self::Surface>,
+        context: &RenderContext<Self::Surface>,
         declarations: Vec<RenderedDeclaration<'decl, Self::Surface>>,
     ) -> Result<GeneratedOutput> {
-        Module::new(&self.module, &self.runtime_package).render(bindings, declarations)
+        Module::new(&self.module, &self.runtime_package).render(bindings, context, declarations)
     }
 }
 
@@ -204,6 +204,11 @@ mod tests {
 
                 #[export]
                 pub fn add(left: i32, right: i32) -> i32 { left + right }
+
+                #[export]
+                pub fn apply_closure(callback: impl Fn(i32) -> i32, value: i32) -> i32 {
+                    callback(value)
+                }
 
                 #[export]
                 pub fn echo_u64(value: u64) -> u64 { value }
@@ -506,6 +511,17 @@ mod tests {
                 .contents()
                 .contains("export function add(left: number, right: number): number")
         );
+        assert!(
+            browser
+                .contents()
+                .contains("export type ClosureI32ToI32 = (arg0: number) => number;")
+        );
+        assert!(browser.contents().contains(
+            "_callbackImports[\"__boltffi_callback_closure____closure__i32_to_i32_call\"]"
+        ));
+        assert!(browser.contents().contains(
+            "export function applyClosure(callback: ClosureI32ToI32, value: number): number"
+        ));
         assert!(
             browser
                 .contents()
