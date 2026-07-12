@@ -1,3 +1,4 @@
+mod declaration;
 mod expression;
 mod identifier;
 mod literal;
@@ -6,6 +7,7 @@ mod type_name;
 
 use crate::core::{LanguageSyntax, syntax::sealed};
 
+pub use declaration::MethodDeclaration;
 pub use expression::{ArgumentList, Expression, Statement};
 pub use identifier::Identifier;
 pub use literal::{IntegerLiteral, StringLiteral};

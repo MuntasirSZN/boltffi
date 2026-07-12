@@ -1,10 +1,13 @@
 
 
+export type {{ name }} =
+{% for variant in variants %}  | {{ variant.value }}{% if loop.last %};{% endif %}
+{% endfor %}
+
 export const {{ name }} = {
 {% for variant in variants %}  {{ variant.name }}: {{ variant.value }},
+{% endfor %}{% for method in methods %}  {{ method }}
 {% endfor %}} as const;
-
-export type {{ name }} = typeof {{ name }}[keyof typeof {{ name }}];
 
 const {{ codec }}: WireCodec<{{ name }}> = {
   size: () => {{ size }},

@@ -19,7 +19,7 @@
 
 use boltffi_ast::FnSig;
 
-use crate::{Native, Primitive, Surface, Wasm32, native, wasm32};
+use crate::{Native, Primitive, ReturnValueSlot, Surface, Wasm32, native, wasm32};
 
 use super::async_protocol::AsyncProtocolBuilder;
 use super::callbacks::CallbackProtocolBuilder;
@@ -70,6 +70,9 @@ pub trait SurfaceLower:
     #[doc(hidden)]
     fn scalar_option(primitive: Primitive) -> Option<Primitive>;
 
+    #[doc(hidden)]
+    fn direct_record_return_slot() -> ReturnValueSlot;
+
     /// Handle carrier used for a class instance crossing.
     ///
     /// Native classes cross as a 64-bit token
@@ -117,6 +120,10 @@ impl SurfaceLower for Native {
 
     fn scalar_option(primitive: Primitive) -> Option<Primitive> {
         Some(primitive)
+    }
+
+    fn direct_record_return_slot() -> ReturnValueSlot {
+        ReturnValueSlot::ReturnSlot
     }
 
     fn class_handle_carrier() -> Self::HandleCarrier {
@@ -168,6 +175,10 @@ impl SurfaceLower for Wasm32 {
                 | Primitive::USize
         )
         .then_some(primitive)
+    }
+
+    fn direct_record_return_slot() -> ReturnValueSlot {
+        ReturnValueSlot::OutPointer
     }
 
     fn class_handle_carrier() -> Self::HandleCarrier {

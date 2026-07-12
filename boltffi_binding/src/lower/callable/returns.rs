@@ -162,8 +162,10 @@ where
             ty: DirectValueType::primitive(Primitive::from(*primitive)),
         }),
         TypeExpr::Record { id, .. } if index.record(id).is_some_and(records::is_direct) => {
-            Ok(ReturnPlan::DirectViaReturnSlot {
-                ty: DirectValueType::record(ids.record(id)?),
+            let ty = DirectValueType::record(ids.record(id)?);
+            Ok(match S::direct_record_return_slot() {
+                crate::ReturnValueSlot::ReturnSlot => ReturnPlan::DirectViaReturnSlot { ty },
+                crate::ReturnValueSlot::OutPointer => ReturnPlan::DirectViaOutPointer { ty },
             })
         }
         TypeExpr::Enum { id, .. } if index.enumeration(id).is_some_and(enums::is_c_style) => {

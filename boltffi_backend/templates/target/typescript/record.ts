@@ -16,3 +16,8 @@ const {{ codec }}: WireCodec<{{ name }}> = {
 {% endfor %}    };
   },
 };
+{% if !methods.is_empty() %}
+export const {{ name }} = {
+{% for method in methods %}  {{ method }}
+{% endfor %}};
+{% endif %}

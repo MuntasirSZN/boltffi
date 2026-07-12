@@ -3,6 +3,11 @@
 export type {{ name }} =
 {% for variant in variants %}  | { readonly tag: {{ variant.tag }}{% for field in variant.fields %}; readonly {{ field.key }}: {{ field.ty }}{% endfor %} }{% if loop.last %};{% endif %}
 {% endfor %}
+{% if !methods.is_empty() %}
+export const {{ name }} = {
+{% for method in methods %}  {{ method }}
+{% endfor %}};
+{% endif %}
 const {{ codec }}: WireCodec<{{ name }}> = {
   size: (value) => {
     switch (value.tag) {

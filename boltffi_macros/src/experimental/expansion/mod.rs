@@ -8652,6 +8652,46 @@ mod tests {
     }
 
     #[test]
+    fn wasm_direct_record_return_expansion_writes_explicit_out_pointer() {
+        let source = direct_record_return_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn origin() -> Point {
+                Point { x: 0.0 }
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                pub fn origin() -> Point {
+                    Point { x: 0.0 }
+                }
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn boltffi_function_demo_origin(
+                    __boltffi_return_out: *mut <Point as ::boltffi::__private::Passable>::Out
+                ) {
+                    let __boltffi_result: Point = origin();
+                    if !__boltffi_return_out.is_null() {
+                        unsafe {
+                            ::core::ptr::write(
+                                __boltffi_return_out,
+                                <Point as ::boltffi::__private::Passable>::pack(__boltffi_result),
+                            );
+                        }
+                    }
+                }
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
     fn native_result_i32_string_expansion_writes_success_out_pointer() {
         let source = result_i32_string_contract();
         let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");

@@ -388,7 +388,31 @@ where
                 })
             }
             ReturnPlan::DirectViaOutPointer { .. } => {
-                Err(Error::UnsupportedExpansion("direct out-pointer return"))
+                let rust_type = input.rust_type.as_ref().ok_or(Error::SourceSyntaxMismatch(
+                    "binding direct out-pointer return requires a source return type",
+                ))?;
+                let result = locals.result();
+                let out = locals.return_out();
+                Ok(Tokens {
+                    items: Vec::new(),
+                    ffi_parameters: vec![quote! {
+                        #out: *mut <#rust_type as ::boltffi::__private::Passable>::Out
+                    }],
+                    return_type: TokenStream::new(),
+                    body: quote! {
+                        #(#conversions)*
+                        let #result: #rust_type = #call;
+                        #(#writebacks)*
+                        if !#out.is_null() {
+                            unsafe {
+                                ::core::ptr::write(
+                                    #out,
+                                    <#rust_type as ::boltffi::__private::Passable>::pack(#result),
+                                );
+                            }
+                        }
+                    },
+                })
             }
             ReturnPlan::EncodedViaOutPointer { .. } => {
                 Err(Error::UnsupportedExpansion("encoded out-pointer return"))

@@ -530,6 +530,10 @@ export class BoltFFIModule {
     writer.release();
   }
 
+  readerFromWriter(writer: WriterAlloc): WireReader {
+    return new WireReader(this._memory.buffer, writer.ptr);
+  }
+
   allocBufDescriptor(): number {
     const ptr = this.exports.boltffi_wasm_alloc(FFI_BUF_DESCRIPTOR_SIZE);
     if (ptr === 0) {

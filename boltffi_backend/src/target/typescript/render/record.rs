@@ -3,15 +3,17 @@ use boltffi_binding::{
     DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, FieldKey, RecordDecl, Wasm32,
 };
 
-use crate::core::{Emitted, Error, RenderContext, Result};
+use crate::core::{Diagnostic, Emitted, Error, RenderContext, Result};
 
 use super::super::{
     codec::{Reader, Sizer, Writer},
     name_style::Name,
     primitive::Scalar,
-    syntax::{ArgumentList, Expression, Identifier, PropertyKey, Statement, TypeName},
+    syntax::{
+        ArgumentList, Expression, Identifier, MethodDeclaration, PropertyKey, Statement, TypeName,
+    },
 };
-use super::Type;
+use super::{Function, Type};
 
 #[derive(AskamaTemplate)]
 #[template(path = "target/typescript/record.ts", escape = "none")]
@@ -22,6 +24,8 @@ pub struct Record {
     size: Expression,
     writes: Vec<Statement>,
     reads: Vec<Statement>,
+    methods: Vec<MethodDeclaration>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 struct Field {
@@ -43,17 +47,18 @@ impl Record {
         context: &RenderContext<Wasm32>,
     ) -> Result<Self> {
         match declaration {
-            RecordDecl::Direct(record) => Self::direct(record),
+            RecordDecl::Direct(record) => Self::direct(record, context),
             RecordDecl::Encoded(record) => Self::encoded(record, context),
             _ => Err(Self::error("unknown record declaration")),
         }
     }
 
     pub fn render(&self) -> Result<Emitted> {
-        Ok(Emitted::primary(AskamaTemplate::render(self)?))
+        Ok(Emitted::primary(AskamaTemplate::render(self)?)
+            .with_diagnostics(self.diagnostics.clone()))
     }
 
-    fn direct(record: &DirectRecordDecl<Wasm32>) -> Result<Self> {
+    fn direct(record: &DirectRecordDecl<Wasm32>, context: &RenderContext<Wasm32>) -> Result<Self> {
         let writer = Identifier::known("writer");
         let reader = Identifier::known("reader");
         let value = Expression::identifier(Identifier::known("value"));
@@ -112,6 +117,12 @@ impl Record {
             .checked_sub(parts.offset)
             .ok_or_else(|| Self::error("direct record size is smaller than its fields"))?;
         parts.skip(tail, &writer, &reader);
+        let (methods, diagnostics) = Function::record_methods(
+            record.id(),
+            record.initializers(),
+            record.methods(),
+            context,
+        )?;
         Ok(Self {
             name: Name::new(record.name()).type_name(),
             codec: Name::new(record.name()).codec_identifier()?,
@@ -119,6 +130,8 @@ impl Record {
             size: Expression::integer(record.layout().size().get()),
             writes: parts.writes,
             reads: parts.reads,
+            methods,
+            diagnostics,
         })
     }
 
@@ -170,6 +183,12 @@ impl Record {
                     .map(|read| Statement::constant(rendered.local.clone(), read.into_expression()))
             })
             .collect::<Result<Vec<_>>>()?;
+        let (methods, diagnostics) = Function::record_methods(
+            record.id(),
+            record.initializers(),
+            record.methods(),
+            context,
+        )?;
         Ok(Self {
             name: Name::new(record.name()).type_name(),
             codec: Name::new(record.name()).codec_identifier()?,
@@ -177,6 +196,8 @@ impl Record {
             size,
             writes,
             reads,
+            methods,
+            diagnostics,
         })
     }
 

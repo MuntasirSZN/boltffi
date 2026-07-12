@@ -4,17 +4,18 @@ use boltffi_binding::{
     FieldKey, IntegerRepr, Wasm32,
 };
 
-use crate::core::{Emitted, Error, RenderContext, Result};
+use crate::core::{Diagnostic, Emitted, Error, RenderContext, Result};
 
 use super::super::{
     codec::{Reader, Sizer, Writer},
     name_style::Name,
     primitive::Scalar,
     syntax::{
-        Expression, Identifier, IntegerLiteral, PropertyKey, Statement, StringLiteral, TypeName,
+        Expression, Identifier, IntegerLiteral, MethodDeclaration, PropertyKey, Statement,
+        StringLiteral, TypeName,
     },
 };
-use super::Type;
+use super::{Function, Type};
 
 pub enum Enumeration {
     CStyle(CStyle),
@@ -30,6 +31,8 @@ pub struct CStyle {
     size: u64,
     write: Identifier,
     read: Identifier,
+    methods: Vec<MethodDeclaration>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(AskamaTemplate)]
@@ -38,6 +41,8 @@ pub struct Data {
     name: TypeName,
     codec: Identifier,
     variants: Vec<DataVariant>,
+    methods: Vec<MethodDeclaration>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 struct CStyleVariant {
@@ -70,7 +75,7 @@ impl Enumeration {
         context: &RenderContext<Wasm32>,
     ) -> Result<Self> {
         match declaration {
-            EnumDecl::CStyle(enumeration) => CStyle::new(enumeration).map(Self::CStyle),
+            EnumDecl::CStyle(enumeration) => CStyle::new(enumeration, context).map(Self::CStyle),
             EnumDecl::Data(enumeration) => Data::new(enumeration, context).map(Self::Data),
             _ => Err(Self::error("unknown enum declaration")),
         }
@@ -100,10 +105,16 @@ impl Enumeration {
 }
 
 impl CStyle {
-    fn new(enumeration: &CStyleEnumDecl<Wasm32>) -> Result<Self> {
+    fn new(enumeration: &CStyleEnumDecl<Wasm32>, context: &RenderContext<Wasm32>) -> Result<Self> {
         let primitive = enumeration.repr().primitive();
         let scalar = Scalar::new(primitive)?;
         let bigint = matches!(enumeration.repr(), IntegerRepr::I64 | IntegerRepr::U64);
+        let (methods, diagnostics) = Function::enum_methods(
+            enumeration.id(),
+            enumeration.initializers(),
+            enumeration.methods(),
+            context,
+        )?;
         Ok(Self {
             name: Name::new(enumeration.name()).type_name(),
             codec: Name::new(enumeration.name()).codec_identifier()?,
@@ -123,16 +134,25 @@ impl CStyle {
             size: primitive.byte_size::<Wasm32>().get(),
             write: scalar.write_method(),
             read: scalar.read_method(),
+            methods,
+            diagnostics,
         })
     }
 
     fn render(&self) -> Result<Emitted> {
-        Ok(Emitted::primary(AskamaTemplate::render(self)?))
+        Ok(Emitted::primary(AskamaTemplate::render(self)?)
+            .with_diagnostics(self.diagnostics.clone()))
     }
 }
 
 impl Data {
     fn new(enumeration: &DataEnumDecl<Wasm32>, context: &RenderContext<Wasm32>) -> Result<Self> {
+        let (methods, diagnostics) = Function::enum_methods(
+            enumeration.id(),
+            enumeration.initializers(),
+            enumeration.methods(),
+            context,
+        )?;
         Ok(Self {
             name: Name::new(enumeration.name()).type_name(),
             codec: Name::new(enumeration.name()).codec_identifier()?,
@@ -141,11 +161,14 @@ impl Data {
                 .iter()
                 .map(|variant| DataVariant::new(variant, context))
                 .collect::<Result<Vec<_>>>()?,
+            methods,
+            diagnostics,
         })
     }
 
     fn render(&self) -> Result<Emitted> {
-        Ok(Emitted::primary(AskamaTemplate::render(self)?))
+        Ok(Emitted::primary(AskamaTemplate::render(self)?)
+            .with_diagnostics(self.diagnostics.clone()))
     }
 }
 

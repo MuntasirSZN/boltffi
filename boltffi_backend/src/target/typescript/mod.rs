@@ -265,6 +265,15 @@ mod tests {
                     pub y: f64,
                 }
 
+                #[data(impl)]
+                impl Point {
+                    pub fn origin() -> Self {
+                        Self { x: 0.0, active: false, y: 0.0 }
+                    }
+
+                    pub fn x_value(&self) -> f64 { self.x }
+                }
+
                 #[data]
                 pub struct User {
                     pub name: String,
@@ -278,11 +287,25 @@ mod tests {
                     Active = 1,
                 }
 
+                #[data(impl)]
+                impl Status {
+                    pub fn inactive() -> Self { Self::Inactive }
+
+                    pub fn is_active(&self) -> bool { matches!(self, Self::Active) }
+                }
+
                 #[data]
                 pub enum Filter {
                     None,
                     ByName { name: String },
                     ByRange(i32, i32),
+                }
+
+                #[data(impl)]
+                impl Filter {
+                    pub fn none() -> Self { Self::None }
+
+                    pub fn is_none(&self) -> bool { matches!(self, Self::None) }
                 }
 
                 #[data]
@@ -302,6 +325,12 @@ mod tests {
 
                 #[export]
                 pub fn echo_filter(value: Filter) -> Filter { value }
+
+                #[export]
+                pub fn echo_point(value: Point) -> Point { value }
+
+                #[export]
+                pub fn point_x(value: Point) -> f64 { value.x }
                 "#,
             )
             .expect("valid source"),
@@ -497,6 +526,12 @@ mod tests {
         );
         assert!(browser.contents().contains("export const Status ="));
         assert!(browser.contents().contains("Inactive: -1"));
+        assert!(browser.contents().contains("inactive(): Status"));
+        assert!(
+            browser
+                .contents()
+                .contains("isActive(self: Status): boolean")
+        );
         assert!(browser.contents().contains("writer.writeI8(value);"));
         assert!(
             browser
@@ -516,6 +551,9 @@ mod tests {
         );
         assert!(browser.contents().contains("StatusCodec.decode(reader)"));
         assert!(browser.contents().contains("export type Filter ="));
+        assert!(browser.contents().contains("export const Filter ="));
+        assert!(browser.contents().contains("none(): Filter"));
+        assert!(browser.contents().contains("isNone(self: Filter): boolean"));
         assert!(
             browser
                 .contents()
@@ -537,5 +575,31 @@ mod tests {
                 .contents()
                 .contains("export function echoFilter(value: Filter): Filter")
         );
+        assert!(
+            browser
+                .contents()
+                .contains("export function echoPoint(value: Point): Point")
+        );
+        assert!(browser.contents().contains(
+            "const __boltffi_value_writer = _module.allocWriter(PointCodec.size(value));"
+        ));
+        assert!(
+            browser
+                .contents()
+                .contains("const __boltffiReturnWriter = _module.allocWriter(24);")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("PointCodec.decode(_module.readerFromWriter(__boltffiReturnWriter))")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("export function pointX(value: Point): number")
+        );
+        assert!(browser.contents().contains("export const Point ="));
+        assert!(browser.contents().contains("origin(): Point"));
+        assert!(browser.contents().contains("xValue(self: Point): number"));
     }
 }
