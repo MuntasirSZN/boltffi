@@ -40,10 +40,14 @@ export class {{ name }} {
   }
 
   private _borrowHandle(): number {
+    this._assertNotDisposed();
+    return this._handle;
+  }
+
+  private _assertNotDisposed(): void {
     if (this._disposed) {
       throw new Error("{{ name }} has been disposed");
     }
-    return this._handle;
   }
 {% for method in methods %}
   {{ method }}

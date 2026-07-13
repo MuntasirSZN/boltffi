@@ -107,6 +107,23 @@ impl Scalar {
         })
     }
 
+    pub fn take_optional_method(self) -> Identifier {
+        Identifier::known(match self.primitive {
+            Primitive::Bool => "takePackedOptionalBool",
+            Primitive::I8 => "takePackedOptionalI8",
+            Primitive::U8 => "takePackedOptionalU8",
+            Primitive::I16 => "takePackedOptionalI16",
+            Primitive::U16 => "takePackedOptionalU16",
+            Primitive::I32 | Primitive::ISize => "takePackedOptionalI32",
+            Primitive::U32 | Primitive::USize => "takePackedOptionalU32",
+            Primitive::I64 => "takePackedOptionalI64",
+            Primitive::U64 => "takePackedOptionalU64",
+            Primitive::F32 => "takePackedOptionalF32",
+            Primitive::F64 => "takePackedOptionalF64",
+            _ => unreachable!(),
+        })
+    }
+
     pub fn typed_array(self) -> Option<TypeName> {
         Some(TypeName::named(match self.primitive {
             Primitive::Bool => return None,

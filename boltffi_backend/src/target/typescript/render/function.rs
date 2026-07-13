@@ -62,6 +62,9 @@ enum ReturnConversion {
         reader: Identifier,
         decode: Expression,
     },
+    PackedOptional {
+        take: Identifier,
+    },
     DirectVector {
         take: Identifier,
     },
@@ -127,6 +130,7 @@ struct ReturnRenderer<'context> {
 
 struct CallReceiver {
     parameter: Option<Parameter>,
+    setup: Vec<Statement>,
     arguments: Vec<Expression>,
     mutation: Option<ReceiverMutation>,
 }
@@ -265,7 +269,7 @@ impl Function {
             method.name(),
             symbol.as_str(),
             method.callable(),
-            Some(CallReceiver::class()),
+            Some(CallReceiver::callback()),
             context,
         )?
         .render_method()
@@ -540,7 +544,12 @@ impl Function {
             }
             _ => return Err(Self::unsupported("unknown execution protocol")),
         };
-        let body = parameter_setup
+        let receiver_setup = receiver
+            .as_ref()
+            .into_iter()
+            .flat_map(|receiver| receiver.setup.iter().cloned());
+        let body = receiver_setup
+            .chain(parameter_setup)
             .chain(match parameter_cleanup.is_empty() {
                 true => call,
                 false => vec![Statement::try_finally(call, parameter_cleanup)],
@@ -578,6 +587,7 @@ impl CallReceiver {
     ) -> Result<Self> {
         Parameter::receiver(owner, receive, context).map(|(parameter, mutation)| Self {
             parameter: Some(parameter),
+            setup: Vec::new(),
             arguments: Vec::new(),
             mutation,
         })
@@ -586,6 +596,23 @@ impl CallReceiver {
     fn class() -> Self {
         Self {
             parameter: None,
+            setup: vec![Statement::expression(Expression::call(
+                Expression::this(),
+                Identifier::known("_assertNotDisposed"),
+                ArgumentList::default(),
+            ))],
+            arguments: vec![Expression::property(
+                Expression::this(),
+                Identifier::known("_handle"),
+            )],
+            mutation: None,
+        }
+    }
+
+    fn callback() -> Self {
+        Self {
+            parameter: None,
+            setup: Vec::new(),
             arguments: vec![Expression::call(
                 Expression::this(),
                 Identifier::known("_borrowHandle"),
@@ -687,6 +714,7 @@ impl Failure {
                         ReadKind::Bytes
                         | ReadKind::Primitive(_)
                         | ReadKind::CustomPrimitive(_)
+                        | ReadKind::OptionalPrimitive(_)
                         | ReadKind::ErrorRecord(_)
                         | ReadKind::ErrorEnum(_),
                     )
@@ -1436,6 +1464,15 @@ impl Return {
                 ),
                 Statement::return_value(decode.clone()),
             ],
+            ReturnConversion::PackedOptional { take } => {
+                vec![Statement::return_value(Expression::call(
+                    Expression::identifier(Identifier::known("_module")),
+                    take.clone(),
+                    [call.cast(TypeName::bigint())]
+                        .into_iter()
+                        .collect::<ArgumentList>(),
+                ))]
+            }
             ReturnConversion::DirectVector { take } => vec![
                 Statement::expression(call),
                 Statement::return_value(Expression::call(
@@ -1717,6 +1754,14 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                 Type::from_ref(ty, self.context)?,
                 ReturnConversion::Bytes,
             )),
+            (ReturnValueSlot::ReturnSlot, Some(ReadKind::OptionalPrimitive(primitive))) => {
+                Ok(Return::new(
+                    Type::from_ref(ty, self.context)?,
+                    ReturnConversion::PackedOptional {
+                        take: Scalar::new(primitive)?.take_optional_method(),
+                    },
+                ))
+            }
             (
                 ReturnValueSlot::ReturnSlot,
                 Some(ReadKind::Primitive(_) | ReadKind::CustomPrimitive(_)) | None,
@@ -1724,6 +1769,22 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                 Type::from_ref(ty, self.context)?,
                 ReturnConversion::Encoded { reader, decode },
             )),
+            (ReturnValueSlot::OutPointer, Some(ReadKind::OptionalPrimitive(primitive))) => {
+                let ty = Type::from_ref(ty, self.context)?;
+                let take = Scalar::new(primitive)?.take_optional_method();
+                Ok(Return::out(ty, 8, move |output| {
+                    let packed = Expression::call(
+                        output,
+                        Identifier::known("readU64"),
+                        ArgumentList::default(),
+                    );
+                    vec![Statement::return_value(Expression::call(
+                        Expression::identifier(Identifier::known("_module")),
+                        take,
+                        [packed].into_iter().collect::<ArgumentList>(),
+                    ))]
+                }))
+            }
             (ReturnValueSlot::OutPointer, kind) => {
                 let ty = Type::from_ref(ty, self.context)?;
                 Ok(Return::out(ty, 8, move |output| {
@@ -1746,6 +1807,7 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                         Some(
                             ReadKind::Primitive(_)
                             | ReadKind::CustomPrimitive(_)
+                            | ReadKind::OptionalPrimitive(_)
                             | ReadKind::ErrorRecord(_)
                             | ReadKind::ErrorEnum(_),
                         )

@@ -6,6 +6,20 @@ const FFI_STATUS_SIZE = 4;
 const MIN_WRITER_CAPACITY = 64;
 const MAX_WRITERS_PER_CAPACITY = 32;
 
+const enum PackedPrimitive {
+  Bool,
+  I8,
+  U8,
+  I16,
+  U16,
+  I32,
+  U32,
+  I64,
+  U64,
+  F32,
+  F64,
+}
+
 export const enum WasmPollStatus {
   Pending = 0,
   Ready = 1,
@@ -814,72 +828,95 @@ export class BoltFFIModule {
     }
   }
 
-  private takePackedOptionalPrimitive<T>(
+  private takePackedOptionalPrimitive(
     packed: bigint,
     encodedSize: number,
-    readValue: (view: DataView, valueOffset: number) => T
-  ): T | null {
+    primitive: PackedPrimitive
+  ): boolean | number | bigint | null {
     const { pointer, length } = this.unpackPacked(packed);
     if (pointer === 0 || length === 0) {
       return null;
     }
-    const view = this.getView();
-    const tag = view.getUint8(pointer);
-    if (tag === 0) {
+    try {
+      const view = this.getView();
+      if (view.getUint8(pointer) === 0) {
+        return null;
+      }
+      if (length < 1 + encodedSize) {
+        throw new Error("Invalid packed optional payload");
+      }
+      const valueOffset = pointer + 1;
+      switch (primitive) {
+        case PackedPrimitive.Bool:
+          return view.getUint8(valueOffset) !== 0;
+        case PackedPrimitive.I8:
+          return view.getInt8(valueOffset);
+        case PackedPrimitive.U8:
+          return view.getUint8(valueOffset);
+        case PackedPrimitive.I16:
+          return view.getInt16(valueOffset, true);
+        case PackedPrimitive.U16:
+          return view.getUint16(valueOffset, true);
+        case PackedPrimitive.I32:
+          return view.getInt32(valueOffset, true);
+        case PackedPrimitive.U32:
+          return view.getUint32(valueOffset, true);
+        case PackedPrimitive.I64:
+          return view.getBigInt64(valueOffset, true);
+        case PackedPrimitive.U64:
+          return view.getBigUint64(valueOffset, true);
+        case PackedPrimitive.F32:
+          return view.getFloat32(valueOffset, true);
+        case PackedPrimitive.F64:
+          return view.getFloat64(valueOffset, true);
+      }
+    } finally {
       this.freePacked(pointer, length);
-      return null;
     }
-    if (length < 1 + encodedSize) {
-      this.freePacked(pointer, length);
-      throw new Error("Invalid packed optional payload");
-    }
-    const value = readValue(view, pointer + 1);
-    this.freePacked(pointer, length);
-    return value;
   }
 
   takePackedOptionalBool(packed: bigint): boolean | null {
-    return this.takePackedOptionalPrimitive(packed, 1, (view, offset) => view.getUint8(offset) !== 0);
+    return this.takePackedOptionalPrimitive(packed, 1, PackedPrimitive.Bool) as boolean | null;
   }
 
   takePackedOptionalI8(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 1, (view, offset) => view.getInt8(offset));
+    return this.takePackedOptionalPrimitive(packed, 1, PackedPrimitive.I8) as number | null;
   }
 
   takePackedOptionalU8(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 1, (view, offset) => view.getUint8(offset));
+    return this.takePackedOptionalPrimitive(packed, 1, PackedPrimitive.U8) as number | null;
   }
 
   takePackedOptionalI16(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 2, (view, offset) => view.getInt16(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 2, PackedPrimitive.I16) as number | null;
   }
 
   takePackedOptionalU16(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 2, (view, offset) => view.getUint16(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 2, PackedPrimitive.U16) as number | null;
   }
 
   takePackedOptionalI32(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 4, (view, offset) => view.getInt32(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 4, PackedPrimitive.I32) as number | null;
   }
 
   takePackedOptionalU32(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 4, (view, offset) => view.getUint32(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 4, PackedPrimitive.U32) as number | null;
   }
 
   takePackedOptionalI64(packed: bigint): bigint | null {
-    return this.takePackedOptionalPrimitive(packed, 8, (view, offset) => view.getBigInt64(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 8, PackedPrimitive.I64) as bigint | null;
   }
 
   takePackedOptionalU64(packed: bigint): bigint | null {
-    return this.takePackedOptionalPrimitive(packed, 8, (view, offset) => view.getBigUint64(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 8, PackedPrimitive.U64) as bigint | null;
   }
 
   takePackedOptionalF32(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 4, (view, offset) => view.getFloat32(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 4, PackedPrimitive.F32) as number | null;
   }
 
   takePackedOptionalF64(packed: bigint): number | null {
-    return this.takePackedOptionalPrimitive(packed, 8, (view, offset) => view.getFloat64(offset, true));
+    return this.takePackedOptionalPrimitive(packed, 8, PackedPrimitive.F64) as number | null;
   }
 
   unpackOptionBool(packed: number): boolean | null {

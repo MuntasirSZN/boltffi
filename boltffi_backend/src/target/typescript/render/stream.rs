@@ -172,6 +172,7 @@ impl<'plan> StreamItemPlanRender<'plan, Wasm32> for ItemRenderer<'_> {
                 ReadKind::String
                 | ReadKind::Bytes
                 | ReadKind::CustomPrimitive(_)
+                | ReadKind::OptionalPrimitive(_)
                 | ReadKind::ErrorRecord(_)
                 | ReadKind::ErrorEnum(_),
             )

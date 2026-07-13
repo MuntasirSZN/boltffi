@@ -15,6 +15,7 @@ use super::super::{
 pub enum ReadKind {
     Primitive(Primitive),
     CustomPrimitive(Primitive),
+    OptionalPrimitive(Primitive),
     String,
     Bytes,
     ErrorRecord(RecordId),
@@ -223,13 +224,23 @@ impl CodecRead for Reader<'_> {
     }
 
     fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
-        Ok(ReadExpression::dynamic(Expression::call(
-            Expression::identifier(self.reader.clone()),
-            Identifier::known("readOptional"),
-            [Expression::lambda(inner?.into_expression())]
-                .into_iter()
-                .collect::<ArgumentList>(),
-        )))
+        let inner = inner?;
+        let kind = match inner.kind() {
+            Some(ReadKind::Primitive(primitive) | ReadKind::CustomPrimitive(primitive)) => {
+                Some(ReadKind::OptionalPrimitive(primitive))
+            }
+            _ => None,
+        };
+        Ok(ReadExpression {
+            kind,
+            expression: Expression::call(
+                Expression::identifier(self.reader.clone()),
+                Identifier::known("readOptional"),
+                [Expression::lambda(inner.into_expression())]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+            ),
+        })
     }
 
     fn sequence(&mut self, _len: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {

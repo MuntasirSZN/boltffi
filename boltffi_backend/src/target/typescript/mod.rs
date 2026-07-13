@@ -653,7 +653,7 @@ mod tests {
         assert!(
             browser
                 .contents()
-                .contains("return __boltffiReader.readOptional(() => __boltffiReader.readI64());")
+                .contains("return _module.takePackedOptionalI64(")
         );
         assert!(
             browser
@@ -907,7 +907,8 @@ mod tests {
                 .contains("static new(initial: number): Counter")
         );
         assert!(browser.contents().contains("get(): number"));
-        assert!(browser.contents().contains("this._borrowHandle()"));
+        assert!(browser.contents().contains("this._assertNotDisposed();"));
+        assert!(browser.contents().contains("this._handle"));
         assert!(
             browser
                 .contents()
