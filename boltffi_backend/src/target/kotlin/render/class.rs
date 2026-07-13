@@ -12,7 +12,10 @@ use crate::{
     target::kotlin::{
         KotlinFactoryStyle, KotlinHost,
         name_style::Name,
-        render::function::{ExportedCall, ExportedCallRenderer, ReceiverCarrier},
+        render::{
+            function::{ExportedCall, ExportedCallRenderer, ReceiverCarrier},
+            signature::validate_reserved_members,
+        },
         syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
     },
 };
@@ -79,18 +82,28 @@ impl Class {
             .iter()
             .map(|initializer| Initializer::from_declaration(initializer, host, bridge, context))
             .collect::<Result<Vec<_>>>()?;
+        let name = Self::type_name(decl.name())?;
+        let instance_methods = Self::methods(
+            decl.methods(),
+            Some(guarded_handle("this", HandlePresence::Required)?),
+            host,
+            bridge,
+            context,
+        )?;
+        validate_reserved_members(
+            &name,
+            &["close", "boltffiHandle"],
+            instance_methods
+                .iter()
+                .filter(|method| method.parameters().is_empty())
+                .map(ExportedCall::name),
+        )?;
         Ok(Self {
-            name: Self::type_name(decl.name())?,
             release: Identifier::escape(decl.release().name().as_str())?,
             initializers: Initializer::apply_factory_style(initializers, factory_style),
             static_methods: Self::methods(decl.methods(), None, host, bridge, context)?,
-            instance_methods: Self::methods(
-                decl.methods(),
-                Some(guarded_handle("this", HandlePresence::Required)?),
-                host,
-                bridge,
-                context,
-            )?,
+            instance_methods,
+            name,
         })
     }
 

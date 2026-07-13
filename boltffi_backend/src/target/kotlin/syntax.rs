@@ -127,6 +127,10 @@ impl fmt::Display for Identifier {
 }
 
 impl Identifier {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     pub fn parse(identifier: impl Into<String>) -> Result<Self> {
         let identifier = identifier.into();
         if Self::valid(&identifier) && !Syntax::keyword(&identifier) {

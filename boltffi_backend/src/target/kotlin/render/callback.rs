@@ -20,8 +20,13 @@ use crate::{
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
-            class::ClassHandle, direct_vector::DirectVector, enumeration::Enumeration,
-            jvm_invocation, native::NativeCall, record::Record, signature::Parameter,
+            class::ClassHandle,
+            direct_vector::DirectVector,
+            enumeration::Enumeration,
+            jvm_invocation,
+            native::NativeCall,
+            record::Record,
+            signature::{Parameter, validate_reserved_members},
             type_name::KotlinType,
         },
         syntax::{ArgumentList, Expression, Identifier, Literal, Statement, TypeName},
@@ -212,6 +217,14 @@ impl Callback {
             .map(|(source, method)| HandleMethod::from_declaration(source, method, host, context))
             .collect::<Result<Vec<_>>>()?;
         let handle_name = TypeName::new(format!("{name}Handle"));
+        validate_reserved_members(
+            &handle_name,
+            &["close", "rawHandle", "requireOpen"],
+            handle_methods
+                .iter()
+                .filter(|method| method.parameters().is_empty())
+                .map(HandleMethod::name),
+        )?;
         let handle_release = bridge
             .callback_handle_lifecycle()
             .map(|lifecycle| Identifier::escape(lifecycle.release_method().as_str()))

@@ -1,5 +1,6 @@
-use boltffi_backend::target::kotlin::{
-    KotlinApiStyle, KotlinCustomMapping, KotlinFactoryStyle, KotlinHost,
+use boltffi_backend::{
+    Error,
+    target::kotlin::{KotlinApiStyle, KotlinCustomMapping, KotlinFactoryStyle, KotlinHost},
 };
 
 use super::{
@@ -136,6 +137,92 @@ fn kotlin_target_renders_class_handles_and_associated_callables() {
     assert!(!rendered.contains("other?.handle"));
 
     insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn kotlin_target_rejects_methods_shadowing_generated_class_members() {
+    let render = |source: &str| {
+        KotlinHost::new("com.boltffi.demo", "Demo")
+            .expect("Kotlin host")
+            .into_target()
+            .expect("Kotlin target")
+            .render(&super::bindings(source))
+    };
+
+    let error = render(
+        r#"
+        pub struct Engine {
+            value: i64,
+        }
+
+        #[export]
+        impl Engine {
+            pub fn new() -> Self {
+                Self { value: 0 }
+            }
+
+            pub fn boltffi_handle(&self) -> i64 {
+                self.value
+            }
+        }
+        "#,
+    )
+    .expect_err("a method shadowing the generated handle accessor must not render");
+    assert!(
+        matches!(
+            &error,
+            Error::KotlinNameCollision { scope, name }
+                if scope == "Engine" && name == "boltffiHandle()"
+        ),
+        "{error:?}"
+    );
+
+    let error = render(
+        r#"
+        pub struct Engine {
+            value: i64,
+        }
+
+        #[export]
+        impl Engine {
+            pub fn new() -> Self {
+                Self { value: 0 }
+            }
+
+            pub fn close(&self) {}
+        }
+        "#,
+    )
+    .expect_err("a method shadowing the generated close() must not render");
+    assert!(
+        matches!(
+            &error,
+            Error::KotlinNameCollision { scope, name }
+                if scope == "Engine" && name == "close()"
+        ),
+        "{error:?}"
+    );
+
+    // Overloads with parameters are legal Kotlin and must keep rendering.
+    render(
+        r#"
+        pub struct Engine {
+            value: i64,
+        }
+
+        #[export]
+        impl Engine {
+            pub fn new() -> Self {
+                Self { value: 0 }
+            }
+
+            pub fn close(&self, force: bool) {
+                let _ = force;
+            }
+        }
+        "#,
+    )
+    .expect("close overloads taking parameters remain valid");
 }
 
 #[test]
