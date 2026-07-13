@@ -455,6 +455,11 @@ describe("BoltFFIModule memory operations", () => {
       bytesAllocation.ptr,
       bytesAllocation.len,
     ]);
+
+    const unicodeAllocation = module.allocWireString("BoltFFI ⚡");
+    const packedUnicode =
+      BigInt(unicodeAllocation.ptr) | (BigInt(unicodeAllocation.len) << 32n);
+    expect(module.takePackedWireString(packedUnicode)).toBe("BoltFFI ⚡");
   });
 });
 

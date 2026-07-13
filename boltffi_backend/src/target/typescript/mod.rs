@@ -867,19 +867,19 @@ mod tests {
                 .contents()
                 .contains("scale(self: MutablePoint, factor: number): MutablePoint")
         );
-        assert!(
-            browser
-                .contents()
-                .contains("const __boltffiReceiverOut = _module.allocBufDescriptor();")
-        );
+        assert!(browser.contents().contains(
+            "const __boltffi_self_writer = _module.allocWriter(MutablePointCodec.size(self));"
+        ));
         assert!(
             browser
                 .contents()
                 .contains("_module.checkStatus((_exports.")
         );
-        assert!(browser.contents().contains(
-            "const __boltffiReceiverReader = _module.readerFromBuf(__boltffiReceiverOut);"
-        ));
+        assert!(
+            browser
+                .contents()
+                .contains("return MutablePointCodec.decode(__boltffiReceiverReader);")
+        );
     }
 
     #[test]

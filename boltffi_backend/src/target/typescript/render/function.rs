@@ -15,7 +15,8 @@ use super::super::{
     primitive::Scalar,
     render::{Type, direct_vector::DirectVector, scalar_option::ScalarOption},
     syntax::{
-        ArgumentList, Expression, Identifier, MemberName, MethodDeclaration, Statement, TypeName,
+        ArgumentList, Expression, Identifier, MemberName, MethodDeclaration, Statement,
+        StringLiteral, TypeName,
     },
 };
 use super::closure::ClosureAdapter;
@@ -66,7 +67,7 @@ enum ReturnConversion {
         take: Identifier,
     },
     DirectVector {
-        take: Identifier,
+        take: Expression,
     },
     ScalarOption {
         unpack: Identifier,
@@ -135,11 +136,17 @@ struct CallReceiver {
     mutation: Option<ReceiverMutation>,
 }
 
-struct ReceiverMutation {
-    ty: TypeName,
-    descriptor: Identifier,
-    reader: Identifier,
-    decode: Expression,
+enum ReceiverMutation {
+    Direct {
+        ty: TypeName,
+        value: Identifier,
+    },
+    Encoded {
+        ty: TypeName,
+        descriptor: Identifier,
+        reader: Identifier,
+        decode: Expression,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -220,13 +227,17 @@ impl Function {
 
     pub fn from_class_method(
         method: &ExportedMethodDecl<Wasm32, NativeSymbol>,
+        class: &TypeName,
         context: &RenderContext<Wasm32>,
     ) -> Result<Self> {
         Self::from_callable(
             method.name(),
             method.target().name().as_str(),
             method.callable(),
-            method.callable().receiver().map(|_| CallReceiver::class()),
+            method
+                .callable()
+                .receiver()
+                .map(|_| CallReceiver::class(class)),
             context,
         )
     }
@@ -556,7 +567,7 @@ impl Function {
             })
             .collect();
         let return_type = match receiver.and_then(|receiver| receiver.mutation) {
-            Some(mutation) => mutation.ty,
+            Some(mutation) => mutation.ty(),
             None if failure.returns_null() => returns.ty.clone().nullable(),
             None => returns.ty,
         };
@@ -593,14 +604,18 @@ impl CallReceiver {
         })
     }
 
-    fn class() -> Self {
+    fn class(class: &TypeName) -> Self {
+        let disposed = Expression::property(Expression::this(), Identifier::known("_disposed"));
+        let message = format!("{class} has been disposed");
+        let error = Expression::construct(
+            "Error",
+            [Expression::string(StringLiteral::new(&message))]
+                .into_iter()
+                .collect::<ArgumentList>(),
+        );
         Self {
             parameter: None,
-            setup: vec![Statement::expression(Expression::call(
-                Expression::this(),
-                Identifier::known("_assertNotDisposed"),
-                ArgumentList::default(),
-            ))],
+            setup: vec![Statement::throw_when(disposed, error)],
             arguments: vec![Expression::property(
                 Expression::this(),
                 Identifier::known("_handle"),
@@ -631,7 +646,7 @@ impl ReceiverMutation {
     ) -> Result<Self> {
         let descriptor = Identifier::known("__boltffiReceiverOut");
         let reader = Identifier::known("__boltffiReceiverReader");
-        Ok(Self {
+        Ok(Self::Encoded {
             ty,
             descriptor,
             decode: read
@@ -641,10 +656,23 @@ impl ReceiverMutation {
         })
     }
 
+    fn ty(self) -> TypeName {
+        match self {
+            Self::Direct { ty, .. } | Self::Encoded { ty, .. } => ty,
+        }
+    }
+
     fn prepare(&self, parameter: &mut Parameter) {
-        let descriptor = Expression::identifier(self.descriptor.clone());
+        let Self::Encoded {
+            descriptor: descriptor_name,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let descriptor = Expression::identifier(descriptor_name.clone());
         parameter.setup.push(Statement::constant(
-            self.descriptor.clone(),
+            descriptor_name.clone(),
             Expression::call(
                 Expression::identifier(Identifier::known("_module")),
                 Identifier::known("allocBufDescriptor"),
@@ -672,23 +700,36 @@ impl ReceiverMutation {
         {
             return Err(Function::unsupported("mutable receiver with return value"));
         }
-        let descriptor = Expression::identifier(self.descriptor.clone());
-        Ok(vec![
-            Statement::expression(Expression::call(
-                Expression::identifier(Identifier::known("_module")),
-                Identifier::known("checkStatus"),
-                [call].into_iter().collect::<ArgumentList>(),
-            )),
-            Statement::constant(
-                self.reader.clone(),
-                Expression::call(
-                    Expression::identifier(Identifier::known("_module")),
-                    Identifier::known("readerFromBuf"),
-                    [descriptor].into_iter().collect::<ArgumentList>(),
+        let status = Statement::expression(Expression::call(
+            Expression::identifier(Identifier::known("_module")),
+            Identifier::known("checkStatus"),
+            [call].into_iter().collect::<ArgumentList>(),
+        ));
+        match self {
+            Self::Direct { value, .. } => Ok(vec![
+                status,
+                Statement::return_value(Expression::identifier(value.clone())),
+            ]),
+            Self::Encoded {
+                descriptor,
+                reader,
+                decode,
+                ..
+            } => Ok(vec![
+                status,
+                Statement::constant(
+                    reader.clone(),
+                    Expression::call(
+                        Expression::identifier(Identifier::known("_module")),
+                        Identifier::known("readerFromBuf"),
+                        [Expression::identifier(descriptor.clone())]
+                            .into_iter()
+                            .collect::<ArgumentList>(),
+                    ),
                 ),
-            ),
-            Statement::return_value(self.decode.clone()),
-        ])
+                Statement::return_value(decode.clone()),
+            ]),
+        }
     }
 }
 
@@ -867,8 +908,15 @@ impl Parameter {
         let name = Identifier::known("self");
         match owner {
             ReceiverOwner::Record(id) => match context.record(id) {
-                Some(RecordDecl::Direct(_)) => Self::direct_record(name, id, receive, context)
-                    .map(|parameter| (parameter, None)),
+                Some(RecordDecl::Direct(record)) => {
+                    let mutation =
+                        matches!(receive, Receive::ByMutRef).then(|| ReceiverMutation::Direct {
+                            ty: Name::new(record.name()).type_name(),
+                            value: name.clone(),
+                        });
+                    Self::direct_record(name, id, receive, context)
+                        .map(|parameter| (parameter, mutation))
+                }
                 Some(RecordDecl::Encoded(record)) => Self::encoded_receiver(
                     name,
                     Name::new(record.name()).type_name(),
@@ -1046,8 +1094,9 @@ impl Parameter {
         name: Identifier,
         element: &DirectVectorElementType,
         receive: Receive,
+        context: &RenderContext<Wasm32>,
     ) -> Result<Self> {
-        let vector = DirectVector::new(element, receive)?;
+        let vector = DirectVector::new(element, receive, context)?;
         let allocation = Identifier::parse(format!("__boltffi_{name}_allocation"))?;
         let allocation_value = Expression::identifier(allocation.clone());
         let value = Expression::identifier(name.clone());
@@ -1067,7 +1116,7 @@ impl Parameter {
         };
         cleanup.push(Statement::expression(Expression::call(
             Expression::identifier(Identifier::known("_module")),
-            Identifier::known("freePrimitiveBuffer"),
+            vector.free_method(),
             [allocation_value.clone()]
                 .into_iter()
                 .collect::<ArgumentList>(),
@@ -1076,11 +1125,7 @@ impl Parameter {
             ty: vector.parameter_type()?,
             setup: vec![Statement::constant(
                 allocation.clone(),
-                Expression::call(
-                    Expression::identifier(Identifier::known("_module")),
-                    vector.allocation_method(),
-                    [value].into_iter().collect::<ArgumentList>(),
-                ),
+                vector.allocation(value),
             )],
             arguments: ["ptr", "len"]
                 .into_iter()
@@ -1110,9 +1155,6 @@ impl Parameter {
         receive: Receive,
         context: &RenderContext<Wasm32>,
     ) -> Result<Self> {
-        if matches!(receive, Receive::ByMutRef) {
-            return Err(Function::unsupported("mutable direct record parameter"));
-        }
         let record = context
             .record(id)
             .ok_or_else(|| Function::unsupported("record without declaration"))?;
@@ -1120,6 +1162,36 @@ impl Parameter {
         let writer = Identifier::parse(format!("__boltffi_{name}_writer"))?;
         let writer_value = Expression::identifier(writer.clone());
         let value = Expression::identifier(name.clone());
+        let mut cleanup = matches!(receive, Receive::ByMutRef)
+            .then(|| {
+                Statement::expression(Expression::static_call(
+                    "Object",
+                    Identifier::known("assign"),
+                    [
+                        value.clone(),
+                        Expression::call(
+                            Expression::identifier(codec.clone()),
+                            Identifier::known("decode"),
+                            [Expression::call(
+                                Expression::identifier(Identifier::known("_module")),
+                                Identifier::known("readerFromWriter"),
+                                [writer_value.clone()].into_iter().collect(),
+                            )]
+                            .into_iter()
+                            .collect(),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ))
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        cleanup.push(Statement::expression(Expression::call(
+            Expression::identifier(Identifier::known("_module")),
+            Identifier::known("freeWriter"),
+            [writer_value.clone()].into_iter().collect::<ArgumentList>(),
+        )));
         Ok(Self {
             ty: Name::new(record.name()).type_name(),
             setup: vec![
@@ -1149,11 +1221,7 @@ impl Parameter {
                 writer_value.clone(),
                 Identifier::known("ptr"),
             )],
-            cleanup: vec![Statement::expression(Expression::call(
-                Expression::identifier(Identifier::known("_module")),
-                Identifier::known("freeWriter"),
-                [writer_value].into_iter().collect::<ArgumentList>(),
-            ))],
+            cleanup,
             name,
         })
     }
@@ -1475,11 +1543,7 @@ impl Return {
             }
             ReturnConversion::DirectVector { take } => vec![
                 Statement::expression(call),
-                Statement::return_value(Expression::call(
-                    Expression::identifier(Identifier::known("_module")),
-                    take.clone(),
-                    ArgumentList::default(),
-                )),
+                Statement::return_value(take.clone()),
             ],
             ReturnConversion::ScalarOption { unpack } => {
                 vec![Statement::return_value(Expression::call(
@@ -1637,7 +1701,7 @@ impl<'plan> ParamPlanRender<'plan, Wasm32, IntoRust> for ParameterRenderer<'_> {
         element: &'plan DirectVectorElementType,
         receive: Receive,
     ) -> Self::Output {
-        Parameter::direct_vector(self.name.clone(), element, receive)
+        Parameter::direct_vector(self.name.clone(), element, receive, self.context)
     }
 }
 
@@ -1932,11 +1996,11 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
     }
 
     fn direct_vector(&mut self, element: &'plan DirectVectorElementType) -> Self::Output {
-        let vector = DirectVector::new(element, Receive::ByValue)?;
+        let vector = DirectVector::new(element, Receive::ByValue, self.context)?;
         Ok(Return::new(
             vector.return_type(),
             ReturnConversion::DirectVector {
-                take: vector.take_method(),
+                take: vector.take(),
             },
         ))
     }

@@ -214,6 +214,15 @@ export class BoltFFIModule {
     view[index + 3] = alignment;
   }
 
+  writeWriterReturnSlot(writer: WriterAlloc, alignment: number): void {
+    const view = this.getU32();
+    const index = this._returnSlotAddr >>> 2;
+    view[index] = writer.ptr;
+    view[index + 1] = writer.len;
+    view[index + 2] = writer.capacity;
+    view[index + 3] = alignment;
+  }
+
   completeAsync<T>(complete: (statusPtr: number) => T): T {
     const statusPtr = this.allocStatus();
     try {
@@ -366,7 +375,21 @@ export class BoltFFIModule {
   }
 
   allocWireString(value: string): StringAlloc {
-    return this.allocWireBytes(this._encoder.encode(value));
+    const len = 4 + value.length;
+    const ptr = this.exports.boltffi_wasm_alloc(len);
+    if (ptr === 0) {
+      throw new Error("Failed to allocate memory for wire string");
+    }
+    const encoded = this._encoder.encodeInto(
+      value,
+      new Uint8Array(this._memory.buffer, ptr + 4, value.length)
+    );
+    if (encoded.read !== value.length) {
+      this.exports.boltffi_wasm_free(ptr, len);
+      return this.allocWireBytes(this._encoder.encode(value));
+    }
+    this.getView().setUint32(ptr, encoded.written, true);
+    return { ptr, len: 4 + encoded.written };
   }
 
   allocWireBytes(value: Uint8Array): StringAlloc {
@@ -562,6 +585,25 @@ export class BoltFFIModule {
     return writer;
   }
 
+  borrowRecordArray<T>(
+    ptr: number,
+    byteLen: number,
+    stride: number,
+    decode: (reader: WireReader) => T
+  ): T[] {
+    if (ptr === 0 || byteLen === 0) return [];
+    if (byteLen % stride !== 0) {
+      throw new Error(`Invalid record array byte length ${byteLen} for stride ${stride}`);
+    }
+    const count = byteLen / stride;
+    const result: T[] = new Array(count);
+    const reader = new WireReader(this._memory.buffer, ptr);
+    for (let index = 0; index < count; index++) {
+      result[index] = decode(reader);
+    }
+    return result;
+  }
+
   freePrimitiveBuffer(allocation: PrimitiveBufferAlloc): void {
     if (allocation.ptr !== 0 && allocation.allocationSize !== 0) {
       this.exports.boltffi_wasm_free(allocation.ptr, allocation.allocationSize);
@@ -654,6 +696,10 @@ export class BoltFFIModule {
 
   readerFromWriter(writer: WriterAlloc): WireReader {
     return new WireReader(this._memory.buffer, writer.ptr);
+  }
+
+  writerFromMemory(ptr: number, size: number): WriterAlloc {
+    return WireWriter.withWasmRegion(ptr, size, () => this._memory.buffer);
   }
 
   allocBufDescriptor(): number {
@@ -1166,6 +1212,16 @@ export class BoltFFIModule {
       result[i] = decode(view, i * stride);
     }
     return result;
+  }
+
+  takeSlotRecordArray<T>(stride: number, decode: (reader: WireReader) => T): T[] {
+    const { ptr, len: byteLen, cap, align } = this.readSlot();
+    if (ptr === 0) return [];
+    try {
+      return this.borrowRecordArray(ptr, byteLen, stride, decode);
+    } finally {
+      this.freeSlotBuf(ptr, cap, align);
+    }
   }
 
   takePackedI16Array(packed: bigint): Int16Array {

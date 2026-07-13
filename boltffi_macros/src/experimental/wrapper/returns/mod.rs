@@ -498,6 +498,26 @@ where
                 handle::Failure,
                 handle::FailureInput::new(target.clone(), *carrier),
             ),
+            ReturnPlan::DirectViaOutPointer { .. } => {
+                let rust_type = input
+                    .source
+                    .written_type()?
+                    .ok_or(Error::SourceSyntaxMismatch("direct return type is missing"))?;
+                let output = names::Locals::new(proc_macro2::Span::call_site()).return_out();
+                Ok(quote! {
+                    if !#output.is_null() {
+                        unsafe {
+                            ::core::ptr::write(
+                                #output,
+                                ::core::mem::MaybeUninit::<
+                                    <#rust_type as ::boltffi::__private::Passable>::Out
+                                >::zeroed().assume_init(),
+                            );
+                        }
+                    }
+                    return;
+                })
+            }
             ReturnPlan::ClosureViaOutPointer(_) => Ok(quote! {
                 return ::boltffi::__private::FfiStatus::INVALID_ARG;
             }),

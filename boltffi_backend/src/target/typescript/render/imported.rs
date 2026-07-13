@@ -214,8 +214,12 @@ impl Parameter {
         })
     }
 
-    fn direct_vector(name: Identifier, element: &DirectVectorElementType) -> Result<Self> {
-        let vector = DirectVector::outgoing(element)?;
+    fn direct_vector(
+        name: Identifier,
+        element: &DirectVectorElementType,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        let vector = DirectVector::outgoing(element, context)?;
         let pointer = Identifier::parse(format!("{name}Pointer"))?;
         let length = Identifier::parse(format!("{name}Length"))?;
         Ok(Self {
@@ -233,15 +237,9 @@ impl Parameter {
             ],
             setup: vec![Statement::constant(
                 name.clone(),
-                Expression::call(
-                    Expression::identifier(Identifier::known("_module")),
-                    vector.borrow_method(),
-                    [
-                        Expression::identifier(pointer),
-                        Expression::identifier(length),
-                    ]
-                    .into_iter()
-                    .collect::<ArgumentList>(),
+                vector.borrow(
+                    Expression::identifier(pointer),
+                    Expression::identifier(length),
                 ),
             )],
             argument: Expression::identifier(name),
@@ -297,6 +295,6 @@ impl<'plan> ParamPlanRender<'plan, Wasm32, OutOfRust> for Renderer<'_> {
         element: &'plan DirectVectorElementType,
         _receive: (),
     ) -> Self::Output {
-        Parameter::direct_vector(self.name.clone(), element)
+        Parameter::direct_vector(self.name.clone(), element, self.context)
     }
 }

@@ -223,7 +223,7 @@ export class WireReader {
   }
 
   readTimestamp(): Date {
-    const secs = this.readU64();
+    const secs = this.readI64();
     const nanos = this.readU32();
     const ms = Number(secs) * 1000 + Math.floor(nanos / 1_000_000);
     return new Date(ms);
@@ -336,6 +336,21 @@ export class WireWriter {
     writer.wasmAllocator = allocator;
     writer.wasmPtr = pointer;
     writer.allocationSize = normalizedSize;
+    return writer;
+  }
+
+  static withWasmRegion(pointer: number, size: number, buffer: () => ArrayBuffer): WireWriter {
+    const writer = new WireWriter(1);
+    writer.wasmAllocator = {
+      alloc: () => pointer,
+      realloc: () => {
+        throw new Error("Fixed WASM region exceeded its capacity");
+      },
+      free: () => {},
+      buffer,
+    };
+    writer.wasmPtr = pointer;
+    writer.allocationSize = size;
     return writer;
   }
 
@@ -564,9 +579,10 @@ export class WireWriter {
 
   writeTimestamp(value: Date): void {
     const ms = value.getTime();
-    const secs = BigInt(Math.floor(ms / 1000));
-    const nanos = (ms % 1000) * 1_000_000;
-    this.writeU64(secs);
+    const wholeSeconds = Math.floor(ms / 1000);
+    const secs = BigInt(wholeSeconds);
+    const nanos = (ms - wholeSeconds * 1000) * 1_000_000;
+    this.writeI64(secs);
     this.writeU32(nanos);
   }
 

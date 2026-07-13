@@ -46,6 +46,20 @@ impl Expression {
         Self(format!("({parameter}) => {expression}"))
     }
 
+    pub fn parameters_lambda(
+        parameters: impl IntoIterator<Item = Identifier>,
+        expression: Self,
+    ) -> Self {
+        Self(format!(
+            "({}) => {expression}",
+            parameters
+                .into_iter()
+                .map(|parameter| parameter.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+
     pub fn statements_lambda(parameter: Identifier, statements: Vec<Statement>) -> Self {
         Self(format!(
             "({parameter}) => {{\n{}\n}}",
@@ -151,6 +165,10 @@ impl Statement {
 
     pub fn throwing(expression: Expression) -> Self {
         Self(format!("throw {expression};"))
+    }
+
+    pub fn throw_when(condition: Expression, expression: Expression) -> Self {
+        Self(format!("if ({condition}) throw {expression};"))
     }
 
     pub fn when(condition: Expression, body: Vec<Self>) -> Self {

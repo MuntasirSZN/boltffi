@@ -39,7 +39,7 @@ impl Class {
             .chain(declaration.methods().iter().map(|method| {
                 (
                     method.name(),
-                    Function::from_class_method(method, context),
+                    Function::from_class_method(method, &name, context),
                     method.callable().receiver().is_none(),
                 )
             }))

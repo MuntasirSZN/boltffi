@@ -100,7 +100,7 @@ impl<'plan> StreamItemPlanRender<'plan, Wasm32> for ItemRenderer<'_> {
             DirectValueType::Primitive(primitive) => {
                 let element = DirectVectorElementType::primitive(*primitive)
                     .ok_or_else(|| Stream::unsupported("direct stream primitive"))?;
-                let vector = DirectVector::outgoing(&element)?;
+                let vector = DirectVector::outgoing(&element, self.context)?;
                 Ok(Item {
                     ty: Type::primitive(*primitive)?,
                     size,

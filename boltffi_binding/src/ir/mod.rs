@@ -101,7 +101,9 @@ pub use callable::{
     ReturnPlan, ReturnPlanRender, ReturnValueSlot,
 };
 pub use closure::ClosureSignature;
-pub use codec::{CodecNode, CodecPlan, CodecRead, CodecSize, CodecWrite, ReadPlan, WritePlan};
+pub use codec::{
+    CodecNode, CodecPlan, CodecRead, CodecSize, CodecWrite, OwnedWireEncoding, ReadPlan, WritePlan,
+};
 pub use contract::{
     BINDING_EXPANSION_BUILD_ENV, BINDING_EXPANSION_ROOT_ENV, BINDING_EXPANSION_SOURCE_ENV,
     BINDING_EXPANSION_SURFACE_ENV, BINDING_METADATA_BUILD_ENV, BINDING_METADATA_FEATURES_ENV,

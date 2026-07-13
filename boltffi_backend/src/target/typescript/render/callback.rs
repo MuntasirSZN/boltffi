@@ -44,6 +44,7 @@ struct Method {
     returns_void: bool,
     returns_string: bool,
     returns_encoded: bool,
+    returns_direct_record: bool,
     returns_scalar_option: bool,
     return_pointer: Option<Identifier>,
     encoded_setup: Vec<Statement>,
@@ -58,7 +59,8 @@ struct Fallible {
 }
 
 struct VectorReturn {
-    allocation_method: Identifier,
+    allocation: Expression,
+    write_method: Identifier,
     alignment: usize,
 }
 
@@ -219,6 +221,7 @@ impl Method {
             returns_void: return_shape.returns_void,
             returns_string: return_shape.returns_string,
             returns_encoded: return_shape.return_pointer.is_some() && fallible.is_none(),
+            returns_direct_record: return_shape.direct_record,
             returns_scalar_option: return_shape.returns_scalar_option,
             return_pointer: return_shape.return_pointer,
             encoded_setup: return_shape.setup,
@@ -261,6 +264,47 @@ impl Method {
                     ))],
                     false,
                 ),
+                ReturnPlan::DirectViaOutPointer {
+                    ty: DirectValueType::Record(id),
+                } => {
+                    let record = context
+                        .record(*id)
+                        .ok_or_else(|| Self::unsupported("callback record without declaration"))?;
+                    let boltffi_binding::RecordDecl::Direct(record) = record else {
+                        return Err(Self::unsupported("encoded callback direct record"));
+                    };
+                    let writer = Identifier::known("resultWriter");
+                    let codec = Name::new(record.name()).codec_identifier()?;
+                    (
+                        Name::new(record.name()).type_name(),
+                        vec![
+                            Statement::constant(
+                                writer.clone(),
+                                Expression::call(
+                                    Expression::identifier(Identifier::known("_module")),
+                                    Identifier::known("writerFromMemory"),
+                                    [
+                                        Expression::identifier(success_pointer.clone()),
+                                        Expression::integer(record.layout().size().get()),
+                                    ]
+                                    .into_iter()
+                                    .collect(),
+                                ),
+                            ),
+                            Statement::expression(Expression::call(
+                                Expression::identifier(codec),
+                                Identifier::known("encode"),
+                                [
+                                    Expression::identifier(writer),
+                                    Expression::identifier(Identifier::known("success")),
+                                ]
+                                .into_iter()
+                                .collect(),
+                            )),
+                        ],
+                        false,
+                    )
+                }
                 ReturnPlan::EncodedViaOutPointer {
                     ty,
                     codec,
@@ -337,6 +381,9 @@ impl Method {
                     .ok_or_else(|| Self::unsupported("callback enum without declaration"))?,
                 TypeName::number(),
             )),
+            ReturnPlan::DirectViaOutPointer {
+                ty: DirectValueType::Record(id),
+            } => ReturnShape::direct_record(*id, context),
             ReturnPlan::EncodedViaReturnSlot {
                 ty: TypeRef::String,
                 shape: wasm32::BufferShape::Packed,
@@ -373,7 +420,7 @@ impl Method {
             ReturnPlan::ScalarOptionViaReturnSlot { primitive } => Ok(ReturnShape::scalar_option(
                 Scalar::new(*primitive)?.ty().nullable(),
             )),
-            ReturnPlan::DirectVecViaReturnSlot { element } => ReturnShape::vector(element),
+            ReturnPlan::DirectVecViaReturnSlot { element } => ReturnShape::vector(element, context),
             _ => Err(Self::unsupported("callback method return")),
         }
     }
@@ -422,15 +469,38 @@ impl AsyncMethod {
                 codec: error_codec,
                 shape: wasm32::BufferShape::Packed,
             } => {
-                let ReturnPlan::EncodedViaOutPointer {
-                    ty: success_type,
-                    codec: success_codec,
-                    shape: wasm32::BufferShape::Packed,
-                } = method.callable().returns().plan()
-                else {
-                    return Err(Method::unsupported("callback async fallible success"));
+                let (success, success_setup) = match method.callable().returns().plan() {
+                    ReturnPlan::EncodedViaOutPointer {
+                        ty,
+                        codec,
+                        shape: wasm32::BufferShape::Packed,
+                    } => (
+                        super::Type::from_ref(ty, context)?,
+                        Self::encoding(
+                            codec,
+                            Expression::identifier(Identifier::known("success")),
+                            context,
+                        )?,
+                    ),
+                    ReturnPlan::DirectViaOutPointer {
+                        ty: DirectValueType::Record(id),
+                    } => (
+                        context
+                            .record(*id)
+                            .map(|record| Name::new(record.name()).type_name())
+                            .ok_or_else(|| {
+                                Method::unsupported("callback record without declaration")
+                            })?,
+                        Self::record_encoding(
+                            *id,
+                            Expression::identifier(Identifier::known("success")),
+                            context,
+                        )?,
+                    ),
+                    _ => {
+                        return Err(Method::unsupported("callback async fallible success"));
+                    }
                 };
-                let success = super::Type::from_ref(success_type, context)?;
                 let error = super::Type::from_ref(error_type, context)?;
                 (
                     TypeName::union(
@@ -440,11 +510,7 @@ impl AsyncMethod {
                             TypeName::named("Error"),
                         ),
                     ),
-                    Self::encoding(
-                        success_codec,
-                        Expression::identifier(Identifier::known("success")),
-                        context,
-                    )?,
+                    success_setup,
                     false,
                     Some(AsyncFallible {
                         error_setup: Self::encoding(
@@ -518,6 +584,20 @@ impl AsyncMethod {
                 )?,
                 false,
             )),
+            ReturnPlan::DirectViaOutPointer {
+                ty: DirectValueType::Record(id),
+            } => Ok((
+                context
+                    .record(*id)
+                    .map(|record| Name::new(record.name()).type_name())
+                    .ok_or_else(|| Method::unsupported("callback record without declaration"))?,
+                Self::record_encoding(
+                    *id,
+                    Expression::identifier(Identifier::known("result")),
+                    context,
+                )?,
+                false,
+            )),
             _ => Err(Method::unsupported("callback async return")),
         }
     }
@@ -546,6 +626,39 @@ impl AsyncMethod {
         .chain(writes.into_iter().map(|write| write.into_statement()))
         .collect())
     }
+
+    fn record_encoding(
+        id: boltffi_binding::RecordId,
+        value: Expression,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Vec<Statement>> {
+        let record = context
+            .record(id)
+            .ok_or_else(|| Method::unsupported("callback record without declaration"))?;
+        let boltffi_binding::RecordDecl::Direct(record) = record else {
+            return Err(Method::unsupported("encoded callback direct record"));
+        };
+        let writer = Identifier::known("resultWriter");
+        Ok(vec![
+            Statement::constant(
+                writer.clone(),
+                Expression::call(
+                    Expression::identifier(Identifier::known("_module")),
+                    Identifier::known("allocWriter"),
+                    [Expression::integer(record.layout().size().get())]
+                        .into_iter()
+                        .collect(),
+                ),
+            ),
+            Statement::expression(Expression::call(
+                Expression::identifier(Name::new(record.name()).codec_identifier()?),
+                Identifier::known("encode"),
+                [Expression::identifier(writer), value]
+                    .into_iter()
+                    .collect(),
+            )),
+        ])
+    }
 }
 
 struct ReturnShape {
@@ -557,6 +670,7 @@ struct ReturnShape {
     return_pointer: Option<Identifier>,
     setup: Vec<Statement>,
     vector_return: Option<VectorReturn>,
+    direct_record: bool,
 }
 
 impl ReturnShape {
@@ -570,6 +684,7 @@ impl ReturnShape {
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
+            direct_record: false,
         }
     }
 
@@ -583,6 +698,7 @@ impl ReturnShape {
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
+            direct_record: false,
         }
     }
 
@@ -596,6 +712,7 @@ impl ReturnShape {
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
+            direct_record: false,
         }
     }
 
@@ -609,6 +726,7 @@ impl ReturnShape {
             return_pointer: Some(Identifier::known("resultPointer")),
             setup,
             vector_return: None,
+            direct_record: false,
         }
     }
 
@@ -622,6 +740,7 @@ impl ReturnShape {
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
+            direct_record: false,
         }
     }
 
@@ -635,11 +754,12 @@ impl ReturnShape {
             return_pointer: Some(Identifier::known("successPointer")),
             setup: Vec::new(),
             vector_return: None,
+            direct_record: false,
         }
     }
 
-    fn vector(element: &DirectVectorElementType) -> Result<Self> {
-        let vector = super::direct_vector::DirectVector::outgoing(element)?;
+    fn vector(element: &DirectVectorElementType, context: &RenderContext<Wasm32>) -> Result<Self> {
+        let vector = super::direct_vector::DirectVector::outgoing(element, context)?;
         Ok(Self {
             public_type: vector.return_type(),
             carrier_type: TypeName::void(),
@@ -649,9 +769,59 @@ impl ReturnShape {
             return_pointer: None,
             setup: Vec::new(),
             vector_return: Some(VectorReturn {
-                allocation_method: vector.allocation_method(),
+                allocation: vector.allocation(Expression::identifier(Identifier::known("result"))),
+                write_method: vector.return_slot_method(),
                 alignment: vector.alignment(),
             }),
+            direct_record: false,
+        })
+    }
+
+    fn direct_record(
+        id: boltffi_binding::RecordId,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
+        let record = context
+            .record(id)
+            .ok_or_else(|| Method::unsupported("callback record without declaration"))?;
+        let boltffi_binding::RecordDecl::Direct(record) = record else {
+            return Err(Method::unsupported("encoded callback direct record"));
+        };
+        let pointer = Identifier::known("resultPointer");
+        let writer = Identifier::known("resultWriter");
+        let codec = Name::new(record.name()).codec_identifier()?;
+        let size = record.layout().size().get();
+        Ok(Self {
+            public_type: Name::new(record.name()).type_name(),
+            carrier_type: TypeName::void(),
+            returns_void: false,
+            returns_string: false,
+            returns_scalar_option: false,
+            return_pointer: Some(pointer.clone()),
+            setup: vec![
+                Statement::constant(
+                    writer.clone(),
+                    Expression::call(
+                        Expression::identifier(Identifier::known("_module")),
+                        Identifier::known("writerFromMemory"),
+                        [Expression::identifier(pointer), Expression::integer(size)]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ),
+                Statement::expression(Expression::call(
+                    Expression::identifier(codec),
+                    Identifier::known("encode"),
+                    [
+                        Expression::identifier(writer),
+                        Expression::identifier(Identifier::known("result")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )),
+            ],
+            vector_return: None,
+            direct_record: true,
         })
     }
 }

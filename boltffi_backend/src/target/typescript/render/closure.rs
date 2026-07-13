@@ -31,6 +31,8 @@ pub struct ClosureAdapter {
     returns_void: bool,
     returns_string: bool,
     returns_encoded: bool,
+    returns_direct_record: bool,
+    return_pointer: Option<Identifier>,
     encoded_setup: Vec<Statement>,
     fallible: Option<Fallible>,
 }
@@ -161,7 +163,7 @@ impl ClosureAdapter {
                     None,
                     Vec::new(),
                 ),
-                ReturnPlan::DirectViaReturnSlot {
+                ReturnPlan::DirectViaOutPointer {
                     ty: DirectValueType::Record(id),
                 } => {
                     let record = context.record(*id).ok_or(Error::UnsupportedTarget {
@@ -178,7 +180,7 @@ impl ClosureAdapter {
                     (
                         Name::new(record.name()).type_name(),
                         Name::new(record.name()).type_name().to_string(),
-                        TypeName::bigint(),
+                        TypeName::void(),
                         false,
                         false,
                         None,
@@ -187,10 +189,13 @@ impl ClosureAdapter {
                                 writer.clone(),
                                 Expression::call(
                                     Expression::identifier(Identifier::known("_module")),
-                                    Identifier::known("allocOwnedWriter"),
-                                    [Expression::integer(size)]
-                                        .into_iter()
-                                        .collect::<ArgumentList>(),
+                                    Identifier::known("writerFromMemory"),
+                                    [
+                                        Expression::identifier(Identifier::known("resultPointer")),
+                                        Expression::integer(size),
+                                    ]
+                                    .into_iter()
+                                    .collect::<ArgumentList>(),
                                 ),
                             ),
                             Statement::expression(Expression::call(
@@ -292,6 +297,12 @@ impl ClosureAdapter {
             }
             Some(_) | None => invocation,
         };
+        let returns_direct_record = matches!(
+            closure.invoke().returns().plan(),
+            ReturnPlan::DirectViaOutPointer {
+                ty: DirectValueType::Record(_)
+            }
+        );
         Ok(Some(Self {
             name,
             registry_name: StringLiteral::new(&closure_name),
@@ -306,7 +317,9 @@ impl ClosureAdapter {
             invocation,
             returns_void,
             returns_string,
-            returns_encoded: !encoded_setup.is_empty(),
+            returns_encoded: !encoded_setup.is_empty() && !returns_direct_record,
+            returns_direct_record,
+            return_pointer: returns_direct_record.then(|| Identifier::known("resultPointer")),
             encoded_setup,
             fallible: fallible.map(|(_, _, fallible)| fallible),
         }))

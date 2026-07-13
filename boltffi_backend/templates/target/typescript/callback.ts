@@ -38,14 +38,17 @@ _callbackImports[{{ clone_import }}] = (handle: number): number => {
 {% else if method.returns_string %}  const result = {{ method.invocation }};
   const allocation = _module.allocOwnedString(result);
   return (BigInt(allocation.len) << 32n) | BigInt(allocation.ptr >>> 0);
+{% else if method.returns_direct_record %}  const result = {{ method.invocation }};
+{% for statement in method.encoded_setup %}  {{ statement }}
+{% endfor %}
 {% else if method.returns_encoded %}  const result = {{ method.invocation }};
 {% for statement in method.encoded_setup %}  {{ statement }}
 {% endfor %}{% match method.return_pointer %}{% when Some with (pointer) %}  _module.writeCallbackBuffer({{ pointer }}, resultWriter.ptr, resultWriter.len, resultWriter.capacity);
 {% when None %}{% endmatch %}{% else if method.returns_scalar_option %}  const result = {{ method.invocation }};
   return result === null ? Number.NaN : result;
 {% else %}{% match method.vector_return %}{% when Some with (vector) %}  const result = {{ method.invocation }};
-  const allocation = _module.{{ vector.allocation_method }}(result);
-  _module.writeReturnSlot(allocation, {{ vector.alignment }});
+  const allocation = {{ vector.allocation }};
+  _module.{{ vector.write_method }}(allocation, {{ vector.alignment }});
 {% when None %}  return {{ method.invocation }};
 {% endmatch %}
 {% endif %}{% endmatch %}};

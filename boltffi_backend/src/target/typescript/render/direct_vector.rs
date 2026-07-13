@@ -1,13 +1,28 @@
-use boltffi_binding::{DirectVectorElementType, Primitive, Receive};
+use boltffi_binding::{DirectVectorElementType, Primitive, Receive, RecordDecl, Wasm32};
 
-use crate::core::{Error, Result};
+use crate::core::{Error, RenderContext, Result};
 
-use super::super::syntax::{Identifier, StringLiteral, TypeName};
+use super::super::{
+    name_style::Name,
+    syntax::{ArgumentList, Expression, Identifier, StringLiteral, TypeName},
+};
 use super::Type;
 
 pub struct DirectVector {
-    kind: PrimitiveVector,
+    kind: VectorKind,
     receive: Option<Receive>,
+}
+
+enum VectorKind {
+    Primitive(PrimitiveVector),
+    Record(RecordVector),
+}
+
+struct RecordVector {
+    ty: TypeName,
+    codec: Identifier,
+    size: u64,
+    alignment: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -25,62 +40,101 @@ enum PrimitiveVector {
 }
 
 impl DirectVector {
-    pub fn new(element: &DirectVectorElementType, receive: Receive) -> Result<Self> {
+    pub fn new(
+        element: &DirectVectorElementType,
+        receive: Receive,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
         match element {
             DirectVectorElementType::Primitive(primitive) => Ok(Self {
-                kind: PrimitiveVector::new(primitive.primitive())?,
+                kind: VectorKind::Primitive(PrimitiveVector::new(primitive.primitive())?),
                 receive: Some(receive),
             }),
-            DirectVectorElementType::Record(_) => Self::unsupported("direct record vector"),
+            DirectVectorElementType::Record(id) => Ok(Self {
+                kind: VectorKind::Record(RecordVector::new(*id, context)?),
+                receive: Some(receive),
+            }),
             _ => Self::unsupported("unknown direct vector"),
         }
     }
 
-    pub fn outgoing(element: &DirectVectorElementType) -> Result<Self> {
+    pub fn outgoing(
+        element: &DirectVectorElementType,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Self> {
         match element {
             DirectVectorElementType::Primitive(primitive) => Ok(Self {
-                kind: PrimitiveVector::new(primitive.primitive())?,
+                kind: VectorKind::Primitive(PrimitiveVector::new(primitive.primitive())?),
                 receive: None,
             }),
-            DirectVectorElementType::Record(_) => Self::unsupported("direct record vector"),
+            DirectVectorElementType::Record(id) => Ok(Self {
+                kind: VectorKind::Record(RecordVector::new(*id, context)?),
+                receive: None,
+            }),
             _ => Self::unsupported("unknown direct vector"),
         }
     }
 
     pub fn parameter_type(&self) -> Result<TypeName> {
-        let scalar = Type::primitive(self.kind.primitive())?;
-        match self.receive {
-            Some(Receive::ByValue | Receive::ByRef)
-                if matches!(self.kind, PrimitiveVector::Bool) =>
+        match (&self.kind, self.receive) {
+            (VectorKind::Primitive(kind), Some(Receive::ByValue | Receive::ByRef))
+                if matches!(kind, PrimitiveVector::Bool) =>
             {
-                Ok(TypeName::readonly_array(scalar))
+                Ok(TypeName::readonly_array(Type::primitive(kind.primitive())?))
             }
-            Some(Receive::ByValue | Receive::ByRef) => Ok(TypeName::union(
-                TypeName::readonly_array(scalar),
-                self.kind.typed_array(),
-            )),
-            Some(Receive::ByMutRef) if !matches!(self.kind, PrimitiveVector::Bool) => {
-                Ok(self.kind.typed_array())
+            (VectorKind::Primitive(kind), Some(Receive::ByValue | Receive::ByRef)) => {
+                Ok(TypeName::union(
+                    TypeName::readonly_array(Type::primitive(kind.primitive())?),
+                    kind.typed_array(),
+                ))
             }
-            Some(Receive::ByMutRef) => Self::unsupported("mutable boolean slice"),
-            None => Ok(self.return_type()),
+            (VectorKind::Primitive(kind), Some(Receive::ByMutRef))
+                if !matches!(kind, PrimitiveVector::Bool) =>
+            {
+                Ok(kind.typed_array())
+            }
+            (VectorKind::Primitive(_), Some(Receive::ByMutRef)) => {
+                Self::unsupported("mutable boolean slice")
+            }
+            (VectorKind::Record(record), Some(Receive::ByValue | Receive::ByRef)) => {
+                Ok(TypeName::readonly_array(record.ty.clone()))
+            }
+            (VectorKind::Record(_), Some(Receive::ByMutRef)) => {
+                Self::unsupported("mutable direct record vector")
+            }
+            (_, None) => Ok(self.return_type()),
             _ => Self::unsupported("unknown direct vector receive mode"),
         }
     }
 
     pub fn return_type(&self) -> TypeName {
-        match self.kind {
-            PrimitiveVector::Bool => TypeName::array(TypeName::boolean()),
-            _ => self.kind.typed_array(),
+        match &self.kind {
+            VectorKind::Primitive(PrimitiveVector::Bool) => TypeName::array(TypeName::boolean()),
+            VectorKind::Primitive(kind) => kind.typed_array(),
+            VectorKind::Record(record) => TypeName::array(record.ty.clone()),
         }
     }
 
-    pub fn allocation_method(&self) -> Identifier {
-        Identifier::known(self.kind.allocation_method())
+    pub fn allocation(&self, value: Expression) -> Expression {
+        match &self.kind {
+            VectorKind::Primitive(kind) => Expression::call(
+                Expression::identifier(Identifier::known("_module")),
+                Identifier::known(kind.allocation_method()),
+                [value].into_iter().collect(),
+            ),
+            VectorKind::Record(record) => record.allocation(value),
+        }
     }
 
-    pub fn take_method(&self) -> Identifier {
-        Identifier::known(self.kind.take_method())
+    pub fn take(&self) -> Expression {
+        match &self.kind {
+            VectorKind::Primitive(kind) => Expression::call(
+                Expression::identifier(Identifier::known("_module")),
+                Identifier::known(kind.take_method()),
+                ArgumentList::default(),
+            ),
+            VectorKind::Record(record) => record.take(),
+        }
     }
 
     pub fn writeback(&self) -> bool {
@@ -88,15 +142,49 @@ impl DirectVector {
     }
 
     pub fn borrow_method(&self) -> Identifier {
-        Identifier::known(self.kind.borrow_method())
+        match &self.kind {
+            VectorKind::Primitive(kind) => Identifier::known(kind.borrow_method()),
+            VectorKind::Record(_) => Identifier::known("borrowRecordArray"),
+        }
+    }
+
+    pub fn borrow(&self, pointer: Expression, length: Expression) -> Expression {
+        match &self.kind {
+            VectorKind::Primitive(kind) => Expression::call(
+                Expression::identifier(Identifier::known("_module")),
+                Identifier::known(kind.borrow_method()),
+                [pointer, length].into_iter().collect(),
+            ),
+            VectorKind::Record(record) => record.borrow(pointer, length),
+        }
     }
 
     pub const fn alignment(&self) -> usize {
-        self.kind.alignment()
+        match &self.kind {
+            VectorKind::Primitive(kind) => kind.alignment(),
+            VectorKind::Record(record) => record.alignment,
+        }
+    }
+
+    pub fn return_slot_method(&self) -> Identifier {
+        match self.kind {
+            VectorKind::Primitive(_) => Identifier::known("writeReturnSlot"),
+            VectorKind::Record(_) => Identifier::known("writeWriterReturnSlot"),
+        }
+    }
+
+    pub fn free_method(&self) -> Identifier {
+        match self.kind {
+            VectorKind::Primitive(_) => Identifier::known("freePrimitiveBuffer"),
+            VectorKind::Record(_) => Identifier::known("freeWriter"),
+        }
     }
 
     pub fn element_literal(&self) -> StringLiteral {
-        StringLiteral::new(self.kind.element_name())
+        match self.kind {
+            VectorKind::Primitive(kind) => StringLiteral::new(kind.element_name()),
+            VectorKind::Record(_) => StringLiteral::new("record"),
+        }
     }
 
     fn unsupported<T>(shape: &'static str) -> Result<T> {
@@ -104,6 +192,95 @@ impl DirectVector {
             target: "typescript",
             shape,
         })
+    }
+}
+
+impl RecordVector {
+    fn new(id: boltffi_binding::RecordId, context: &RenderContext<Wasm32>) -> Result<Self> {
+        let Some(record) = context.record(id) else {
+            return DirectVector::unsupported("direct vector record without declaration");
+        };
+        let RecordDecl::Direct(record) = record else {
+            return DirectVector::unsupported("encoded direct vector record");
+        };
+        Ok(Self {
+            ty: Name::new(record.name()).type_name(),
+            codec: Name::new(record.name()).codec_identifier()?,
+            size: record.layout().size().get(),
+            alignment: record.layout().alignment().get() as usize,
+        })
+    }
+
+    fn allocation(&self, value: Expression) -> Expression {
+        let writer = Identifier::known("writer");
+        let element = Identifier::known("element");
+        Expression::call(
+            Expression::identifier(Identifier::known("_module")),
+            Identifier::known("allocCompositeBuffer"),
+            [
+                value,
+                Expression::integer(self.size),
+                Expression::parameters_lambda(
+                    [writer.clone(), element.clone()],
+                    Expression::call(
+                        Expression::identifier(self.codec.clone()),
+                        Identifier::known("encode"),
+                        [
+                            Expression::identifier(writer),
+                            Expression::identifier(element),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )
+    }
+
+    fn take(&self) -> Expression {
+        let reader = Identifier::known("reader");
+        Expression::call(
+            Expression::identifier(Identifier::known("_module")),
+            Identifier::known("takeSlotRecordArray"),
+            [
+                Expression::integer(self.size),
+                Expression::parameter_lambda(
+                    reader.clone(),
+                    Expression::call(
+                        Expression::identifier(self.codec.clone()),
+                        Identifier::known("decode"),
+                        [Expression::identifier(reader)].into_iter().collect(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )
+    }
+
+    fn borrow(&self, pointer: Expression, length: Expression) -> Expression {
+        let reader = Identifier::known("reader");
+        Expression::call(
+            Expression::identifier(Identifier::known("_module")),
+            Identifier::known("borrowRecordArray"),
+            [
+                pointer,
+                length,
+                Expression::integer(self.size),
+                Expression::parameter_lambda(
+                    reader.clone(),
+                    Expression::call(
+                        Expression::identifier(self.codec.clone()),
+                        Identifier::known("decode"),
+                        [Expression::identifier(reader)].into_iter().collect(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )
     }
 }
 

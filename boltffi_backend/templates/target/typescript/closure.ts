@@ -14,7 +14,7 @@ _callbackImports[{{ free_import }}] = (handle: number): void => {
   {{ registry }}.release(handle);
 };
 
-_callbackImports[{{ call_import }}] = (handle: number{% for parameter in parameters %}{% for binding in parameter.imported.bindings %}, {{ binding.name }}: {{ binding.carrier_type }}{% endfor %}{% endfor %}{% match fallible %}{% when Some with (fallible) %}, {{ fallible.success_pointer }}: number{% when None %}{% endmatch %}): {{ carrier_return }} => {
+_callbackImports[{{ call_import }}] = (handle: number{% for parameter in parameters %}{% for binding in parameter.imported.bindings %}, {{ binding.name }}: {{ binding.carrier_type }}{% endfor %}{% endfor %}{% match return_pointer %}{% when Some with (pointer) %}, {{ pointer }}: number{% when None %}{% endmatch %}{% match fallible %}{% when Some with (fallible) %}, {{ fallible.success_pointer }}: number{% when None %}{% endmatch %}): {{ carrier_return }} => {
   const callback = {{ registry }}.get(handle);
 {% for parameter in parameters %}{% for statement in parameter.imported.setup %}  {{ statement }}
 {% endfor %}{% endfor %}{% match fallible %}{% when Some with (fallible) %}  const result = {{ invocation }};
@@ -29,6 +29,9 @@ _callbackImports[{{ call_import }}] = (handle: number{% for parameter in paramet
 {% else if returns_string %}  const result = {{ invocation }};
   const allocation = _module.allocOwnedWireString(result);
   return (BigInt(allocation.len) << 32n) | BigInt(allocation.ptr >>> 0);
+{% else if returns_direct_record %}  const result = {{ invocation }};
+{% for statement in encoded_setup %}  {{ statement }}
+{% endfor %}
 {% else if returns_encoded %}  const result = {{ invocation }};
 {% for statement in encoded_setup %}  {{ statement }}
 {% endfor %}  return (BigInt(resultWriter.len) << 32n) | BigInt(resultWriter.ptr >>> 0);

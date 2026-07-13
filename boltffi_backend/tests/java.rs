@@ -1848,7 +1848,7 @@ fn java_target_rejects_class_lifecycle_signature_collisions() {
 }
 
 #[test]
-fn java_target_renders_encoded_record_calls_through_shared_jni_carriers() {
+fn java_target_renders_data_record_calls_through_shared_jni_carriers() {
     let output = render(ENCODED_RECORD_CALLS, CoverageMode::Complete);
     let point = java_source(&output, "com.boltffi.demo", "Point");
     let module = java_source(&output, "com.boltffi.demo", "Demo");
@@ -1862,8 +1862,8 @@ fn java_target_renders_encoded_record_calls_through_shared_jni_carriers() {
     assert!(point.contains("public Point scale(double factor)"));
     assert!(point.contains("public Point add(Point other)"));
     assert!(point.contains("public static double pathLength(java.util.List<Point> points)"));
-    assert!(module.contains("java.nio.ByteBuffer point"));
-    assert!(module.contains("int __boltffi_point_len"));
+    assert!(module.contains("public static Point echoPoint(Point point)"));
+    assert!(module.contains("point.toDirectBuffer()"));
 }
 
 #[test]

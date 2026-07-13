@@ -4218,7 +4218,7 @@ mod tests {
                                     *out_status = ::boltffi::__private::FfiStatus::OK;
                                 }
                             }
-                            ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result)
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_result)
                         }
                         Err(status) => {
                             if !out_status.is_null() {
@@ -4336,7 +4336,7 @@ mod tests {
                                     *out_status = ::boltffi::__private::FfiStatus::OK;
                                 }
                             }
-                            ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_error)
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_error)
                         }
                         Err(status) => {
                             if !out_status.is_null() {
@@ -5065,8 +5065,8 @@ mod tests {
                     unsafe {
                         ::core::ptr::write(
                             __boltffi_name_out,
-                            ::boltffi::__private::FfiBuf::wire_encode(
-                                &__boltffi_name_storage
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(
+                                __boltffi_name_storage
                             )
                         );
                     }
@@ -7553,7 +7553,7 @@ mod tests {
                             ::boltffi::__private::FfiBuf::default()
                         }
                         Err(__boltffi_error) => {
-                            ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_error)
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_error)
                         }
                     }
                 }
@@ -7683,10 +7683,9 @@ mod tests {
         syn::parse2::<syn::File>(tokens.clone()).expect("expanded closure param parses");
 
         assert!(rendered.contains("extern \"C\" fn (* mut :: core :: ffi :: c_void , * const u8 , usize) -> :: boltffi :: __private :: FfiBuf"));
-        assert!(
-            rendered
-                .contains(":: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_arg0)")
-        );
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: FfiBuf :: wire_encode_owned_string (__boltffi_arg0)"
+        ));
         assert!(rendered.contains(
             ":: boltffi :: __private :: wire :: decode :: < String > (__boltffi_result_bytes)"
         ));
@@ -8289,10 +8288,9 @@ mod tests {
                 ":: boltffi :: __private :: wire :: decode :: < String > (__boltffi_bytes)"
             )
         );
-        assert!(
-            rendered
-                .contains(":: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_result)")
-        );
+        assert!(rendered.contains(
+            ":: boltffi :: __private :: FfiBuf :: wire_encode_owned_string (__boltffi_result)"
+        ));
     }
 
     #[test]
@@ -8347,7 +8345,7 @@ mod tests {
             )
         );
         assert!(rendered.contains(
-            ":: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_result) . into_packed ()"
+            ":: boltffi :: __private :: FfiBuf :: wire_encode_owned_string (__boltffi_result) . into_packed ()"
         ));
     }
 
@@ -8381,7 +8379,7 @@ mod tests {
                 .contains("release : Some (__boltffi_try_make_callback_success_closure_release)")
         );
         assert!(rendered.contains(
-            "Err (__boltffi_error) => { :: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_error) }"
+            "Err (__boltffi_error) => { :: boltffi :: __private :: FfiBuf :: wire_encode_owned_string (__boltffi_error) }"
         ));
         assert!(rendered.contains(":: boltffi :: __private :: FfiBuf :: default ()"));
     }
@@ -8409,7 +8407,7 @@ mod tests {
         assert!(rendered.contains("* __boltffi_success_out = __boltffi_success"));
         assert!(rendered.contains(":: boltffi :: __private :: FfiBuf :: default ()"));
         assert!(rendered.contains(
-            "Err (__boltffi_error) => { :: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_error) }"
+            "Err (__boltffi_error) => { :: boltffi :: __private :: FfiBuf :: wire_encode_owned_string (__boltffi_error) }"
         ));
     }
 
@@ -8434,10 +8432,10 @@ mod tests {
         ));
         assert!(rendered.contains("match __boltffi_closure ()"));
         assert!(rendered.contains(
-            "* __boltffi_success_out = :: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_success) . into_packed ()"
+            "* __boltffi_success_out = :: boltffi :: __private :: FfiBuf :: wire_encode_owned_string (__boltffi_success) . into_packed ()"
         ));
         assert!(rendered.contains(
-            "Err (__boltffi_error) => { :: boltffi :: __private :: FfiBuf :: wire_encode (& __boltffi_error) . into_packed () }"
+            "Err (__boltffi_error) => { :: boltffi :: __private :: FfiBuf :: wire_encode_owned_string (__boltffi_error) . into_packed () }"
         ));
     }
 
@@ -8521,7 +8519,7 @@ mod tests {
                             ::boltffi::__private::FfiBuf::default()
                         }
                         Err(__boltffi_error) => {
-                            ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_error)
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_error)
                         }
                     }
                 }
@@ -8771,7 +8769,7 @@ mod tests {
                             ::boltffi::__private::FfiBuf::default()
                         }
                         Err(__boltffi_error) => {
-                            ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_error)
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_error)
                         }
                     }
                 }
@@ -8808,7 +8806,7 @@ mod tests {
                             ::boltffi::__private::FfiBuf::default().into_packed()
                         }
                         Err(__boltffi_error) => {
-                            ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_error).into_packed()
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_error).into_packed()
                         }
                     }
                 }
@@ -8848,8 +8846,8 @@ mod tests {
                                 unsafe {
                                     ::core::ptr::write(
                                         __boltffi_return_out,
-                                        ::boltffi::__private::FfiBuf::wire_encode(
-                                            &__boltffi_success
+                                        ::boltffi::__private::FfiBuf::wire_encode_owned_string(
+                                            __boltffi_success
                                         ).into_packed()
                                     );
                                 }
@@ -8857,7 +8855,7 @@ mod tests {
                             ::boltffi::__private::FfiBuf::default().into_packed()
                         }
                         Err(__boltffi_error) => {
-                            ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_error).into_packed()
+                            ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_error).into_packed()
                         }
                     }
                 }
@@ -9025,7 +9023,7 @@ mod tests {
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_greet() -> ::boltffi::__private::FfiBuf {
                     let __boltffi_result: String = greet();
-                    ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result)
+                    ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_result)
                 }
             }
             .to_string()
@@ -9056,7 +9054,7 @@ mod tests {
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_greet() -> u64 {
                     let __boltffi_result: String = greet();
-                    ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result).into_packed()
+                    ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_result).into_packed()
                 }
             }
             .to_string()
@@ -9087,7 +9085,7 @@ mod tests {
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_payload() -> u64 {
                     let __boltffi_result: Vec<u8> = payload();
-                    ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_result).into_packed()
+                    ::boltffi::__private::FfiBuf::wire_encode_owned_bytes(__boltffi_result).into_packed()
                 }
             }
             .to_string()

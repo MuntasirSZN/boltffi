@@ -128,6 +128,16 @@ pub struct CodecPlan {
     write: WritePlan,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub enum OwnedWireEncoding {
+    Generic,
+    String,
+    Bytes,
+}
+
 impl CodecPlan {
     pub(crate) fn new(read: ReadPlan, write: WritePlan) -> Self {
         Self { read, write }
@@ -228,6 +238,17 @@ pub enum CodecNode {
 }
 
 impl CodecNode {
+    #[doc(hidden)]
+    #[allow(missing_docs)]
+    pub fn owned_wire_encoding(&self) -> OwnedWireEncoding {
+        match self {
+            Self::String => OwnedWireEncoding::String,
+            Self::Bytes => OwnedWireEncoding::Bytes,
+            Self::Custom { representation, .. } => representation.owned_wire_encoding(),
+            _ => OwnedWireEncoding::Generic,
+        }
+    }
+
     /// Returns whether this codec tree contains a custom conversion node.
     pub fn contains_custom(&self) -> bool {
         match self {

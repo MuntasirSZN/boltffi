@@ -17,11 +17,18 @@ export async function run() {
 
   const messages = bus.subscribeMessages()[Symbol.asyncIterator]();
   const nextMessage = messages.next();
+  const secondMessage = messages.next();
   bus.emitMessage({ text: "alpha", values: [1, 2] });
+  bus.emitMessage({ text: "beta", values: [3, 4] });
   const message = await nextMessage;
   assert.equal(message.done, false);
   assert.equal(message.value.text, "alpha");
   assert.deepEqual(Array.from(message.value.values), [1, 2]);
+  const second = await secondMessage;
+  assert.equal(second.done, false);
+  assert.equal(second.value.text, "beta");
+  assert.deepEqual(Array.from(second.value.values), [3, 4]);
+  globalThis.demoCase("case:classes.streams.event_bus.subscribe_messages.should_deliver_encoded_record_items");
   await messages.return();
 
   const batch = bus.subscribeValuesBatch();
