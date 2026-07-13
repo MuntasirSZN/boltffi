@@ -76,6 +76,15 @@ function createHarness(): RuntimeHarness {
       allocations.set(pointer, newSize);
       return pointer;
     },
+    boltffi_wasm_alloc_owned_bytes: (size: number) => {
+      if (size === 0) {
+        return 0;
+      }
+      const pointer = nextPointer;
+      nextPointer += size;
+      allocations.set(pointer, size);
+      return pointer;
+    },
     boltffi_wasm_free_string_return: (ptr: number, len: number) => {
       if (ptr === 0 || len === 0) {
         return;
@@ -460,6 +469,43 @@ describe("BoltFFIModule memory operations", () => {
     const packedUnicode =
       BigInt(unicodeAllocation.ptr) | (BigInt(unicodeAllocation.len) << 32n);
     expect(module.takePackedWireString(packedUnicode)).toBe("BoltFFI ⚡");
+  });
+
+  it("transfers owned UTF-8 strings without wire framing", () => {
+    const { module, freedAllocations } = createHarness();
+    const ascii = module.allocOwnedString("boltffi");
+    const packedAscii = BigInt(ascii.ptr) | (BigInt(ascii.len) << 32n);
+    expect(module.takePackedUtf8String(packedAscii)).toBe("boltffi");
+
+    const unicode = module.allocOwnedString("BoltFFI ⚡");
+    const packedUnicode = BigInt(unicode.ptr) | (BigInt(unicode.len) << 32n);
+    expect(module.takePackedUtf8String(packedUnicode)).toBe("BoltFFI ⚡");
+    expect(freedAllocations).toContainEqual([ascii.ptr, ascii.len]);
+    expect(freedAllocations).toContainEqual([unicode.ptr, unicode.len]);
+  });
+
+  it("preserves every optional f64 state", () => {
+    const { module } = createHarness();
+    expect(module.unpackOptionF64(4.5)).toBe(4.5);
+
+    module.writeToMemory(16, Uint8Array.from([0, 0, 0, 0]));
+    expect(module.unpackOptionF64(Number.NaN)).toBeNull();
+
+    module.writeToMemory(16, Uint8Array.from([1, 0, 0, 0]));
+    expect(Number.isNaN(module.unpackOptionF64(Number.NaN))).toBe(true);
+
+    const negativeZero = module.unpackOptionF64Bits(module.packOptionF64Bits(-0));
+    expect(Object.is(negativeZero, -0)).toBe(true);
+    expect(module.unpackOptionF64Bits(module.packOptionF64Bits(null))).toBeNull();
+    expect(Number.isNaN(module.unpackOptionF64Bits(module.packOptionF64Bits(Number.NaN)))).toBe(true);
+  });
+
+  it("packs scalar callback options", () => {
+    const { module } = createHarness();
+    expect(Number.isNaN(module.packOptionScalar(null))).toBe(true);
+    expect(module.packOptionScalar(true)).toBe(1);
+    expect(module.packOptionScalar(false)).toBe(0);
+    expect(module.packOptionScalar(-17)).toBe(-17);
   });
 });
 

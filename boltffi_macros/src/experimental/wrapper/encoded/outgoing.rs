@@ -54,6 +54,9 @@ impl<'expansion, 'lowered, S: RenderSurface> Value<'expansion, 'lowered, S> {
             OwnedWireEncoding::String => {
                 quote! { ::boltffi::__private::FfiBuf::wire_encode_owned_string(#value) }
             }
+            OwnedWireEncoding::Utf8String => {
+                quote! { ::boltffi::__private::FfiBuf::from_vec(#value.into_bytes()) }
+            }
             OwnedWireEncoding::Bytes => {
                 quote! { ::boltffi::__private::FfiBuf::wire_encode_owned_bytes(#value) }
             }

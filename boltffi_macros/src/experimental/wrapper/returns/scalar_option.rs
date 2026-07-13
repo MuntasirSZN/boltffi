@@ -10,8 +10,12 @@ use crate::experimental::{
 
 pub struct Renderer;
 pub struct Failure;
-pub struct FailureInput;
-pub struct Empty;
+pub struct FailureInput {
+    primitive: Primitive,
+}
+pub struct Empty {
+    primitive: Primitive,
+}
 pub struct Incoming;
 
 pub struct Input {
@@ -28,6 +32,18 @@ pub struct IncomingInput {
 impl Input {
     pub fn new(primitive: Primitive, value: syn::Ident) -> Self {
         Self { primitive, value }
+    }
+}
+
+impl FailureInput {
+    pub fn new(primitive: Primitive) -> Self {
+        Self { primitive }
+    }
+}
+
+impl Empty {
+    pub fn new(primitive: Primitive) -> Self {
+        Self { primitive }
     }
 }
 
@@ -63,15 +79,39 @@ impl Render<Wasm32, Input> for Renderer {
     fn render(self, input: Input) -> Result<Self::Output, Error> {
         let value = input.value;
         let present = names::Locals::new(value.span()).value();
-        let some = WasmScalar::new(input.primitive, present.clone()).outgoing()?;
+        if matches!(input.primitive, Primitive::F64) {
+            return Ok(Tokens {
+                items: Vec::new(),
+                ffi_parameters: Vec::new(),
+                return_type: quote! { -> f64 },
+                body: quote! {
+                    match #value {
+                        Some(#present) => {
+                            if #present.is_nan() {
+                                ::boltffi::__private::write_option_f64_presence(true);
+                            }
+                            #present
+                        }
+                        None => {
+                            ::boltffi::__private::write_option_f64_presence(false);
+                            f64::NAN
+                        }
+                    }
+                },
+            });
+        }
+        let scalar = WasmScalar::new(input.primitive, present.clone());
+        let return_type = scalar.carrier_type();
+        let none = scalar.none();
+        let some = scalar.outgoing()?;
         Ok(Tokens {
             items: Vec::new(),
             ffi_parameters: Vec::new(),
-            return_type: quote! { -> f64 },
+            return_type: quote! { -> #return_type },
             body: quote! {
                 match #value {
                     Some(#present) => #some,
-                    None => f64::NAN,
+                    None => #none,
                 }
             },
         })
@@ -81,8 +121,9 @@ impl Render<Wasm32, Input> for Renderer {
 impl Render<Native, FailureInput> for Failure {
     type Output = TokenStream;
 
-    fn render(self, _input: FailureInput) -> Result<Self::Output, Error> {
-        let empty = <Renderer as Render<Native, Empty>>::render(Renderer, Empty)?;
+    fn render(self, input: FailureInput) -> Result<Self::Output, Error> {
+        let empty =
+            <Renderer as Render<Native, Empty>>::render(Renderer, Empty::new(input.primitive))?;
         let body = empty.body();
         Ok(quote! {
             return #body;
@@ -93,8 +134,9 @@ impl Render<Native, FailureInput> for Failure {
 impl Render<Wasm32, FailureInput> for Failure {
     type Output = TokenStream;
 
-    fn render(self, _input: FailureInput) -> Result<Self::Output, Error> {
-        let empty = <Renderer as Render<Wasm32, Empty>>::render(Renderer, Empty)?;
+    fn render(self, input: FailureInput) -> Result<Self::Output, Error> {
+        let empty =
+            <Renderer as Render<Wasm32, Empty>>::render(Renderer, Empty::new(input.primitive))?;
         let body = empty.body();
         Ok(quote! {
             return #body;
@@ -118,12 +160,31 @@ impl Render<Native, Empty> for Renderer {
 impl Render<Wasm32, Empty> for Renderer {
     type Output = Tokens;
 
-    fn render(self, _input: Empty) -> Result<Self::Output, Error> {
+    fn render(self, input: Empty) -> Result<Self::Output, Error> {
+        if matches!(input.primitive, Primitive::F64) {
+            return Ok(Tokens {
+                items: Vec::new(),
+                ffi_parameters: Vec::new(),
+                return_type: quote! { -> f64 },
+                body: quote! {
+                    {
+                        ::boltffi::__private::write_option_f64_presence(false);
+                        f64::NAN
+                    }
+                },
+            });
+        }
+        let scalar = WasmScalar::new(
+            input.primitive,
+            names::Locals::new(Span::call_site()).value(),
+        );
+        let return_type = scalar.carrier_type();
+        let none = scalar.none();
         Ok(Tokens {
             items: Vec::new(),
             ffi_parameters: Vec::new(),
-            return_type: quote! { -> f64 },
-            body: quote! { f64::NAN },
+            return_type: quote! { -> #return_type },
+            body: none,
         })
     }
 }
@@ -156,11 +217,13 @@ impl Render<Wasm32, IncomingInput> for Incoming {
     fn render(self, input: IncomingInput) -> Result<Self::Output, Error> {
         let value = input.value;
         let result = names::Locals::new(Span::call_site()).result();
-        let some = WasmScalar::new(input.primitive, result.clone()).incoming()?;
+        let scalar = WasmScalar::new(input.primitive, result.clone());
+        let is_none = scalar.is_none();
+        let some = scalar.incoming()?;
         Ok(quote! {
             {
                 let #result = #value;
-                if #result.is_nan() {
+                if #is_none {
                     None
                 } else {
                     Some(#some)

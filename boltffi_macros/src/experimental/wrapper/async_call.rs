@@ -736,7 +736,7 @@ impl PlainComplete {
                 )?;
                 let empty = <scalar_option::Renderer as Render<S, _>>::render(
                     scalar_option::Renderer,
-                    scalar_option::Empty,
+                    scalar_option::Empty::new(*primitive),
                 )?;
                 Ok(Self {
                     items: Vec::new(),

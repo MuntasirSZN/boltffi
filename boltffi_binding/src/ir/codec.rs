@@ -135,6 +135,7 @@ pub struct CodecPlan {
 pub enum OwnedWireEncoding {
     Generic,
     String,
+    Utf8String,
     Bytes,
 }
 
@@ -185,6 +186,8 @@ pub enum CodecNode {
     Primitive(Primitive),
     /// UTF-8 string value.
     String,
+    #[doc(hidden)]
+    Utf8String,
     /// Byte buffer value.
     Bytes,
     /// Record carried by direct memory layout.
@@ -243,6 +246,7 @@ impl CodecNode {
     pub fn owned_wire_encoding(&self) -> OwnedWireEncoding {
         match self {
             Self::String => OwnedWireEncoding::String,
+            Self::Utf8String => OwnedWireEncoding::Utf8String,
             Self::Bytes => OwnedWireEncoding::Bytes,
             Self::Custom { representation, .. } => representation.owned_wire_encoding(),
             _ => OwnedWireEncoding::Generic,
@@ -314,6 +318,11 @@ pub trait CodecRead {
     /// Reads a UTF-8 string.
     fn string(&mut self) -> Self::Expr;
 
+    #[doc(hidden)]
+    fn utf8_string(&mut self) -> Self::Expr {
+        self.string()
+    }
+
     /// Reads a byte buffer.
     fn bytes(&mut self) -> Self::Expr;
 
@@ -371,6 +380,11 @@ pub trait CodecWrite {
 
     /// Writes a UTF-8 string.
     fn string(&mut self, value: &ValueRef) -> Vec<Self::Stmt>;
+
+    #[doc(hidden)]
+    fn utf8_string(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
+        self.string(value)
+    }
 
     /// Writes a byte buffer.
     fn bytes(&mut self, value: &ValueRef) -> Vec<Self::Stmt>;
@@ -463,6 +477,11 @@ pub trait CodecSize {
     /// Returns the encoded size of a UTF-8 string.
     fn string(&mut self, value: &ValueRef) -> Self::Expr;
 
+    #[doc(hidden)]
+    fn utf8_string(&mut self, value: &ValueRef) -> Self::Expr {
+        self.string(value)
+    }
+
     /// Returns the encoded size of a byte buffer.
     fn bytes(&mut self, value: &ValueRef) -> Self::Expr;
 
@@ -538,6 +557,7 @@ impl CodecWalker {
         match node {
             CodecNode::Primitive(primitive) => renderer.primitive(*primitive),
             CodecNode::String => renderer.string(),
+            CodecNode::Utf8String => renderer.utf8_string(),
             CodecNode::Bytes => renderer.bytes(),
             CodecNode::DirectRecord(id) => renderer.direct_record(*id),
             CodecNode::EncodedRecord(id) => renderer.encoded_record(*id),
@@ -606,6 +626,7 @@ impl CodecWalker {
         match node {
             CodecNode::Primitive(primitive) => renderer.primitive(*primitive, value),
             CodecNode::String => renderer.string(value),
+            CodecNode::Utf8String => renderer.utf8_string(value),
             CodecNode::Bytes => renderer.bytes(value),
             CodecNode::DirectRecord(id) => renderer.direct_record(*id, value),
             CodecNode::EncodedRecord(id) => renderer.encoded_record(*id, value),
@@ -693,6 +714,7 @@ impl CodecWalker {
         match node {
             CodecNode::Primitive(primitive) => renderer.primitive(*primitive, value),
             CodecNode::String => renderer.string(value),
+            CodecNode::Utf8String => renderer.utf8_string(value),
             CodecNode::Bytes => renderer.bytes(value),
             CodecNode::DirectRecord(id) => renderer.direct_record(*id, value),
             CodecNode::EncodedRecord(id) => renderer.encoded_record(*id, value),

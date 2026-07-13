@@ -480,10 +480,10 @@ where
                     return #value;
                 })
             }
-            ReturnPlan::ScalarOptionViaReturnSlot { .. } => {
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => {
                 <scalar_option::Failure as Render<S, _>>::render(
                     scalar_option::Failure,
-                    scalar_option::FailureInput,
+                    scalar_option::FailureInput::new(*primitive),
                 )
             }
             ReturnPlan::DirectVecViaReturnSlot { .. } => {

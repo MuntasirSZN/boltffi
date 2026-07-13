@@ -45,7 +45,7 @@ _callbackImports[{{ clone_import }}] = (handle: number): number => {
 {% for statement in method.encoded_setup %}  {{ statement }}
 {% endfor %}{% match method.return_pointer %}{% when Some with (pointer) %}  _module.writeCallbackBuffer({{ pointer }}, resultWriter.ptr, resultWriter.len, resultWriter.capacity);
 {% when None %}{% endmatch %}{% else if method.returns_scalar_option %}  const result = {{ method.invocation }};
-  return result === null ? Number.NaN : result;
+  return _module.{{ method.scalar_option_pack }}(result);
 {% else %}{% match method.vector_return %}{% when Some with (vector) %}  const result = {{ method.invocation }};
   const allocation = {{ vector.allocation }};
   _module.{{ vector.write_method }}(allocation, {{ vector.alignment }});

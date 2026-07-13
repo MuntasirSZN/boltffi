@@ -172,6 +172,10 @@ impl CodecWrite for Writer<'_> {
         })]
     }
 
+    fn utf8_string(&mut self, _value: &ValueRef) -> Vec<Self::Stmt> {
+        Vec::new()
+    }
+
     fn bytes(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
         vec![self.value(value).map(|value| {
             WriteStatement::bytes(Statement::expression(Expression::call(

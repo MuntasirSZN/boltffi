@@ -58,6 +58,7 @@ enum ReturnConversion {
     BigInt,
     Boolean,
     String,
+    Utf8String,
     Bytes,
     Encoded {
         reader: Identifier,
@@ -108,6 +109,7 @@ enum FailureAction {
 
 enum FailureValue {
     String,
+    Utf8String,
     Encoded {
         reader: Identifier,
         decode: Expression,
@@ -751,6 +753,7 @@ impl Failure {
                 let decode = codec.render_with(&mut Reader::new(reader.clone(), context))?;
                 let value = match decode.kind() {
                     Some(ReadKind::String) => FailureValue::String,
+                    Some(ReadKind::Utf8String) => FailureValue::Utf8String,
                     Some(
                         ReadKind::Bytes
                         | ReadKind::Primitive(_)
@@ -855,6 +858,14 @@ impl FailureValue {
                 Expression::call(
                     Expression::identifier(Identifier::known("_module")),
                     Identifier::known("takePackedWireString"),
+                    [error].into_iter().collect::<ArgumentList>(),
+                ),
+            ),
+            Self::Utf8String => (
+                Vec::new(),
+                Expression::call(
+                    Expression::identifier(Identifier::known("_module")),
+                    Identifier::known("takePackedUtf8String"),
                     [error].into_iter().collect::<ArgumentList>(),
                 ),
             ),
@@ -1019,6 +1030,29 @@ impl Parameter {
             .render_with(&mut Writer::new(writer.clone(), value.clone(), context))
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
+        if matches!(size.kind(), Some(SizeKind::Utf8String)) && writes.is_empty() {
+            let allocation = Identifier::parse(format!("__boltffi_{name}_allocation"))?;
+            let allocation_value = Expression::identifier(allocation.clone());
+            return Ok(Self {
+                ty,
+                setup: vec![Statement::constant(
+                    allocation,
+                    Expression::call(
+                        Expression::identifier(Identifier::known("_module")),
+                        Identifier::known("allocOwnedString"),
+                        [value].into_iter().collect::<ArgumentList>(),
+                    ),
+                )],
+                arguments: ["ptr", "len"]
+                    .into_iter()
+                    .map(|property| {
+                        Expression::property(allocation_value.clone(), Identifier::known(property))
+                    })
+                    .collect(),
+                cleanup: Vec::new(),
+                name,
+            });
+        }
         let allocation_method = match (size.kind(), writes.as_slice()) {
             (Some(SizeKind::String), [write])
                 if matches!(write.kind(), Some(WriteKind::String)) =>
@@ -1512,6 +1546,13 @@ impl Return {
                     .into_iter()
                     .collect::<ArgumentList>(),
             ))],
+            ReturnConversion::Utf8String => vec![Statement::return_value(Expression::call(
+                Expression::identifier(Identifier::known("_module")),
+                Identifier::known("takePackedUtf8String"),
+                [call.cast(TypeName::bigint())]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+            ))],
             ReturnConversion::Bytes => vec![Statement::return_value(Expression::call(
                 Expression::identifier(Identifier::known("_module")),
                 Identifier::known("takePackedWireBytes"),
@@ -1814,6 +1855,10 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                 Type::from_ref(ty, self.context)?,
                 ReturnConversion::String,
             )),
+            (ReturnValueSlot::ReturnSlot, Some(ReadKind::Utf8String)) => Ok(Return::new(
+                Type::from_ref(ty, self.context)?,
+                ReturnConversion::Utf8String,
+            )),
             (ReturnValueSlot::ReturnSlot, Some(ReadKind::Bytes)) => Ok(Return::new(
                 Type::from_ref(ty, self.context)?,
                 ReturnConversion::Bytes,
@@ -1863,6 +1908,13 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                             Identifier::known("takePackedWireString"),
                             [packed].into_iter().collect::<ArgumentList>(),
                         ))],
+                        Some(ReadKind::Utf8String) => {
+                            vec![Statement::return_value(Expression::call(
+                                Expression::identifier(Identifier::known("_module")),
+                                Identifier::known("takePackedUtf8String"),
+                                [packed].into_iter().collect::<ArgumentList>(),
+                            ))]
+                        }
                         Some(ReadKind::Bytes) => vec![Statement::return_value(Expression::call(
                             Expression::identifier(Identifier::known("_module")),
                             Identifier::known("takePackedWireBytes"),
@@ -1990,7 +2042,7 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
         Ok(Return::new(
             option.ty()?,
             ReturnConversion::ScalarOption {
-                unpack: option.unpack_method(),
+                unpack: option.return_unpack_method(),
             },
         ))
     }

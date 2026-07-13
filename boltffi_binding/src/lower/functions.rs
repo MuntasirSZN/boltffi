@@ -299,7 +299,7 @@ mod tests {
                 codec,
                 shape: wasm32::BufferShape::Packed,
             } => {
-                assert_eq!(codec.root(), &CodecNode::String);
+                assert_eq!(codec.root(), &CodecNode::Utf8String);
             }
             other => panic!("expected wasm32 packed string return, got {other:?}"),
         }
@@ -722,27 +722,40 @@ mod tests {
 
     #[test]
     fn wasm32_lossy_scalar_options_use_encoded_returns() {
-        [
-            Primitive::I64,
-            Primitive::U64,
-            Primitive::F32,
-            Primitive::F64,
-        ]
-        .into_iter()
-        .for_each(|primitive| {
-            let bindings = TestContract::new()
-                .with_function(returning(
-                    "demo::maybe_value",
-                    "maybe_value",
-                    TypeExpr::option(TypeExpr::Primitive(primitive)),
-                ))
-                .lower_ok::<Wasm32>();
+        [Primitive::I64, Primitive::U64, Primitive::F32]
+            .into_iter()
+            .for_each(|primitive| {
+                let bindings = TestContract::new()
+                    .with_function(returning(
+                        "demo::maybe_value",
+                        "maybe_value",
+                        TypeExpr::option(TypeExpr::Primitive(primitive)),
+                    ))
+                    .lower_ok::<Wasm32>();
 
-            assert!(matches!(
-                first_function(&bindings).callable().returns().plan(),
-                ReturnPlan::EncodedViaReturnSlot { .. }
-            ));
-        });
+                assert!(matches!(
+                    first_function(&bindings).callable().returns().plan(),
+                    ReturnPlan::EncodedViaReturnSlot { .. }
+                ));
+            });
+    }
+
+    #[test]
+    fn wasm32_f64_option_return_uses_scalar_carrier() {
+        let bindings = TestContract::new()
+            .with_function(returning(
+                "demo::maybe_value",
+                "maybe_value",
+                TypeExpr::option(TypeExpr::Primitive(Primitive::F64)),
+            ))
+            .lower_ok::<Wasm32>();
+
+        assert_eq!(
+            first_function(&bindings).callable().returns().plan(),
+            &ReturnPlan::ScalarOptionViaReturnSlot {
+                primitive: BindingPrimitive::F64,
+            }
+        );
     }
 
     #[test]
@@ -948,28 +961,43 @@ mod tests {
 
     #[test]
     fn wasm32_lossy_scalar_options_use_encoded_parameters() {
-        [
-            Primitive::I64,
-            Primitive::U64,
-            Primitive::F32,
-            Primitive::F64,
-        ]
-        .into_iter()
-        .for_each(|primitive| {
-            let bindings = TestContract::new()
-                .with_function(taking(
-                    "demo::set_value",
-                    "set_value",
-                    "value",
-                    TypeExpr::option(TypeExpr::Primitive(primitive)),
-                ))
-                .lower_ok::<Wasm32>();
+        [Primitive::I64, Primitive::U64, Primitive::F32]
+            .into_iter()
+            .for_each(|primitive| {
+                let bindings = TestContract::new()
+                    .with_function(taking(
+                        "demo::set_value",
+                        "set_value",
+                        "value",
+                        TypeExpr::option(TypeExpr::Primitive(primitive)),
+                    ))
+                    .lower_ok::<Wasm32>();
 
-            assert!(matches!(
-                first_param_lower(&bindings),
-                ParamPlan::Encoded { .. }
-            ));
-        });
+                assert!(matches!(
+                    first_param_lower(&bindings),
+                    ParamPlan::Encoded { .. }
+                ));
+            });
+    }
+
+    #[test]
+    fn wasm32_f64_option_parameter_uses_scalar_carrier() {
+        let bindings = TestContract::new()
+            .with_function(taking(
+                "demo::set_value",
+                "set_value",
+                "value",
+                TypeExpr::option(TypeExpr::Primitive(Primitive::F64)),
+            ))
+            .lower_ok::<Wasm32>();
+
+        assert!(matches!(
+            first_param_lower(&bindings),
+            ParamPlan::ScalarOption {
+                primitive: BindingPrimitive::F64,
+                ..
+            }
+        ));
     }
 
     #[test]

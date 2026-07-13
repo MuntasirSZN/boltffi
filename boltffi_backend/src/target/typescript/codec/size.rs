@@ -16,6 +16,7 @@ use super::value::ValueExpression;
 pub enum SizeKind {
     Primitive(Primitive),
     String,
+    Utf8String,
     Bytes,
 }
 
@@ -99,6 +100,13 @@ impl SizeExpression {
         }
     }
 
+    fn utf8_string() -> Self {
+        Self {
+            expression: Expression::integer(0),
+            kind: Some(SizeKind::Utf8String),
+        }
+    }
+
     fn bytes(expression: Expression) -> Self {
         Self {
             expression,
@@ -133,6 +141,10 @@ impl CodecSize for Sizer<'_> {
             Identifier::known("wireStringSize"),
             [self.value(value)?].into_iter().collect::<ArgumentList>(),
         )))
+    }
+
+    fn utf8_string(&mut self, _value: &ValueRef) -> Self::Expr {
+        Ok(SizeExpression::utf8_string())
     }
 
     fn bytes(&mut self, value: &ValueRef) -> Self::Expr {

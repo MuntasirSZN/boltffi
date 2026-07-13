@@ -3,6 +3,8 @@ import type { WasmWireWriterAllocator } from "./wire.js";
 
 const FFI_BUF_DESCRIPTOR_SIZE = 16;
 const FFI_STATUS_SIZE = 4;
+const OPTION_F64_NONE = 0xffff_ffff_ffff_ffffn;
+const OPTION_F64_NAN = 0x7ff8_0000_0000_0000n;
 const MIN_WRITER_CAPACITY = 64;
 const MAX_WRITERS_PER_CAPACITY = 32;
 
@@ -186,6 +188,9 @@ export class BoltFFIModule {
   private _cachedF32: Float32Array | null = null;
   private _cachedF64: Float64Array | null = null;
   private _cachedView: DataView | null = null;
+  private _optionF64Storage = new ArrayBuffer(8);
+  private _optionF64Bits = new BigUint64Array(this._optionF64Storage);
+  private _optionF64Values = new Float64Array(this._optionF64Storage);
   private _returnSlotAddr: number = 0;
 
   constructor(instance: WebAssembly.Instance, asyncManager: AsyncFutureManager) {
@@ -363,6 +368,18 @@ export class BoltFFIModule {
   }
 
   allocOwnedString(value: string): StringAlloc {
+    const len = value.length;
+    const ptr = this.exports.boltffi_wasm_alloc_owned_bytes(len);
+    if (ptr === 0 && len > 0) {
+      throw new Error("Failed to allocate owned string");
+    }
+    const bytes = new Uint8Array(this._memory.buffer, ptr, len);
+    const encoded = this._encoder.encodeInto(value, bytes);
+    if (encoded.read === value.length && encoded.written === len) {
+      return { ptr, len };
+    }
+    bytes.fill(0, encoded.written);
+    this.exports.boltffi_wasm_free_string_return(ptr, len);
     return this.allocOwnedBytes(this._encoder.encode(value));
   }
 
@@ -1000,14 +1017,34 @@ export class BoltFFIModule {
     return packed >>> 0;
   }
 
+  packOptionScalar(value: number | boolean | null): number {
+    if (value === null) return Number.NaN;
+    if (typeof value === "boolean") return value ? 1 : 0;
+    return value;
+  }
+
+  packOptionF64Bits(value: number | null): bigint {
+    if (value === null) return OPTION_F64_NONE;
+    if (Number.isNaN(value)) return OPTION_F64_NAN;
+    this._optionF64Values[0] = value;
+    return this._optionF64Bits[0];
+  }
+
+  unpackOptionF64Bits(packed: bigint): number | null {
+    if (packed === OPTION_F64_NONE) return null;
+    this._optionF64Bits[0] = packed;
+    return this._optionF64Values[0];
+  }
+
   unpackOptionF32(packed: number): number | null {
     if (Number.isNaN(packed)) return null;
     return packed;
   }
 
   unpackOptionF64(packed: number): number | null {
-    if (Number.isNaN(packed)) return null;
-    return packed;
+    if (!Number.isNaN(packed)) return packed;
+    const slotIndex = this._returnSlotAddr >>> 2;
+    return this.getU32()[slotIndex] === 0 ? null : packed;
   }
 
   takePackedUtf8String(packed: bigint): string {

@@ -80,13 +80,16 @@ impl Render<Wasm32, Input> for Renderer {
     fn render(self, input: Input) -> Result<Self::Output, Error> {
         let ident = &input.ident;
         let rust_type = &input.rust_type;
-        let value = WasmScalar::new(input.primitive, ident.clone()).incoming()?;
+        let scalar = WasmScalar::new(input.primitive, ident.clone());
+        let ffi_type = scalar.carrier_type();
+        let is_none = scalar.is_none();
+        let value = scalar.incoming()?;
         Ok(Tokens {
             items: Vec::new(),
-            ffi_parameters: vec![quote! { #ident: f64 }],
-            ffi_parameter_types: vec![quote! { f64 }],
+            ffi_parameters: vec![quote! { #ident: #ffi_type }],
+            ffi_parameter_types: vec![ffi_type],
             conversions: vec![quote! {
-                let #ident: #rust_type = if #ident.is_nan() {
+                let #ident: #rust_type = if #is_none {
                     None
                 } else {
                     Some(#value)

@@ -4398,34 +4398,18 @@ impl CallbackMethodSurface for Wasm32 {
         value: &Ident,
     ) -> Result<ForeignMethodParameterTokens, Error> {
         let encoded = wrapper::names::Parameter::new(value).packed();
-        let body = match primitive {
-            Primitive::Bool => quote! {
-                match #value {
-                    Some(value) if value => 1.0,
-                    Some(_) => 0.0,
-                    None => f64::NAN,
-                }
-            },
-            Primitive::F64 => quote! { #value.unwrap_or(f64::NAN) },
-            Primitive::I8
-            | Primitive::U8
-            | Primitive::I16
-            | Primitive::U16
-            | Primitive::I32
-            | Primitive::U32
-            | Primitive::I64
-            | Primitive::U64
-            | Primitive::ISize
-            | Primitive::USize
-            | Primitive::F32 => quote! {
-                #value.map(|value| value as f64).unwrap_or(f64::NAN)
-            },
-            _ => return Err(Error::UnsupportedExpansion("scalar option primitive")),
-        };
+        let present = wrapper::names::Locals::new(value.span()).value();
+        let scalar = wrapper::scalar_option::WasmScalar::new(primitive, present.clone());
+        let ffi_type = scalar.carrier_type();
+        let none = scalar.none();
+        let some = scalar.outgoing()?;
         Ok(ForeignMethodParameterTokens::new(
-            quote! { f64 },
+            ffi_type,
             vec![quote! {
-                let #encoded = #body;
+                let #encoded = match #value {
+                    Some(#present) => #some,
+                    None => #none,
+                };
             }],
             quote! { #encoded },
         ))

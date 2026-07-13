@@ -170,6 +170,7 @@ impl<'plan> StreamItemPlanRender<'plan, Wasm32> for ItemRenderer<'_> {
             }
             Some(
                 ReadKind::String
+                | ReadKind::Utf8String
                 | ReadKind::Bytes
                 | ReadKind::CustomPrimitive(_)
                 | ReadKind::OptionalPrimitive(_)

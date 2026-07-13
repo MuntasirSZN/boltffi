@@ -4,7 +4,7 @@ use boltffi_binding::{
     HandlePresence, ImportedCallable, IntoRust, Native, OutgoingParam, ParamPlan, ReturnPlan,
     Wasm32, WritePlan, native, wasm32,
 };
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{Ident, Type};
 
@@ -794,7 +794,12 @@ impl<'expansion, 'lowered> Render<Wasm32, ForeignClosureReturn<'expansion, 'lowe
                             quote! { __boltffi_result_value },
                         ),
                     )?;
-                Ok(ForeignClosureReturnTokens::WasmScalarOption { value })
+                let ffi_type = wrapper::scalar_option::WasmScalar::new(
+                    *primitive,
+                    Ident::new("__boltffi_result_value", Span::call_site()),
+                )
+                .carrier_type();
+                Ok(ForeignClosureReturnTokens::WasmScalarOption { value, ffi_type })
             }
             (ReturnPlan::DirectVecViaReturnSlot { .. }, ErrorDecl::None(_)) => {
                 let element = rust_api::Return::new(input.source).direct_vec_element_type()?;
@@ -945,6 +950,7 @@ enum ForeignClosureReturnTokens {
     },
     WasmScalarOption {
         value: TokenStream,
+        ffi_type: TokenStream,
     },
     NativeDirectVec {
         value: TokenStream,
@@ -999,7 +1005,7 @@ impl ForeignClosureReturnTokens {
             Self::NativeScalarOption { .. } | Self::NativeDirectVec { .. } => {
                 quote! { -> ::boltffi::__private::FfiBuf }
             }
-            Self::WasmScalarOption { .. } => quote! { -> f64 },
+            Self::WasmScalarOption { ffi_type, .. } => quote! { -> #ffi_type },
             Self::WasmDirectVec { .. } => TokenStream::new(),
             Self::NativeFallibleVoid { .. }
             | Self::NativeFallibleDirectPrimitive { .. }
@@ -1125,7 +1131,7 @@ impl ForeignClosureReturnTokens {
                     #value
                 }
             },
-            Self::WasmScalarOption { value } | Self::WasmDirectVec { value } => quote! {
+            Self::WasmScalarOption { value, .. } | Self::WasmDirectVec { value } => quote! {
                 {
                     let __boltffi_result_value = unsafe { #call };
                     #value

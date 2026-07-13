@@ -17,6 +17,7 @@ pub enum ReadKind {
     CustomPrimitive(Primitive),
     OptionalPrimitive(Primitive),
     String,
+    Utf8String,
     Bytes,
     ErrorRecord(RecordId),
     ErrorEnum(EnumId),
@@ -100,6 +101,13 @@ impl ReadExpression {
         }
     }
 
+    fn utf8_string(expression: Expression) -> Self {
+        Self {
+            expression,
+            kind: Some(ReadKind::Utf8String),
+        }
+    }
+
     fn bytes(expression: Expression) -> Self {
         Self {
             expression,
@@ -162,6 +170,14 @@ impl CodecRead for Reader<'_> {
 
     fn string(&mut self) -> Self::Expr {
         Ok(ReadExpression::string(Expression::call(
+            Expression::identifier(self.reader.clone()),
+            Identifier::known("readString"),
+            ArgumentList::default(),
+        )))
+    }
+
+    fn utf8_string(&mut self) -> Self::Expr {
+        Ok(ReadExpression::utf8_string(Expression::call(
             Expression::identifier(self.reader.clone()),
             Identifier::known("readString"),
             ArgumentList::default(),
@@ -280,7 +296,7 @@ impl CodecRead for Reader<'_> {
     fn result(&mut self, ok: Self::Expr, err: Self::Expr) -> Self::Expr {
         let err = err?;
         let error = match err.kind() {
-            Some(ReadKind::String) => Expression::construct(
+            Some(ReadKind::String | ReadKind::Utf8String) => Expression::construct(
                 "Error",
                 [err.into_expression()]
                     .into_iter()

@@ -96,10 +96,19 @@ pub(crate) unsafe fn boltffi_wasm_free_string_return_impl(ptr: usize, len: usize
 
 #[cfg(any(test, target_arch = "wasm32"))]
 fn boltffi_wasm_alloc_owned_bytes_impl(len: usize) -> usize {
-    let mut bytes = vec![0u8; len].into_boxed_slice();
-    let pointer = bytes.as_mut_ptr() as usize;
-    std::mem::forget(bytes);
-    pointer
+    if len == 0 {
+        return 0;
+    }
+    let layout = match Layout::array::<u8>(len) {
+        Ok(layout) => layout,
+        Err(_) => return 0,
+    };
+    let pointer = unsafe { alloc(layout) };
+    if pointer.is_null() {
+        0
+    } else {
+        pointer as usize
+    }
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -138,6 +147,12 @@ pub fn write_return_slot(ptr: u32, len: u32, cap: u32, align: u32) {
         core::ptr::write_volatile(&raw mut RETURN_SLOT[2], cap);
         core::ptr::write_volatile(&raw mut RETURN_SLOT[3], align);
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline(always)]
+pub fn write_option_f64_presence(present: bool) {
+    unsafe { core::ptr::write_volatile(&raw mut RETURN_SLOT[0], u32::from(present)) }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -323,6 +338,7 @@ mod tests {
         let len = 16;
         let pointer = boltffi_wasm_alloc_owned_bytes_impl(len);
         assert_ne!(pointer, 0);
+        unsafe { core::ptr::write_bytes(pointer as *mut u8, 0, len) };
         unsafe { boltffi_wasm_free_string_return_impl(pointer, len) };
     }
 }

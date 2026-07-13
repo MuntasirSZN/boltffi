@@ -203,7 +203,7 @@ impl Parameter {
             public_type: Scalar::new(primitive)?.ty().nullable(),
             bindings: vec![Binding {
                 name,
-                carrier_type: TypeName::number(),
+                carrier_type: option.carrier_type(),
             }],
             setup: Vec::new(),
             argument: Expression::call(

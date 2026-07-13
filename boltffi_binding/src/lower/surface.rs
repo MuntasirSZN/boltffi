@@ -71,6 +71,9 @@ pub trait SurfaceLower:
     fn scalar_option(primitive: Primitive) -> Option<Primitive>;
 
     #[doc(hidden)]
+    fn root_string_codec() -> crate::CodecNode;
+
+    #[doc(hidden)]
     fn direct_record_return_slot() -> ReturnValueSlot;
 
     /// Handle carrier used for a class instance crossing.
@@ -120,6 +123,10 @@ impl SurfaceLower for Native {
 
     fn scalar_option(primitive: Primitive) -> Option<Primitive> {
         Some(primitive)
+    }
+
+    fn root_string_codec() -> crate::CodecNode {
+        crate::CodecNode::String
     }
 
     fn direct_record_return_slot() -> ReturnValueSlot {
@@ -173,8 +180,13 @@ impl SurfaceLower for Wasm32 {
                 | Primitive::U32
                 | Primitive::ISize
                 | Primitive::USize
+                | Primitive::F64
         )
         .then_some(primitive)
+    }
+
+    fn root_string_codec() -> crate::CodecNode {
+        crate::CodecNode::Utf8String
     }
 
     fn direct_record_return_slot() -> ReturnValueSlot {

@@ -2040,6 +2040,18 @@ mod tests {
         source
     }
 
+    fn option_f64_return_contract() -> SourceContract {
+        let mut function = FunctionDef::new(
+            FunctionId::new("demo::maybe_ratio"),
+            CanonicalName::single("maybe_ratio"),
+        );
+        function.returns = ReturnDef::value(TypeExpr::option(TypeExpr::Primitive(Primitive::F64)));
+
+        let mut source = SourceContract::new(PackageInfo::new("demo", None));
+        source.functions.push(function);
+        source
+    }
+
     fn vec_i32_return_contract() -> SourceContract {
         let mut function = FunctionDef::new(
             FunctionId::new("demo::numbers"),
@@ -8846,8 +8858,8 @@ mod tests {
                                 unsafe {
                                     ::core::ptr::write(
                                         __boltffi_return_out,
-                                        ::boltffi::__private::FfiBuf::wire_encode_owned_string(
-                                            __boltffi_success
+                                        ::boltffi::__private::FfiBuf::from_vec(
+                                            __boltffi_success.into_bytes()
                                         ).into_packed()
                                     );
                                 }
@@ -8927,6 +8939,27 @@ mod tests {
             }
             .to_string()
         );
+    }
+
+    #[test]
+    fn wasm_option_f64_return_expansion_tracks_nan_presence() {
+        let source = option_f64_return_contract();
+        let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn maybe_ratio() -> Option<f64> {
+                Some(7.0)
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+        let rendered = tokens.to_string();
+
+        assert!(rendered.contains("extern \"C\" fn boltffi_function_demo_maybe_ratio () -> f64"));
+        assert!(rendered.contains("if __boltffi_value . is_nan ()"));
+        assert!(rendered.contains("write_option_f64_presence (true)"));
+        assert!(rendered.contains("write_option_f64_presence (false)"));
     }
 
     #[test]
@@ -9054,7 +9087,7 @@ mod tests {
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_greet() -> u64 {
                     let __boltffi_result: String = greet();
-                    ::boltffi::__private::FfiBuf::wire_encode_owned_string(__boltffi_result).into_packed()
+                    ::boltffi::__private::FfiBuf::from_vec(__boltffi_result.into_bytes()).into_packed()
                 }
             }
             .to_string()

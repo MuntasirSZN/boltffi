@@ -46,6 +46,7 @@ struct Method {
     returns_encoded: bool,
     returns_direct_record: bool,
     returns_scalar_option: bool,
+    scalar_option_pack: Identifier,
     return_pointer: Option<Identifier>,
     encoded_setup: Vec<Statement>,
     fallible: Option<Fallible>,
@@ -223,6 +224,7 @@ impl Method {
             returns_encoded: return_shape.return_pointer.is_some() && fallible.is_none(),
             returns_direct_record: return_shape.direct_record,
             returns_scalar_option: return_shape.returns_scalar_option,
+            scalar_option_pack: return_shape.scalar_option_pack,
             return_pointer: return_shape.return_pointer,
             encoded_setup: return_shape.setup,
             fallible: fallible.map(|(_, fallible)| fallible),
@@ -417,9 +419,14 @@ impl Method {
                     .collect(),
                 ))
             }
-            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => Ok(ReturnShape::scalar_option(
-                Scalar::new(*primitive)?.ty().nullable(),
-            )),
+            ReturnPlan::ScalarOptionViaReturnSlot { primitive } => {
+                let option = super::scalar_option::ScalarOption::new(*primitive)?;
+                Ok(ReturnShape::scalar_option(
+                    Scalar::new(*primitive)?.ty().nullable(),
+                    option.carrier_type(),
+                    option.pack_method(),
+                ))
+            }
             ReturnPlan::DirectVecViaReturnSlot { element } => ReturnShape::vector(element, context),
             _ => Err(Self::unsupported("callback method return")),
         }
@@ -667,6 +674,7 @@ struct ReturnShape {
     returns_void: bool,
     returns_string: bool,
     returns_scalar_option: bool,
+    scalar_option_pack: Identifier,
     return_pointer: Option<Identifier>,
     setup: Vec<Statement>,
     vector_return: Option<VectorReturn>,
@@ -681,6 +689,7 @@ impl ReturnShape {
             returns_void: true,
             returns_string: false,
             returns_scalar_option: false,
+            scalar_option_pack: Identifier::known("packOptionScalar"),
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
@@ -695,6 +704,7 @@ impl ReturnShape {
             returns_void: false,
             returns_string: false,
             returns_scalar_option: false,
+            scalar_option_pack: Identifier::known("packOptionScalar"),
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
@@ -709,6 +719,7 @@ impl ReturnShape {
             returns_void: false,
             returns_string: true,
             returns_scalar_option: false,
+            scalar_option_pack: Identifier::known("packOptionScalar"),
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
@@ -723,6 +734,7 @@ impl ReturnShape {
             returns_void: false,
             returns_string: false,
             returns_scalar_option: false,
+            scalar_option_pack: Identifier::known("packOptionScalar"),
             return_pointer: Some(Identifier::known("resultPointer")),
             setup,
             vector_return: None,
@@ -730,13 +742,14 @@ impl ReturnShape {
         }
     }
 
-    fn scalar_option(public_type: TypeName) -> Self {
+    fn scalar_option(public_type: TypeName, carrier_type: TypeName, pack: Identifier) -> Self {
         Self {
             public_type,
-            carrier_type: TypeName::number(),
+            carrier_type,
             returns_void: false,
             returns_string: false,
             returns_scalar_option: true,
+            scalar_option_pack: pack,
             return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
@@ -751,6 +764,7 @@ impl ReturnShape {
             returns_void: false,
             returns_string: false,
             returns_scalar_option: false,
+            scalar_option_pack: Identifier::known("packOptionScalar"),
             return_pointer: Some(Identifier::known("successPointer")),
             setup: Vec::new(),
             vector_return: None,
@@ -766,6 +780,7 @@ impl ReturnShape {
             returns_void: false,
             returns_string: false,
             returns_scalar_option: false,
+            scalar_option_pack: Identifier::known("packOptionScalar"),
             return_pointer: None,
             setup: Vec::new(),
             vector_return: Some(VectorReturn {
@@ -797,6 +812,7 @@ impl ReturnShape {
             returns_void: false,
             returns_string: false,
             returns_scalar_option: false,
+            scalar_option_pack: Identifier::known("packOptionScalar"),
             return_pointer: Some(pointer.clone()),
             setup: vec![
                 Statement::constant(
