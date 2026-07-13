@@ -7,11 +7,6 @@ use boltffi::*;
     justification = "Ensure a Rust HashMap return becomes a TypeScript Map with every key and value intact.",
     directions = "Call `collections::make_hash_map` through the generated binding and assert the returned map contains the expected entries.",
     exclude(
-        swift,
-        reason = ExclusionReason::CoverageGap,
-        details = "The Swift demo suite does not assert HashMap returns yet. Add the marker when Swift map coverage lands."
-    ),
-    exclude(
         kotlin,
         reason = ExclusionReason::CoverageGap,
         details = "The Kotlin demo suite does not assert HashMap returns yet. Add the marker when Kotlin map coverage lands."
@@ -44,11 +39,6 @@ pub fn make_hash_map() -> HashMap<String, i32> {
     justification = "Ensure an empty TypeScript Map crosses into Rust and returns without gaining entries.",
     directions = "Call `collections::echo_hash_map` with an empty map and assert the returned map remains empty.",
     exclude(
-        swift,
-        reason = ExclusionReason::CoverageGap,
-        details = "The Swift demo suite does not assert HashMap parameters yet. Add the marker when Swift map coverage lands."
-    ),
-    exclude(
         kotlin,
         reason = ExclusionReason::CoverageGap,
         details = "The Kotlin demo suite does not assert HashMap parameters yet. Add the marker when Kotlin map coverage lands."
@@ -73,11 +63,6 @@ pub fn make_hash_map() -> HashMap<String, i32> {
     "collections.hash_map.should_roundtrip_nested_values",
     justification = "Ensure HashMap values use their nested vector codec in both directions.",
     directions = "Call `collections::echo_hash_map` with string keys and vector values and assert every nested value returns intact.",
-    exclude(
-        swift,
-        reason = ExclusionReason::CoverageGap,
-        details = "The Swift demo suite does not assert nested HashMap values yet. Add the marker when Swift map coverage lands."
-    ),
     exclude(
         kotlin,
         reason = ExclusionReason::CoverageGap,
