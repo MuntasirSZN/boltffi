@@ -31,7 +31,7 @@ use crate::{
             DirectVector, Enumeration, Record,
             class::ClassHandle,
             native::Method as NativeMethod,
-            signature::{Parameter, ReturnType, ValueType},
+            signature::{ErasedSignature, Parameter, ReturnType, ValueType},
             type_name::JavaType,
         },
         syntax::{
@@ -257,6 +257,29 @@ impl Callback {
 
     pub fn handle_release(&self) -> Option<&Identifier> {
         self.handle_release.as_ref()
+    }
+
+    pub fn signatures(&self) -> Vec<ErasedSignature> {
+        // The handle class implements every interface method next to its own
+        // `close()` and `rawHandle()`, so those names are reserved whenever the
+        // handle class is emitted.
+        let reserved = match self.handle_methods.is_empty() {
+            true => &[][..],
+            false => &["close", "rawHandle"][..],
+        };
+        reserved
+            .iter()
+            .map(|name| ErasedSignature::new(Identifier::known(name), []))
+            .chain(self.methods.iter().map(|method| {
+                ErasedSignature::new(
+                    method.name().clone(),
+                    method
+                        .public_parameters()
+                        .iter()
+                        .map(|parameter| parameter.ty().clone()),
+                )
+            }))
+            .collect()
     }
 
     pub fn doc(&self) -> Option<&Javadoc> {

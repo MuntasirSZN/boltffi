@@ -1511,6 +1511,75 @@ fn java_target_renders_jvm_owned_callbacks_from_binding_ir() {
 }
 
 #[test]
+fn java_target_rejects_callback_methods_shadowing_handle_members() {
+    let render =
+        |source: &str| host().render_with_coverage(&bindings(source), CoverageMode::Complete);
+
+    let error = render(
+        r#"
+        #[export]
+        pub trait Listener {
+            fn raw_handle(&self) -> u32;
+        }
+
+        #[export]
+        pub fn make_listener() -> Box<dyn Listener> {
+            loop {}
+        }
+        "#,
+    )
+    .expect_err("a callback method shadowing the generated handle members must not render");
+    assert!(
+        matches!(
+            &error,
+            Error::JavaNameCollision { scope, name }
+                if scope.contains("Listener") && name == "rawHandle()"
+        ),
+        "{error:?}"
+    );
+
+    let error = render(
+        r#"
+        #[export]
+        pub trait Listener {
+            fn close(&self);
+        }
+
+        #[export]
+        pub fn make_listener() -> Box<dyn Listener> {
+            loop {}
+        }
+        "#,
+    )
+    .expect_err("a callback method shadowing the generated close() must not render");
+    assert!(
+        matches!(
+            &error,
+            Error::JavaNameCollision { scope, name }
+                if scope.contains("Listener") && name == "close()"
+        ),
+        "{error:?}"
+    );
+
+    // A callback that never crosses out of Rust has no handle class, so the
+    // reserved names stay available.
+    render(
+        r#"
+        #[export]
+        pub trait Listener {
+            fn raw_handle(&self) -> u32;
+        }
+
+        #[export]
+        pub fn set_listener(listener: Box<dyn Listener>) {
+            let _ = listener;
+        }
+        "#,
+    )
+    .expect("callbacks without a handle class keep the reserved names available");
+}
+
+#[test]
 fn java_target_renders_encoded_and_fallible_callbacks_through_codec_plans() {
     let output = render(ENCODED_CALLBACKS, CoverageMode::Complete);
     let formatter = java_source(&output, "com.boltffi.demo", "MessageFormatter");

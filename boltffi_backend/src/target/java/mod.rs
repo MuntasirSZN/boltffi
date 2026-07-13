@@ -359,19 +359,7 @@ impl JavaHost {
                 }
                 DeclarationRef::Callback(declaration) => {
                     let callback = self.callback_plan(declaration, bridge, context)?;
-                    let signatures = callback
-                        .methods()
-                        .iter()
-                        .map(|method| {
-                            ErasedSignature::new(
-                                method.name().clone(),
-                                method
-                                    .public_parameters()
-                                    .iter()
-                                    .map(|parameter| parameter.ty().clone()),
-                            )
-                        })
-                        .collect::<Vec<_>>();
+                    let signatures = callback.signatures();
                     ErasedSignature::validate_owner(
                         &Callback::file_for(declaration, self.java_version)?,
                         &signatures,
