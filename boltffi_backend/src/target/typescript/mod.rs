@@ -258,6 +258,37 @@ mod tests {
 
                 #[export]
                 pub const BYTES: &'static [u8] = b"ffi";
+
+                #[data]
+                #[repr(u8)]
+                pub enum Mode {
+                    Fast = 1,
+                    Safe = 2,
+                }
+
+                #[export]
+                pub const MODE: Mode = Mode::Fast;
+
+                #[data]
+                pub enum State {
+                    Idle,
+                    Busy { jobs: u32 },
+                }
+
+                #[export]
+                pub const IDLE: State = State::Idle;
+
+                #[export]
+                pub const ALIAS: &str = LABEL;
+
+                #[export]
+                pub const COMPUTED: u32 = 6 * 7;
+
+                #[export]
+                pub const PAIR: (u32, u32) = (3, 5);
+
+                #[export]
+                pub const BUSY: State = State::Busy { jobs: 3 };
                 "#,
             )
             .expect("valid source"),
@@ -836,9 +867,31 @@ mod tests {
         assert!(
             browser
                 .contents()
+                .contains("export const mode: Mode = Mode.Fast;")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("export const idle: State = { tag: \"Idle\" };")
+        );
+        assert!(browser.contents().contains("export let alias: string;"));
+        assert!(browser.contents().contains("export let computed: number;"));
+        assert!(
+            browser
+                .contents()
+                .contains("export let pair: [number, number];")
+        );
+        assert!(browser.contents().contains("export let busy: State;"));
+        assert!(
+            browser
+                .contents()
                 .contains("const _readBytes = (): Uint8Array =>")
         );
         assert!(browser.contents().contains("  bytes = _readBytes();"));
+        assert!(browser.contents().contains("  alias = _readAlias();"));
+        assert!(browser.contents().contains("  computed = _readComputed();"));
+        assert!(browser.contents().contains("  pair = _readPair();"));
+        assert!(browser.contents().contains("  busy = _readBusy();"));
         assert!(node.contents().contains("const _exports: BoltFFIExports"));
         assert!(node.contents().contains("  bytes = _readBytes();"));
     }

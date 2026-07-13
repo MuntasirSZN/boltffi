@@ -18,6 +18,7 @@ const suiteModules = [
   "./tests/classes/thread_safe.test.mjs",
   "./tests/classes/unsafe_single_threaded.test.mjs",
   "./tests/collections/mod.test.mjs",
+  "./tests/constants/mod.test.mjs",
   "./tests/custom_types/mod.test.mjs",
   "./tests/enums/c_style.test.mjs",
   "./tests/enums/complex_variants.test.mjs",

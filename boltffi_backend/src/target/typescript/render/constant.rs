@@ -1,13 +1,14 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
-    Bindings, ConstantDecl, ConstantValueDecl, Decl, DefaultValue, Primitive, TypeRef, Wasm32,
+    Bindings, ConstantDecl, ConstantValueDecl, Decl, DefaultValue, EnumDecl, Primitive, TypeRef,
+    Wasm32,
 };
 
 use crate::core::{Emitted, Error, RenderContext, Result};
 
 use super::super::{
     name_style::Name,
-    syntax::{Expression, Identifier, IntegerLiteral, StringLiteral, TypeName},
+    syntax::{Expression, Identifier, IntegerLiteral, PropertyKey, StringLiteral, TypeName},
 };
 use super::{Function, Type};
 
@@ -41,7 +42,7 @@ impl Constant {
                 inline: Some(Inline {
                     name: Name::new(declaration.name()).identifier()?,
                     ty: Type::from_ref(ty, context)?,
-                    value: Self::default_value(ty, value)?,
+                    value: Self::default_value(ty, value, context)?,
                 }),
                 accessor: None,
             }),
@@ -101,7 +102,11 @@ impl Constant {
             .map(|initializers| initializers.concat())
     }
 
-    fn default_value(ty: &TypeRef, value: &DefaultValue) -> Result<Expression> {
+    fn default_value(
+        ty: &TypeRef,
+        value: &DefaultValue,
+        context: &RenderContext<Wasm32>,
+    ) -> Result<Expression> {
         match value {
             DefaultValue::Bool(value) => Ok(Expression::boolean(*value)),
             DefaultValue::Integer(value)
@@ -119,12 +124,24 @@ impl Constant {
             DefaultValue::EnumVariant {
                 enum_name,
                 variant_name,
-            } => Ok(Expression::property(
-                Expression::identifier(Identifier::parse(
-                    Name::new(enum_name).type_name().to_string(),
-                )?),
-                Name::new(variant_name).variant_identifier()?,
-            )),
+            } => match ty {
+                TypeRef::Enum(id) => match context.enumeration(*id) {
+                    Some(EnumDecl::CStyle(_)) => Ok(Expression::property(
+                        Expression::identifier(Identifier::parse(
+                            Name::new(enum_name).type_name().to_string(),
+                        )?),
+                        Name::new(variant_name).variant_identifier()?,
+                    )),
+                    Some(EnumDecl::Data(_)) => Ok(Expression::object([(
+                        PropertyKey::Named(Identifier::known("tag")),
+                        Expression::string(StringLiteral::new(
+                            &Name::new(variant_name).variant_identifier()?.to_string(),
+                        )),
+                    )])),
+                    _ => Err(Self::unsupported("constant enum declaration")),
+                },
+                _ => Err(Self::unsupported("constant enum type")),
+            },
             DefaultValue::Null => Ok(Expression::null()),
             _ => Err(Self::unsupported("constant default value")),
         }

@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::core::syntax::sealed;
 
-use super::{Identifier, IntegerLiteral, StringLiteral};
+use super::{Identifier, IntegerLiteral, PropertyKey, StringLiteral};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Expression(String);
@@ -32,6 +32,17 @@ impl Expression {
             elements
                 .into_iter()
                 .map(|element| element.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+
+    pub fn object(properties: impl IntoIterator<Item = (PropertyKey, Self)>) -> Self {
+        Self(format!(
+            "{{ {} }}",
+            properties
+                .into_iter()
+                .map(|(key, value)| format!("{key}: {value}"))
                 .collect::<Vec<_>>()
                 .join(", ")
         ))

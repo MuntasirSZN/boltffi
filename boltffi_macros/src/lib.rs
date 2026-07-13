@@ -259,6 +259,14 @@ pub fn derive_data(input: TokenStream) -> TokenStream {
 pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_clone = item.clone();
 
+    if let Ok(item_const) = syn::parse::<syn::ItemConst>(item_clone.clone()) {
+        return expand_or_experimental(
+            TokenStream::from(quote!(#item_const)),
+            strip_boltffi_attrs,
+            DependencyExpansion::Preserve,
+        );
+    }
+
     if let Ok(item_fn) = syn::parse::<ItemFn>(item_clone.clone()) {
         return expand_or_experimental(
             TokenStream::from(quote!(#item_fn)),
@@ -281,7 +289,7 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     syn::Error::new_spanned(
         proc_macro2::TokenStream::from(item),
-        "export can only be applied to fn, impl, or trait",
+        "export can only be applied to const, fn, impl, or trait",
     )
     .to_compile_error()
     .into()
