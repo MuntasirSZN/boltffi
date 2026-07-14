@@ -58,17 +58,16 @@ object ListenerCallbacks {
 }
 
 private class ListenerHandle(private val handle: Long) : Listener, AutoCloseable {
-    private var closed = false
+    private val __boltffi_closed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun close() {
-        if (!closed) {
+        if (__boltffi_closed.compareAndSet(false, true)) {
             Native.boltffi_callback_handle_release(handle)
-            closed = true
         }
     }
 
     private fun requireOpen(): Long {
-        check(!closed) { "callback handle is closed" }
+        check(!__boltffi_closed.get()) { "callback handle is closed" }
         return handle
     }
 

@@ -63,19 +63,18 @@ object {{ callback.callbacks_name() }} {
 {%- if !callback.handle_methods().is_empty() %}
 
 private class {{ callback.handle_name() }}(private val handle: Long) : {{ callback.name() }}, AutoCloseable {
-    private var closed = false
+    private val __boltffi_closed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun close() {
 {%- if let Some(release) = callback.handle_release() %}
-        if (!closed) {
+        if (__boltffi_closed.compareAndSet(false, true)) {
             Native.{{ release }}(handle)
-            closed = true
         }
 {%- endif %}
     }
 
     private fun requireOpen(): Long {
-        check(!closed) { "callback handle is closed" }
+        check(!__boltffi_closed.get()) { "callback handle is closed" }
         return handle
     }
 

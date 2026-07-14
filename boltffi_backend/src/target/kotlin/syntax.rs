@@ -127,6 +127,10 @@ impl fmt::Display for Identifier {
 }
 
 impl Identifier {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     pub fn parse(identifier: impl Into<String>) -> Result<Self> {
         let identifier = identifier.into();
         if Self::valid(&identifier) && !Syntax::keyword(&identifier) {
@@ -336,6 +340,14 @@ impl Expression {
 
     pub fn safe_property(receiver: impl fmt::Display, property: Identifier) -> Self {
         Self(format!("{receiver}?.{property}"))
+    }
+
+    pub fn safe_call(
+        receiver: impl fmt::Display,
+        method: Identifier,
+        arguments: ArgumentList,
+    ) -> Self {
+        Self(format!("{receiver}?.{method}({arguments})"))
     }
 
     pub fn add(self, other: Self) -> Self {
