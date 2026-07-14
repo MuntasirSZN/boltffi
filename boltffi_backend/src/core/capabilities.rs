@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn from_decl_propagates_interned_string_through_named_codec_dependencies() {
+    fn from_decl_propagates_interned_string_through_encoded_record_and_data_enum_codec_plans() {
         use boltffi_ast::PackageInfo;
         use boltffi_binding::{Native, lower};
 
@@ -580,7 +580,7 @@ mod tests {
         );
         assert!(
             capabilities.contains(&BindingCapability::InternedString),
-            "expected InternedString propagated through BrowserResponse and Browser"
+            "expected InternedString propagated through BrowserResponse and Browser codec plans"
         );
     }
 }

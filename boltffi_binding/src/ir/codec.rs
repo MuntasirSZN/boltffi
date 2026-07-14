@@ -370,21 +370,7 @@ impl CodecNode {
     /// Used by capability gates to detect bindings that require the `InternedString`
     /// host capability.
     pub fn contains_interned_string(&self) -> bool {
-        match self {
-            Self::InternedString { .. } => true,
-            Self::Custom { representation, .. } => representation.contains_interned_string(),
-            Self::Optional(inner) | Self::Sequence { element: inner, .. } => {
-                inner.contains_interned_string()
-            }
-            Self::Tuple(elements) => elements.iter().any(Self::contains_interned_string),
-            Self::Result { ok, err } => {
-                ok.contains_interned_string() || err.contains_interned_string()
-            }
-            Self::Map { key, value, .. } => {
-                key.contains_interned_string() || value.contains_interned_string()
-            }
-            _ => false,
-        }
+        self.render_read_with(&mut InternedStringDetector)
     }
 
     /// Returns whether this codec tree contains a custom conversion node.
@@ -501,6 +487,89 @@ pub trait CodecRead {
 
     /// Reads a map.
     fn map(&mut self, kind: MapKind, key: Self::Expr, value: Self::Expr) -> Self::Expr;
+}
+
+/// Classifies codec trees that require the `InternedString` host capability.
+///
+/// This intentionally implements every [`CodecRead`] method rather than
+/// reopening [`CodecNode`]. New read leaves must therefore be explicitly
+/// classified when the shared walker grows.
+struct InternedStringDetector;
+
+impl CodecRead for InternedStringDetector {
+    type Expr = bool;
+
+    fn primitive(&mut self, _: Primitive) -> Self::Expr {
+        false
+    }
+
+    fn string(&mut self) -> Self::Expr {
+        false
+    }
+
+    fn utf8_string(&mut self) -> Self::Expr {
+        false
+    }
+
+    fn interned_string(&mut self, _: &[String]) -> Self::Expr {
+        true
+    }
+
+    fn bytes(&mut self) -> Self::Expr {
+        false
+    }
+
+    fn direct_record(&mut self, _: RecordId) -> Self::Expr {
+        false
+    }
+
+    fn encoded_record(&mut self, _: RecordId) -> Self::Expr {
+        false
+    }
+
+    fn c_style_enum(&mut self, _: EnumId) -> Self::Expr {
+        false
+    }
+
+    fn data_enum(&mut self, _: EnumId) -> Self::Expr {
+        false
+    }
+
+    fn class_handle(&mut self, _: ClassId) -> Self::Expr {
+        false
+    }
+
+    fn callback_handle(&mut self, _: CallbackId) -> Self::Expr {
+        false
+    }
+
+    fn custom(&mut self, _: CustomTypeId, representation: Self::Expr) -> Self::Expr {
+        representation
+    }
+
+    fn builtin(&mut self, _: BuiltinType) -> Self::Expr {
+        false
+    }
+
+    fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
+        inner
+    }
+
+    fn sequence(&mut self, _: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {
+        element
+    }
+
+    fn tuple(&mut self, elements: Vec<Self::Expr>) -> Self::Expr {
+        elements.into_iter().any(|element| element)
+    }
+
+    fn result(&mut self, ok: Self::Expr, err: Self::Expr) -> Self::Expr {
+        ok || err
+    }
+
+    fn map(&mut self, _: MapKind, key: Self::Expr, value: Self::Expr) -> Self::Expr {
+        key || value
+    }
 }
 
 /// Target-language rendering for codec writes.
@@ -1518,14 +1587,99 @@ mod tests {
     }
 
     #[test]
-    fn codec_node_contains_interned_string_detects_nested_occurrences() {
-        let node = CodecNode::Optional(Box::new(CodecNode::InternedString {
-            static_values: vec!["X".to_owned()],
-        }));
-        assert!(node.contains_interned_string());
+    fn codec_node_contains_interned_string_walks_every_container() {
+        fn interned() -> CodecNode {
+            CodecNode::InternedString {
+                static_values: vec!["X".to_owned()],
+            }
+        }
 
-        let plain = CodecNode::Optional(Box::new(CodecNode::String));
-        assert!(!plain.contains_interned_string());
+        let sequence = |element| CodecNode::Sequence {
+            len: Op::sequence_len(ValueRef::self_value()),
+            element: Box::new(element),
+        };
+
+        assert!(
+            CodecNode::Custom {
+                id: CustomTypeId::from_raw(1),
+                representation: Box::new(interned()),
+            }
+            .contains_interned_string()
+        );
+        assert!(CodecNode::Optional(Box::new(interned())).contains_interned_string());
+        assert!(sequence(interned()).contains_interned_string());
+        assert!(CodecNode::Tuple(vec![CodecNode::String, interned()]).contains_interned_string());
+        assert!(
+            CodecNode::Result {
+                ok: Box::new(interned()),
+                err: Box::new(CodecNode::String),
+            }
+            .contains_interned_string()
+        );
+        assert!(
+            CodecNode::Result {
+                ok: Box::new(CodecNode::String),
+                err: Box::new(interned()),
+            }
+            .contains_interned_string()
+        );
+        assert!(
+            CodecNode::Map {
+                kind: MapKind::Hash,
+                key: Box::new(interned()),
+                value: Box::new(CodecNode::String),
+            }
+            .contains_interned_string()
+        );
+        assert!(
+            CodecNode::Map {
+                kind: MapKind::Hash,
+                key: Box::new(CodecNode::String),
+                value: Box::new(interned()),
+            }
+            .contains_interned_string()
+        );
+
+        let deeply_nested = CodecNode::Custom {
+            id: CustomTypeId::from_raw(1),
+            representation: Box::new(CodecNode::Optional(Box::new(sequence(CodecNode::Tuple(
+                vec![CodecNode::Result {
+                    ok: Box::new(CodecNode::String),
+                    err: Box::new(CodecNode::Map {
+                        kind: MapKind::Hash,
+                        key: Box::new(CodecNode::Bytes),
+                        value: Box::new(interned()),
+                    }),
+                }],
+            ))))),
+        };
+        assert!(deeply_nested.contains_interned_string());
+    }
+
+    #[test]
+    fn codec_node_contains_interned_string_rejects_explicit_non_interned_leaves() {
+        let leaves = [
+            CodecNode::Primitive(Primitive::U8),
+            CodecNode::String,
+            CodecNode::Utf8String,
+            CodecNode::Bytes,
+            CodecNode::DirectRecord(RecordId::from_raw(1)),
+            CodecNode::EncodedRecord(RecordId::from_raw(1)),
+            CodecNode::CStyleEnum(EnumId::from_raw(1)),
+            CodecNode::DataEnum(EnumId::from_raw(1)),
+            CodecNode::ClassHandle(ClassId::from_raw(1)),
+            CodecNode::CallbackHandle(CallbackId::from_raw(1)),
+            CodecNode::Builtin(BuiltinType::Duration),
+        ];
+
+        assert!(leaves.iter().all(|leaf| !leaf.contains_interned_string()));
+        assert!(
+            !CodecNode::Custom {
+                id: CustomTypeId::from_raw(1),
+                representation: Box::new(CodecNode::String),
+            }
+            .contains_interned_string()
+        );
     }
 
     fn value_name(value: &ValueRef) -> String {

@@ -918,9 +918,11 @@ impl<S: Surface> EncodedRecordDecl<S> {
     }
 
     fn contains_interned_string(&self) -> bool {
-        self.fields
-            .iter()
-            .any(EncodedFieldDecl::contains_interned_string)
+        self.codec.uses_interned_string()
+            || self
+                .fields
+                .iter()
+                .any(EncodedFieldDecl::contains_interned_string)
             || self
                 .initializers
                 .iter()
@@ -1461,9 +1463,11 @@ impl<S: Surface> DataEnumDecl<S> {
     }
 
     fn contains_interned_string(&self) -> bool {
-        self.variants
-            .iter()
-            .any(DataVariantDecl::contains_interned_string)
+        self.codec.uses_interned_string()
+            || self
+                .variants
+                .iter()
+                .any(DataVariantDecl::contains_interned_string)
             || self
                 .initializers
                 .iter()
