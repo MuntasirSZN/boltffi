@@ -111,6 +111,7 @@ impl<'a> Scanner<'a> {
             .ok_or_else(|| ScanError::unsupported_type(source))?;
         match standard_type {
             StandardType::String => Ok(TypeExpr::String),
+            StandardType::InternedString => self.interned_string(type_path, segment, source),
             StandardType::Vec => self
                 .single_type_argument(segment, source)
                 .and_then(|argument| self.scan(argument))
@@ -173,6 +174,7 @@ impl<'a> Scanner<'a> {
             | SourceType::Declared(DeclaredType::Enum(_))
             | SourceType::Declared(DeclaredType::Trait(_))
             | SourceType::Declared(DeclaredType::Class(_))
+            | SourceType::Declared(DeclaredType::InternedStringPool(_))
             | SourceType::Unregistered => Err(ScanError::unsupported_type(source)),
             SourceType::Declared(DeclaredType::Custom(_)) => Ok(None),
             SourceType::External(path) => {
@@ -222,6 +224,7 @@ impl<'a> Scanner<'a> {
                 Ok(TypeExpr::custom(id.clone(), path))
             }
             SourceType::Declared(DeclaredType::Trait(_))
+            | SourceType::Declared(DeclaredType::InternedStringPool(_))
             | SourceType::Unregistered
             | SourceType::External(_)
             | SourceType::Unknown => Err(ScanError::unsupported_type(source)),
@@ -419,6 +422,37 @@ impl<'a> Scanner<'a> {
         }
     }
 
+    fn interned_string(
+        &self,
+        type_path: &syn::TypePath,
+        segment: &syn::PathSegment,
+        source: &syn::Type,
+    ) -> Result<TypeExpr, ScanError> {
+        let pool = self.single_type_argument(segment, source)?;
+        let syn::Type::Path(pool_path) = unwrapped(pool) else {
+            return Err(ScanError::unsupported_type(source));
+        };
+        if pool_path.qself.is_some()
+            || pool_path
+                .path
+                .segments
+                .iter()
+                .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+        {
+            return Err(ScanError::unsupported_type(source));
+        }
+        let (pool_canonical_path, static_values) = self
+            .declared_types
+            .resolve_interned_string_pool_entry(self.scope, &pool_path.path)?
+            .ok_or_else(|| ScanError::unsupported_type(source))?;
+        Ok(TypeExpr::interned_string(
+            interned_string_base_path(&type_path.path),
+            pool_canonical_path,
+            ast_path_without_arguments(&pool_path.path),
+            static_values.to_vec(),
+        ))
+    }
+
     fn single_type_argument<'segment>(
         &self,
         segment: &'segment syn::PathSegment,
@@ -497,6 +531,14 @@ fn ast_path_without_arguments(path: &syn::Path) -> Path {
     Path::new(
         path_root(path),
         path_segments_without_arguments(path).collect(),
+    )
+}
+
+/// Returns the bare path to `InternedString` without pool generic arguments.
+fn interned_string_base_path(type_path: &syn::Path) -> Path {
+    Path::new(
+        path_root(type_path),
+        path_segments_without_arguments(type_path).collect(),
     )
 }
 
@@ -596,6 +638,7 @@ fn ast_generic_argument(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StandardType {
     String,
+    InternedString,
     Vec,
     Option,
     Result,
@@ -610,6 +653,7 @@ impl StandardType {
     fn from_leaf(leaf: &str) -> Option<Self> {
         Some(match leaf {
             "String" => Self::String,
+            "InternedString" => Self::InternedString,
             "Vec" => Self::Vec,
             "Option" => Self::Option,
             "Result" => Self::Result,
@@ -632,6 +676,11 @@ impl StandardType {
     fn paths(self) -> &'static [&'static str] {
         match self {
             Self::String => &["String", "std::string::String", "alloc::string::String"],
+            Self::InternedString => &[
+                "InternedString",
+                "boltffi::InternedString",
+                "boltffi_core::InternedString",
+            ],
             Self::Vec => &["Vec", "std::vec::Vec", "alloc::vec::Vec"],
             Self::Option => &["Option", "std::option::Option", "core::option::Option"],
             Self::Result => &["Result", "std::result::Result", "core::result::Result"],
@@ -759,6 +808,44 @@ mod tests {
                 Primitive::U8
             ))))
         );
+    }
+
+    #[test]
+    fn scans_nested_interned_string_with_canonical_pool_identity_and_source_path() {
+        let mut declared_types = DeclaredTypes::new();
+        declared_types.register_test_interned_string_pool(
+            "demo::pools::BrowserName",
+            vec!["Chrome".to_owned()],
+        );
+        let items = [item("use crate::pools::BrowserName;")];
+        let module = ModuleScope::new(ModulePath::root("demo").child("api"), &items);
+        let scanner = Scanner::new(&declared_types, &module);
+
+        let scanned = scanner
+            .scan(&ty("boltffi::InternedString<BrowserName>"))
+            .expect("declared pool should resolve");
+        let TypeExpr::InternedString {
+            path,
+            pool_id,
+            pool,
+            static_values,
+        } = scanned
+        else {
+            panic!("expected interned string type");
+        };
+        assert_eq!(
+            path,
+            Path::new(
+                PathRoot::Relative,
+                vec![
+                    PathSegment::new("boltffi"),
+                    PathSegment::new("InternedString")
+                ],
+            )
+        );
+        assert_eq!(pool_id, "demo::pools::BrowserName");
+        assert_eq!(pool, Path::single("BrowserName"));
+        assert_eq!(static_values, vec!["Chrome"]);
     }
 
     #[test]
