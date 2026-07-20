@@ -47,7 +47,24 @@ enum Body {
     },
     Data {
         variants: Vec<DataVariant>,
+        wire_size_type: TypeName,
     },
+}
+
+const KOTLIN_SHADOWABLE_PRIMITIVES: &[&str] = &[
+    "Boolean", "Byte", "UByte", "Short", "UShort", "Int", "UInt", "Long", "ULong", "Float",
+    "Double",
+];
+
+fn qualify_if_shadowed(ty: TypeName, variant_names: &[String]) -> TypeName {
+    let name = ty.to_string();
+    if KOTLIN_SHADOWABLE_PRIMITIVES.contains(&name.as_str())
+        && variant_names.iter().any(|variant| variant == &name)
+    {
+        TypeName::new(format!("kotlin.{name}"))
+    } else {
+        ty
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -157,8 +174,15 @@ impl Enumeration {
 
     pub fn data_variants(&self) -> &[DataVariant] {
         match &self.body {
-            Body::Data { variants } => variants,
+            Body::Data { variants, .. } => variants,
             Body::CStyle { .. } => &[],
+        }
+    }
+
+    pub fn wire_size_type(&self) -> TypeName {
+        match &self.body {
+            Body::Data { wire_size_type, .. } => wire_size_type.clone(),
+            Body::CStyle { .. } => TypeName::int(),
         }
     }
 
@@ -323,6 +347,16 @@ impl Enumeration {
             )?),
             writeback: Some(name.clone()),
         };
+        let variant_names = enumeration
+            .variants()
+            .iter()
+            .map(|variant| {
+                Name::new(variant.name())
+                    .variant()
+                    .map(|name| name.to_string())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let wire_size_type = qualify_if_shadowed(TypeName::int(), &variant_names);
         Ok(Self {
             name,
             error,
@@ -330,8 +364,17 @@ impl Enumeration {
                 variants: enumeration
                     .variants()
                     .iter()
-                    .map(|variant| DataVariant::from_declaration(variant, host, context, package))
+                    .map(|variant| {
+                        DataVariant::from_declaration(
+                            variant,
+                            host,
+                            context,
+                            package,
+                            &variant_names,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?,
+                wire_size_type,
             },
             initializers: Self::initializer_calls(
                 enumeration.initializers(),
@@ -532,10 +575,12 @@ impl DataVariant {
         host: &KotlinHost,
         context: &RenderContext<Native>,
         package: Option<&KotlinPackage>,
+        variant_names: &[String],
     ) -> Result<Self> {
         let name = Name::new(variant.name()).variant()?;
         let tag = Self::tag_expression(variant.tag())?;
-        let fields = Self::payload_fields(variant.payload(), host, context, package)?;
+        let fields =
+            Self::payload_fields(variant.payload(), host, context, package, variant_names)?;
         let read = Self::read_expression(name.clone(), &fields);
         let size = fields
             .iter()
@@ -561,6 +606,7 @@ impl DataVariant {
         host: &KotlinHost,
         context: &RenderContext<Native>,
         package: Option<&KotlinPackage>,
+        variant_names: &[String],
     ) -> Result<Vec<EncodedField>> {
         let reader = Identifier::parse("reader")?;
         let writer = Identifier::parse("writer")?;
@@ -587,6 +633,12 @@ impl DataVariant {
                         &writer,
                         current.clone(),
                     ),
+                })
+                .map(|field| {
+                    field.map(|field| {
+                        let qualified = qualify_if_shadowed(field.ty().clone(), variant_names);
+                        field.requalified(qualified)
+                    })
                 })
                 .collect(),
             _ => Err(KotlinHost::unsupported("unknown data enum payload")),
