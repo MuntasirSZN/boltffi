@@ -482,6 +482,141 @@ def {{ encoder.name() }}({{ encoder.argument() }}) -> bytes:
 _native._register_wire_codec({{ encoder.key() }}, {{ encoder.name() }})
 
 {% endfor %}
+{% for enumeration in enums %}
+{%- if let Some(wire) = enumeration.wire %}
+class {{ enumeration.class_name }}:
+{{- enumeration.documentation.docstring("    ") }}
+    __slots__ = ()
+
+    @classmethod
+    def _boltffi_from_wire(cls, data: bytes) -> "{{ enumeration.class_name }}":
+        reader = _BoltFfiWireReader(data)
+        try:
+            value = cls._boltffi_from_reader(reader)
+        except struct.error as error:
+            raise ValueError("truncated BoltFFI wire bytes") from error
+        reader.finish()
+        return value
+
+    @classmethod
+    def _boltffi_from_reader(cls, reader: "_BoltFfiWireReader") -> "{{ enumeration.class_name }}":
+        tag = reader.u32()
+{%- for variant in wire.variants %}
+        if tag == {{ variant.tag }}:
+            return {{ variant.class_name }}._boltffi_from_reader_payload(reader)
+{%- endfor %}
+        raise ValueError("invalid {{ enumeration.class_name }} tag")
+{%- for constructor in enumeration.constructors %}
+
+    @classmethod
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
+{{- constructor.documentation.docstring("        ") }}
+{%- for line in constructor.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+{%- for method in enumeration.static_methods %}
+
+    @staticmethod
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+{%- for method in enumeration.instance_methods %}
+
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+
+{% for variant in wire.variants %}
+@dataclass(frozen=True, slots=True)
+class {{ variant.class_name }}({{ enumeration.class_name }}):
+{{- variant.documentation.docstring("    ") }}
+{%- if variant.has_fields() %}
+{%- for field in variant.fields %}
+    {{ field.name }}: {{ field.annotation }}{% if let Some(default) = field.default %} = {{ default }}{% endif %}
+{{- field.documentation.docstring("    ") }}
+{%- endfor %}
+{%- else %}
+    pass
+{%- endif %}
+
+    def _boltffi_wire(self) -> bytes:
+{%- if variant.has_fields() %}
+        return _boltffi_wire_u32({{ variant.tag }}) + b"".join((
+{%- for field in variant.wire_fields %}
+            {{ field.encode }},
+{%- endfor %}
+        ))
+{%- else %}
+        return _boltffi_wire_u32({{ variant.tag }})
+{%- endif %}
+
+    @classmethod
+    def _boltffi_from_reader_payload(cls, reader: "_BoltFfiWireReader") -> "{{ variant.class_name }}":
+{%- if variant.has_fields() %}
+        return cls(
+{%- for field in variant.wire_fields %}
+            {{ field.name }}={{ field.decode }},
+{%- endfor %}
+        )
+{%- else %}
+        return cls()
+{%- endif %}
+
+{% endfor %}
+{%- else %}
+class {{ enumeration.class_name }}(IntEnum):
+{{- enumeration.documentation.docstring("    ") }}
+{%- for variant in enumeration.variants %}
+    {{ variant.name }} = {{ variant.value }}
+{%- endfor %}
+{%- for constructor in enumeration.constructors %}
+
+    @classmethod
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
+{{- constructor.documentation.docstring("        ") }}
+{%- for line in constructor.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+{%- for method in enumeration.static_methods %}
+
+    @staticmethod
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+{%- for method in enumeration.instance_methods %}
+
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+
+{%- endif %}
+
+_native.{{ enumeration.register_method }}({{ enumeration.class_name }})
+{% if let Some(exception_name) = enumeration.exception_name %}
+
+class {{ exception_name }}(RuntimeError):
+    __slots__ = ("error",)
+
+    def __init__(self, error: {{ enumeration.class_name }}) -> None:
+        self.error = error
+        super().__init__(error)
+{% endif %}
+
+{% endfor %}
 {% for record in records %}
 {%- match record.wire %}
 {%- when RecordWire::Fixed(fixed) %}
@@ -621,141 +756,6 @@ class {{ exception_name }}(RuntimeError):
     __slots__ = ("error",)
 
     def __init__(self, error: {{ record.class_name }}) -> None:
-        self.error = error
-        super().__init__(error)
-{% endif %}
-
-{% endfor %}
-{% for enumeration in enums %}
-{%- if let Some(wire) = enumeration.wire %}
-class {{ enumeration.class_name }}:
-{{- enumeration.documentation.docstring("    ") }}
-    __slots__ = ()
-
-    @classmethod
-    def _boltffi_from_wire(cls, data: bytes) -> "{{ enumeration.class_name }}":
-        reader = _BoltFfiWireReader(data)
-        try:
-            value = cls._boltffi_from_reader(reader)
-        except struct.error as error:
-            raise ValueError("truncated BoltFFI wire bytes") from error
-        reader.finish()
-        return value
-
-    @classmethod
-    def _boltffi_from_reader(cls, reader: "_BoltFfiWireReader") -> "{{ enumeration.class_name }}":
-        tag = reader.u32()
-{%- for variant in wire.variants %}
-        if tag == {{ variant.tag }}:
-            return {{ variant.class_name }}._boltffi_from_reader_payload(reader)
-{%- endfor %}
-        raise ValueError("invalid {{ enumeration.class_name }} tag")
-{%- for constructor in enumeration.constructors %}
-
-    @classmethod
-    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
-{{- constructor.documentation.docstring("        ") }}
-{%- for line in constructor.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-{%- for method in enumeration.static_methods %}
-
-    @staticmethod
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-{{- method.documentation.docstring("        ") }}
-{%- for line in method.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-{%- for method in enumeration.instance_methods %}
-
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-{{- method.documentation.docstring("        ") }}
-{%- for line in method.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-
-{% for variant in wire.variants %}
-@dataclass(frozen=True, slots=True)
-class {{ variant.class_name }}({{ enumeration.class_name }}):
-{{- variant.documentation.docstring("    ") }}
-{%- if variant.has_fields() %}
-{%- for field in variant.fields %}
-    {{ field.name }}: {{ field.annotation }}{% if let Some(default) = field.default %} = {{ default }}{% endif %}
-{{- field.documentation.docstring("    ") }}
-{%- endfor %}
-{%- else %}
-    pass
-{%- endif %}
-
-    def _boltffi_wire(self) -> bytes:
-{%- if variant.has_fields() %}
-        return _boltffi_wire_u32({{ variant.tag }}) + b"".join((
-{%- for field in variant.wire_fields %}
-            {{ field.encode }},
-{%- endfor %}
-        ))
-{%- else %}
-        return _boltffi_wire_u32({{ variant.tag }})
-{%- endif %}
-
-    @classmethod
-    def _boltffi_from_reader_payload(cls, reader: "_BoltFfiWireReader") -> "{{ variant.class_name }}":
-{%- if variant.has_fields() %}
-        return cls(
-{%- for field in variant.wire_fields %}
-            {{ field.name }}={{ field.decode }},
-{%- endfor %}
-        )
-{%- else %}
-        return cls()
-{%- endif %}
-
-{% endfor %}
-{%- else %}
-class {{ enumeration.class_name }}(IntEnum):
-{{- enumeration.documentation.docstring("    ") }}
-{%- for variant in enumeration.variants %}
-    {{ variant.name }} = {{ variant.value }}
-{%- endfor %}
-{%- for constructor in enumeration.constructors %}
-
-    @classmethod
-    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
-{{- constructor.documentation.docstring("        ") }}
-{%- for line in constructor.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-{%- for method in enumeration.static_methods %}
-
-    @staticmethod
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-{{- method.documentation.docstring("        ") }}
-{%- for line in method.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-{%- for method in enumeration.instance_methods %}
-
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-{{- method.documentation.docstring("        ") }}
-{%- for line in method.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-
-{%- endif %}
-
-_native.{{ enumeration.register_method }}({{ enumeration.class_name }})
-{% if let Some(exception_name) = enumeration.exception_name %}
-
-class {{ exception_name }}(RuntimeError):
-    __slots__ = ("error",)
-
-    def __init__(self, error: {{ enumeration.class_name }}) -> None:
         self.error = error
         super().__init__(error)
 {% endif %}
