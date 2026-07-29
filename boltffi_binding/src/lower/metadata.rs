@@ -1,13 +1,13 @@
 use boltffi_ast::{
     DefaultValue as SourceDefaultValue, DeprecationInfo as SourceDeprecationInfo,
-    DocComment as SourceDocComment, FloatLiteral as SourceFloatLiteral,
+    DocComment as SourceDocComment, FloatLiteral as SourceFloatLiteral, TypeExpr,
 };
 
 use crate::{
     DeclMeta, DefaultValue, DeprecationInfo, DocComment, ElementMeta, FloatValue, IntegerValue,
 };
 
-use super::{LowerError, error::UnsupportedType};
+use super::{LowerError, constants, error::UnsupportedType, index::Index};
 
 pub fn decl_meta(
     doc: Option<&SourceDocComment>,
@@ -19,13 +19,38 @@ pub fn decl_meta(
 pub fn element_meta(
     doc: Option<&SourceDocComment>,
     deprecated: Option<&SourceDeprecationInfo>,
-    default: Option<&SourceDefaultValue>,
-) -> Result<ElementMeta, LowerError> {
-    Ok(ElementMeta::new(
+    default: Option<DefaultValue>,
+) -> ElementMeta {
+    ElementMeta::new(
         doc.map(DocComment::from),
         deprecated.map(Into::into),
-        default.map(DefaultValue::try_from).transpose()?,
-    ))
+        default,
+    )
+}
+
+pub fn default_value(
+    default: Option<&SourceDefaultValue>,
+) -> Result<Option<DefaultValue>, LowerError> {
+    default.map(DefaultValue::try_from).transpose()
+}
+
+pub fn default_value_for_type(
+    index: &Index,
+    type_expr: &TypeExpr,
+    default: Option<&SourceDefaultValue>,
+) -> Result<Option<DefaultValue>, LowerError> {
+    default
+        .map(|default| match (type_expr, default) {
+            (TypeExpr::Enum { id, .. }, SourceDefaultValue::Path(path)) => index
+                .enumeration(id)
+                .and_then(|enumeration| constants::enum_variant_default(enumeration, path))
+                .ok_or_else(|| LowerError::unsupported_type(UnsupportedType::DefaultValue)),
+            (_, SourceDefaultValue::Path(_)) => {
+                Err(LowerError::unsupported_type(UnsupportedType::DefaultValue))
+            }
+            (_, default) => DefaultValue::try_from(default),
+        })
+        .transpose()
 }
 
 impl From<&SourceDocComment> for DocComment {

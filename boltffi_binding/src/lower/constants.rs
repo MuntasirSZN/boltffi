@@ -203,9 +203,21 @@ fn enum_variant_from_path(
     if !enum_qualifier_matches(enumeration, qualifier) && !associated_self {
         return None;
     }
+    unit_variant_default(enumeration, variant_segment.name.as_str())
+}
+
+pub fn enum_variant_default(enumeration: &SourceEnum, path: &SourcePath) -> Option<DefaultValue> {
+    let (variant_segment, qualifier) = path.segments.split_last()?;
+    if !enum_qualifier_matches(enumeration, qualifier) {
+        return None;
+    }
+    unit_variant_default(enumeration, variant_segment.name.as_str())
+}
+
+fn unit_variant_default(enumeration: &SourceEnum, variant_segment: &str) -> Option<DefaultValue> {
     let variant = enumeration.variants.iter().find(|variant| {
         matches!(variant.payload, VariantPayload::Unit)
-            && canonical_name_matches_segment(&variant.name, variant_segment.name.as_str())
+            && canonical_name_matches_segment(&variant.name, variant_segment)
     })?;
     Some(DefaultValue::EnumVariant {
         enum_name: CanonicalName::from(&enumeration.name),
