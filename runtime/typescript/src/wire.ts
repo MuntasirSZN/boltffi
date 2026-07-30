@@ -422,6 +422,16 @@ export class WireWriter {
   private offset: number;
   private cachedWasmView: DataView | null;
   private cachedWasmBuffer: ArrayBuffer | null;
+  /**
+   * Detachment probe for the two caches above. `allocator.buffer()` reads the
+   * `WebAssembly.Memory.prototype.buffer` *accessor*, and every scalar write
+   * went through it — 21 accessor reads per record on `countActiveUsers`.
+   * Growing wasm memory detaches the old buffer, so a cached `Uint8Array` over
+   * it reports `byteLength === 0`, which is a plain field read. It has to be a
+   * `Uint8Array`: `DataView.prototype.byteLength` throws when detached rather
+   * than reporting 0, so the view cannot probe itself.
+   */
+  private wasmProbe: Uint8Array | null;
 
   constructor(initialSize = 256, allocateLocal = true) {
     const normalizedSize = Math.max(initialSize, 1);
@@ -434,6 +444,7 @@ export class WireWriter {
     this.offset = 0;
     this.cachedWasmView = null;
     this.cachedWasmBuffer = null;
+    this.wasmProbe = null;
   }
 
   static withWasmAllocation(
@@ -515,23 +526,37 @@ export class WireWriter {
     return this.wasmAllocator !== null;
   }
 
+  /** Only reached when the probe says the cached buffer is gone. */
+  private refreshWasmCaches(): ArrayBuffer {
+    const buffer = this.wasmAllocator!.buffer();
+    this.cachedWasmBuffer = buffer;
+    this.cachedWasmView = new DataView(buffer);
+    this.wasmProbe = new Uint8Array(buffer);
+    return buffer;
+  }
+
   private currentBuffer(): ArrayBuffer {
-    return this.inWasmMemory()
-      ? this.wasmAllocator!.buffer()
-      : this.ensureLocalBuffer();
+    if (this.wasmAllocator === null) {
+      return this.ensureLocalBuffer();
+    }
+    const probe = this.wasmProbe;
+    if (probe !== null && probe.byteLength !== 0) {
+      return this.cachedWasmBuffer as ArrayBuffer;
+    }
+    return this.refreshWasmCaches();
   }
 
   private currentView(): DataView {
-    if (!this.inWasmMemory()) {
+    if (this.wasmAllocator === null) {
       this.ensureLocalBuffer();
       return this.localView as DataView;
     }
-    const buffer = this.wasmAllocator!.buffer();
-    if (this.cachedWasmBuffer !== buffer) {
-      this.cachedWasmBuffer = buffer;
-      this.cachedWasmView = new DataView(buffer);
+    const probe = this.wasmProbe;
+    if (probe !== null && probe.byteLength !== 0) {
+      return this.cachedWasmView as DataView;
     }
-    return this.cachedWasmView!;
+    this.refreshWasmCaches();
+    return this.cachedWasmView as DataView;
   }
 
   private writePosition(): number {
