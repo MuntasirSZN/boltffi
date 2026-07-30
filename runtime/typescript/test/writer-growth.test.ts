@@ -105,3 +105,41 @@ describe("WireWriter over wasm memory that grows", () => {
     expect(new WireReader(memory.buffer, 256).readU32()).toBe(0x2222);
   });
 });
+
+/**
+ * Growing a *shared* memory replaces `memory.buffer` without detaching the old
+ * `SharedArrayBuffer`, so a detachment probe over it stays nonzero and would
+ * hand back a stale view. The buffer-identity comparison this patch replaces
+ * handled that, so shared buffers must keep it — otherwise a `realloc` that
+ * grows the memory and moves the allocation past the old buffer's length makes
+ * the next write throw.
+ */
+describe("shared memory", () => {
+  it("refreshes the cached view when a shared memory grows under it", () => {
+    const memory = new WebAssembly.Memory({ initial: 1, maximum: 4, shared: true });
+    const oldLength = memory.buffer.byteLength;
+    const moved = oldLength + 4096; // past the end of the pre-growth buffer
+
+    const allocator: WasmWireWriterAllocator = {
+      alloc: () => 128,
+      realloc: (ptr, oldSize) => {
+        memory.grow(1);
+        // A real `realloc` preserves the bytes it moves.
+        const bytes = new Uint8Array(memory.buffer);
+        bytes.copyWithin(moved, ptr, ptr + oldSize);
+        return moved;
+      },
+      free: () => {},
+      buffer: () => memory.buffer,
+    };
+
+    const writer = WireWriter.withWasmAllocation(8, allocator);
+    writer.writeF64(1.5); // caches a view over the pre-growth buffer
+    writer.writeF64(2.5); // exceeds capacity: grows, and the region moves
+
+    expect(memory.buffer.byteLength).toBeGreaterThan(oldLength);
+    const reader = new WireReader(memory.buffer as ArrayBuffer, moved, false, 16);
+    expect(reader.readF64()).toBe(1.5);
+    expect(reader.readF64()).toBe(2.5);
+  });
+});

@@ -531,7 +531,17 @@ export class WireWriter {
     const buffer = this.wasmAllocator!.buffer();
     this.cachedWasmBuffer = buffer;
     this.cachedWasmView = new DataView(buffer);
-    this.wasmProbe = new Uint8Array(buffer);
+    // Growing a *shared* memory replaces `memory.buffer` without detaching the
+    // old `SharedArrayBuffer`, so a probe over it would stay nonzero and the
+    // stale view would be reused — and if `realloc` moved the allocation past
+    // the old length, the next write throws. Leaving the probe unset makes the
+    // fast check fail every time, so shared memory keeps the buffer-identity
+    // refresh above, which handles it. Costs the unshared path nothing.
+    this.wasmProbe =
+      typeof SharedArrayBuffer !== "undefined" &&
+      buffer instanceof SharedArrayBuffer
+        ? null
+        : new Uint8Array(buffer);
     return buffer;
   }
 
