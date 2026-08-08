@@ -3,7 +3,7 @@
 mod codec;
 mod name_style;
 mod primitive;
-mod render;
+pub(crate) mod render;
 mod syntax;
 mod tuple;
 

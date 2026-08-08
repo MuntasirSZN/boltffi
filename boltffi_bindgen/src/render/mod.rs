@@ -19,7 +19,6 @@
 pub mod c;
 pub mod dart;
 pub mod jni;
-pub mod kmp;
 pub mod kotlin;
 
 use std::collections::HashMap;

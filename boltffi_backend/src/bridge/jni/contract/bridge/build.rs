@@ -17,7 +17,7 @@ use boltffi_binding::{CallbackId, DeclarationId};
 use crate::{
     bridge::{
         c::{self, HeaderInclude, Identifier},
-        jni::JvmClassPath,
+        jni::{JniHeaderStyle, JvmClassPath},
     },
     core::{BridgeCapability, BridgeContract, FilePath, Result},
 };
@@ -32,6 +32,7 @@ impl JniBridgeContract {
     pub fn from_c_bridge(
         class: JvmClassPath,
         source_path: FilePath,
+        header_style: JniHeaderStyle,
         c_bridge: &c::CBridgeContract,
     ) -> Result<Self> {
         let handle_method_callbacks = Self::handle_method_callbacks(c_bridge);
@@ -89,6 +90,7 @@ impl JniBridgeContract {
                 .clone()
                 .stable(BridgeCapability::Jni),
             c_header: HeaderInclude::from_files(&source_path, c_bridge.header_path())?,
+            header_style,
             free_buffer: Identifier::parse(c_bridge.support().buffer_free()?.name())?,
             buffer_with_len: Identifier::parse(c_bridge.support().buffer_with_len()?.name())?,
             callback_handle_lifecycle,

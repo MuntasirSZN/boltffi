@@ -35,6 +35,18 @@ use crate::{
 pub struct JniBridge {
     class: JvmClassPath,
     path: FilePath,
+    header_style: JniHeaderStyle,
+}
+
+/// C-header include spelling used by generated JNI translation units.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum JniHeaderStyle {
+    /// Includes the generated header relative to the JNI source file.
+    #[default]
+    Quoted,
+    /// Includes the generated header through the compiler's include search path.
+    SearchPath,
 }
 
 impl JniBridge {
@@ -47,6 +59,7 @@ impl JniBridge {
         Ok(Self {
             class: JvmClassPath::new(package, class)?,
             path: FilePath::new(path)?,
+            header_style: JniHeaderStyle::default(),
         })
     }
 
@@ -64,6 +77,12 @@ impl JniBridge {
     pub fn path(&self) -> &FilePath {
         &self.path
     }
+
+    /// Selects how the generated C header is included by the JNI source.
+    pub fn header_style(mut self, style: JniHeaderStyle) -> Self {
+        self.header_style = style;
+        self
+    }
 }
 
 impl bridge::BridgeBackend for JniBridge {
@@ -72,7 +91,12 @@ impl bridge::BridgeBackend for JniBridge {
     type Contract = JniBridgeContract;
 
     fn build_contract(&self, input: &Self::Input) -> Result<Self::Contract> {
-        JniBridgeContract::from_c_bridge(self.class.clone(), self.path.clone(), input)
+        JniBridgeContract::from_c_bridge(
+            self.class.clone(),
+            self.path.clone(),
+            self.header_style,
+            input,
+        )
     }
 
     fn render_bridge(

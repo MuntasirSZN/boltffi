@@ -1,65 +1,109 @@
+//! Shared JNI bridge stack for Kotlin Multiplatform JVM-family targets.
+
+use std::path::PathBuf;
+
 use boltffi_binding::{Bindings, Native};
 
-use crate::core::{
-    BridgeCapabilities, BridgeContract, GeneratedOutput, Result, bridge, contract::sealed,
+use crate::{
+    bridge::{
+        c::CBridge,
+        jni::{JniBridge, JniBridgeContract, JniHeaderStyle},
+    },
+    core::{
+        GeneratedOutput, Result, bridge,
+        bridge::{BridgeBackend, BridgeOutput},
+        contract::sealed,
+    },
 };
 
-/// No-op bridge used while KMP target emission is moving into the IR backend.
-///
-/// Later milestones can replace this bridge contract with the concrete ABI
-/// model needed for shared JNI and native output. Keeping it explicit lets
-/// [`crate::Target`] exercise the same typed host/bridge composition path as
-/// the Python backend without implying Apple output ownership yet.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub struct KmpBridge;
+use super::emit::KMP_GENERATED_C_HEADER_DIR;
 
-/// Bridge contract consumed by the KMP host.
+const JVM_SOURCE_SETS: [&str; 2] = ["jvmMain", "androidMain"];
+
+/// JNI bridge stack used by the KMP JVM and Android source sets.
 ///
-/// The contract advertises no bridge capabilities because the current KMP
-/// emitter owns only the JVM/Android project surface; callable JNI delegation
-/// remains fail-closed until JVM/Android parity is rebuilt around the shared
-/// bridge model.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Both source sets expose the same generated `Native` JVM class. Each source
+/// set owns its JNI translation unit, while the typed contract returned to the
+/// KMP host comes from the first source set. The C headers themselves are
+/// staged by the KMP packager beside these generated translation units.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
-pub struct KmpBridgeContract {
-    capabilities: BridgeCapabilities,
+pub struct KmpBridge {
+    internal_package: String,
 }
 
-impl KmpBridgeContract {
-    fn empty() -> Self {
+impl KmpBridge {
+    /// Creates a bridge for the internal JVM implementation package.
+    pub fn new(internal_package: impl Into<String>) -> Self {
         Self {
-            capabilities: BridgeCapabilities::new(),
+            internal_package: internal_package.into(),
         }
     }
-}
 
-impl bridge::BridgeBackend for KmpBridge {
-    type Surface = Native;
-    type Input = Bindings<Native>;
-    type Contract = KmpBridgeContract;
-
-    fn build_contract(&self, _input: &Self::Input) -> Result<Self::Contract> {
-        Ok(KmpBridgeContract::empty())
-    }
-
-    fn render_bridge(
+    fn source_set_layout(
         &self,
-        _input: &Self::Input,
-        _contract: &Self::Contract,
-    ) -> Result<GeneratedOutput> {
-        Ok(GeneratedOutput::empty())
+        source_set: &'static str,
+        bindings: &Bindings<Native>,
+    ) -> KmpJniSourceSet {
+        let c_directory = PathBuf::from(format!("src/{source_set}/c"));
+        let header_name = cargo_crate_name(bindings);
+        KmpJniSourceSet {
+            header: c_directory
+                .join(KMP_GENERATED_C_HEADER_DIR)
+                .join(format!("{header_name}.h")),
+            source: c_directory.join("jni_glue.c"),
+        }
+    }
+
+    fn build_source_set(
+        &self,
+        source_set: &'static str,
+        bindings: &Bindings<Native>,
+    ) -> Result<(JniBridgeContract, GeneratedOutput)> {
+        let layout = self.source_set_layout(source_set, bindings);
+        let c_bridge = CBridge::new(layout.header)?;
+        let c_contract = c_bridge.build_contract(bindings)?;
+        let jni_bridge = JniBridge::new(&self.internal_package, "Native", layout.source)?
+            .header_style(JniHeaderStyle::SearchPath);
+        let jni_contract = jni_bridge.build_contract(&c_contract)?;
+        let output = jni_bridge.render_bridge(&c_contract, &jni_contract)?;
+        Ok((jni_contract, output))
     }
 }
 
-impl sealed::BridgeBackend for KmpBridge {}
+impl sealed::BridgeStack for KmpBridge {}
 
-impl BridgeContract for KmpBridgeContract {
+impl bridge::BridgeStack for KmpBridge {
     type Surface = Native;
+    type Contract = JniBridgeContract;
 
-    fn capabilities(&self) -> &BridgeCapabilities {
-        &self.capabilities
+    fn build(&self, bindings: &Bindings<Self::Surface>) -> Result<BridgeOutput<Self::Contract>> {
+        let mut source_sets = JVM_SOURCE_SETS.into_iter();
+        let first = source_sets
+            .next()
+            .expect("KMP JVM source-set list must not be empty");
+        let (contract, mut output) = self.build_source_set(first, bindings)?;
+        for source_set in source_sets {
+            let (_, source_set_output) = self.build_source_set(source_set, bindings)?;
+            output.append(source_set_output);
+        }
+        Ok(BridgeOutput::new(contract, output))
     }
 }
 
-impl sealed::BridgeContract for KmpBridgeContract {}
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct KmpJniSourceSet {
+    header: PathBuf,
+    source: PathBuf,
+}
+
+fn cargo_crate_name(bindings: &Bindings<Native>) -> String {
+    bindings
+        .package()
+        .name()
+        .parts()
+        .iter()
+        .map(|part| part.as_str().replace('-', "_"))
+        .collect::<Vec<_>>()
+        .join("_")
+}
