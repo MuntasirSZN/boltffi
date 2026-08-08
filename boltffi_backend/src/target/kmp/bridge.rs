@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-use super::emit::KMP_GENERATED_C_HEADER_DIR;
+use super::{emit::KMP_GENERATED_C_HEADER_DIR, library::cargo_crate_name};
 
 const JVM_SOURCE_SETS: [&str; 2] = ["jvmMain", "androidMain"];
 
@@ -95,15 +95,4 @@ impl bridge::BridgeStack for KmpBridge {
 struct KmpJniSourceSet {
     header: PathBuf,
     source: PathBuf,
-}
-
-fn cargo_crate_name(bindings: &Bindings<Native>) -> String {
-    bindings
-        .package()
-        .name()
-        .parts()
-        .iter()
-        .map(|part| part.as_str().replace('-', "_"))
-        .collect::<Vec<_>>()
-        .join("_")
 }

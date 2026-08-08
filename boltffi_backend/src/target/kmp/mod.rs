@@ -8,6 +8,7 @@
 mod bridge;
 pub mod emit;
 mod host;
+mod library;
 pub mod lower;
 mod names;
 pub mod plan;

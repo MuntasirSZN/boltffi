@@ -1052,6 +1052,7 @@ mod tests {
     #[test]
     fn kmp_generation_wires_shared_jni_bridge_for_sync_primitive_bindings() {
         let output = render_primitive_kmp_output();
+        let internal = file(&output, "src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt");
 
         assert!(
             file(&output, "src/commonMain/kotlin/com/boltffi/demo/Demo.kt")
@@ -1065,9 +1066,11 @@ mod tests {
             .contains("return com.boltffi.demo.jvm.add(left, right)")
         );
         assert!(
-            file(&output, "src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt")
-                .contains("external fun boltffi_function_demo_add(left: Int, right: Int): Int")
+            internal.contains("external fun boltffi_function_demo_add(left: Int, right: Int): Int")
         );
+        assert!(internal.contains("val androidLibrary = \"demo\""));
+        assert!(internal.contains("val desktopPreferredLibrary = \"demo_jni\""));
+        assert!(internal.contains("val desktopFallbackLibrary = \"demo\""));
         assert!(
             file(&output, "src/jvmMain/c/jni_glue.c")
                 .contains("_result = boltffi_function_demo_add(left, right);")

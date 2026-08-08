@@ -10,11 +10,12 @@ use crate::core::{
 };
 use crate::{
     bridge::jni::JniBridgeContract,
-    target::jvm::{DesktopLoader, LibraryName, NativeLibraries},
+    target::jvm::{DesktopLoader, LibraryName},
 };
 
 use super::{
     KmpBridge, KmpEmissionOptions, KmpEmitter, KmpPlatform, KmpSupportMode, Syntax,
+    library::KmpNativeLibraryConfiguration,
     lower::{KmpLowerer, KmpLoweringOptions, KmpSupportPlan},
 };
 
@@ -38,7 +39,7 @@ pub struct KmpHost {
     package_name: String,
     module_name: String,
     min_sdk: u32,
-    native_libraries: NativeLibraries,
+    native_library_configuration: KmpNativeLibraryConfiguration,
 }
 
 impl KmpHost {
@@ -50,8 +51,7 @@ impl KmpHost {
             package_name: DEFAULT_KMP_PACKAGE_NAME.to_string(),
             module_name: DEFAULT_KMP_MODULE_NAME.to_string(),
             min_sdk: 24,
-            native_libraries: NativeLibraries::boltffi()
-                .expect("static KMP native-library names must be valid"),
+            native_library_configuration: KmpNativeLibraryConfiguration::default(),
         }
     }
 
@@ -87,31 +87,32 @@ impl KmpHost {
 
     /// Selects the Android native library load name.
     pub fn android_library(mut self, library: impl Into<String>) -> Result<Self> {
-        self.native_libraries = self
-            .native_libraries
-            .with_android(LibraryName::parse(library)?);
+        self.native_library_configuration = self
+            .native_library_configuration
+            .android_library(LibraryName::parse(library)?);
         Ok(self)
     }
 
     /// Selects the desktop JNI wrapper library load name.
     pub fn desktop_jni_library(mut self, library: impl Into<String>) -> Result<Self> {
-        self.native_libraries = self
-            .native_libraries
-            .with_desktop_jni(LibraryName::parse(library)?);
+        self.native_library_configuration = self
+            .native_library_configuration
+            .desktop_jni_library(LibraryName::parse(library)?);
         Ok(self)
     }
 
     /// Selects the desktop fallback library load name.
     pub fn desktop_fallback_library(mut self, library: impl Into<String>) -> Result<Self> {
-        self.native_libraries = self
-            .native_libraries
-            .with_desktop_fallback(LibraryName::parse(library)?);
+        self.native_library_configuration = self
+            .native_library_configuration
+            .desktop_fallback_library(LibraryName::parse(library)?);
         Ok(self)
     }
 
     /// Selects the desktop native-library loading policy.
     pub fn desktop_loader(mut self, loader: DesktopLoader) -> Self {
-        self.native_libraries = self.native_libraries.with_desktop_loader(loader);
+        self.native_library_configuration =
+            self.native_library_configuration.desktop_loader(loader);
         self
     }
 
@@ -320,13 +321,14 @@ impl host::HostBackend for KmpHost {
         let module = KmpLowerer::new(self.lowering_options(support_mode))
             .lower_support_plan(support_plan)
             .map_err(|error| error.into_backend_error())?;
+        let native_libraries = self.native_library_configuration.resolve(bindings)?;
         let emitted = KmpEmitter::new(
             KmpEmissionOptions::new(
                 self.package_name.clone(),
                 self.module_name.clone(),
                 self.min_sdk,
             )
-            .native_libraries(self.native_libraries.clone()),
+            .native_libraries(native_libraries),
         )
         .emit(&module)?;
         let (files, mut emitted_diagnostics, _coverage) = emitted.into_parts();
@@ -348,9 +350,13 @@ mod tests {
     };
 
     fn bindings(source: &str) -> Bindings<Native> {
+        bindings_for_package("demo", source)
+    }
+
+    fn bindings_for_package(package: &str, source: &str) -> Bindings<Native> {
         let source = boltffi_scan::scan_file(
             syn::parse_str(source).expect("valid source fixture"),
-            PackageInfo::new("demo", None),
+            PackageInfo::new(package, None),
         )
         .expect("source should scan");
         lower::<Native>(&source).expect("source should lower")
@@ -448,6 +454,30 @@ mod tests {
         assert_eq!(report["admitted_apis"][0]["kind"], "function");
         assert_eq!(report["admitted_apis"][0]["name"], "add");
         assert_eq!(report["rejected_apis"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn kmp_target_derives_default_native_libraries_from_binding_package() {
+        let output = KmpHost::new()
+            .into_target()
+            .render(&bindings_for_package(
+                "sample-library",
+                r#"
+                #[export]
+                pub fn value() -> i32 {
+                    42
+                }
+                "#,
+            ))
+            .expect("package-derived native-library names should render");
+
+        let internal = file(
+            &output,
+            "src/jvmMain/kotlin/com/example/boltffi/jvm/BoltFFI.kt",
+        );
+        assert!(internal.contains("val androidLibrary = \"sample-library\""));
+        assert!(internal.contains("val desktopPreferredLibrary = \"sample_library_jni\""));
+        assert!(internal.contains("val desktopFallbackLibrary = \"sample_library\""));
     }
 
     #[test]
