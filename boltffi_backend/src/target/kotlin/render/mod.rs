@@ -11,6 +11,7 @@ mod function;
 mod jvm_invocation;
 mod module;
 mod native;
+pub(crate) mod native_library_loader;
 mod record;
 mod signature;
 mod stream;

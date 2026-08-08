@@ -33,7 +33,7 @@ use crate::{
 #[derive(AskamaTemplate)]
 #[template(path = "bridge/jni/source.c", escape = "none")]
 struct SourceFileTemplate {
-    c_header: Literal,
+    c_header: String,
     class_name: LookupText,
     error_buffer_exception_class: Literal,
     free_buffer: Identifier,
@@ -129,7 +129,14 @@ impl SourceFile {
             None => CallbackHandleLifecycle::new(contract.class())?,
         };
         let rendered = SourceFileTemplate {
-            c_header: Literal::string(contract.c_header().as_str()),
+            c_header: match contract.header_style() {
+                crate::bridge::jni::JniHeaderStyle::Quoted => {
+                    Literal::string(contract.c_header().as_str()).to_string()
+                }
+                crate::bridge::jni::JniHeaderStyle::SearchPath => {
+                    format!("<{}>", contract.c_header().as_str())
+                }
+            },
             class_name: LookupText::new(&contract.class().as_jni_class_name()),
             error_buffer_exception_class: ModifiedUtf8::new(
                 &contract

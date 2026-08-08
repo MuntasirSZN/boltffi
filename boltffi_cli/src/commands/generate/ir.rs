@@ -13,10 +13,6 @@ use boltffi_backend::target::kotlin::{
 };
 use boltffi_backend::{CoverageMode, GeneratedOutput};
 use boltffi_bindgen::generate::{Generation, GenerationError};
-use boltffi_bindgen::render::kotlin::{
-    FactoryStyle as BindgenFactoryStyle, KotlinApiStyle as BindgenKotlinApiStyle,
-    KotlinDesktopLoader as BindgenKotlinDesktopLoader, KotlinOptions,
-};
 use boltffi_bindgen::target::Target;
 use boltffi_binding::BindingMetadataSurface;
 
@@ -658,6 +654,13 @@ fn write_kmp(
     };
 
     let module_name = config.kotlin_multiplatform_module_name();
+    let desktop_libraries =
+        NativeLibraries::from_artifact(config.resolved_android_kotlin_desktop_library_name())
+            .map_err(|error| generation_error("kmp", GenerationError::Render(error)))?;
+    let android_library = LibraryName::parse(config.resolved_android_kotlin_library_name())
+        .map_err(|error| generation_error("kmp", GenerationError::Render(error)))?;
+    let fallback_library = NativeLibraries::from_artifact(&artifact_name)
+        .map_err(|error| generation_error("kmp", GenerationError::Render(error)))?;
     let output = Generation::new(manifest_path)
         .cargo_args(cargo_args)
         .cargo_toolchain_selector(toolchain_selector)
@@ -665,39 +668,15 @@ fn write_kmp(
         .kmp_package_name(config.kotlin_multiplatform_package())
         .kmp_module_name(module_name.clone())
         .kmp_min_sdk(config.android_min_sdk())
-        .kmp_kotlin_options(kmp_kotlin_options(config, &module_name, &artifact_name))
+        .kmp_android_library(android_library.as_str())
+        .kmp_desktop_jni_library(desktop_libraries.desktop_jni().as_str())
+        .kmp_desktop_fallback_library(fallback_library.desktop_fallback().as_str())
+        .kmp_desktop_loader(BackendKotlinDesktopLoader::Bundled)
         .kmp_support_mode(support_mode)
         .render(Target::KotlinMultiplatform)
         .map_err(|error| generation_error("kmp", error))?;
 
     write_kmp_output(output, &output_directory)
-}
-
-fn kmp_kotlin_options(
-    config: &Config,
-    module_name: &str,
-    desktop_fallback_library_name: &str,
-) -> KotlinOptions {
-    let factory_style = match config.android_kotlin_factory_style() {
-        KotlinFactoryStyle::Constructors => BindgenFactoryStyle::Constructors,
-        KotlinFactoryStyle::CompanionMethods => BindgenFactoryStyle::CompanionMethods,
-    };
-
-    KotlinOptions {
-        factory_style,
-        api_style: BindgenKotlinApiStyle::TopLevel,
-        module_object_name: Some(module_name.to_string()),
-        library_name: Some(boltffi_bindgen::load_library_name(
-            &config.resolved_android_kotlin_library_name(),
-        )),
-        desktop_jni_library_name: Some(boltffi_bindgen::library_name(
-            &config.resolved_android_kotlin_desktop_library_name(),
-        )),
-        desktop_fallback_library_name: Some(boltffi_bindgen::library_name(
-            desktop_fallback_library_name,
-        )),
-        desktop_loader: BindgenKotlinDesktopLoader::Bundled,
-    }
 }
 
 fn write_kmp_output(output: GeneratedOutput, output_directory: &Path) -> Result<()> {

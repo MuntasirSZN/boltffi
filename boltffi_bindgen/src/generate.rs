@@ -19,8 +19,6 @@ use boltffi_binding::{BindingMetadataSurface, Bindings, Native, Surface, Wasm32}
 use thiserror::Error;
 
 use crate::metadata::{BindingMetadataBuild, BindingMetadataBuildError};
-use crate::render::kmp::delegate::KmpJvmDelegateAdapter;
-use crate::render::kotlin::KotlinOptions;
 use crate::target::Target;
 
 /// Drives one BoltFFI generation from a compiled crate's embedded metadata
@@ -71,7 +69,10 @@ pub struct Generation {
     kmp_package_name: Option<String>,
     kmp_module_name: Option<String>,
     kmp_min_sdk: Option<u32>,
-    kmp_kotlin_options: KotlinOptions,
+    kmp_android_library: Option<String>,
+    kmp_desktop_jni_library: Option<String>,
+    kmp_desktop_fallback_library: Option<String>,
+    kmp_desktop_loader: KotlinDesktopLoader,
     kmp_support_mode: KmpSupportMode,
     typescript_module: Option<String>,
     typescript_runtime_package: Option<String>,
@@ -119,7 +120,10 @@ impl Generation {
             kmp_package_name: None,
             kmp_module_name: None,
             kmp_min_sdk: None,
-            kmp_kotlin_options: KotlinOptions::default(),
+            kmp_android_library: None,
+            kmp_desktop_jni_library: None,
+            kmp_desktop_fallback_library: None,
+            kmp_desktop_loader: KotlinDesktopLoader::default(),
             kmp_support_mode: KmpSupportMode::Strict,
             typescript_module: None,
             typescript_runtime_package: None,
@@ -349,9 +353,27 @@ impl Generation {
         self
     }
 
-    /// Sets Kotlin/JNI loader options used by generated KMP JVM and Android delegates.
-    pub fn kmp_kotlin_options(mut self, kotlin_options: KotlinOptions) -> Self {
-        self.kmp_kotlin_options = kotlin_options;
+    /// Selects the Android native library loaded by KMP JVM-family bindings.
+    pub fn kmp_android_library(mut self, library: impl Into<String>) -> Self {
+        self.kmp_android_library = Some(library.into());
+        self
+    }
+
+    /// Selects the desktop JNI wrapper library loaded by KMP bindings.
+    pub fn kmp_desktop_jni_library(mut self, library: impl Into<String>) -> Self {
+        self.kmp_desktop_jni_library = Some(library.into());
+        self
+    }
+
+    /// Selects the desktop fallback library loaded by KMP bindings.
+    pub fn kmp_desktop_fallback_library(mut self, library: impl Into<String>) -> Self {
+        self.kmp_desktop_fallback_library = Some(library.into());
+        self
+    }
+
+    /// Selects the desktop native-library loading policy for KMP bindings.
+    pub fn kmp_desktop_loader(mut self, loader: KotlinDesktopLoader) -> Self {
+        self.kmp_desktop_loader = loader;
         self
     }
 
@@ -549,7 +571,7 @@ impl Generation {
         &self,
         bindings: &Bindings<Native>,
     ) -> Result<GeneratedOutput, GenerationError> {
-        let target = self.kmp_host(bindings)?.into_target();
+        let target = self.kmp_host()?.into_target();
         self.render_backend(&target, bindings)
     }
 
@@ -660,25 +682,35 @@ impl Generation {
             .fold(host, |host, header| host.c_header(header.clone())))
     }
 
-    fn kmp_host(&self, bindings: &Bindings<Native>) -> Result<KmpHost, GenerationError> {
+    fn kmp_host(&self) -> Result<KmpHost, GenerationError> {
         let package_name = self.effective_kmp_package_name();
         let module_name = self.effective_kmp_module_name();
-        let delegate = KmpJvmDelegateAdapter::new(
-            package_name.clone(),
-            module_name.clone(),
-            self.kmp_kotlin_options.clone(),
-        )
-        .adapt_bindings(bindings)
-        .map_err(|source| GenerationError::KmpJvmDelegate {
-            message: source.to_string(),
-        })?;
-        let host = KmpHost::new().support_mode(self.kmp_support_mode);
+        let host = KmpHost::new()
+            .support_mode(self.kmp_support_mode)
+            .desktop_loader(self.kmp_desktop_loader);
         let host = host.package_name(package_name).module_name(module_name);
         let host = self
             .kmp_min_sdk
             .iter()
             .fold(host, |host, min_sdk| host.min_sdk(*min_sdk));
-        Ok(host.jvm_delegate(delegate))
+        let host = self
+            .kmp_android_library
+            .iter()
+            .try_fold(host, |host, library| host.android_library(library.clone()))
+            .map_err(GenerationError::Render)?;
+        let host = self
+            .kmp_desktop_jni_library
+            .iter()
+            .try_fold(host, |host, library| {
+                host.desktop_jni_library(library.clone())
+            })
+            .map_err(GenerationError::Render)?;
+        self.kmp_desktop_fallback_library
+            .iter()
+            .try_fold(host, |host, library| {
+                host.desktop_fallback_library(library.clone())
+            })
+            .map_err(GenerationError::Render)
     }
 
     fn effective_kmp_package_name(&self) -> String {
@@ -770,12 +802,6 @@ pub enum GenerationError {
     /// The target backend failed to render the bindings.
     #[error("render bindings: {0}")]
     Render(boltffi_backend::Error),
-    /// The Kotlin/JNI delegate adapter failed before backend rendering.
-    #[error("adapt KMP JVM delegate: {message}")]
-    KmpJvmDelegate {
-        /// Adapter failure message.
-        message: String,
-    },
     /// The target is not wired to the IR generation pipeline.
     #[error("IR generation is not available for {target}")]
     UnsupportedTarget {
@@ -1024,8 +1050,9 @@ mod tests {
     }
 
     #[test]
-    fn kmp_generation_wires_jni_delegate_for_sync_primitive_bindings() {
+    fn kmp_generation_wires_shared_jni_bridge_for_sync_primitive_bindings() {
         let output = render_primitive_kmp_output();
+        let internal = file(&output, "src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt");
 
         assert!(
             file(&output, "src/commonMain/kotlin/com/boltffi/demo/Demo.kt")
@@ -1039,9 +1066,11 @@ mod tests {
             .contains("return com.boltffi.demo.jvm.add(left, right)")
         );
         assert!(
-            file(&output, "src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt")
-                .contains("external fun boltffi_function_demo_add(left: Int, right: Int): Int")
+            internal.contains("external fun boltffi_function_demo_add(left: Int, right: Int): Int")
         );
+        assert!(internal.contains("val androidLibrary = \"demo\""));
+        assert!(internal.contains("val desktopPreferredLibrary = \"demo_jni\""));
+        assert!(internal.contains("val desktopFallbackLibrary = \"demo\""));
         assert!(
             file(&output, "src/jvmMain/c/jni_glue.c")
                 .contains("_result = boltffi_function_demo_add(left, right);")
@@ -1054,12 +1083,9 @@ mod tests {
         let output = Generation::new("Cargo.toml")
             .kmp_package_name("com.boltffi.demo")
             .kmp_module_name("Demo")
-            .kmp_kotlin_options(KotlinOptions {
-                library_name: Some(crate::load_library_name("configured-library")),
-                desktop_jni_library_name: Some(crate::library_name("configured-library")),
-                desktop_fallback_library_name: Some(crate::library_name("my-lib")),
-                ..KotlinOptions::default()
-            })
+            .kmp_android_library("configured-library")
+            .kmp_desktop_jni_library("configured_library_jni")
+            .kmp_desktop_fallback_library("my_lib")
             .render_native_bindings(Target::KotlinMultiplatform, &bindings)
             .expect("configured KMP loader options should render");
 
@@ -1076,6 +1102,8 @@ mod tests {
         assert_eq!(
             output_paths(&output),
             vec![
+                "src/jvmMain/c/jni_glue.c",
+                "src/androidMain/c/jni_glue.c",
                 "settings.gradle.kts",
                 "build.gradle.kts",
                 "src/commonMain/kotlin/com/boltffi/demo/Demo.kt",
@@ -1084,8 +1112,6 @@ mod tests {
                 "src/androidMain/kotlin/com/boltffi/demo/DemoAndroidActual.kt",
                 "src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt",
                 "src/androidMain/kotlin/com/boltffi/demo/jvm/Demo.kt",
-                "src/jvmMain/c/jni_glue.c",
-                "src/androidMain/c/jni_glue.c",
             ]
         );
 
@@ -1291,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn kmp_generation_uses_backend_planned_kotlin_name_for_delegate_matching() {
+    fn kmp_generation_uses_backend_planned_kotlin_name_for_jni_entrypoint() {
         let bindings = bindings_for_functions(vec![primitive_function(
             "demo::DoTheThing",
             "DoTheThing",
@@ -1302,13 +1328,13 @@ mod tests {
             .kmp_package_name("com.boltffi.demo")
             .kmp_module_name("Demo");
         let target = generation
-            .kmp_host(&bindings)
-            .expect("KMP host should adapt primitive bindings")
+            .kmp_host()
+            .expect("KMP host should configure primitive bindings")
             .into_target();
 
         let output = generation
             .render_backend(&target, &bindings)
-            .expect("backend-planned Kotlin names should be covered by the delegate");
+            .expect("backend-planned Kotlin names should use the shared JNI bridge");
 
         let common = file(&output, "src/commonMain/kotlin/com/boltffi/demo/Demo.kt");
         assert!(
@@ -1352,13 +1378,13 @@ mod tests {
             .kmp_package_name("com.boltffi.demo")
             .kmp_module_name("Demo");
         let target = generation
-            .kmp_host(&bindings)
-            .expect("KMP host should adapt primitive overloads")
+            .kmp_host()
+            .expect("KMP host should configure primitive overloads")
             .into_target();
 
         let output = generation
             .render_backend(&target, &bindings)
-            .expect("same-name overloads with distinct signatures should keep both delegates");
+            .expect("same-name overloads with distinct signatures should keep both JNI methods");
         let jni = file(&output, "src/jvmMain/c/jni_glue.c");
 
         let common = file(&output, "src/commonMain/kotlin/com/boltffi/demo/Demo.kt");

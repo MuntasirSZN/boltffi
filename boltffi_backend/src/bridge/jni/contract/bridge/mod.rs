@@ -20,7 +20,7 @@ use boltffi_binding::{CallbackId, Native, SymbolId};
 use crate::{
     bridge::{
         c::{HeaderInclude, Identifier},
-        jni::JvmClassPath,
+        jni::{JniHeaderStyle, JvmClassPath},
     },
     core::{BridgeCapabilities, BridgeContract, FilePath, contract::sealed},
 };
@@ -44,6 +44,7 @@ pub struct JniBridgeContract {
     class: JvmClassPath,
     source_path: FilePath,
     c_header: HeaderInclude,
+    header_style: JniHeaderStyle,
     free_buffer: Identifier,
     buffer_with_len: Identifier,
     callback_handle_lifecycle: Option<CallbackHandleLifecycle>,
@@ -70,6 +71,11 @@ impl JniBridgeContract {
     /// Returns the C header include path used by the JNI source.
     pub fn c_header(&self) -> &HeaderInclude {
         &self.c_header
+    }
+
+    /// Returns how the generated C header is included by the JNI source.
+    pub const fn header_style(&self) -> JniHeaderStyle {
+        self.header_style
     }
 
     /// Returns the C support function that releases owned BoltFFI byte buffers.
