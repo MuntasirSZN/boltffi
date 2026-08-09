@@ -163,7 +163,10 @@ export class AsyncFutureManager {
   }
 }
 
-export const WASM_ABI_VERSION = 2;
+// 3: byte buffers returned from an exported callable cross unframed. Checked
+// at instantiation, so a mismatched artifact fails there instead of handing
+// back a payload with the old length prefix still on the front.
+export const WASM_ABI_VERSION = 3;
 
 export interface BoltFFIExports {
   memory: WebAssembly.Memory;

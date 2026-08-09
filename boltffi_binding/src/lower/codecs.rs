@@ -27,9 +27,11 @@ impl RootEncoding {
     ) -> Result<CodecNode, LowerError> {
         match (self, type_expr) {
             (Self::Surface | Self::SurfaceReturn, TypeExpr::String) => Ok(S::root_string_codec()),
-            (Self::SurfaceReturn, TypeExpr::Vec(inner) | TypeExpr::Slice(inner))
-                if types::is_byte_primitive(inner) =>
-            {
+            // Owned only, the same reason `String` is here and `Str` is not: a
+            // borrowed value is written by `borrowed_buffer`, which always
+            // frames. Handing `Slice` an unframed reader would surface the
+            // length prefix as the first four bytes of the payload.
+            (Self::SurfaceReturn, TypeExpr::Vec(inner)) if types::is_byte_primitive(inner) => {
                 Ok(S::root_bytes_return_codec())
             }
             _ => node(index, ids, type_expr, value),

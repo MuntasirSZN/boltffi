@@ -1,4 +1,7 @@
-pub const WASM_ABI_VERSION: u32 = 2;
+/// 3: byte buffers returned from an exported callable cross unframed. A host
+/// built for 2 reads the length prefix it expects and hands back four bytes of
+/// header as payload, which nothing else would catch.
+pub const WASM_ABI_VERSION: u32 = 3;
 
 #[cfg(any(test, target_arch = "wasm32"))]
 use std::alloc::{Layout, alloc, dealloc};
@@ -243,7 +246,7 @@ mod tests {
 
     #[test]
     fn wasm_abi_version_is_stable() {
-        assert_eq!(WASM_ABI_VERSION, 2);
+        assert_eq!(WASM_ABI_VERSION, 3);
     }
 
     #[test]
