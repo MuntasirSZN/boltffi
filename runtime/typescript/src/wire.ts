@@ -399,6 +399,19 @@ export function matchWireResult<T, E, R>(
   if (value instanceof Error) {
     return err(value as E);
   }
+  // A typed array is never a `WireResult`: it carries no `tag`, and a caller
+  // cannot have meant it as one. Without this a callback returning
+  // `Result<Vec<u8>, E>` hits the ambiguity below, the throw is reported as
+  // completion code -2, and the Rust side decodes that message as the error
+  // enum — a decode failure that aborts the process rather than surfacing.
+  //
+  // Only views with a numeric `length`, which is what the bytes codec sizes
+  // and writes through. A bare `ArrayBuffer` or a `DataView` has none, so
+  // exempting them would size the payload as `NaN` and throw inside the
+  // encoder instead — the same abort, one step later.
+  if (ArrayBuffer.isView(value) && typeof (value as { length?: unknown }).length === "number") {
+    return ok(value as T);
+  }
   if (typeof value === "object" && value !== null) {
     throw new Error(
       "Ambiguous Result object. Pass wireOk(value) or wireErr(error) for object payloads."
@@ -422,6 +435,16 @@ export class WireWriter {
   private offset: number;
   private cachedWasmView: DataView | null;
   private cachedWasmBuffer: ArrayBuffer | null;
+  /**
+   * Detachment probe for the two caches above. `allocator.buffer()` reads the
+   * `WebAssembly.Memory.prototype.buffer` *accessor*, and every scalar write
+   * went through it — 21 accessor reads per record on `countActiveUsers`.
+   * Growing wasm memory detaches the old buffer, so a cached `Uint8Array` over
+   * it reports `byteLength === 0`, which is a plain field read. It has to be a
+   * `Uint8Array`: `DataView.prototype.byteLength` throws when detached rather
+   * than reporting 0, so the view cannot probe itself.
+   */
+  private wasmProbe: Uint8Array | null;
 
   constructor(initialSize = 256, allocateLocal = true) {
     const normalizedSize = Math.max(initialSize, 1);
@@ -434,6 +457,7 @@ export class WireWriter {
     this.offset = 0;
     this.cachedWasmView = null;
     this.cachedWasmBuffer = null;
+    this.wasmProbe = null;
   }
 
   static withWasmAllocation(
@@ -515,23 +539,47 @@ export class WireWriter {
     return this.wasmAllocator !== null;
   }
 
+  /** Only reached when the probe says the cached buffer is gone. */
+  private refreshWasmCaches(): ArrayBuffer {
+    const buffer = this.wasmAllocator!.buffer();
+    this.cachedWasmBuffer = buffer;
+    this.cachedWasmView = new DataView(buffer);
+    // Growing a *shared* memory replaces `memory.buffer` without detaching the
+    // old `SharedArrayBuffer`, so a probe over it would stay nonzero and the
+    // stale view would be reused — and if `realloc` moved the allocation past
+    // the old length, the next write throws. Leaving the probe unset makes the
+    // fast check fail every time, so shared memory keeps the buffer-identity
+    // refresh above, which handles it. Costs the unshared path nothing.
+    this.wasmProbe =
+      typeof SharedArrayBuffer !== "undefined" &&
+      buffer instanceof SharedArrayBuffer
+        ? null
+        : new Uint8Array(buffer);
+    return buffer;
+  }
+
   private currentBuffer(): ArrayBuffer {
-    return this.inWasmMemory()
-      ? this.wasmAllocator!.buffer()
-      : this.ensureLocalBuffer();
+    if (this.wasmAllocator === null) {
+      return this.ensureLocalBuffer();
+    }
+    const probe = this.wasmProbe;
+    if (probe !== null && probe.byteLength !== 0) {
+      return this.cachedWasmBuffer as ArrayBuffer;
+    }
+    return this.refreshWasmCaches();
   }
 
   private currentView(): DataView {
-    if (!this.inWasmMemory()) {
+    if (this.wasmAllocator === null) {
       this.ensureLocalBuffer();
       return this.localView as DataView;
     }
-    const buffer = this.wasmAllocator!.buffer();
-    if (this.cachedWasmBuffer !== buffer) {
-      this.cachedWasmBuffer = buffer;
-      this.cachedWasmView = new DataView(buffer);
+    const probe = this.wasmProbe;
+    if (probe !== null && probe.byteLength !== 0) {
+      return this.cachedWasmView as DataView;
     }
-    return this.cachedWasmView!;
+    this.refreshWasmCaches();
+    return this.cachedWasmView as DataView;
   }
 
   private writePosition(): number {

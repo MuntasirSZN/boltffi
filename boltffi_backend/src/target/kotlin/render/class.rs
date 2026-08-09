@@ -202,8 +202,10 @@ impl Initializer {
                 None,
             )
             .map(|call| Self {
+                // A secondary constructor cannot delegate to a `suspend` call, so asynchronous
+                // initializers are companion factories only.
+                constructor: call.async_call().is_none(),
                 call,
-                constructor: true,
             })
     }
 

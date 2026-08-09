@@ -25,7 +25,39 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
 {{ constant }}
 {%- endfor %}
 {%- for initializer in class.initializers() %}
-        fun {{ initializer.call().name() }}({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.call().returns() %}: {{ return_type }}{% endif %} {
+        {% if initializer.call().async_call().is_some() %}suspend {% endif %}fun {{ initializer.call().name() }}({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.call().returns() %}: {{ return_type }}{% endif %} {
+{%- if let Some(async_call) = initializer.call().async_call() %}
+{%- if async_call.returns_value() %}
+            return boltffiCallAsync(
+{%- else %}
+            boltffiCallAsync(
+{%- endif %}
+                createFuture = {
+{%- for statement in async_call.create_setup() %}
+                    {{ statement }}
+{%- endfor %}
+{%- if async_call.has_create_cleanup() %}
+                    try {
+                        {{ async_call.create() }}
+                    } finally {
+{%- for statement in async_call.create_cleanup() %}
+                        {{ statement }}
+{%- endfor %}
+                    }
+{%- else %}
+                    {{ async_call.create() }}
+{%- endif %}
+                },
+                poll = { future, contHandle -> Native.{{ async_call.poll() }}(future, contHandle) },
+                complete = { future ->
+{%- for statement in async_call.complete_body() %}
+                    {{ statement }}
+{%- endfor %}
+                },
+                free = { future -> Native.{{ async_call.free() }}(future) },
+                cancel = { future -> Native.{{ async_call.cancel() }}(future) },
+            )
+{%- else %}
 {%- for statement in initializer.call().setup() %}
             {{ statement }}
 {%- endfor %}
@@ -43,6 +75,7 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
 {%- for statement in initializer.call().call() %}
             {{ statement }}
 {%- endfor %}
+{%- endif %}
 {%- endif %}
         }
 {%- endfor %}

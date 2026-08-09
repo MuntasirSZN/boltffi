@@ -117,6 +117,12 @@ pub enum Commands {
 
         #[arg(long, help = "Render through the IR-AST metadata pipeline")]
         ir: bool,
+
+        #[arg(
+            long,
+            help = "Fail instead of emitting a binding with declarations left out"
+        )]
+        deny_skipped: bool,
     },
 
     #[command(
@@ -136,6 +142,13 @@ pub enum Commands {
         long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack kmp --experimental\n  boltffi pack wasm --release\n  boltffi pack python\n  boltffi pack csharp\n"
     )]
     Pack {
+        #[arg(
+            long,
+            global = true,
+            help = "Fail instead of emitting a binding with declarations left out"
+        )]
+        deny_skipped: bool,
+
         #[command(subcommand)]
         target: PackTargetArg,
     },
@@ -479,6 +492,7 @@ pub(crate) fn execute_command(
             output,
             experimental,
             ir,
+            deny_skipped,
         } => {
             let config = load_config(config_paths)?;
             let options = GenerateOptions {
@@ -499,6 +513,7 @@ pub(crate) fn execute_command(
                 experimental,
                 ir,
                 cargo_args: cargo_args.clone(),
+                deny_skipped,
             };
             run_generate_with_output(&config, options)
         }
@@ -521,7 +536,10 @@ pub(crate) fn execute_command(
             run_build(&config, options).map(|_| ())
         }
 
-        Commands::Pack { target } => {
+        Commands::Pack {
+            deny_skipped,
+            target,
+        } => {
             let config = load_config(config_paths)?;
             let command = match target {
                 PackTargetArg::All {
@@ -535,6 +553,7 @@ pub(crate) fn execute_command(
                         release,
                         regenerate,
                         no_build,
+                        deny_skipped,
                         cargo_args.clone(),
                     ),
                     experimental,
@@ -553,6 +572,7 @@ pub(crate) fn execute_command(
                         release,
                         regenerate,
                         no_build,
+                        deny_skipped,
                         cargo_args.clone(),
                     ),
                     version,
@@ -574,6 +594,7 @@ pub(crate) fn execute_command(
                         release,
                         regenerate,
                         no_build,
+                        deny_skipped,
                         cargo_args.clone(),
                     ),
                 }),
@@ -587,6 +608,7 @@ pub(crate) fn execute_command(
                         release,
                         regenerate,
                         no_build,
+                        deny_skipped,
                         cargo_args.clone(),
                     ),
                     experimental,
@@ -600,6 +622,7 @@ pub(crate) fn execute_command(
                         release,
                         regenerate,
                         no_build,
+                        deny_skipped,
                         cargo_args.clone(),
                     ),
                 }),
@@ -612,6 +635,7 @@ pub(crate) fn execute_command(
                         release,
                         regenerate,
                         no_build,
+                        deny_skipped,
                         cargo_args.clone(),
                     ),
                     experimental: false,
@@ -627,6 +651,7 @@ pub(crate) fn execute_command(
                         release,
                         regenerate,
                         no_build,
+                        deny_skipped,
                         cargo_args.clone(),
                     ),
                     python_interpreters,
@@ -637,7 +662,13 @@ pub(crate) fn execute_command(
                     no_build,
                     experimental,
                 } => PackCommand::Dart(PackDartOptions {
-                    execution: pack_execution_options(release, regenerate, no_build, cargo_args),
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        deny_skipped,
+                        cargo_args,
+                    ),
                     experimental,
                 }),
                 PackTargetArg::Csharp {
@@ -645,7 +676,13 @@ pub(crate) fn execute_command(
                     regenerate,
                     no_build,
                 } => PackCommand::CSharp(PackCSharpOptions {
-                    execution: pack_execution_options(release, regenerate, no_build, cargo_args),
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        deny_skipped,
+                        cargo_args,
+                    ),
                 }),
             };
             run_pack(&config, command, reporter)
@@ -671,12 +708,14 @@ fn pack_execution_options(
     release: bool,
     regenerate: bool,
     no_build: bool,
+    deny_skipped: bool,
     cargo_args: Vec<String>,
 ) -> PackExecutionOptions {
     PackExecutionOptions {
         release,
         regenerate,
         no_build,
+        deny_skipped,
         cargo_args,
     }
 }
@@ -867,6 +906,7 @@ fn run_release(
             experimental: false,
             ir: false,
             cargo_args: cargo_args.clone(),
+            deny_skipped: false,
         },
     )?;
     println!();
@@ -894,7 +934,13 @@ fn release_pack_commands(
         Some(BuildPlatformArg::Apple) => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        true,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                     version: None,
                     spm_only: false,
                     xcframework_only: false,
@@ -905,21 +951,39 @@ fn release_pack_commands(
         Some(BuildPlatformArg::Android) => {
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        true,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                 }));
             }
         }
         Some(BuildPlatformArg::Wasm) => {
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        true,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                 }));
             }
         }
         Some(BuildPlatformArg::Dart) => {
             if config.is_dart_enabled() {
                 commands.push(PackCommand::Dart(PackDartOptions {
-                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        true,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                     experimental: true,
                 }));
             }
@@ -927,7 +991,13 @@ fn release_pack_commands(
         Some(BuildPlatformArg::All) | None => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        true,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                     version: None,
                     spm_only: false,
                     xcframework_only: false,
@@ -936,43 +1006,85 @@ fn release_pack_commands(
             }
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        true,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                 }));
             }
             if config.should_process(Target::KotlinMultiplatform, false) {
                 commands.push(PackCommand::Kmp(PackKmpOptions {
-                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        true,
+                        false,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                     experimental: false,
                 }));
             }
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        true,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                 }));
             }
             if config.should_process(Target::Python, false) {
                 commands.push(PackCommand::Python(PackPythonOptions {
-                    execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        false,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                     python_interpreters: Vec::new(),
                 }));
             }
             if config.should_process(Target::Java, false) {
                 commands.push(PackCommand::Java(PackJavaOptions {
-                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        true,
+                        false,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                     experimental: false,
                 }));
             }
 
             if config.should_process(Target::Dart, false) {
                 commands.push(PackCommand::Dart(PackDartOptions {
-                    execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        false,
+                        false,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                     experimental: false,
                 }));
             }
 
             if config.is_csharp_enabled() {
                 commands.push(PackCommand::CSharp(PackCSharpOptions {
-                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
+                    execution: pack_execution_options(
+                        true,
+                        true,
+                        false,
+                        false,
+                        cargo_args.to_vec(),
+                    ),
                 }));
             }
         }
@@ -1378,6 +1490,47 @@ enabled = true
         ));
     }
 
+    /// `pack` is what builds the artifact, so a coverage gate that only `generate`
+    /// accepts does not guard the thing that ships. Every target takes the flag,
+    /// on either side of the subcommand, and defaults to off.
+    #[test]
+    fn cli_parses_deny_skipped_on_every_pack_target() {
+        for target in [
+            "all", "apple", "android", "kmp", "wasm", "python", "csharp", "java", "dart",
+        ] {
+            let default = Cli::try_parse_from(["boltffi", "pack", target])
+                .unwrap_or_else(|error| panic!("pack {target} should parse: {error}"));
+            assert!(
+                matches!(
+                    default.command,
+                    Commands::Pack {
+                        deny_skipped: false,
+                        ..
+                    }
+                ),
+                "pack {target} should default to emitting a truncated binding",
+            );
+
+            for argv in [
+                vec!["boltffi", "pack", target, "--deny-skipped"],
+                vec!["boltffi", "pack", "--deny-skipped", target],
+            ] {
+                let cli = Cli::try_parse_from(&argv)
+                    .unwrap_or_else(|error| panic!("{argv:?} should parse: {error}"));
+                assert!(
+                    matches!(
+                        cli.command,
+                        Commands::Pack {
+                            deny_skipped: true,
+                            ..
+                        }
+                    ),
+                    "{argv:?} should deny skipped declarations",
+                );
+            }
+        }
+    }
+
     #[test]
     fn cli_parses_pack_python_target() {
         let cli =
@@ -1386,6 +1539,7 @@ enabled = true
         assert!(matches!(
             cli.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Python { .. }
             }
         ));
@@ -1399,6 +1553,7 @@ enabled = true
         assert!(matches!(
             cli.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Csharp { .. }
             }
         ));
@@ -1416,6 +1571,7 @@ enabled = true
         assert!(matches!(
             default.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Java {
                     regenerate: true,
                     ..
@@ -1425,6 +1581,7 @@ enabled = true
         assert!(matches!(
             enabled.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Java {
                     regenerate: true,
                     ..
@@ -1434,6 +1591,7 @@ enabled = true
         assert!(matches!(
             disabled.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Java {
                     regenerate: false,
                     ..
@@ -1455,6 +1613,7 @@ enabled = true
         assert!(matches!(
             cli.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Android {
                     experimental: true,
                     ..
@@ -1471,6 +1630,7 @@ enabled = true
         assert!(matches!(
             cli.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Kmp {
                     experimental: true,
                     ..
@@ -1487,6 +1647,7 @@ enabled = true
         assert!(matches!(
             cli.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Python {
                     experimental: true,
                     ..
@@ -1511,6 +1672,7 @@ enabled = true
         assert!(matches!(
             cli.command,
             Commands::Pack {
+                deny_skipped: _,
                 target: PackTargetArg::Python {
                     python_interpreters,
                     ..

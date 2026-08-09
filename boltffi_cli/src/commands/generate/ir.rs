@@ -157,12 +157,13 @@ fn generate_typescript(config: &Config, options: &GenerateOptions) -> Result<()>
         .typescript_module(config.wasm_typescript_module_name())
         .typescript_runtime_package(config.wasm_runtime_package())
         .render(Target::TypeScript)
-        .and_then(|output| {
-            print_coverage("typescript", &output);
-            Generation::write_output(output, &output_directory)
-        })
-        .map(drop)
         .map_err(|error| generation_error("typescript", error))
+        .and_then(|output| {
+            print_coverage("typescript", &output, options.deny_skipped)?;
+            Generation::write_output(output, &output_directory)
+                .map(drop)
+                .map_err(|error| generation_error("typescript", error))
+        })
 }
 
 fn generate_java(config: &Config, options: &GenerateOptions) -> Result<()> {
@@ -175,7 +176,13 @@ fn generate_java(config: &Config, options: &GenerateOptions) -> Result<()> {
     ensure_java_cargo_target_unset(&cargo_args, plan.platform())?;
     let expansion = BindingExpansion::resolve(config, &cargo_args)?;
     let generations = resolve_java_generations(config, &plan, &expansion)?;
-    write_java(config, &plan, expansion.artifact_name(), generations)
+    write_java(
+        config,
+        &plan,
+        expansion.artifact_name(),
+        generations,
+        options.deny_skipped,
+    )
 }
 
 fn ensure_java_cargo_target_unset(cargo_args: &[String], platform: JavaPlatform) -> Result<()> {
@@ -255,9 +262,10 @@ pub fn run_java_generations(
     output: Option<PathBuf>,
     artifact_name: &str,
     generations: impl IntoIterator<Item = TargetGeneration>,
+    deny_skipped: bool,
 ) -> Result<()> {
     let plan = JavaPlan::resolve(config, output)?;
-    write_java(config, &plan, artifact_name, generations)
+    write_java(config, &plan, artifact_name, generations, deny_skipped)
 }
 
 fn write_java(
@@ -265,6 +273,7 @@ fn write_java(
     plan: &JavaPlan,
     artifact_name: &str,
     generations: impl IntoIterator<Item = TargetGeneration>,
+    deny_skipped: bool,
 ) -> Result<()> {
     let bindgen_target = Target::Java;
     let target_name = bindgen_target.name();
@@ -309,7 +318,7 @@ fn write_java(
             status: None,
         });
     }
-    print_coverage(target_name, &generated.output);
+    print_coverage(target_name, &generated.output, deny_skipped)?;
     JavaOutput::new(plan.output(), &config.java_package())?.write(generated.output)
 }
 
@@ -341,12 +350,13 @@ fn generate_swift(config: &Config, options: &GenerateOptions) -> Result<()> {
         .swift_file(config.swift_bindings_file_stem())
         .swift_custom_mappings(config.apple_swift_custom_mappings())
         .render(target)
-        .and_then(|output| {
-            print_coverage(target_name, &output);
-            Generation::write_output(output, &output_directory)
-        })
-        .map(drop)
         .map_err(|error| generation_error(target_name, error))
+        .and_then(|output| {
+            print_coverage(target_name, &output, options.deny_skipped)?;
+            Generation::write_output(output, &output_directory)
+                .map(drop)
+                .map_err(|error| generation_error(target_name, error))
+        })
 }
 
 fn swift_output_directory(config: &Config, options: &GenerateOptions) -> PathBuf {
@@ -383,12 +393,13 @@ fn generate_csharp(config: &Config, options: &GenerateOptions) -> Result<()> {
         .csharp_namespace(config.csharp_namespace().map(str::to_owned))
         .csharp_native_library(expansion.artifact_name())
         .render(Target::CSharp)
-        .and_then(|output| {
-            print_coverage(Target::CSharp.name(), &output);
-            Generation::write_output(output, &output_directory)
-        })
-        .map(drop)
         .map_err(|error| generation_error(Target::CSharp.name(), error))
+        .and_then(|output| {
+            print_coverage(Target::CSharp.name(), &output, options.deny_skipped)?;
+            Generation::write_output(output, &output_directory)
+                .map(drop)
+                .map_err(|error| generation_error(Target::CSharp.name(), error))
+        })
 }
 
 fn generate_python(config: &Config, options: &GenerateOptions) -> Result<()> {
@@ -416,6 +427,7 @@ fn generate_python(config: &Config, options: &GenerateOptions) -> Result<()> {
         expansion.artifact_name().to_string(),
         expansion.cargo_args().clone().into_vec(),
         expansion.toolchain_selector().map(str::to_owned),
+        options.deny_skipped,
     )
 }
 
@@ -460,12 +472,13 @@ fn generate_kotlin(config: &Config, options: &GenerateOptions) -> Result<()> {
         ))
         .kotlin_c_header(PathBuf::from("jni").join(format!("{}.h", config.library_name())))
         .render(target)
-        .and_then(|output| {
-            print_coverage(target_name, &output);
-            Generation::write_output(output, &output_directory)
-        })
-        .map(drop)
         .map_err(|error| generation_error(target_name, error))
+        .and_then(|output| {
+            print_coverage(target_name, &output, options.deny_skipped)?;
+            Generation::write_output(output, &output_directory)
+                .map(drop)
+                .map_err(|error| generation_error(target_name, error))
+        })
 }
 
 fn generate_kmp(config: &Config, options: &GenerateOptions) -> Result<()> {
@@ -512,6 +525,7 @@ fn generate_kmp(config: &Config, options: &GenerateOptions) -> Result<()> {
         library_target.name.clone(),
         cargo.probe_command_arguments(),
         cargo.toolchain_selector().map(str::to_owned),
+        options.deny_skipped,
     )
 }
 
@@ -544,6 +558,7 @@ pub fn run_python_generation(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     if !config.is_python_enabled() {
         return Err(CliError::CommandFailed {
@@ -561,6 +576,7 @@ pub fn run_python_generation(
         artifact_name,
         cargo_args,
         toolchain_selector,
+        deny_skipped,
     )
 }
 
@@ -571,6 +587,7 @@ pub fn run_csharp_generation(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     if !config.is_csharp_enabled() {
         return Err(CliError::CommandFailed {
@@ -586,12 +603,13 @@ pub fn run_csharp_generation(
         .csharp_namespace(config.csharp_namespace().map(str::to_owned))
         .csharp_native_library(artifact_name)
         .render(Target::CSharp)
-        .and_then(|output| {
-            print_coverage(Target::CSharp.name(), &output);
-            Generation::write_output(output, &output_directory)
-        })
-        .map(drop)
         .map_err(|error| generation_error(Target::CSharp.name(), error))
+        .and_then(|output| {
+            print_coverage(Target::CSharp.name(), &output, deny_skipped)?;
+            Generation::write_output(output, &output_directory)
+                .map(drop)
+                .map_err(|error| generation_error(Target::CSharp.name(), error))
+        })
 }
 
 pub fn run_kmp_generation(
@@ -601,6 +619,7 @@ pub fn run_kmp_generation(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     if !config.is_kotlin_multiplatform_enabled() {
         return Err(CliError::CommandFailed {
@@ -618,6 +637,7 @@ pub fn run_kmp_generation(
         artifact_name,
         cargo_args,
         toolchain_selector,
+        deny_skipped,
     )
 }
 
@@ -644,6 +664,7 @@ fn write_python(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     Generation::new(manifest_path)
         .cargo_args(cargo_args)
@@ -654,12 +675,13 @@ fn write_python(
         .python_package_version(config.package_version())
         .python_native_library(artifact_name)
         .render(Target::Python)
-        .and_then(|output| {
-            print_coverage("python", &output);
-            Generation::write_output(output, &output_directory)
-        })
-        .map(drop)
         .map_err(|error| generation_error("python", error))
+        .and_then(|output| {
+            print_coverage("python", &output, deny_skipped)?;
+            Generation::write_output(output, &output_directory)
+                .map(drop)
+                .map_err(|error| generation_error("python", error))
+        })
 }
 
 fn write_kmp(
@@ -669,6 +691,7 @@ fn write_kmp(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     let support_mode = if config.kotlin_multiplatform_preview_prune_unsupported() {
         eprintln!(
@@ -707,6 +730,10 @@ fn write_kmp(
         .kmp_support_mode(support_mode)
         .render(Target::KotlinMultiplatform)
         .map_err(|error| generation_error("kmp", error))?;
+
+    // Preview pruning omits unsupported APIs on purpose, so it is exactly the
+    // mode where a denied run has to stop before writing.
+    print_coverage("kmp", &output, deny_skipped)?;
 
     write_kmp_output(output, &output_directory)
 }
@@ -749,10 +776,15 @@ fn remove_stale_generated_path(path: PathBuf) -> Result<()> {
     }
 }
 
-fn print_coverage(target: &str, output: &GeneratedOutput) {
+/// Reports declarations the target could not render.
+///
+/// The table alone is easy to miss: generation still succeeds and the binding
+/// ships without them, so a build that checks only the exit status cannot tell
+/// a complete binding from a truncated one. `--deny-skipped` makes it fail.
+pub(crate) fn print_coverage(target: &str, output: &GeneratedOutput, deny: bool) -> Result<()> {
     let unsupported = output.coverage().unsupported();
     if unsupported.is_empty() {
-        return;
+        return Ok(());
     }
 
     eprintln!("{target} generation skipped unsupported declarations");
@@ -765,6 +797,17 @@ fn print_coverage(target: &str, output: &GeneratedOutput) {
             item.reason()
         );
     });
+
+    if !deny {
+        return Ok(());
+    }
+    Err(CliError::CommandFailed {
+        command: format!(
+            "generate {target}: {} declaration(s) skipped",
+            unsupported.len()
+        ),
+        status: None,
+    })
 }
 
 fn generation_error(target: &str, error: GenerationError) -> CliError {
@@ -917,6 +960,7 @@ enabled = false
                 experimental: false,
                 ir: true,
                 cargo_args: Vec::new(),
+                deny_skipped: false,
             },
         )
         .expect_err("disabled KMP IR generation should fail before cargo probing");
@@ -945,6 +989,7 @@ version = "0.1.0"
                 experimental: false,
                 ir: true,
                 cargo_args: Vec::new(),
+                deny_skipped: false,
             },
         )
         .expect_err("disabled Java IR generation should fail before cargo probing");
@@ -975,6 +1020,7 @@ enabled = false
                 experimental: false,
                 ir: true,
                 cargo_args: Vec::new(),
+                deny_skipped: false,
             },
         )
         .expect_err("disabled TypeScript IR generation should fail before cargo probing");
@@ -1009,6 +1055,7 @@ host_targets = ["current"]
                     "--target".to_string(),
                     "x86_64-unknown-linux-gnu".to_string(),
                 ],
+                deny_skipped: false,
             },
         )
         .expect_err("explicit Cargo target must not bypass the configured Java matrix");
@@ -1042,6 +1089,7 @@ enabled = true
                     "--target=aarch64-linux-android".to_string(),
                     "--offline".to_string(),
                 ],
+                deny_skipped: false,
             },
         )
         .expect_err("explicit Cargo target must not narrow the configured Android matrix");
@@ -1095,6 +1143,7 @@ host_targets = ["current"]
                 target,
                 Generation::new("missing-java-target/Cargo.toml"),
             )],
+            false,
         )
         .expect_err("failed matrix generation must identify its build target");
 
@@ -1125,6 +1174,7 @@ enabled = true
                 experimental: false,
                 ir: true,
                 cargo_args: Vec::new(),
+                deny_skipped: false,
             },
         )
         .expect_err("KMP IR generation should require experimental opt-in");
@@ -1158,6 +1208,7 @@ package = "com.boltffi.demo"
             "demo".to_string(),
             Vec::new(),
             None,
+            false,
         )
         .expect_err("production IR KMP must fail closed for unsupported declarations");
 
