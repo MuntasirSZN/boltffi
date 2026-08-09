@@ -47,9 +47,7 @@ pub(crate) fn pack_python(
             plan.cargo_context.artifact_name.clone(),
             plan.cargo_context.cargo_command_args.clone(),
             plan.cargo_context.toolchain_selector.clone(),
-            // Pack pipelines keep the previous behaviour: the flag belongs to
-            // `generate`, where a caller can ask for it.
-            false,
+            options.execution.deny_skipped,
         )?;
         step.finish_success();
     }
@@ -133,6 +131,7 @@ mod tests {
                     release: false,
                     regenerate: false,
                     no_build: true,
+                    deny_skipped: false,
                     cargo_args: Vec::new(),
                 },
                 python_interpreters: Vec::new(),

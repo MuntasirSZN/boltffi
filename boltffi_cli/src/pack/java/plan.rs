@@ -170,6 +170,7 @@ fn execute_java_pack(config: &Config, plan: JavaPackPlan, reporter: &Reporter) -
             packaging_targets
                 .iter()
                 .map(|target| target.binding_generation(&expansion)),
+            execution.deny_skipped,
         )?;
         step.finish_success();
     }

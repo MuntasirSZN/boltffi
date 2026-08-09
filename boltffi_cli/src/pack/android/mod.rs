@@ -90,7 +90,7 @@ pub(crate) fn pack_android(
                 experimental: false,
                 ir: false,
                 cargo_args: build_cargo_args.clone(),
-                deny_skipped: false,
+                deny_skipped: options.execution.deny_skipped,
             },
         )?;
         step.finish_success();
@@ -104,7 +104,7 @@ pub(crate) fn pack_android(
                 experimental: false,
                 ir: false,
                 cargo_args: build_cargo_args.clone(),
-                deny_skipped: false,
+                deny_skipped: options.execution.deny_skipped,
             },
         )?;
         step.finish_success();
