@@ -38,6 +38,8 @@ pub struct GenerateOptions {
     pub experimental: bool,
     pub ir: bool,
     pub cargo_args: Vec<String>,
+    /// Turn skipped declarations into a failure instead of a printed table.
+    pub deny_skipped: bool,
 }
 
 pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Result<()> {
@@ -73,6 +75,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }
@@ -86,6 +89,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }
@@ -99,6 +103,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }
@@ -112,6 +117,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }
@@ -125,6 +131,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }
@@ -142,6 +149,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }
@@ -155,6 +163,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }
@@ -330,6 +339,7 @@ enabled = true
                     "--manifest-path".to_string(),
                     "/definitely/missing/boltffi/Cargo.toml".to_string(),
                 ],
+                deny_skipped: false,
             },
         )
         .expect_err("production KMP generation should use IR cargo selection");
@@ -360,6 +370,7 @@ enabled = false
                 experimental: false,
                 ir: false,
                 cargo_args: Vec::new(),
+                deny_skipped: false,
             },
         )
         .expect_err("production TypeScript generation should use the IR route");
@@ -393,6 +404,7 @@ enabled = true
                     "--manifest-path".to_string(),
                     "/definitely/missing/boltffi/Cargo.toml".to_string(),
                 ],
+                deny_skipped: false,
             },
         )
         .expect_err("production C# generation should use IR cargo selection");
@@ -483,6 +495,7 @@ Email = { type = "java.net.URI", conversion = "url_string" }
                     "--manifest-path".to_string(),
                     demo_manifest_path().display().to_string(),
                 ],
+                deny_skipped: false,
             },
         )
         .expect("kotlin multiplatform generate should succeed");
@@ -571,6 +584,7 @@ package = "com.boltffi.demo"
                     "--manifest-path".to_string(),
                     demo_manifest_path().display().to_string(),
                 ],
+                deny_skipped: false,
             },
         )
         .expect_err("strict KMP generation should reject unsupported demo APIs");

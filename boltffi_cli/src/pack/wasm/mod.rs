@@ -114,6 +114,7 @@ pub(crate) fn pack_wasm(
                 experimental: false,
                 ir: true,
                 cargo_args: build_cargo_args.clone(),
+                deny_skipped: false,
             },
         )?;
         step.finish_success();
