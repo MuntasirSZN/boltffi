@@ -288,7 +288,7 @@ pub fn lower_exported_method<S: SurfaceLower>(
         ids,
         allocator,
         owner,
-        codecs::RootEncoding::Surface,
+        codecs::RootEncoding::SurfaceReturn,
         &method.returns,
     )?;
     let execution = lower_execution::<S>(allocator, method.execution, start_symbol_name)?;
@@ -606,7 +606,7 @@ pub fn lower_function<S: SurfaceLower>(
         ids,
         allocator,
         owner,
-        codecs::RootEncoding::Surface,
+        codecs::RootEncoding::SurfaceReturn,
         &function.returns,
     )?;
     let execution = lower_execution::<S>(allocator, function.execution, start_symbol_name)?;
@@ -638,7 +638,7 @@ pub fn lower_constant_accessor<S: SurfaceLower>(
         ids,
         allocator,
         owner,
-        codecs::RootEncoding::Surface,
+        codecs::RootEncoding::SurfaceReturn,
         &return_def,
     )?;
 

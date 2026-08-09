@@ -25,6 +25,7 @@ impl RuntimeWireCodec {
             | CodecNode::Utf8String
             | CodecNode::InternedString { .. }
             | CodecNode::Bytes
+            | CodecNode::RawBytes
             | CodecNode::DirectRecord(_)
             | CodecNode::EncodedRecord(_)
             | CodecNode::CStyleEnum(_)

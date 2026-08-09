@@ -58,6 +58,7 @@ enum ReturnConversion {
     String,
     Utf8String,
     Bytes,
+    RawBytes,
     Encoded {
         reader: Identifier,
         decode: Expression,
@@ -756,6 +757,7 @@ impl Failure {
                     Some(ReadKind::Utf8String) => FailureValue::Utf8String,
                     Some(
                         ReadKind::Bytes
+                        | ReadKind::RawBytes
                         | ReadKind::Primitive(_)
                         | ReadKind::CustomPrimitive(_)
                         | ReadKind::OptionalPrimitive(_)
@@ -1549,6 +1551,13 @@ impl Return {
                     .into_iter()
                     .collect::<ArgumentList>(),
             ))],
+            ReturnConversion::RawBytes => vec![Statement::return_value(Expression::call(
+                Expression::identifier(Identifier::known("_module")),
+                Identifier::known("takePackedBytes"),
+                [call.cast(TypeName::bigint())]
+                    .into_iter()
+                    .collect::<ArgumentList>(),
+            ))],
             ReturnConversion::Bytes => vec![Statement::return_value(Expression::call(
                 Expression::identifier(Identifier::known("_module")),
                 Identifier::known("takePackedWireBytes"),
@@ -1854,6 +1863,10 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                 Type::from_ref(ty, self.context)?,
                 ReturnConversion::Bytes,
             )),
+            (ReturnValueSlot::ReturnSlot, Some(ReadKind::RawBytes)) => Ok(Return::new(
+                Type::from_ref(ty, self.context)?,
+                ReturnConversion::RawBytes,
+            )),
             (ReturnValueSlot::ReturnSlot, Some(ReadKind::OptionalPrimitive(primitive))) => {
                 Ok(Return::new(
                     Type::from_ref(ty, self.context)?,
@@ -1911,6 +1924,13 @@ impl<'plan> ReturnPlanRender<'plan, Wasm32, boltffi_binding::OutOfRust> for Retu
                             Identifier::known("takePackedWireBytes"),
                             [packed].into_iter().collect::<ArgumentList>(),
                         ))],
+                        Some(ReadKind::RawBytes) => {
+                            vec![Statement::return_value(Expression::call(
+                                Expression::identifier(Identifier::known("_module")),
+                                Identifier::known("takePackedBytes"),
+                                [packed].into_iter().collect::<ArgumentList>(),
+                            ))]
+                        }
                         Some(
                             ReadKind::Primitive(_)
                             | ReadKind::CustomPrimitive(_)

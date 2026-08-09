@@ -9435,8 +9435,50 @@ mod tests {
         );
     }
 
+    /// The unframed return is a wasm choice, not a change to the wire.
+    ///
+    /// Native hands back an `FfiBuf` through a different path, and its readers
+    /// still expect the length prefix, so the same contract has to keep framing
+    /// there. This pins that the surface picks the shape.
     #[test]
-    fn wasm_bytes_return_expansion_uses_wire_framing() {
+    fn native_bytes_return_expansion_keeps_wire_framing() {
+        let source = bytes_return_contract();
+        let lowered = lower_with_declarations::<Native>(&source).expect("lowered bindings");
+        let expansion = Expansion::new(&lowered);
+        let syntax = syn::parse_quote! {
+            pub fn payload() -> Vec<u8> {
+                vec![1, 2, 3]
+            }
+        };
+
+        let tokens =
+            expand_function(&expansion, &source.functions[0], syntax).expect("expanded function");
+
+        assert_eq!(
+            tokens.to_string(),
+            quote! {
+                pub fn payload() -> Vec<u8> {
+                    vec![1, 2, 3]
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                #[unsafe(no_mangle)]
+                pub extern "C" fn boltffi_function_demo_payload() -> ::boltffi::__private::FfiBuf {
+                    let __boltffi_result: Vec<u8> = payload();
+                    ::boltffi::__private::FfiBuf::wire_encode_owned_bytes(__boltffi_result)
+                }
+            }
+            .to_string()
+        );
+    }
+
+    /// A returned byte buffer crosses as it was allocated.
+    ///
+    /// Framing it means shifting every byte to make room for a length prefix
+    /// the caller never needs: the packed return value carries the length, and
+    /// the host reader checked the prefix agreed with it rather than learning
+    /// anything from it. The `String` return above already crosses this way.
+    #[test]
+    fn wasm_bytes_return_expansion_hands_back_the_buffer_unframed() {
         let source = bytes_return_contract();
         let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
         let expansion = Expansion::new(&lowered);
@@ -9459,7 +9501,7 @@ mod tests {
                 #[unsafe(no_mangle)]
                 pub extern "C" fn boltffi_function_demo_payload() -> u64 {
                     let __boltffi_result: Vec<u8> = payload();
-                    ::boltffi::__private::FfiBuf::wire_encode_owned_bytes(__boltffi_result).into_packed()
+                    ::boltffi::__private::FfiBuf::from_vec(__boltffi_result).into_packed()
                 }
             }
             .to_string()
