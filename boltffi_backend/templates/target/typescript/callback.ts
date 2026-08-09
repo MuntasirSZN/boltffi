@@ -60,9 +60,7 @@ _callbackImports[{{ clone_import }}] = (handle: number): number => {
   try {
     callback = {{ registry }}.get(handle);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const errorWriter = _module.allocWriter(4 + message.length * 3);
-    errorWriter.writeString(message);
+    const errorWriter = writeUnexpectedCallbackError(_module, error);
     complete(requestId, -2, errorWriter.ptr, errorWriter.len, errorWriter.capacity);
     return;
   }
@@ -83,9 +81,7 @@ _callbackImports[{{ clone_import }}] = (handle: number): number => {
 {% endfor %}      complete(requestId, 0, resultWriter.ptr, resultWriter.len, resultWriter.capacity);
 {% endif %}{% endmatch %}    })
     .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      const errorWriter = _module.allocWriter(4 + message.length * 3);
-      errorWriter.writeString(message);
+      const errorWriter = writeUnexpectedCallbackError(_module, error);
       complete(requestId, -2, errorWriter.ptr, errorWriter.len, errorWriter.capacity);
     });
 };

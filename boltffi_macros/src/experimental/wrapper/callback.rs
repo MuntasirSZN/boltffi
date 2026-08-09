@@ -2295,8 +2295,11 @@ where
     }
 
     fn wasm_async_foreign_body(&self, call: TokenStream) -> Result<TokenStream, Error> {
-        if let ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } = self.error {
-            return self.wasm_async_fallible_body(call, codec.root(), *shape);
+        if let ErrorDecl::EncodedViaReturnSlot {
+            ty, codec, shape, ..
+        } = self.error
+        {
+            return self.wasm_async_fallible_body(call, codec.root(), *shape, ty);
         }
 
         match InfallibleMethodReturn::new(self.plan, self.error)? {
@@ -2564,14 +2567,14 @@ where
         call: TokenStream,
         error_codec: &CodecNode,
         error_shape: S::BufferShape,
+        error_ty: &TypeRef,
     ) -> Result<TokenStream, Error> {
         S::callback_encoded_error(error_shape)?;
-        let success =
-            self.async_fallible_success_value(quote! { __boltffi_completion.data.as_slice() })?;
-        let error = self.async_fallible_error_value(
-            error_codec,
-            quote! { __boltffi_completion.data.as_slice() },
-        )?;
+        let error_type = self.source.fallible()?.error_written_type()?;
+        let bytes = quote! { __boltffi_completion.data.as_slice() };
+        let success = self.async_fallible_success_value(bytes.clone())?;
+        let declared_error = self.async_fallible_error_value(error_codec, bytes.clone())?;
+        let error = wasm_foreign_callback_error_value(error_ty, &error_type, bytes, declared_error);
         Ok(self.wasm_async_result_body(call, success, error))
     }
 
@@ -4379,7 +4382,7 @@ enum CallbackEncodedError {
 }
 
 /// Classifies reserved native payloads for typed errors before using their declared decoder.
-fn native_foreign_callback_error_value(
+fn classified_callback_error_value(
     error_ty: &TypeRef,
     error_type: &Type,
     bytes: TokenStream,
@@ -4399,6 +4402,47 @@ fn native_foreign_callback_error_value(
                 }
             }
         },
+        _ => declared_error,
+    }
+}
+
+/// Classifies a wasm async failure payload before decoding it as the declared error.
+///
+/// A completion code says the callback failed, not how. A host callback that
+/// threw and one that returned its declared error arrive under codes that
+/// `AsyncCallbackCompletionCode` cannot tell apart, and a cancelled request
+/// arrives with no payload at all. Decoding a thrown message, or nothing, as
+/// the declared type fails, and that failure is a panic — under
+/// `panic = "abort"` on wasm it takes the module down instead of surfacing.
+///
+/// Restricted to the error types that carry `From<UnexpectedFfiCallbackError>`,
+/// matching the native surface.
+fn wasm_foreign_callback_error_value(
+    error_ty: &TypeRef,
+    error_type: &Type,
+    bytes: TokenStream,
+    declared_error: TokenStream,
+) -> TokenStream {
+    match error_ty {
+        TypeRef::Record(_) | TypeRef::Enum(_) => {
+            let classified = classified_callback_error_value(
+                error_ty,
+                error_type,
+                bytes.clone(),
+                declared_error,
+            );
+            quote! {
+                if #bytes.is_empty() {
+                    <#error_type as ::core::convert::From<
+                        ::boltffi::__private::UnexpectedFfiCallbackError
+                    >>::from(::boltffi::__private::UnexpectedFfiCallbackError::new(
+                        "async callback reported a failure without a payload",
+                    ))
+                } else {
+                    #classified
+                }
+            }
+        }
         _ => declared_error,
     }
 }
@@ -4444,7 +4488,7 @@ impl CallbackEncodedError {
     ) -> TokenStream {
         match self {
             Self::NativeBuffer => {
-                native_foreign_callback_error_value(error_ty, error_type, bytes, declared_error)
+                classified_callback_error_value(error_ty, error_type, bytes, declared_error)
             }
             Self::WasmPacked => declared_error,
         }

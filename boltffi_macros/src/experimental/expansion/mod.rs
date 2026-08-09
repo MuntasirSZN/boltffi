@@ -7414,8 +7414,19 @@ mod tests {
         ));
     }
 
+    /// Only the async half of the wasm surface carries the protocol.
+    ///
+    /// An async completion reports failure through a status code that cannot
+    /// distinguish a thrown host error from the declared one, and a cancelled
+    /// request carries no payload at all, so the payload has to be classified
+    /// before it is decoded. A synchronous callback has no such status: the
+    /// only thing it can hand back is its declared error, so classifying there
+    /// would be reading a discriminator that was never written.
+    ///
+    /// The contract has one method of each kind, so a single `classify_payload`
+    /// is the async one and pins the sync one as untouched.
     #[test]
-    fn wasm_typed_callback_errors_do_not_claim_native_unexpected_error_protocol() {
+    fn wasm_typed_callback_errors_claim_the_unexpected_error_protocol_when_async() {
         let source = typed_fallible_listener_contract();
         let lowered = lower_with_declarations::<Wasm32>(&source).expect("lowered bindings");
         let expansion = Expansion::new(&lowered);
@@ -7425,8 +7436,13 @@ mod tests {
         let rendered = tokens.to_string();
         syn::parse2::<syn::File>(tokens).expect("expanded callback parses");
 
-        assert!(!rendered.contains("UnexpectedFfiCallbackPayload"));
-        assert!(!rendered.contains("classify_payload"));
+        assert_eq!(rendered.matches("classify_payload").count(), 1);
+        assert!(rendered.contains("UnexpectedFfiCallbackPayload :: Unexpected"));
+        assert!(rendered.contains("UnexpectedFfiCallbackPayload :: Malformed"));
+        assert!(rendered.contains(
+            "Status as :: core :: convert :: From < :: boltffi :: __private :: UnexpectedFfiCallbackError"
+        ));
+        assert!(rendered.contains("async callback reported a failure without a payload"));
     }
 
     #[test]
