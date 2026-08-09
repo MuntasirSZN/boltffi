@@ -138,6 +138,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                         experimental: options.experimental,
                         ir: true,
                         cargo_args: options.cargo_args.clone(),
+                        deny_skipped: options.deny_skipped,
                     },
                 )?;
             }

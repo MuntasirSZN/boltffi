@@ -119,15 +119,15 @@ fn generate_dart(config: &Config, options: &GenerateOptions) -> Result<()> {
         .clone()
         .unwrap_or_else(|| config.targets.dart.output.clone());
 
-    expansion
+    let output = expansion
         .generation()
         .dart_package(config.package.name.clone())
         .dart_native_artifact(expansion.artifact_name())
         .render(Target::Dart)
-        .and_then(|output| {
-            print_coverage(Target::Dart.name(), &output);
-            Generation::write_output(output, &output_directory)
-        })
+        .map_err(|error| generation_error(Target::Dart.name(), error))?;
+
+    print_coverage(Target::Dart.name(), &output, options.deny_skipped)?;
+    Generation::write_output(output, &output_directory)
         .map(drop)
         .map_err(|error| generation_error(Target::Dart.name(), error))
 }
