@@ -216,6 +216,7 @@ pub fn run_generate_python_with_manifest(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     ir::run_python_generation(
         config,
@@ -224,6 +225,7 @@ pub fn run_generate_python_with_manifest(
         artifact_name,
         cargo_args,
         toolchain_selector,
+        deny_skipped,
     )
 }
 
@@ -268,6 +270,7 @@ pub fn run_generate_csharp_with_output_from_source_dir(
     crate_name: &str,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     ir::run_csharp_generation(
         config,
@@ -276,6 +279,7 @@ pub fn run_generate_csharp_with_output_from_source_dir(
         crate_name.to_owned(),
         cargo_args,
         toolchain_selector,
+        deny_skipped,
     )
 }
 

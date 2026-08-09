@@ -362,7 +362,7 @@ fn generate_csharp(config: &Config, options: &GenerateOptions) -> Result<()> {
         .render(Target::CSharp)
         .map_err(|error| generation_error(Target::CSharp.name(), error))
         .and_then(|output| {
-            print_coverage(Target::CSharp.name(), &output, false)?;
+            print_coverage(Target::CSharp.name(), &output, options.deny_skipped)?;
             Generation::write_output(output, &output_directory)
                 .map(drop)
                 .map_err(|error| generation_error(Target::CSharp.name(), error))
@@ -394,6 +394,7 @@ fn generate_python(config: &Config, options: &GenerateOptions) -> Result<()> {
         expansion.artifact_name().to_string(),
         expansion.cargo_args().clone().into_vec(),
         expansion.toolchain_selector().map(str::to_owned),
+        options.deny_skipped,
     )
 }
 
@@ -491,6 +492,7 @@ fn generate_kmp(config: &Config, options: &GenerateOptions) -> Result<()> {
         library_target.name.clone(),
         cargo.probe_command_arguments(),
         cargo.toolchain_selector().map(str::to_owned),
+        options.deny_skipped,
     )
 }
 
@@ -523,6 +525,7 @@ pub fn run_python_generation(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     if !config.is_python_enabled() {
         return Err(CliError::CommandFailed {
@@ -540,6 +543,7 @@ pub fn run_python_generation(
         artifact_name,
         cargo_args,
         toolchain_selector,
+        deny_skipped,
     )
 }
 
@@ -550,6 +554,7 @@ pub fn run_csharp_generation(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     if !config.is_csharp_enabled() {
         return Err(CliError::CommandFailed {
@@ -567,7 +572,7 @@ pub fn run_csharp_generation(
         .render(Target::CSharp)
         .map_err(|error| generation_error(Target::CSharp.name(), error))
         .and_then(|output| {
-            print_coverage(Target::CSharp.name(), &output, false)?;
+            print_coverage(Target::CSharp.name(), &output, deny_skipped)?;
             Generation::write_output(output, &output_directory)
                 .map(drop)
                 .map_err(|error| generation_error(Target::CSharp.name(), error))
@@ -598,6 +603,8 @@ pub fn run_kmp_generation(
         artifact_name,
         cargo_args,
         toolchain_selector,
+        // Entry point used by pack; the flag belongs to `generate`.
+        false,
     )
 }
 
@@ -624,6 +631,7 @@ fn write_python(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     Generation::new(manifest_path)
         .cargo_args(cargo_args)
@@ -636,7 +644,7 @@ fn write_python(
         .render(Target::Python)
         .map_err(|error| generation_error("python", error))
         .and_then(|output| {
-            print_coverage("python", &output, false)?;
+            print_coverage("python", &output, deny_skipped)?;
             Generation::write_output(output, &output_directory)
                 .map(drop)
                 .map_err(|error| generation_error("python", error))
@@ -650,6 +658,7 @@ fn write_kmp(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     let support_mode = if config.kotlin_multiplatform_preview_prune_unsupported() {
         eprintln!(
@@ -688,6 +697,10 @@ fn write_kmp(
         .kmp_support_mode(support_mode)
         .render(Target::KotlinMultiplatform)
         .map_err(|error| generation_error("kmp", error))?;
+
+    // Preview pruning omits unsupported APIs on purpose, so it is exactly the
+    // mode where a denied run has to stop before writing.
+    print_coverage("kmp", &output, deny_skipped)?;
 
     write_kmp_output(output, &output_directory)
 }
@@ -1161,6 +1174,7 @@ package = "com.boltffi.demo"
             "demo".to_string(),
             Vec::new(),
             None,
+            false,
         )
         .expect_err("production IR KMP must fail closed for unsupported declarations");
 
