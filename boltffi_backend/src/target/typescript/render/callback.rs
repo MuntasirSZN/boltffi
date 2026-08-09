@@ -530,7 +530,12 @@ impl AsyncMethod {
                         ),
                     ),
                     success_setup,
-                    false,
+                    // A `()` success writes nothing, so the completion reports
+                    // zero pointer, length and capacity. Without this the
+                    // success branch referenced a `resultWriter` only the error
+                    // branch declares, so every success threw and the catch
+                    // reported it as completion code -2.
+                    matches!(method.callable().returns().plan(), ReturnPlan::Void),
                     Some(AsyncFallible {
                         error_setup: Self::encoding(
                             error_codec,
