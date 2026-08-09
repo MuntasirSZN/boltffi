@@ -399,6 +399,14 @@ export function matchWireResult<T, E, R>(
   if (value instanceof Error) {
     return err(value as E);
   }
+  // A binary payload is never a `WireResult`: it carries no `tag`, and a
+  // caller cannot have meant it as one. Without this a callback returning
+  // `Result<Vec<u8>, E>` hits the ambiguity below, the throw is reported as
+  // completion code -2, and the Rust side decodes that message as the error
+  // enum — a decode failure that aborts the process rather than surfacing.
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    return ok(value as T);
+  }
   if (typeof value === "object" && value !== null) {
     throw new Error(
       "Ambiguous Result object. Pass wireOk(value) or wireErr(error) for object payloads."
