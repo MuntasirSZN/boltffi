@@ -203,9 +203,9 @@ impl Method {
             Some((public_type, _)) => ReturnShape::fallible(public_type.clone()),
             None => Self::return_shape(method.callable().returns().plan(), context)?,
         };
-        let invocation = Expression::call(
+        let invocation = Expression::call_member(
             Expression::identifier(Identifier::known("callback")),
-            Name::new(method.name()).identifier()?,
+            &Name::new(method.name()).member()?,
             parameters
                 .iter()
                 .map(|parameter| parameter.argument.clone())
@@ -466,9 +466,9 @@ impl AsyncMethod {
             .iter()
             .map(|parameter| Parameter::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
-        let invocation = Expression::call(
+        let invocation = Expression::call_member(
             Expression::identifier(Identifier::known("callback")),
-            Name::new(method.name()).identifier()?,
+            &Name::new(method.name()).member()?,
             parameters
                 .iter()
                 .map(|parameter| parameter.argument.clone())

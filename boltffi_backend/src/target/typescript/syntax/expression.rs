@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::core::syntax::sealed;
 
-use super::{Identifier, IntegerLiteral, PropertyKey, StringLiteral};
+use super::{Identifier, IntegerLiteral, MemberName, PropertyKey, StringLiteral};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Expression(String);
@@ -61,6 +61,16 @@ impl Expression {
     }
 
     pub fn call(receiver: Self, method: Identifier, arguments: ArgumentList) -> Self {
+        Self(format!("{receiver}.{method}({arguments})"))
+    }
+
+    /// Calls a method by the name a declaration gave it.
+    ///
+    /// A property may be spelled with a reserved word — `map.delete(k)` is
+    /// valid — so this takes the unescaped `MemberName` an interface declares.
+    /// Escaping here instead would invoke `_delete` on an object that, per the
+    /// emitted interface, has `delete`.
+    pub fn call_member(receiver: Self, method: &MemberName, arguments: ArgumentList) -> Self {
         Self(format!("{receiver}.{method}({arguments})"))
     }
 
