@@ -4381,6 +4381,30 @@ enum CallbackEncodedError {
     WasmPacked,
 }
 
+/// Reads the envelope out of a payload, falling back to the declared decoder.
+///
+/// Callers gate this on the error types that carry
+/// `From<UnexpectedFfiCallbackError>`; it does not check that itself.
+fn classify_callback_error_payload(
+    error_type: &Type,
+    bytes: TokenStream,
+    declared_error: TokenStream,
+) -> TokenStream {
+    quote! {
+        match ::boltffi::__private::UnexpectedFfiCallbackError::classify_payload(#bytes) {
+            ::boltffi::__private::UnexpectedFfiCallbackPayload::NotUnexpected => {
+                #declared_error
+            }
+            ::boltffi::__private::UnexpectedFfiCallbackPayload::Unexpected(error)
+            | ::boltffi::__private::UnexpectedFfiCallbackPayload::Malformed(error) => {
+                <#error_type as ::core::convert::From<
+                    ::boltffi::__private::UnexpectedFfiCallbackError
+                >>::from(error)
+            }
+        }
+    }
+}
+
 /// Classifies reserved native payloads for typed errors before using their declared decoder.
 fn classified_callback_error_value(
     error_ty: &TypeRef,
@@ -4389,19 +4413,9 @@ fn classified_callback_error_value(
     declared_error: TokenStream,
 ) -> TokenStream {
     match error_ty {
-        TypeRef::Record(_) | TypeRef::Enum(_) => quote! {
-            match ::boltffi::__private::UnexpectedFfiCallbackError::classify_payload(#bytes) {
-                ::boltffi::__private::UnexpectedFfiCallbackPayload::NotUnexpected => {
-                    #declared_error
-                }
-                ::boltffi::__private::UnexpectedFfiCallbackPayload::Unexpected(error)
-                | ::boltffi::__private::UnexpectedFfiCallbackPayload::Malformed(error) => {
-                    <#error_type as ::core::convert::From<
-                        ::boltffi::__private::UnexpectedFfiCallbackError
-                    >>::from(error)
-                }
-            }
-        },
+        TypeRef::Record(_) | TypeRef::Enum(_) => {
+            classify_callback_error_payload(error_type, bytes, declared_error)
+        }
         _ => declared_error,
     }
 }
@@ -4409,14 +4423,21 @@ fn classified_callback_error_value(
 /// Classifies a wasm async failure payload before decoding it as the declared error.
 ///
 /// A completion code says the callback failed, not how. A host callback that
-/// threw and one that returned its declared error arrive under codes that
-/// `AsyncCallbackCompletionCode` cannot tell apart, and a cancelled request
-/// arrives with no payload at all. Decoding a thrown message, or nothing, as
-/// the declared type fails, and that failure is a panic — under
+/// threw and one that returned its declared error arrive under codes
+/// `AsyncCallbackCompletionCode` cannot tell apart, so the payload carries the
+/// distinction and has to be read before it is decoded. Decoding a thrown
+/// message as the declared type fails, and that failure is a panic — under
 /// `panic = "abort"` on wasm it takes the module down instead of surfacing.
 ///
-/// Restricted to the error types that carry `From<UnexpectedFfiCallbackError>`,
-/// matching the native surface.
+/// Cancellation is the one failure the code *does* identify, and it completes
+/// with no payload at all. It is matched on the code rather than on an empty
+/// payload: a declared error whose encoding happens to be zero bytes is also
+/// empty, and is not a cancellation.
+///
+/// Restricted to the error types that carry `From<UnexpectedFfiCallbackError>`.
+/// `String` is one of them, and unlike the native surface it has to be handled
+/// here: the TypeScript trampoline wraps every thrown error, so a `String`
+/// error left unclassified would decode the marker as its length prefix.
 fn wasm_foreign_callback_error_value(
     error_ty: &TypeRef,
     error_type: &Type,
@@ -4424,19 +4445,17 @@ fn wasm_foreign_callback_error_value(
     declared_error: TokenStream,
 ) -> TokenStream {
     match error_ty {
-        TypeRef::Record(_) | TypeRef::Enum(_) => {
-            let classified = classified_callback_error_value(
-                error_ty,
-                error_type,
-                bytes.clone(),
-                declared_error,
-            );
+        TypeRef::Record(_) | TypeRef::Enum(_) | TypeRef::String => {
+            let classified =
+                classify_callback_error_payload(error_type, bytes.clone(), declared_error);
             quote! {
-                if #bytes.is_empty() {
+                if __boltffi_completion.code
+                    == ::boltffi::__private::AsyncCallbackCompletionCode::Cancelled
+                {
                     <#error_type as ::core::convert::From<
                         ::boltffi::__private::UnexpectedFfiCallbackError
                     >>::from(::boltffi::__private::UnexpectedFfiCallbackError::new(
-                        "async callback reported a failure without a payload",
+                        "async callback request was cancelled",
                     ))
                 } else {
                     #classified

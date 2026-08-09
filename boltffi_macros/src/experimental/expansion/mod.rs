@@ -7417,9 +7417,9 @@ mod tests {
     /// Only the async half of the wasm surface carries the protocol.
     ///
     /// An async completion reports failure through a status code that cannot
-    /// distinguish a thrown host error from the declared one, and a cancelled
-    /// request carries no payload at all, so the payload has to be classified
-    /// before it is decoded. A synchronous callback has no such status: the
+    /// distinguish a thrown host error from the declared one, so the payload
+    /// has to be classified before it is decoded. Cancellation is the failure
+    /// the code does identify, and is matched there. A synchronous callback has no such status: the
     /// only thing it can hand back is its declared error, so classifying there
     /// would be reading a discriminator that was never written.
     ///
@@ -7442,7 +7442,8 @@ mod tests {
         assert!(rendered.contains(
             "Status as :: core :: convert :: From < :: boltffi :: __private :: UnexpectedFfiCallbackError"
         ));
-        assert!(rendered.contains("async callback reported a failure without a payload"));
+        assert!(rendered.contains("async callback request was cancelled"));
+        assert!(rendered.contains("AsyncCallbackCompletionCode :: Cancelled"));
     }
 
     #[test]
