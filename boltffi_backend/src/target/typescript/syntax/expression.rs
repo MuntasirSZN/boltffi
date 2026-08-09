@@ -70,8 +70,14 @@ impl Expression {
     /// valid — so this takes the unescaped `MemberName` an interface declares.
     /// Escaping here instead would invoke `_delete` on an object that, per the
     /// emitted interface, has `delete`.
+    ///
+    /// A name the declaration had to quote is reached through the index form,
+    /// since `receiver."new"(…)` is not an expression.
     pub fn call_member(receiver: Self, method: &MemberName, arguments: ArgumentList) -> Self {
-        Self(format!("{receiver}.{method}({arguments})"))
+        match method.needs_quoting() {
+            true => Self(format!("{receiver}[\"{method}\"]({arguments})")),
+            false => Self(format!("{receiver}.{method}({arguments})")),
+        }
     }
 
     pub fn invoke(function: Identifier, arguments: ArgumentList) -> Self {

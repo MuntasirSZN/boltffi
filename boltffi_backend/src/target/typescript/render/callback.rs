@@ -11,7 +11,7 @@ use super::super::{
     name_style::Name,
     primitive::Scalar,
     syntax::{
-        ArgumentList, Expression, Identifier, MemberName, MethodDeclaration, Statement,
+        ArgumentList, Expression, Identifier, InterfaceMemberName, MethodDeclaration, Statement,
         StringLiteral, TypeName,
     },
 };
@@ -35,7 +35,7 @@ pub struct Callback {
 }
 
 struct Method {
-    name: MemberName,
+    name: InterfaceMemberName,
     import: StringLiteral,
     parameters: Vec<Parameter>,
     public_return: TypeName,
@@ -66,7 +66,7 @@ struct VectorReturn {
 }
 
 struct AsyncMethod {
-    name: MemberName,
+    name: InterfaceMemberName,
     import: StringLiteral,
     complete: Identifier,
     parameters: Vec<Parameter>,
@@ -218,7 +218,7 @@ impl Method {
             _ => invocation,
         };
         Ok(Self {
-            name: Name::new(method.name()).member()?,
+            name: InterfaceMemberName::new(Name::new(method.name()).member()?),
             import: StringLiteral::new(method.target().name().as_str()),
             parameters,
             public_return: return_shape.public_type,
@@ -548,7 +548,7 @@ impl AsyncMethod {
             _ => return Err(Method::unsupported("callback async error")),
         };
         Ok(Self {
-            name: Name::new(method.name()).member()?,
+            name: InterfaceMemberName::new(Name::new(method.name()).member()?),
             import: StringLiteral::new(method.target().name().as_str()),
             complete: Identifier::parse(complete.name().as_str())?,
             parameters,

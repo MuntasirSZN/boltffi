@@ -1468,6 +1468,10 @@ mod tests {
     /// calls `_delete` on an object the same file says has `delete`: the call
     /// yields `undefined`, the `.then` throws, and the failure surfaces to Rust
     /// as a panicked completion instead of anything naming the real cause.
+    ///
+    /// `new` is the one name that cannot be declared bare: `new(key: string)`
+    /// in an interface is a construct signature, so the member would not exist
+    /// no matter how it is invoked. It is quoted, and reached by index.
     #[test]
     fn invokes_callback_methods_by_their_declared_reserved_names() {
         let output = TypeScriptHost::new("demo")
@@ -1476,16 +1480,22 @@ mod tests {
             .render(&reserved_member_bindings())
             .expect("target renders");
 
+        let declarations = [
+            ("delete", "  delete(key: string)", "callback.delete("),
+            ("new", "  \"new\"(key: string)", "callback[\"new\"]("),
+        ];
+
         for file in output.files() {
             let contents = file.contents();
-            for name in ["delete", "new"] {
-                if contents.contains(&format!("{name}(key: string)")) {
-                    assert!(
-                        contents.contains(&format!("callback.{name}(")),
-                        "{} declares `{name}` but does not invoke it",
-                        file.path().as_path().display(),
-                    );
+            for (name, declaration, invocation) in declarations {
+                if !contents.contains(declaration) {
+                    continue;
                 }
+                assert!(
+                    contents.contains(invocation),
+                    "{} declares `{name}` as `{declaration}` but does not invoke it as `{invocation}`",
+                    file.path().as_path().display(),
+                );
                 assert!(
                     !contents.contains(&format!("callback._{name}(")),
                     "{} invokes the escaped `_{name}`",
@@ -1493,5 +1503,11 @@ mod tests {
                 );
             }
         }
+
+        let declared = output
+            .files()
+            .iter()
+            .any(|file| file.contents().contains("  \"new\"(key: string)"));
+        assert!(declared, "no file declared the quoted `new` member");
     }
 }
