@@ -369,7 +369,9 @@ impl<'plan> StreamItemPlanRender<'plan, Native> for ItemRenderer<'_, '_, '_> {
         }
         Ok(StreamItem::Encoded {
             public_type: type_name::type_ref(ty, self.context)?,
-            decode: read.render_with(&mut Reader::new("_l$reader", self.context))?,
+            decode: read
+                .render_with(&mut Reader::new("_l$reader", self.context))?
+                .into_source(),
         })
     }
 }

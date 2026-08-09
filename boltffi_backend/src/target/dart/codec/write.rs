@@ -1,48 +1,96 @@
 use boltffi_binding::{
     BinderId, BuiltinType, CallbackId, ClassId, CodecWrite, CustomTypeId, ElementCount, EnumId,
-    MapKind, Op, Primitive, RecordId, ValueRef,
+    MapKind, Native, Op, Primitive, RecordId, ValueRef,
 };
 
-use crate::core::Result;
+use crate::core::{RenderContext, Result};
 
-use super::{ValueScope, primitive_write_method, value::binder_name};
+use super::{CStyleEnumRepresentation, ValueScope, primitive_write_method, value::binder_name};
 
-pub struct Writer {
+pub struct Writer<'context, 'bindings> {
     name: String,
     scope: ValueScope,
+    context: &'context RenderContext<'bindings, Native>,
 }
 
-impl Writer {
-    pub fn new(name: impl Into<String>, scope: ValueScope) -> Self {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WriteStatement {
+    source: String,
+    value: WriteValue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WriteValue {
+    String,
+    Other,
+}
+
+impl<'context, 'bindings> Writer<'context, 'bindings> {
+    pub fn new(
+        name: impl Into<String>,
+        scope: ValueScope,
+        context: &'context RenderContext<'bindings, Native>,
+    ) -> Self {
         Self {
             name: name.into(),
             scope,
+            context,
         }
     }
 
-    fn write(&self, method: &str, value: &ValueRef) -> Result<String> {
-        Ok(format!(
+    fn write(&self, method: &str, value: &ValueRef) -> Result<WriteStatement> {
+        Ok(WriteStatement::new(format!(
             "{}.{}({});",
             self.name,
             method,
             self.scope.value(value)?
-        ))
+        )))
     }
 }
 
-impl CodecWrite for Writer {
-    type Stmt = Result<String>;
+impl WriteStatement {
+    pub fn into_source(self) -> String {
+        self.source
+    }
+
+    fn new(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            value: WriteValue::Other,
+        }
+    }
+
+    fn string(mut self) -> Self {
+        self.value = WriteValue::String;
+        self
+    }
+
+    fn custom_representation(mut self) -> Self {
+        self.value = WriteValue::Other;
+        self
+    }
+
+    fn result_error(&self, writer: &str, binder: &str) -> String {
+        match self.value {
+            WriteValue::String => format!("{writer}.writeString({binder}.message);"),
+            WriteValue::Other => self.source.clone(),
+        }
+    }
+}
+
+impl CodecWrite for Writer<'_, '_> {
+    type Stmt = Result<WriteStatement>;
 
     fn primitive(&mut self, primitive: Primitive, value: &ValueRef) -> Vec<Self::Stmt> {
         vec![self.write(primitive_write_method(primitive), value)]
     }
 
     fn string(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
-        vec![self.write("writeString", value)]
+        vec![self.write("writeString", value).map(WriteStatement::string)]
     }
 
-    fn interned_string(&mut self, _: &[String], value: &ValueRef) -> Vec<Self::Stmt> {
-        vec![self.write("writeInternedString", value)]
+    fn interned_string(&mut self, _: &[String], _: &ValueRef) -> Vec<Self::Stmt> {
+        unreachable!("InternedString codec write reached Dart renderer without host capability")
     }
 
     fn bytes(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
@@ -53,7 +101,7 @@ impl CodecWrite for Writer {
         vec![
             self.scope
                 .value(value)
-                .map(|value| format!("{value}._m$wireEncode({});", self.name)),
+                .map(|value| WriteStatement::new(format!("{value}._m$wireEncode({});", self.name))),
         ]
     }
 
@@ -61,19 +109,22 @@ impl CodecWrite for Writer {
         self.direct_record(id, value)
     }
 
-    fn c_style_enum(&mut self, _: EnumId, value: &ValueRef) -> Vec<Self::Stmt> {
-        vec![
-            self.scope
-                .value(value)
-                .map(|value| format!("{}.writeI32({value}.value);", self.name)),
-        ]
+    fn c_style_enum(&mut self, id: EnumId, value: &ValueRef) -> Vec<Self::Stmt> {
+        vec![self.scope.value(value).and_then(|value| {
+            let representation = CStyleEnumRepresentation::resolve(id, self.context)?;
+            Ok(WriteStatement::new(format!(
+                "{}.{}({value}.value);",
+                self.name,
+                representation.write_method()
+            )))
+        })]
     }
 
     fn data_enum(&mut self, _: EnumId, value: &ValueRef) -> Vec<Self::Stmt> {
         vec![
             self.scope
                 .value(value)
-                .map(|value| format!("{value}._m$wireEncode({});", self.name)),
+                .map(|value| WriteStatement::new(format!("{value}._m$wireEncode({});", self.name))),
         ]
     }
 
@@ -92,6 +143,9 @@ impl CodecWrite for Writer {
         F: FnOnce(&mut Self, &ValueRef) -> Vec<Self::Stmt>,
     {
         representation(self, value)
+            .into_iter()
+            .map(|statement| statement.map(WriteStatement::custom_representation))
+            .collect()
     }
 
     fn builtin(&mut self, kind: BuiltinType, value: &ValueRef) -> Vec<Self::Stmt> {
@@ -113,13 +167,22 @@ impl CodecWrite for Writer {
         inner: Vec<Self::Stmt>,
     ) -> Vec<Self::Stmt> {
         vec![self.scope.value(value).and_then(|value| {
-            Ok(format!(
+            Ok(WriteStatement::new(format!(
                 "if ({value} == null) {{\n  {}.writeU8(0);\n}} else {{\n  {}.writeU8(1);\n  final {} = {value};\n{}\n}}",
                 self.name,
                 self.name,
                 binder_name(binder),
-                indent(inner.into_iter().collect::<Result<Vec<_>>>()?.join("\n"), 2),
-            ))
+                indent(
+                    inner
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .map(WriteStatement::into_source)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    2
+                ),
+            )))
         })]
     }
 
@@ -131,15 +194,21 @@ impl CodecWrite for Writer {
         element: Vec<Self::Stmt>,
     ) -> Vec<Self::Stmt> {
         vec![self.scope.value(value).and_then(|value| {
-            Ok(format!(
+            Ok(WriteStatement::new(format!(
                 "{}.writeU32({value}.length);\nfor (final {} in {value}) {{\n{}\n}}",
                 self.name,
                 binder_name(binder),
                 indent(
-                    element.into_iter().collect::<Result<Vec<_>>>()?.join("\n"),
+                    element
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .map(WriteStatement::into_source)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                     2
                 ),
-            ))
+            )))
         })]
     }
 
@@ -156,13 +225,27 @@ impl CodecWrite for Writer {
     ) -> Vec<Self::Stmt> {
         vec![self.scope.value(value).and_then(|value| {
             let binder = binder_name(binder);
-            Ok(format!(
+            let ok = ok
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(WriteStatement::into_source)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let err = err
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|statement| statement.result_error(&self.name, &binder))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(WriteStatement::new(format!(
                 "switch ({value}) {{\n  case $$BoltResult$Ok(value: final {binder}):\n    {}.writeU8(0);\n{}\n  case $$BoltResult$Err(value: final {binder}):\n    {}.writeU8(1);\n{}\n}}",
                 self.name,
-                indent(ok.into_iter().collect::<Result<Vec<_>>>()?.join("\n"), 4),
+                indent(ok, 4),
                 self.name,
-                indent(err.into_iter().collect::<Result<Vec<_>>>()?.join("\n"), 4),
-            ))
+                indent(err, 4),
+            )))
         })]
     }
 
@@ -176,14 +259,31 @@ impl CodecWrite for Writer {
         map_value: Vec<Self::Stmt>,
     ) -> Vec<Self::Stmt> {
         vec![self.scope.value(value).and_then(|value| {
-            Ok(format!(
+            Ok(WriteStatement::new(format!(
                 "{}.writeU32({value}.length);\nfor (final _l$entry in {value}.entries) {{\n  final {} = _l$entry.key;\n  final {} = _l$entry.value;\n{}\n{}\n}}",
                 self.name,
                 binder_name(key_binder),
                 binder_name(value_binder),
-                indent(key.into_iter().collect::<Result<Vec<_>>>()?.join("\n"), 2),
-                indent(map_value.into_iter().collect::<Result<Vec<_>>>()?.join("\n"), 2),
-            ))
+                indent(
+                    key.into_iter()
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .map(WriteStatement::into_source)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    2
+                ),
+                indent(
+                    map_value
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .map(WriteStatement::into_source)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    2
+                ),
+            )))
         })]
     }
 }

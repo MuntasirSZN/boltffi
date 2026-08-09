@@ -14,7 +14,10 @@ use crate::{
 };
 
 use super::super::super::{
-    codec::{Reader, Sizer, ValueScope, Writer, primitive_read_method, primitive_write_method},
+    codec::{
+        Reader, Sizer, ValueScope, WriteStatement, Writer, primitive_read_method,
+        primitive_write_method,
+    },
     name_style::Name,
     native::{self, NativeParameterSource, NativeType},
     render::direct_vector::PrimitiveVector,
@@ -286,7 +289,13 @@ pub fn render_infallible_entry_return(
         }
         ReturnPlan::EncodedViaReturnSlot { codec, .. } => {
             let mut statements = vec![format!("final _l$value = {call};")];
-            statements.extend(encode_value(codec, "_l$value", "_l$return", bridge)?);
+            statements.extend(encode_value(
+                codec,
+                "_l$value",
+                "_l$return",
+                bridge,
+                context,
+            )?);
             statements.push("return _l$returnBuffer;".to_owned());
             statements
         }
@@ -347,7 +356,13 @@ pub fn render_fallible_entry_return(
                 invariant: "Dart encoded callback success pointer is missing",
             })?;
             success.push(format!("final _l$value = {call};"));
-            success.extend(encode_value(codec, "_l$value", "_l$success", bridge)?);
+            success.extend(encode_value(
+                codec,
+                "_l$value",
+                "_l$success",
+                bridge,
+                context,
+            )?);
             success.push(format!(
                 "{}.ref = _l$successBuffer;",
                 native::parameter_name(output.name())?
@@ -377,6 +392,7 @@ pub fn render_fallible_entry_return(
         error_binding.value.as_str(),
         "_l$error",
         bridge,
+        context,
     )?;
     failure.push("return _l$errorBuffer;".to_owned());
     Ok(vec![format!(
@@ -526,7 +542,8 @@ pub fn render_fallible_proxy_return(
     ));
     let error_decode = error_codec
         .read_plan()
-        .render_with(&mut Reader::new("_l$errorReader", context))?;
+        .render_with(&mut Reader::new("_l$errorReader", context))?
+        .into_source();
     statements.push(format!(
         "if (_l$errorBuffer.ptr != $$ffi.nullptr) {{\n  try {{\n    final _l$errorReader = _$$BoltWireDecoder(_$$BoltBufReader.fromSpan(_l$errorBuffer.ptr, _l$errorBuffer.len));\n    throw {};\n  }} finally {{\n    _f${}(_l$errorBuffer);\n  }}\n}}",
         error_throw_expression(error_type, &error_decode, context)?,
@@ -663,7 +680,7 @@ fn render_async_entry(
     let mut catches = Vec::new();
     if let ErrorDecl::EncodedViaReturnSlot { ty, codec, .. } = declaration.callable().error() {
         let binding = error_catch_binding(ty, context)?;
-        let mut body = encode_value(codec, binding.value.as_str(), "_l$error", bridge)?;
+        let mut body = encode_value(codec, binding.value.as_str(), "_l$error", bridge, context)?;
         body.push(completion_call(
             &completion_context,
             1,
@@ -756,7 +773,8 @@ fn render_async_proxy(
     if let ErrorDecl::EncodedViaReturnSlot { ty, codec, .. } = declaration.callable().error() {
         let decode = codec
             .read_plan()
-            .render_with(&mut Reader::new("_l$errorReader", context))?;
+            .render_with(&mut Reader::new("_l$errorReader", context))?
+            .into_source();
         completion_body.push(format!(
             "else if (_p$value1.code == 1) {{\n  final _l$errorReader = _$$BoltWireDecoder(_$$BoltBufReader.fromSpan(_p$value2.ptr, _p$value2.len));\n  _l$completer.completeError({});\n}}",
             error_throw_expression(ty, &decode, context)?
@@ -817,7 +835,13 @@ fn async_success_payload(
         (ReturnPlan::EncodedViaReturnSlot { codec, .. }, CBridgeType::Buffer)
         | (ReturnPlan::EncodedViaOutPointer { codec, .. }, CBridgeType::Buffer) => {
             let mut statements = vec![format!("final _l$value = {call};")];
-            statements.extend(encode_value(codec, "_l$value", "_l$payload", bridge)?);
+            statements.extend(encode_value(
+                codec,
+                "_l$value",
+                "_l$payload",
+                bridge,
+                context,
+            )?);
             Ok(statements)
         }
         (ReturnPlan::ScalarOptionViaReturnSlot { primitive, .. }, CBridgeType::Buffer) => {
@@ -865,7 +889,8 @@ fn async_proxy_success(
         | ReturnPlan::EncodedViaOutPointer { codec, .. } => {
             let decode = codec
                 .read_plan()
-                .render_with(&mut Reader::new("_l$successReader", context))?;
+                .render_with(&mut Reader::new("_l$successReader", context))?
+                .into_source();
             vec![
                 format!(
                     "final _l$successReader = _$$BoltWireDecoder(_$$BoltBufReader.fromSpan({payload}.ptr, {payload}.len));"
@@ -907,15 +932,25 @@ fn encode_value(
     value: &str,
     prefix: &str,
     bridge: &CBridgeContract,
+    context: &RenderContext<Native>,
 ) -> Result<Vec<String>> {
     let storage = format!("{prefix}Storage");
     let writer = format!("{prefix}Writer");
     let buffer = format!("{prefix}Buffer");
-    let size = codec.size_with(&mut Sizer::new(ValueScope::current(value)))?;
+    let size = codec
+        .size_with(&mut Sizer::new(ValueScope::current(value), context))?
+        .into_source();
     let writes = codec
-        .render_with(&mut Writer::new(&writer, ValueScope::current(value)))
+        .render_with(&mut Writer::new(
+            &writer,
+            ValueScope::current(value),
+            context,
+        ))
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(WriteStatement::into_source)
+        .collect::<Vec<_>>();
     Ok(vec![
         format!("final {storage} = _$$BoltCallocPtr<$$ffi.Uint8>.alloc({size});"),
         format!(
@@ -1056,7 +1091,8 @@ fn decode_buffer_return(
 ) -> Result<Vec<String>> {
     let decode = codec
         .read_plan()
-        .render_with(&mut Reader::new(format!("{prefix}Reader"), context))?;
+        .render_with(&mut Reader::new(format!("{prefix}Reader"), context))?
+        .into_source();
     Ok(vec![
         format!("final {prefix}Buffer = {call};"),
         format!(

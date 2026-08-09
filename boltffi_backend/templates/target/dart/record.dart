@@ -72,6 +72,22 @@ extension on {{ record.name() }} {
   }
 
   int _m$wireEncodedSize() => {{ record.encoded_size() }};
+
+  @override
+  int get hashCode{% if record.fields().is_empty() %} => runtimeType.hashCode;{% else %} {
+    var _l$result = 1;
+{%- for field in record.fields() %}
+    _l$result = 31 * _l$result + {{ field.hash() }};
+{%- endfor %}
+    return _l$result;
+  }{% endif %}
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is {{ record.name() }}{% for field in record.fields() %} &&
+        {{ field.equality() }}{% endfor %};
+  }
 {%- for member in record.members() %}
 
 {{ member }}

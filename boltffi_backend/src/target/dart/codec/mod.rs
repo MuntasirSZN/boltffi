@@ -3,10 +3,44 @@ mod size;
 mod value;
 mod write;
 
+use boltffi_binding::{EnumDecl, EnumId, Native, Primitive};
+
+use crate::core::{Error, RenderContext, Result};
+
 pub use read::Reader;
 pub use size::Sizer;
 pub use value::ValueScope;
-pub use write::Writer;
+pub use write::{WriteStatement, Writer};
+
+struct CStyleEnumRepresentation(Primitive);
+
+impl CStyleEnumRepresentation {
+    fn resolve(id: EnumId, context: &RenderContext<Native>) -> Result<Self> {
+        match context.enumeration(id) {
+            Some(EnumDecl::CStyle(enumeration)) => Ok(Self(enumeration.repr().primitive())),
+            Some(_) => Err(Error::UnsupportedTarget {
+                target: "dart",
+                shape: "data enum where a C-style enum was expected",
+            }),
+            None => Err(Error::BrokenBridgeContract {
+                bridge: "dart",
+                invariant: "missing C-style enum in Dart codec",
+            }),
+        }
+    }
+
+    fn read_method(&self) -> &'static str {
+        primitive_read_method(self.0)
+    }
+
+    fn write_method(&self) -> &'static str {
+        primitive_write_method(self.0)
+    }
+
+    fn size(&self) -> usize {
+        primitive_size(self.0)
+    }
+}
 
 pub fn primitive_read_method(primitive: boltffi_binding::Primitive) -> &'static str {
     use boltffi_binding::Primitive;

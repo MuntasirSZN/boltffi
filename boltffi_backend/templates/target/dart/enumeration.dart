@@ -34,16 +34,10 @@
   const {{ enumeration.name() }}();
 {%- for variant in enumeration.data_body().variants() %}
 
-{{ variant.member_documentation() }}{% if variant.unit() %}  static const {{ variant.name() }} = {{ variant.class_name() }}();
-{%- else %}
-  static {{ enumeration.name() }} {{ variant.name() }}({
+{{ variant.member_documentation() }}  factory {{ enumeration.name() }}.{{ variant.name() }}({% if !variant.unit() %}{
 {%- for field in variant.fields() %}
     required {{ field.ty() }} {{ field.name() }},{% endfor %}
-  }) => {{ variant.class_name() }}(
-{%- for field in variant.fields() %}
-    {{ field.name() }}: {{ field.name() }},{% endfor %}
-  );
-{%- endif %}
+  }{% endif %}) = {{ variant.class_name() }};
 {%- endfor %}
 
   static {{ enumeration.name() }} _m$wireDecode(_$$BoltWireDecoder _p$reader) {
@@ -76,10 +70,10 @@
   final {{ field.ty() }} {{ field.name() }};
 {%- endfor %}
 
-  const {{ variant.class_name() }}({
+  const {{ variant.class_name() }}({% if !variant.unit() %}{
 {%- for field in variant.fields() %}
     required this.{{ field.name() }},{% endfor %}
-  });
+  }{% endif %});
 
   @override
   void _m$wireEncode(_$$BoltWireEncoder _p$writer) {
@@ -93,6 +87,22 @@
 
   @override
   int _m$wireEncodedSize() => {{ variant.encoded_size() }};
+
+  @override
+  int get hashCode{% if variant.unit() %} => runtimeType.hashCode;{% else %} {
+    var _l$result = 1;
+{%- for field in variant.fields() %}
+    _l$result = 31 * _l$result + {{ field.hash() }};
+{%- endfor %}
+    return _l$result;
+  }{% endif %}
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is {{ variant.class_name() }}{% for field in variant.fields() %} &&
+        {{ field.equality() }}{% endfor %};
+  }
 }
 {%- endfor %}
 {%- endif %}

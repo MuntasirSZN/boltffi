@@ -14,6 +14,7 @@ use super::super::{
     default_value,
     native::NativeType,
     type_name,
+    value_semantics::ValueSemantics,
 };
 use super::function::{Placement, Receiver, associated_functions};
 use super::{
@@ -44,6 +45,8 @@ struct Field {
     read: String,
     writes: Vec<String>,
     size: String,
+    equality: String,
+    hash: String,
 }
 
 struct NativeRecord {
@@ -102,7 +105,10 @@ impl Record {
                 .map(|field| {
                     let name = field_name(field.key())?;
                     let primitive = field.ty().primitive();
+                    let semantics = ValueSemantics::direct();
                     Ok(Field {
+                        equality: semantics.equality(name.as_str(), &format!("other.{name}")),
+                        hash: semantics.hash(name.as_str()),
                         name,
                         ty: type_name::primitive_type(primitive)?,
                         default: field
@@ -172,8 +178,12 @@ impl Record {
                 .fields()
                 .iter()
                 .map(|field| {
+                    let name = field_name(field.key())?;
+                    let semantics = ValueSemantics::for_type(field.ty())?;
                     Ok(Field {
-                        name: field_name(field.key())?,
+                        equality: semantics.equality(name.as_str(), &format!("other.{name}")),
+                        hash: semantics.hash(name.as_str()),
+                        name,
                         ty: type_name::type_ref(field.ty(), context)?,
                         default: field
                             .meta()
@@ -183,13 +193,20 @@ impl Record {
                         documentation: Documentation::new(field.meta().doc(), 2),
                         read: field
                             .read()
-                            .render_with(&mut Reader::new("_p$reader", context))?,
+                            .render_with(&mut Reader::new("_p$reader", context))?
+                            .into_source(),
                         writes: field
                             .write()
-                            .render_with(&mut Writer::new("_p$writer", scope.clone()))
+                            .render_with(&mut Writer::new("_p$writer", scope.clone(), context))
                             .into_iter()
-                            .collect::<Result<Vec<_>>>()?,
-                        size: field.write().size_with(&mut Sizer::new(scope.clone()))?,
+                            .collect::<Result<Vec<_>>>()?
+                            .into_iter()
+                            .map(super::super::codec::WriteStatement::into_source)
+                            .collect(),
+                        size: field
+                            .write()
+                            .size_with(&mut Sizer::new(scope.clone(), context))?
+                            .into_source(),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -314,6 +331,14 @@ impl Field {
 
     fn size(&self) -> &str {
         &self.size
+    }
+
+    fn equality(&self) -> &str {
+        &self.equality
+    }
+
+    fn hash(&self) -> &str {
+        &self.hash
     }
 }
 

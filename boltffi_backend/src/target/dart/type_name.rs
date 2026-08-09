@@ -5,10 +5,14 @@ use boltffi_binding::{
 
 use crate::core::{Error, RenderContext, Result};
 
-use super::{name_style::Name, syntax::TypeFragment};
+use super::{
+    name_style::Name,
+    syntax::{Syntax, TypeFragment},
+};
 
 pub fn type_ref(ty: &TypeRef, context: &RenderContext<Native>) -> Result<TypeFragment> {
     ty.render_with(&mut Renderer { context })
+        .map(TypeSpelling::into_value)
 }
 
 pub fn direct_value(ty: &DirectValueType, context: &RenderContext<Native>) -> Result<TypeFragment> {
@@ -123,45 +127,103 @@ struct Renderer<'context, 'bindings> {
     context: &'context RenderContext<'bindings, Native>,
 }
 
+struct TypeSpelling {
+    value: TypeFragment,
+    result_failure: Option<TypeFragment>,
+}
+
+impl TypeSpelling {
+    fn value(value: TypeFragment) -> Self {
+        Self {
+            value,
+            result_failure: None,
+        }
+    }
+
+    fn error(value: TypeFragment) -> Self {
+        Self {
+            value: value.clone(),
+            result_failure: Some(value),
+        }
+    }
+
+    fn string() -> Self {
+        Self {
+            value: TypeFragment::new("String"),
+            result_failure: Some(TypeFragment::new("$$BoltException")),
+        }
+    }
+
+    fn into_value(self) -> TypeFragment {
+        self.value
+    }
+
+    fn into_result_failure(self) -> Result<TypeFragment> {
+        self.result_failure.ok_or(Error::UnsupportedTarget {
+            target: "dart",
+            shape: "Dart Result failure type",
+        })
+    }
+}
+
 impl TypeRefRender for Renderer<'_, '_> {
-    type Output = Result<TypeFragment>;
+    type Output = Result<TypeSpelling>;
 
     fn primitive(&mut self, primitive: Primitive) -> Self::Output {
-        primitive_type(primitive)
+        primitive_type(primitive).map(TypeSpelling::value)
     }
 
     fn string(&mut self) -> Self::Output {
-        Ok(TypeFragment::new("String"))
+        Ok(TypeSpelling::string())
     }
 
-    fn interned_string(&mut self, _static_values: &[String]) -> Self::Output {
-        Ok(TypeFragment::new("String"))
+    fn interned_string(&mut self, _: &[String]) -> Self::Output {
+        unreachable!("InternedString type reached Dart renderer without host capability")
     }
 
     fn bytes(&mut self) -> Self::Output {
-        Ok(TypeFragment::new("$$typed_data.Uint8List"))
+        Ok(TypeSpelling::value(TypeFragment::new(
+            "$$typed_data.Uint8List",
+        )))
     }
 
     fn record(&mut self, id: RecordId) -> Self::Output {
-        record(id, self.context)
+        let ty = record(id, self.context)?;
+        match self
+            .context
+            .record(id)
+            .is_some_and(|record| record.is_error_payload())
+        {
+            true => Ok(TypeSpelling::error(ty)),
+            false => Ok(TypeSpelling::value(ty)),
+        }
     }
 
     fn enumeration(&mut self, id: EnumId) -> Self::Output {
-        enumeration(id, self.context)
+        let ty = enumeration(id, self.context)?;
+        match self
+            .context
+            .enumeration(id)
+            .is_some_and(|enumeration| enumeration.is_error_payload())
+        {
+            true => Ok(TypeSpelling::error(ty)),
+            false => Ok(TypeSpelling::value(ty)),
+        }
     }
 
     fn class(&mut self, id: ClassId) -> Self::Output {
-        class(id, self.context)
+        class(id, self.context).map(TypeSpelling::value)
     }
 
     fn callback(&mut self, id: CallbackId) -> Self::Output {
-        callback(id, self.context)
+        callback(id, self.context).map(TypeSpelling::value)
     }
 
     fn custom(&mut self, id: CustomTypeId) -> Self::Output {
         self.context
             .custom_type_mapping(id)
             .map(|mapping| TypeFragment::new(mapping.target_type().as_str()))
+            .map(TypeSpelling::value)
             .map(Ok)
             .unwrap_or_else(|| {
                 self.context
@@ -173,50 +235,56 @@ impl TypeRefRender for Renderer<'_, '_> {
                     .and_then(|declaration| {
                         Name::new(declaration.name())
                             .upper_camel()
-                            .map(|name| TypeFragment::new(name.to_string()))
+                            .map(|name| TypeSpelling::value(TypeFragment::new(name.to_string())))
                     })
             })
     }
 
     fn builtin(&mut self, kind: BuiltinType) -> Self::Output {
-        Ok(TypeFragment::new(match kind {
+        Ok(TypeSpelling::value(TypeFragment::new(match kind {
             BuiltinType::Duration => "Duration",
             BuiltinType::SystemTime => "DateTime",
             BuiltinType::Uuid => "$$BoltUUIDValue",
             BuiltinType::Url => "Uri",
-        }))
+        })))
     }
 
     fn optional(&mut self, inner: Self::Output) -> Self::Output {
-        Ok(TypeFragment::new(format!("{}?", inner?)))
+        Ok(TypeSpelling::value(TypeFragment::new(format!(
+            "{}?",
+            inner?.into_value()
+        ))))
     }
 
     fn sequence(&mut self, element: Self::Output) -> Self::Output {
-        sequence_type(element?, None)
+        sequence_type(element?.into_value(), None).map(TypeSpelling::value)
     }
 
     fn tuple(&mut self, elements: Vec<Self::Output>) -> Self::Output {
-        Ok(TypeFragment::new(format!(
-            "({})",
-            elements
-                .into_iter()
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .map(|element| element.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )))
+        elements
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .map(|elements| {
+                TypeSpelling::value(TypeFragment::new(Syntax::record(
+                    elements.into_iter().map(TypeSpelling::into_value),
+                )))
+            })
     }
 
     fn result(&mut self, ok: Self::Output, err: Self::Output) -> Self::Output {
-        Ok(TypeFragment::new(format!(
+        Ok(TypeSpelling::value(TypeFragment::new(format!(
             "$$BoltResult<{}, {}>",
-            ok?, err?
-        )))
+            ok?.into_value(),
+            err?.into_result_failure()?
+        ))))
     }
 
     fn map(&mut self, key: Self::Output, value: Self::Output) -> Self::Output {
-        Ok(TypeFragment::new(format!("Map<{}, {}>", key?, value?)))
+        Ok(TypeSpelling::value(TypeFragment::new(format!(
+            "Map<{}, {}>",
+            key?.into_value(),
+            value?.into_value()
+        ))))
     }
 }
 

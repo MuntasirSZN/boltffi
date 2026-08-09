@@ -482,14 +482,23 @@ pub fn render_parameter(
             }
             let storage = format!("_l${}Storage", name.as_str());
             let writer = format!("_l${}Writer", name.as_str());
-            let size = codec.size_with(&mut Sizer::new(ValueScope::current(name.to_string())))?;
+            let size = codec
+                .size_with(&mut Sizer::new(
+                    ValueScope::current(name.to_string()),
+                    context,
+                ))?
+                .into_source();
             let writes = codec
                 .render_with(&mut Writer::new(
                     &writer,
                     ValueScope::current(name.to_string()),
+                    context,
                 ))
                 .into_iter()
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(super::super::codec::WriteStatement::into_source)
+                .collect::<Vec<_>>();
             let public_type = type_name::type_ref(ty, context)?;
             Ok(DartParameter::new(
                 name,
@@ -894,7 +903,9 @@ fn encoded_error_check(
     bridge: &CBridgeContract,
     context: &RenderContext<Native>,
 ) -> Result<Vec<String>> {
-    let read = codec.render_with(&mut Reader::new("_l$errorReader", context))?;
+    let read = codec
+        .render_with(&mut Reader::new("_l$errorReader", context))?
+        .into_source();
     let error = match ty {
         TypeRef::String => format!("$$BoltException({read})"),
         TypeRef::Record(_) | TypeRef::Enum(_) => read,
@@ -944,7 +955,9 @@ fn encoded_return(
     bridge: &CBridgeContract,
     context: &RenderContext<Native>,
 ) -> Result<DartReturn> {
-    let expression = codec.render_with(&mut Reader::new("_l$resultReader", context))?;
+    let expression = codec
+        .render_with(&mut Reader::new("_l$resultReader", context))?
+        .into_source();
     let mut value = out_return(type_name::type_ref(ty, context)?, expression, out)?;
     value.after_call.insert(0, format!(
         "final _l$decodedResult = (() {{\n  try {{\n    final _l$resultReader = _$$BoltWireDecoder(_$$BoltBufReader.fromSpan(_l$result.ptr, _l$result.len));\n    return {};\n  }} finally {{\n    _f${}(_l$result);\n  }}\n}})();",

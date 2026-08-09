@@ -292,6 +292,41 @@ abstract final class _$$BoltUtil {
   }
 
   @pragma('vm:prefer-inline')
+  static bool mapCompare<K, V>(
+    Map<K, V> a,
+    Map<K, V> b,
+    bool Function(K, K) keyComparer,
+    bool Function(V, V) valueComparer,
+  ) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    final remaining = b.entries.toList();
+    return a.entries.every((left) {
+      final index = remaining.indexWhere(
+        (right) =>
+            keyComparer(left.key, right.key) &&
+            valueComparer(left.value, right.value),
+      );
+      if (index == -1) return false;
+      remaining.removeAt(index);
+      return true;
+    });
+  }
+
+  @pragma('vm:prefer-inline')
+  static int mapHash<K, V>(
+    Map<K, V> value,
+    int Function(K) keyHasher,
+    int Function(V) valueHasher,
+  ) {
+    return value.entries.fold(
+      0,
+      (hash, entry) =>
+          hash + Object.hash(keyHasher(entry.key), valueHasher(entry.value)),
+    );
+  }
+
+  @pragma('vm:prefer-inline')
   static bool nullableCompare<T>(T? a, T? b, bool Function(T, T) comparer) {
     if (identical(a, b)) return true;
     if (a == null || b == null) return false;

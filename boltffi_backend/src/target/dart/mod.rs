@@ -7,6 +7,7 @@ mod native;
 mod render;
 mod syntax;
 mod type_name;
+mod value_semantics;
 
 use boltffi_binding::{
     Bindings, CallbackDecl, ClassDecl, ConstantDecl, CustomTypeDecl, EnumDecl, FunctionDecl,
@@ -441,10 +442,10 @@ mod tests {
             .expect("returned closures should render from the typed closure protocol");
 
         let source = file(&output, "demo/lib/demo.dart");
-        assert!(source.contains("int Function(int) makeAdder(int base_)"));
+        assert!(source.contains("int Function(int) makeAdder(int $base)"));
         assert!(source.contains("String Function(String) makeLabeler(String prefix)"));
-        assert!(source.contains("Future<int Function(int)> makeAsyncAdder(int base_)"));
-        assert!(source.contains("int Function(int) tryMakeAdder(int base_)"));
+        assert!(source.contains("Future<int Function(int)> makeAsyncAdder(int $base)"));
+        assert!(source.contains("int Function(int) tryMakeAdder(int $base)"));
         assert!(source.contains("int Function(int) makeChecker()"));
         assert!(source.contains("_$$BoltReturnedClosureRegistration"));
         assert!(source.contains("_$$BoltReturnedClosureOwner"));
@@ -514,6 +515,146 @@ mod tests {
         assert!(source.contains("readMap"));
         assert!(source.contains("writeUUID"));
         assert!(output.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn dart_target_preserves_nested_wire_representations() {
+        let bindings = bindings(
+            r#"
+            use url::Url;
+
+            #[repr(u8)]
+            #[data]
+            pub enum Mode { Fast = 1, Slow = 2 }
+
+            #[repr(u64)]
+            #[data]
+            pub enum WideMode { Fast = 1, Slow = 2 }
+
+            #[data]
+            pub struct Request {
+                pub mode: Mode,
+                pub wide_mode: WideMode,
+                pub endpoint: Url,
+                pub result: Result<i32, String>,
+            }
+
+            #[export]
+            pub fn echo_request(request: Request) -> Request { request }
+            "#,
+        );
+        let output = target(DartHost::new().package("demo"))
+            .render(&bindings)
+            .expect("nested wire values should render");
+
+        let source = file(&output, "demo/lib/demo.dart");
+        assert!(source.contains("$$BoltResult<int, $$BoltException> result;"));
+        assert!(source.contains("Mode._m$fromDiscriminant(_p$reader.readU8())"));
+        assert!(source.contains("_p$writer.writeU8(mode.value);"));
+        assert!(source.contains("WideMode._m$fromDiscriminant(_p$reader.readU64())"));
+        assert!(source.contains("_p$writer.writeU64(wideMode.value);"));
+        assert!(source.contains("$$convert.utf8.encode(endpoint.toString()).length"));
+        assert!(source.contains("$$BoltResult.err($$BoltException(_p$reader.readString()))"));
+        assert!(source.contains(".writeString(_l$boltffiValue0.message);"));
+        assert!(source.contains("utf8.encode(_l$boltffiValue0.message).length"));
+        assert!(output.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn dart_target_preserves_model_api_and_value_semantics() {
+        let bindings = bindings(
+            r#"
+            #[repr(C)]
+            #[data]
+            pub struct Point { pub x: i32, pub y: i32 }
+
+            #[data(impl)]
+            impl Point {
+                pub fn new(x: i32, y: i32) -> Self { Self { x, y } }
+            }
+
+            #[data]
+            pub enum Message {
+                Ping,
+                Values { items: Vec<i32> },
+            }
+
+            pub struct Counter;
+
+            #[export]
+            impl Counter {
+                pub fn create() -> Self { Self }
+                pub fn get(&self) -> i32 { 0 }
+                pub fn dispose(&self) {}
+            }
+
+            #[export]
+            pub fn echo_message(message: Message) -> Message { message }
+            "#,
+        );
+        let output = target(DartHost::new().package("demo"))
+            .render(&bindings)
+            .expect("established Dart model APIs should render");
+
+        let source = file(&output, "demo/lib/demo.dart");
+        assert!(source.contains("Point $new(int x, int y)"));
+        assert!(source.contains("factory Message.ping() = Message$Ping;"));
+        assert!(source.contains("factory Message.values({"));
+        assert!(source.contains("void dispose$()"));
+        assert!(source.contains("void dispose()"));
+        assert!(source.contains("int $get()"));
+        assert!(source.contains("bool operator ==(Object other)"));
+        assert!(source.contains("_$$BoltUtil.listCompare(items, other.items"));
+        assert!(source.contains("_$$BoltUtil.listHash(items"));
+        assert!(output.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn dart_target_preserves_single_element_record_syntax() {
+        let bindings = bindings(
+            r#"
+            #[export]
+            pub fn echo_single(value: (i32,)) -> (i32,) { value }
+            "#,
+        );
+        let output = target(DartHost::new().package("demo"))
+            .render(&bindings)
+            .expect("single-element tuples should render as Dart records");
+
+        let source = file(&output, "demo/lib/demo.dart");
+        assert!(source.contains("(int,) echoSingle((int,) value)"));
+        assert!(source.contains("return (_l$resultReader.readI32(),);"));
+        assert!(source.contains("writeI32(value.$1);"));
+        assert!(output.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn dart_target_rejects_unadvertised_interned_strings_before_rendering() {
+        let bindings = bindings(
+            r#"
+            use boltffi::InternedString;
+
+            boltffi::interned_string_pool! {
+                pub BrowserName { Chrome = "Chrome" }
+            }
+
+            #[export]
+            pub fn browser() -> InternedString<BrowserName> {
+                BrowserName::CHROME
+            }
+            "#,
+        );
+        let output = target(DartHost::new().package("demo"))
+            .render_partial(&bindings)
+            .expect("partial Dart generation should report unsupported interned strings");
+
+        let source = file(&output, "demo/lib/demo.dart");
+        assert!(!source.contains("String browser()"));
+        assert_eq!(output.coverage().unsupported().len(), 1);
+        assert_eq!(
+            output.coverage().unsupported()[0].reason(),
+            "capability was not advertised"
+        );
     }
 
     #[test]

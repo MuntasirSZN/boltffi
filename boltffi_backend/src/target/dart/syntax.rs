@@ -37,6 +37,7 @@ impl LanguageSyntax for Syntax {
         "async",
         "await",
         "base",
+        "bool",
         "break",
         "case",
         "catch",
@@ -47,6 +48,7 @@ impl LanguageSyntax for Syntax {
         "default",
         "deferred",
         "do",
+        "double",
         "dynamic",
         "else",
         "enum",
@@ -66,12 +68,14 @@ impl LanguageSyntax for Syntax {
         "implements",
         "import",
         "in",
+        "int",
         "interface",
         "is",
         "late",
         "library",
         "mixin",
         "new",
+        "num",
         "null",
         "of",
         "on",
@@ -91,6 +95,7 @@ impl LanguageSyntax for Syntax {
         "throw",
         "true",
         "try",
+        "type",
         "typedef",
         "var",
         "void",
@@ -109,6 +114,22 @@ impl LanguageSyntax for Syntax {
 }
 
 impl sealed::LanguageSyntax for Syntax {}
+
+impl Syntax {
+    pub fn record<Element>(elements: impl IntoIterator<Item = Element>) -> String
+    where
+        Element: fmt::Display,
+    {
+        let elements = elements
+            .into_iter()
+            .map(|element| element.to_string())
+            .collect::<Vec<_>>();
+        match elements.as_slice() {
+            [element] => format!("({element},)"),
+            _ => format!("({})", elements.join(", ")),
+        }
+    }
+}
 
 macro_rules! text_fragment {
     ($name:ident) => {
@@ -146,7 +167,7 @@ impl Identifier {
             return Err(Error::InvalidDartIdentifier { identifier });
         }
         match Syntax::keyword(&identifier) {
-            true => Ok(Self(format!("{identifier}_"))),
+            true => Ok(Self(format!("${identifier}"))),
             false => Ok(Self(identifier)),
         }
     }
@@ -253,10 +274,16 @@ mod tests {
 
     #[test]
     fn identifier_normalizes_keywords_without_losing_the_source_name() {
-        assert_eq!(Identifier::normalize("class").unwrap().as_str(), "class_");
+        assert_eq!(Identifier::normalize("class").unwrap().as_str(), "$class");
         assert_eq!(
             Identifier::normalize("httpClient").unwrap().as_str(),
             "httpClient"
         );
+    }
+
+    #[test]
+    fn record_syntax_preserves_single_element_shape() {
+        assert_eq!(Syntax::record(["int"]), "(int,)");
+        assert_eq!(Syntax::record(["int", "String"]), "(int, String)");
     }
 }

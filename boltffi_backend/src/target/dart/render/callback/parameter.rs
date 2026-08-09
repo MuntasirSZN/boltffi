@@ -56,19 +56,32 @@ impl CallbackParameter {
                 let source = name.to_string();
                 let size = codec
                     .write_self_value()
-                    .size_with(&mut Sizer::new(ValueScope::current(source.clone())))?;
+                    .size_with(&mut Sizer::new(
+                        ValueScope::current(source.clone()),
+                        context,
+                    ))?
+                    .into_source();
                 let writes = codec
                     .write_self_value()
-                    .render_with(&mut Writer::new(&writer, ValueScope::current(source)))
+                    .render_with(&mut Writer::new(
+                        &writer,
+                        ValueScope::current(source),
+                        context,
+                    ))
                     .into_iter()
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .map(super::super::super::codec::WriteStatement::into_source)
+                    .collect::<Vec<_>>();
                 Ok(Self::new(
                     name,
                     public_type,
                     vec![format!(
                         "final {reader} = _$$BoltWireDecoder(_$$BoltBufReader.fromSpan({pointer}, {length}));"
                     )],
-                    codec.render_with(&mut Reader::new(&reader, context))?,
+                    codec
+                        .render_with(&mut Reader::new(&reader, context))?
+                        .into_source(),
                     vec![
                         format!("final {storage} = _$$BoltCallocPtr<$$ffi.Uint8>.alloc({size});"),
                         format!(

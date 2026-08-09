@@ -15,7 +15,7 @@
     }
   }
 
-  void dispose() {
+  void dispose$() {
     final handle = _handle;
     if (handle == 0) return;
     _handle = 0;

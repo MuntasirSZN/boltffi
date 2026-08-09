@@ -1,16 +1,27 @@
 use boltffi_binding::{
-    BuiltinType, CallbackId, ClassId, CodecRead, CustomTypeId, ElementCount, EnumDecl, EnumId,
-    MapKind, Native, Op, Primitive, RecordId,
+    BuiltinType, CallbackId, ClassId, CodecRead, CustomTypeId, ElementCount, EnumId, MapKind,
+    Native, Op, Primitive, RecordId,
 };
 
 use crate::core::{Error, RenderContext, Result};
 
-use super::super::type_name;
-use super::primitive_read_method;
+use super::super::{syntax::Syntax, type_name};
+use super::{CStyleEnumRepresentation, primitive_read_method};
 
 pub struct Reader<'context, 'bindings> {
     name: String,
     context: &'context RenderContext<'bindings, Native>,
+}
+
+pub struct ReadExpression {
+    source: String,
+    value: ReadValue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadValue {
+    String,
+    Other,
 }
 
 impl<'context, 'bindings> Reader<'context, 'bindings> {
@@ -21,20 +32,6 @@ impl<'context, 'bindings> Reader<'context, 'bindings> {
         Self {
             name: name.into(),
             context,
-        }
-    }
-
-    fn c_style_enum_repr(&self, id: EnumId) -> Result<Primitive> {
-        match self.context.enumeration(id) {
-            Some(EnumDecl::CStyle(enumeration)) => Ok(enumeration.repr().primitive()),
-            Some(_) => Err(Error::UnsupportedTarget {
-                target: "dart",
-                shape: "data enum where a C-style enum was expected",
-            }),
-            None => Err(Error::BrokenBridgeContract {
-                bridge: "dart",
-                invariant: "missing enum in Dart codec reader",
-            }),
         }
     }
 
@@ -49,43 +46,68 @@ impl<'context, 'bindings> Reader<'context, 'bindings> {
     }
 }
 
+impl ReadExpression {
+    pub fn into_source(self) -> String {
+        self.source
+    }
+
+    fn new(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            value: ReadValue::Other,
+        }
+    }
+
+    fn string(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            value: ReadValue::String,
+        }
+    }
+
+    fn result_error(self) -> String {
+        match self.value {
+            ReadValue::String => format!("$$BoltException({})", self.source),
+            ReadValue::Other => self.source,
+        }
+    }
+}
+
 impl CodecRead for Reader<'_, '_> {
-    type Expr = Result<String>;
+    type Expr = Result<ReadExpression>;
 
     fn primitive(&mut self, primitive: Primitive) -> Self::Expr {
-        Ok(format!(
+        Ok(ReadExpression::new(format!(
             "{}.{}()",
             self.name,
             primitive_read_method(primitive)
-        ))
+        )))
     }
 
     fn string(&mut self) -> Self::Expr {
-        Ok(format!("{}.readString()", self.name))
+        Ok(ReadExpression::string(format!(
+            "{}.readString()",
+            self.name
+        )))
     }
 
-    fn interned_string(&mut self, static_values: &[String]) -> Self::Expr {
-        let values = static_values
-            .iter()
-            .map(|value| format!("{value:?}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        Ok(format!(
-            "{}.readInternedString(const [{values}])",
-            self.name
-        ))
+    fn interned_string(&mut self, _: &[String]) -> Self::Expr {
+        unreachable!("InternedString codec read reached Dart renderer without host capability")
     }
 
     fn bytes(&mut self) -> Self::Expr {
-        Ok(format!("{}.readUint8List()", self.name))
+        Ok(ReadExpression::new(format!(
+            "{}.readUint8List()",
+            self.name
+        )))
     }
 
     fn direct_record(&mut self, id: RecordId) -> Self::Expr {
-        Ok(format!(
+        Ok(ReadExpression::new(format!(
             "{}._m$wireDecode({})",
             self.record_name(id)?,
             self.name
-        ))
+        )))
     }
 
     fn encoded_record(&mut self, id: RecordId) -> Self::Expr {
@@ -93,20 +115,21 @@ impl CodecRead for Reader<'_, '_> {
     }
 
     fn c_style_enum(&mut self, id: EnumId) -> Self::Expr {
-        Ok(format!(
+        let representation = CStyleEnumRepresentation::resolve(id, self.context)?;
+        Ok(ReadExpression::new(format!(
             "{}._m$fromDiscriminant({}.{}())",
             self.enum_name(id)?,
             self.name,
-            primitive_read_method(self.c_style_enum_repr(id)?)
-        ))
+            representation.read_method()
+        )))
     }
 
     fn data_enum(&mut self, id: EnumId) -> Self::Expr {
-        Ok(format!(
+        Ok(ReadExpression::new(format!(
             "{}._m$wireDecode({})",
             self.enum_name(id)?,
             self.name
-        ))
+        )))
     }
 
     fn class_handle(&mut self, _: ClassId) -> Self::Expr {
@@ -124,11 +147,11 @@ impl CodecRead for Reader<'_, '_> {
     }
 
     fn custom(&mut self, _: CustomTypeId, representation: Self::Expr) -> Self::Expr {
-        representation
+        representation.map(|representation| ReadExpression::new(representation.source))
     }
 
     fn builtin(&mut self, kind: BuiltinType) -> Self::Expr {
-        Ok(format!(
+        Ok(ReadExpression::new(format!(
             "{}.{}()",
             self.name,
             match kind {
@@ -137,41 +160,50 @@ impl CodecRead for Reader<'_, '_> {
                 BuiltinType::Uuid => "readUUID",
                 BuiltinType::Url => "readUri",
             }
-        ))
+        )))
     }
 
     fn optional(&mut self, inner: Self::Expr) -> Self::Expr {
-        Ok(format!("{}.readU8() == 0 ? null : {}", self.name, inner?))
+        Ok(ReadExpression::new(format!(
+            "{}.readU8() == 0 ? null : {}",
+            self.name, inner?.source
+        )))
     }
 
     fn sequence(&mut self, _: &Op<ElementCount>, element: Self::Expr) -> Self::Expr {
-        Ok(format!(
+        Ok(ReadExpression::new(format!(
             "{}.readList((_l$reader) => {})",
             self.name,
-            element?.replace(&self.name, "_l$reader")
-        ))
+            element?.source.replace(&self.name, "_l$reader")
+        )))
     }
 
     fn tuple(&mut self, elements: Vec<Self::Expr>) -> Self::Expr {
-        Ok(format!(
-            "({})",
-            elements.into_iter().collect::<Result<Vec<_>>>()?.join(", ")
-        ))
+        elements
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .map(|elements| {
+                ReadExpression::new(Syntax::record(
+                    elements.into_iter().map(ReadExpression::into_source),
+                ))
+            })
     }
 
     fn result(&mut self, ok: Self::Expr, err: Self::Expr) -> Self::Expr {
-        Ok(format!(
+        Ok(ReadExpression::new(format!(
             "{}.readU8() == 0 ? $$BoltResult.ok({}) : $$BoltResult.err({})",
-            self.name, ok?, err?
-        ))
+            self.name,
+            ok?.source,
+            err?.result_error()
+        )))
     }
 
     fn map(&mut self, _: MapKind, key: Self::Expr, value: Self::Expr) -> Self::Expr {
-        Ok(format!(
+        Ok(ReadExpression::new(format!(
             "{}.readMap((_l$reader) => {}, (_l$reader) => {})",
             self.name,
-            key?.replace(&self.name, "_l$reader"),
-            value?.replace(&self.name, "_l$reader")
-        ))
+            key?.source.replace(&self.name, "_l$reader"),
+            value?.source.replace(&self.name, "_l$reader")
+        )))
     }
 }
