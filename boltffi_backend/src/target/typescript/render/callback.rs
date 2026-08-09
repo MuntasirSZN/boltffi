@@ -319,6 +319,11 @@ impl Method {
                     )?;
                     (super::Type::from_ref(ty, context)?, setup, true)
                 }
+                // A callback that reports only failure has no success value to
+                // write. The infallible paths already handle `Void`; without
+                // this arm a `Result<(), E>` callback is dropped from the
+                // binding.
+                ReturnPlan::Void => (TypeName::void(), Vec::new(), false),
                 _ => return Err(Self::unsupported("callback fallible success")),
             };
         Ok(Some((
@@ -504,6 +509,8 @@ impl AsyncMethod {
                             context,
                         )?,
                     ),
+                    // As above, for the async shape.
+                    ReturnPlan::Void => (TypeName::void(), Vec::new()),
                     _ => {
                         return Err(Method::unsupported("callback async fallible success"));
                     }

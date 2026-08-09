@@ -41,6 +41,14 @@ pub enum FixtureError {
     Timeout = 3,
 }
 
+/// Required of any error a callback can report: the runtime needs somewhere to
+/// put a failure that did not come from the callback itself.
+impl From<boltffi::UnexpectedFfiCallbackError> for FixtureError {
+    fn from(_: boltffi::UnexpectedFfiCallbackError) -> Self {
+        Self::InvalidInput
+    }
+}
+
 impl std::fmt::Display for FixtureError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
