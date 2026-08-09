@@ -1,7 +1,0 @@
-{%- let ffi_def = func.ffi_def %}
-{% include "sync_extern_function.txt" %}
-{%- match func.mode %}
-{%- when super::DartFunctionMode::Async with (async_def) %}
-{% include "async_extern_function.txt" %}
-{%- when _ -%}
-{%- endmatch %}

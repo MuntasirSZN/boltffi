@@ -110,6 +110,9 @@ pub enum BackendError {
         /// Invalid identifier text.
         identifier: String,
     },
+    #[allow(missing_docs)]
+    #[error("invalid Dart identifier `{identifier}`")]
+    InvalidDartIdentifier { identifier: String },
     /// A generated C# namespace was invalid.
     #[error("invalid C# namespace `{namespace}`")]
     InvalidCSharpNamespace {
