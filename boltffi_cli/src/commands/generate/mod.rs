@@ -1,6 +1,6 @@
 mod generator;
 mod header;
-mod ir;
+pub(crate) mod ir;
 pub(crate) mod java;
 mod languages;
 
@@ -178,8 +178,9 @@ pub fn run_generate_java_with_generations(
     output: Option<PathBuf>,
     artifact_name: &str,
     generations: impl IntoIterator<Item = java::TargetGeneration>,
+    deny_skipped: bool,
 ) -> Result<()> {
-    ir::run_java_generations(config, output, artifact_name, generations)
+    ir::run_java_generations(config, output, artifact_name, generations, deny_skipped)
 }
 
 #[cfg(test)]
@@ -236,6 +237,7 @@ pub fn run_generate_kmp_with_manifest(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     ir::run_kmp_generation(
         config,
@@ -244,6 +246,7 @@ pub fn run_generate_kmp_with_manifest(
         artifact_name,
         cargo_args,
         toolchain_selector,
+        deny_skipped,
     )
 }
 

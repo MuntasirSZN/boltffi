@@ -230,9 +230,10 @@ pub fn run_java_generations(
     output: Option<PathBuf>,
     artifact_name: &str,
     generations: impl IntoIterator<Item = TargetGeneration>,
+    deny_skipped: bool,
 ) -> Result<()> {
     let plan = JavaPlan::resolve(config, output)?;
-    write_java(config, &plan, artifact_name, generations, false)
+    write_java(config, &plan, artifact_name, generations, deny_skipped)
 }
 
 fn write_java(
@@ -586,6 +587,7 @@ pub fn run_kmp_generation(
     artifact_name: String,
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
+    deny_skipped: bool,
 ) -> Result<()> {
     if !config.is_kotlin_multiplatform_enabled() {
         return Err(CliError::CommandFailed {
@@ -603,8 +605,7 @@ pub fn run_kmp_generation(
         artifact_name,
         cargo_args,
         toolchain_selector,
-        // Entry point used by pack; the flag belongs to `generate`.
-        false,
+        deny_skipped,
     )
 }
 
@@ -748,7 +749,7 @@ fn remove_stale_generated_path(path: PathBuf) -> Result<()> {
 /// The table alone is easy to miss: generation still succeeds and the binding
 /// ships without them, so a build that checks only the exit status cannot tell
 /// a complete binding from a truncated one. `--deny-skipped` makes it fail.
-fn print_coverage(target: &str, output: &GeneratedOutput, deny: bool) -> Result<()> {
+pub(crate) fn print_coverage(target: &str, output: &GeneratedOutput, deny: bool) -> Result<()> {
     let unsupported = output.coverage().unsupported();
     if unsupported.is_empty() {
         return Ok(());
@@ -1110,6 +1111,7 @@ host_targets = ["current"]
                 target,
                 Generation::new("missing-java-target/Cargo.toml"),
             )],
+            false,
         )
         .expect_err("failed matrix generation must identify its build target");
 
