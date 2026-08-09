@@ -195,6 +195,11 @@ impl Method {
             .map(|parameter| Parameter::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
         let return_shape = match &fallible {
+            Some((public_type, _))
+                if matches!(method.callable().returns().plan(), ReturnPlan::Void) =>
+            {
+                ReturnShape::fallible_without_success_pointer(public_type.clone())
+            }
             Some((public_type, _)) => ReturnShape::fallible(public_type.clone()),
             None => Self::return_shape(method.callable().returns().plan(), context)?,
         };
@@ -766,13 +771,25 @@ impl ReturnShape {
 
     fn fallible(public_type: TypeName) -> Self {
         Self {
+            return_pointer: Some(Identifier::known("successPointer")),
+            ..Self::fallible_without_success_pointer(public_type)
+        }
+    }
+
+    /// A fallible shape whose success carries nothing.
+    ///
+    /// The Rust wasm ABI omits the success out-pointer when the success type is
+    /// `()`, so declaring one here would shift every following parameter by one
+    /// and hand the callback the pointer where its first argument should be.
+    fn fallible_without_success_pointer(public_type: TypeName) -> Self {
+        Self {
             public_type,
             carrier_type: TypeName::bigint(),
             returns_void: false,
             returns_string: false,
             returns_scalar_option: false,
             scalar_option_pack: Identifier::known("packOptionScalar"),
-            return_pointer: Some(Identifier::known("successPointer")),
+            return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
             direct_record: false,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use boltffi::*;
 
-use crate::{FixtureError, FixtureMessageRecord, FixturePoint, FixtureStatus};
+use crate::{FixtureMessageRecord, FixturePoint, FixtureStatus};
 
 #[export]
 pub trait SyncValueCallback {
@@ -50,20 +50,6 @@ impl SyncValueCallback for OffsetCallback {
     fn on_value(&self, value: i32) -> i32 {
         self.base + value
     }
-}
-
-/// A callback that reports only failure. The TypeScript renderer used to drop
-/// both shapes because its fallible-success matches had no `Void` arm, while
-/// the infallible ones did.
-#[export]
-pub trait SyncVoidResultCallback {
-    fn run(&self, key: i32) -> Result<(), FixtureError>;
-}
-
-#[export]
-#[allow(async_fn_in_trait)]
-pub trait AsyncVoidResultCallback {
-    async fn run(&self, key: i32) -> Result<(), FixtureError>;
 }
 
 #[export]
