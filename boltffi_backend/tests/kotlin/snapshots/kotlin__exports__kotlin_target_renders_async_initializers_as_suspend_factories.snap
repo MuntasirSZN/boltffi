@@ -1,0 +1,66 @@
+---
+source: boltffi_backend/tests/kotlin/exports.rs
+expression: "rendered_fixture(\"exports/async_initializer\")"
+---
+===== com/boltffi/demo/Demo.kt =====
+@file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
+
+package com.boltffi.demo
+
+import kotlinx.coroutines.launch
+@Suppress("FunctionName")
+private object Native {
+    @JvmStatic external fun boltffi_release_class_demo_client(handle: Long): Unit
+    @JvmStatic external fun boltffi_init_class_demo_client_new(): Long
+    @JvmStatic external fun boltffi_init_class_demo_client_connect(port: Int): Long
+    @JvmStatic external fun boltffi_async_init_class_demo_client_connect_poll(handle: Long, callback_data: Long): Unit
+    @JvmStatic external fun boltffi_async_init_class_demo_client_connect_complete(handle: Long): Long
+    @JvmStatic external fun boltffi_async_init_class_demo_client_connect_cancel(handle: Long): Unit
+    @JvmStatic external fun boltffi_async_init_class_demo_client_connect_free(handle: Long): Unit
+    @JvmStatic external fun boltffi_async_init_class_demo_client_connect_panic_message(handle: Long): ByteArray?
+    @JvmStatic external fun boltffi_method_class_demo_client_port(`receiver`: Long): Int
+
+    @JvmStatic fun boltffiFutureContinuationCallback(handle: Long, pollResult: Byte) {
+        BoltFfiAsync.resume(handle, pollResult)
+    }
+}
+
+class Client internal constructor(internal val handle: Long) : AutoCloseable {
+    private val __boltffi_closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun close() {
+        if (__boltffi_closed.compareAndSet(false, true)) {
+            Native.boltffi_release_class_demo_client(handle)
+        }
+    }
+
+    internal fun boltffiHandle(): Long {
+        check(!__boltffi_closed.get()) { "Client is closed" }
+        return handle
+    }
+
+    constructor() : this(new().handle)
+
+    companion object {
+        fun new(): Client {
+            return Client(Native.boltffi_init_class_demo_client_new())
+        }
+        suspend fun connect(port: UInt): Client {
+            return boltffiCallAsync(
+                createFuture = {
+                    Native.boltffi_init_class_demo_client_connect(port.toInt())
+                },
+                poll = { future, contHandle -> Native.boltffi_async_init_class_demo_client_connect_poll(future, contHandle) },
+                complete = { future ->
+                    Client(Native.boltffi_async_init_class_demo_client_connect_complete(future))
+                },
+                free = { future -> Native.boltffi_async_init_class_demo_client_connect_free(future) },
+                cancel = { future -> Native.boltffi_async_init_class_demo_client_connect_cancel(future) },
+            )
+        }
+    }
+
+    fun port(): UInt {
+        return Native.boltffi_method_class_demo_client_port(this.boltffiHandle()).toUInt()
+    }
+}

@@ -292,6 +292,11 @@ fn kotlin_target_renders_async_class_methods() {
 }
 
 #[test]
+fn kotlin_target_renders_async_initializers_as_suspend_factories() {
+    insta::assert_snapshot!(rendered_fixture("exports/async_initializer"));
+}
+
+#[test]
 fn kotlin_target_renders_closure_parameters() {
     insta::assert_snapshot!(rendered_fixture("exports/closure_parameter"));
 }
