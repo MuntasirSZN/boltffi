@@ -18,7 +18,15 @@ describe("matchWireResult", () => {
 
     expect(take(bytes)).toEqual({ ok: bytes });
     expect(take(new Float64Array([1.5]))).toEqual({ ok: new Float64Array([1.5]) });
-    expect(take(new ArrayBuffer(4))).toEqual({ ok: new ArrayBuffer(4) });
+  });
+
+  it("leaves buffers without a length ambiguous", () => {
+    // The bytes codec sizes and writes through `.length`. A bare `ArrayBuffer`
+    // and a `DataView` have none, so treating them as success would size the
+    // payload as `NaN` and throw inside the encoder — the same failure one
+    // step later. They keep asking the caller to disambiguate.
+    expect(() => take(new ArrayBuffer(4))).toThrow(/Ambiguous/);
+    expect(() => take(new DataView(new ArrayBuffer(4)))).toThrow(/Ambiguous/);
   });
 
   it("still refuses a plain object", () => {

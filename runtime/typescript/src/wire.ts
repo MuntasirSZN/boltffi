@@ -399,12 +399,17 @@ export function matchWireResult<T, E, R>(
   if (value instanceof Error) {
     return err(value as E);
   }
-  // A binary payload is never a `WireResult`: it carries no `tag`, and a
-  // caller cannot have meant it as one. Without this a callback returning
+  // A typed array is never a `WireResult`: it carries no `tag`, and a caller
+  // cannot have meant it as one. Without this a callback returning
   // `Result<Vec<u8>, E>` hits the ambiguity below, the throw is reported as
   // completion code -2, and the Rust side decodes that message as the error
   // enum — a decode failure that aborts the process rather than surfacing.
-  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+  //
+  // Only views with a numeric `length`, which is what the bytes codec sizes
+  // and writes through. A bare `ArrayBuffer` or a `DataView` has none, so
+  // exempting them would size the payload as `NaN` and throw inside the
+  // encoder instead — the same abort, one step later.
+  if (ArrayBuffer.isView(value) && typeof (value as { length?: unknown }).length === "number") {
     return ok(value as T);
   }
   if (typeof value === "object" && value !== null) {
