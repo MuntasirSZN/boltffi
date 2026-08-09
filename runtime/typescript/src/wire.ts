@@ -874,3 +874,51 @@ export interface WireCodec<T> {
   encode(writer: WireWriter, value: T): void;
   decode(reader: WireReader): T;
 }
+
+/**
+ * Marks a callback error payload as a host-language failure rather than the
+ * error type the callback declared.
+ *
+ * Must stay in step with `UnexpectedFfiCallbackError::WIRE_MARKER` in
+ * `boltffi_core`, which is what reads this back.
+ */
+const UNEXPECTED_CALLBACK_ERROR_MARKER = "BOLTFFI_CALLBACK";
+
+/** Envelope format understood by the Rust side. */
+const UNEXPECTED_CALLBACK_ERROR_VERSION = 1;
+
+/** Allocates the wasm-backed writer an unexpected callback error is written into. */
+export interface UnexpectedCallbackErrorAllocator {
+  allocWriter(size: number): WireWriter;
+}
+
+/**
+ * Encodes a host error a callback threw, so Rust can tell it apart from the
+ * error type that callback declared.
+ *
+ * An async completion reports failure through a status code, and the code for
+ * "the callback threw" is indistinguishable from the one for a typed error
+ * once it reaches Rust. Without this envelope the thrown message is decoded as
+ * the declared error; that decode fails, and the failure is a panic, which
+ * under `panic = "abort"` takes the whole module down. The envelope routes it
+ * through `From<UnexpectedFfiCallbackError>` instead.
+ *
+ * The layout is the marker, a version byte, then the message as an ordinary
+ * wire string. `boltffiEncodeUnexpectedCallbackError` in the Swift runtime
+ * writes the same bytes.
+ */
+export function writeUnexpectedCallbackError(
+  allocator: UnexpectedCallbackErrorAllocator,
+  error: unknown
+): WireWriter {
+  const message = error instanceof Error ? error.message : String(error);
+  const writer = allocator.allocWriter(
+    UNEXPECTED_CALLBACK_ERROR_MARKER.length + 1 + 4 + utf8ByteCount(message)
+  );
+  for (let index = 0; index < UNEXPECTED_CALLBACK_ERROR_MARKER.length; index++) {
+    writer.writeU8(UNEXPECTED_CALLBACK_ERROR_MARKER.charCodeAt(index));
+  }
+  writer.writeU8(UNEXPECTED_CALLBACK_ERROR_VERSION);
+  writer.writeString(message);
+  return writer;
+}
