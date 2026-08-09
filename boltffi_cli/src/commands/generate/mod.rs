@@ -2,19 +2,16 @@ mod generator;
 mod header;
 mod ir;
 pub(crate) mod java;
-mod languages;
 
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use boltffi_bindgen::CHeaderLowerer;
+use boltffi_bindgen::target::Target;
 #[cfg(test)]
 use generator::ScanPointerWidth;
 use generator::{GenerateRequest, run_generator};
 use header::HeaderGenerator;
-use languages::DartGenerator;
-
-use boltffi_bindgen::target::Target;
 
 use crate::cli::Result;
 use crate::config::Config;
@@ -56,14 +53,10 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             run_generator::<HeaderGenerator>(&legacy_request(), options.experimental)
         }
         GenerateTarget::Typescript => ir::run_ir_generation(config, &options),
-        GenerateTarget::Dart => {
-            run_generator::<DartGenerator>(&legacy_request(), options.experimental)
-        }
+        GenerateTarget::Dart => ir::run_ir_generation(config, &options),
         GenerateTarget::Python => ir::run_ir_generation(config, &options),
         GenerateTarget::CSharp => ir::run_ir_generation(config, &options),
         GenerateTarget::All => {
-            let request = legacy_request();
-
             if config.should_process(Target::Swift, options.experimental) {
                 ir::run_ir_generation(
                     config,
@@ -130,7 +123,16 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::Dart, options.experimental) {
-                run_generator::<DartGenerator>(&request, options.experimental)?;
+                ir::run_ir_generation(
+                    config,
+                    &GenerateOptions {
+                        target: GenerateTarget::Dart,
+                        output: options.output.clone(),
+                        experimental: options.experimental,
+                        ir: true,
+                        cargo_args: options.cargo_args.clone(),
+                    },
+                )?;
             }
 
             if config.should_process(Target::Python, options.experimental) {

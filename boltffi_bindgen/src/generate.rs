@@ -7,6 +7,7 @@ use boltffi_backend::core::bridge::BridgeBackend;
 use boltffi_backend::core::{CoverageMode, bridge, host};
 use boltffi_backend::target::{
     csharp::CSharpHost,
+    dart::DartHost,
     java::{JavaDesktopLoader, JavaHost, JavaVersion},
     kmp::{DEFAULT_KMP_MODULE_NAME, DEFAULT_KMP_PACKAGE_NAME, KmpHost, KmpSupportMode},
     kotlin::{KotlinApiStyle, KotlinDesktopLoader, KotlinFactoryStyle, KotlinHost},
@@ -44,6 +45,8 @@ pub struct Generation {
     python_native_library: Option<String>,
     csharp_namespace: Option<String>,
     csharp_native_library: Option<String>,
+    dart_package: Option<String>,
+    dart_native_artifact: Option<String>,
     java_package: Option<String>,
     java_file: Option<String>,
     java_android_library: Option<String>,
@@ -95,6 +98,8 @@ impl Generation {
             python_native_library: None,
             csharp_namespace: None,
             csharp_native_library: None,
+            dart_package: None,
+            dart_native_artifact: None,
             java_package: None,
             java_file: None,
             java_android_library: None,
@@ -407,6 +412,16 @@ impl Generation {
         self
     }
 
+    pub fn dart_package(mut self, package: impl Into<String>) -> Self {
+        self.dart_package = Some(package.into());
+        self
+    }
+
+    pub fn dart_native_artifact(mut self, artifact: impl Into<String>) -> Self {
+        self.dart_native_artifact = Some(artifact.into());
+        self
+    }
+
     /// Reads the embedded metadata, selects the target surface contract, and renders it.
     pub fn render(&self, target: Target) -> Result<GeneratedOutput, GenerationError> {
         match target {
@@ -414,13 +429,14 @@ impl Generation {
             | Target::Java
             | Target::Kotlin
             | Target::KotlinMultiplatform
-            | Target::CSharp => {
+            | Target::CSharp
+            | Target::Dart => {
                 let bindings = self.bindings::<Native>()?;
                 self.render_native_bindings(target, &bindings)
             }
             Target::Swift => self.render_swift(),
             Target::TypeScript => self.render_typescript(),
-            Target::Header | Target::Dart => Err(GenerationError::UnsupportedTarget { target }),
+            Target::Header => Err(GenerationError::UnsupportedTarget { target }),
         }
     }
 
@@ -454,7 +470,8 @@ impl Generation {
             Target::Kotlin => self.render_kotlin_bindings(bindings),
             Target::KotlinMultiplatform => self.render_kmp_bindings(bindings),
             Target::CSharp => self.render_csharp_bindings(bindings),
-            Target::Swift | Target::TypeScript | Target::Header | Target::Dart => {
+            Target::Dart => self.render_dart_bindings(bindings),
+            Target::Swift | Target::TypeScript | Target::Header => {
                 Err(GenerationError::UnsupportedTarget { target })
             }
         }
@@ -582,6 +599,21 @@ impl Generation {
             .into_target()
             .map_err(GenerationError::Render)?;
         self.render_backend(&target, &bindings)
+    }
+
+    fn render_dart_bindings(
+        &self,
+        bindings: &Bindings<Native>,
+    ) -> Result<GeneratedOutput, GenerationError> {
+        let mut host = DartHost::new();
+        if let Some(package) = &self.dart_package {
+            host = host.package(package.clone());
+        }
+        if let Some(artifact) = &self.dart_native_artifact {
+            host = host.native_artifact(artifact.clone());
+        }
+        let target = host.into_target().map_err(GenerationError::Render)?;
+        self.render_backend(&target, bindings)
     }
 
     fn render_typescript(&self) -> Result<GeneratedOutput, GenerationError> {
@@ -998,6 +1030,30 @@ mod tests {
                 .contents()
                 .contains("boltffi_function_demo_add")
         );
+    }
+
+    #[test]
+    fn dart_generation_uses_the_native_binding_ir_route() {
+        let bindings = primitive_function_bindings();
+        let output = Generation::new("Cargo.toml")
+            .dart_package("demo_api")
+            .dart_native_artifact("demo_native")
+            .render_native_bindings(Target::Dart, &bindings)
+            .expect("primitive Dart bindings should render through the production target route");
+
+        assert_eq!(
+            output_paths(&output),
+            vec![
+                "boltffi.h",
+                "demo_api/lib/demo_api.dart",
+                "demo_api/pubspec.yaml",
+                "demo_api/hook/build.dart",
+            ]
+        );
+        assert!(
+            file(&output, "demo_api/lib/demo_api.dart").contains("int add(int left, int right)")
+        );
+        assert!(file(&output, "demo_api/hook/build.dart").contains("demo_native"));
     }
 
     #[test]

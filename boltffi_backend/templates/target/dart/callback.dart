@@ -1,0 +1,108 @@
+{{ callback.register_declaration() }}
+{{ callback.create_declaration() }}
+final class {{ callback.native_vtable().name() }} extends $$ffi.Struct {
+{%- for field in callback.native_vtable().fields() %}
+  external {{ field.ty() }} {{ field.name() }};
+{%- if !loop.last %}
+
+{%- endif %}
+{%- endfor %}
+}
+
+{{ callback.documentation() }}abstract interface class {{ callback.name() }} {
+{%- for method in callback.interface_methods() %}
+{{ method }}
+{%- if !loop.last %}
+
+{%- endif %}
+{%- endfor %}
+}
+
+final class {{ callback.proxy_name() }} implements {{ callback.name() }} {
+  static final Finalizer<_$$BoltCallbackHandle> _finalizer =
+      Finalizer<_$$BoltCallbackHandle>((handle) {
+    final vtable =
+        handle.vtable.cast<{{ callback.native_vtable().name() }}>().ref;
+    vtable.free.asFunction<void Function(int)>()(handle.handle);
+  });
+
+  _$$BoltCallbackHandle _handle;
+  final {{ callback.native_vtable().name() }} _vtable;
+
+  {{ callback.proxy_name() }}(this._handle)
+      : _vtable =
+            _handle.vtable.cast<{{ callback.native_vtable().name() }}>().ref {
+    _finalizer.attach(this, _handle, detach: this);
+  }
+
+  _$$BoltCallbackHandle _m$cloneHandle() {
+    if (_handle.handle == 0) return _k$BoltCallbackHandleNull;
+    final cloned =
+        _vtable.clone.asFunction<int Function(int)>()(_handle.handle);
+    return $$ffi.Struct.create<_$$BoltCallbackHandle>()
+      ..handle = cloned
+      ..vtable = _handle.vtable;
+  }
+{%- for method in callback.proxy_methods() %}
+
+{{ method }}
+{%- endfor %}
+}
+
+final class {{ callback.bridge_name() }} {
+  static final _$$BoltFFIHandleMap<{{ callback.name() }}> _k$handles =
+      _$$BoltFFIHandleMap<{{ callback.name() }}>();
+{%- for callable in callback.callables() %}
+
+{{ callable }}
+{%- endfor %}
+
+  static final _$$BoltCallocPtr<{{ callback.native_vtable().name() }}> _k$vtable = (() {
+    final vtable = _$$BoltCallocPtr<{{ callback.native_vtable().name() }}>.alloc(
+      $$ffi.sizeOf<{{ callback.native_vtable().name() }}>(),
+    );
+    vtable.ptr.ref
+      ..free = $$ffi.Pointer.fromFunction<
+        $$ffi.Void Function($$ffi.Uint64)
+      >(_m$free)
+      ..clone = $$ffi.Pointer.fromFunction<
+        $$ffi.Uint64 Function($$ffi.Uint64)
+      >(_m$clone, 0)
+{%- for initializer in callback.vtable_initializers() %}
+{{ initializer }}
+{%- endfor %};
+    return vtable;
+  })();
+
+  static final bool _k$registered = (() {
+    _f${{ callback.register_name() }}(_k$vtable.ptr);
+    return true;
+  })();
+
+  static _$$BoltCallbackHandle create({{ callback.name() }}? implementation) {
+    _k$registered;
+    if (implementation == null) return _k$BoltCallbackHandleNull;
+    if (implementation is {{ callback.proxy_name() }}) {
+      return implementation._m$cloneHandle();
+    }
+    return _f${{ callback.create_name() }}(_k$handles.insert(implementation));
+  }
+
+  static {{ callback.name() }} wrap(_$$BoltCallbackHandle handle) {
+    if (handle.handle == 0) {
+      throw StateError('{{ callback.name() }} callback handle is null');
+    }
+    return _k$handles.get(handle.handle) ?? {{ callback.proxy_name() }}(handle);
+  }
+
+  static void _m$free(int handle) => _k$handles.remove(handle);
+
+  static int _m$clone(int handle) {
+    final implementation = _k$handles.get(handle);
+    return implementation == null ? 0 : _k$handles.insert(implementation);
+  }
+{%- for entry in callback.entries() %}
+
+{{ entry }}
+{%- endfor %}
+}
