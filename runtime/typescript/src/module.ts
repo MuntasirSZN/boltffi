@@ -1178,6 +1178,31 @@ export class BoltFFIModule {
     }
   }
 
+  /**
+   * Takes a returned byte buffer whose length came with the call.
+   *
+   * The framed counterpart, `takePackedWireBytes`, reads a `u32` the buffer
+   * carries and then checks it equals `length - 4`, so the prefix never told
+   * it anything the packed value had not. Writing that prefix costs the Rust
+   * side a shift of the whole payload, which is why this shape exists.
+   */
+  takePackedBytes(packed: bigint): Uint8Array {
+    const { pointer, length } = this.unpackPacked(packed);
+    if (pointer === 0 || length === 0) {
+      return new Uint8Array(0);
+    }
+    try {
+      const bytes = this.getBytes();
+      if (pointer + length > bytes.length) {
+        throw new Error("Invalid packed bytes length");
+      }
+      // One allocation: building a view and then copying it made two.
+      return bytes.slice(pointer, pointer + length);
+    } finally {
+      this.freePacked(pointer, length);
+    }
+  }
+
   takePackedWireString(packed: bigint): string {
     const { pointer, length } = this.unpackPacked(packed);
     if (pointer === 0 || length < 4) {

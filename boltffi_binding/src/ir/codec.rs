@@ -173,6 +173,7 @@ pub enum OwnedWireEncoding {
     String,
     Utf8String,
     Bytes,
+    RawBytes,
 }
 
 impl CodecPlan {
@@ -242,6 +243,14 @@ pub enum CodecNode {
     String,
     #[doc(hidden)]
     Utf8String,
+    /// Byte buffer whose length is carried by the call, not by the buffer.
+    ///
+    /// Only reachable at the root of an exported return, and only on surfaces
+    /// that ask for it. Framing a returned `Vec<u8>` means shifting every byte
+    /// to make room for the prefix, which costs about as much as building the
+    /// buffer did; the caller already knows the length either way.
+    #[doc(hidden)]
+    RawBytes,
     /// Tagged interned-string value (static pool id or dynamic UTF-8 bytes).
     ///
     /// Wire format: `tag (u8)` where `0` = `u32` pool index, `1` = length-prefixed
@@ -311,6 +320,7 @@ impl CodecNode {
             Self::String => OwnedWireEncoding::String,
             Self::Utf8String => OwnedWireEncoding::Utf8String,
             Self::Bytes => OwnedWireEncoding::Bytes,
+            Self::RawBytes => OwnedWireEncoding::RawBytes,
             Self::Custom { representation, .. } => representation.owned_wire_encoding(),
             _ => OwnedWireEncoding::Generic,
         }
@@ -354,6 +364,7 @@ impl CodecNode {
             | Self::Utf8String
             | Self::InternedString { .. }
             | Self::Bytes
+            | Self::RawBytes
             | Self::Builtin(_) => {}
         }
     }
@@ -443,6 +454,11 @@ pub trait CodecRead {
         self.string()
     }
 
+    #[doc(hidden)]
+    fn raw_bytes(&mut self) -> Self::Expr {
+        self.bytes()
+    }
+
     /// Reads a tagged interned string (static pool id or dynamic UTF-8 bytes).
     fn interned_string(&mut self, static_values: &[String]) -> Self::Expr;
 
@@ -508,6 +524,10 @@ impl CodecRead for InternedStringDetector {
     }
 
     fn utf8_string(&mut self) -> Self::Expr {
+        false
+    }
+
+    fn raw_bytes(&mut self) -> Self::Expr {
         false
     }
 
@@ -590,6 +610,11 @@ pub trait CodecWrite {
     #[doc(hidden)]
     fn utf8_string(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
         self.string(value)
+    }
+
+    #[doc(hidden)]
+    fn raw_bytes(&mut self, value: &ValueRef) -> Vec<Self::Stmt> {
+        self.bytes(value)
     }
 
     /// Writes a tagged interned string (static pool id or dynamic UTF-8 bytes).
@@ -691,6 +716,11 @@ pub trait CodecSize {
         self.string(value)
     }
 
+    #[doc(hidden)]
+    fn raw_bytes(&mut self, value: &ValueRef) -> Self::Expr {
+        self.bytes(value)
+    }
+
     /// Returns the encoded size of a tagged interned string.
     fn interned_string(&mut self, static_values: &[String], value: &ValueRef) -> Self::Expr;
 
@@ -770,6 +800,7 @@ impl CodecWalker {
             CodecNode::Primitive(primitive) => renderer.primitive(*primitive),
             CodecNode::String => renderer.string(),
             CodecNode::Utf8String => renderer.utf8_string(),
+            CodecNode::RawBytes => renderer.raw_bytes(),
             CodecNode::InternedString { static_values } => renderer.interned_string(static_values),
             CodecNode::Bytes => renderer.bytes(),
             CodecNode::DirectRecord(id) => renderer.direct_record(*id),
@@ -840,6 +871,7 @@ impl CodecWalker {
             CodecNode::Primitive(primitive) => renderer.primitive(*primitive, value),
             CodecNode::String => renderer.string(value),
             CodecNode::Utf8String => renderer.utf8_string(value),
+            CodecNode::RawBytes => renderer.raw_bytes(value),
             CodecNode::InternedString { static_values } => {
                 renderer.interned_string(static_values, value)
             }
@@ -931,6 +963,7 @@ impl CodecWalker {
             CodecNode::Primitive(primitive) => renderer.primitive(*primitive, value),
             CodecNode::String => renderer.string(value),
             CodecNode::Utf8String => renderer.utf8_string(value),
+            CodecNode::RawBytes => renderer.raw_bytes(value),
             CodecNode::InternedString { static_values } => {
                 renderer.interned_string(static_values, value)
             }

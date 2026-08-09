@@ -757,8 +757,10 @@ mod tests {
                 .contents()
                 .contains("const __boltffi_value_allocation = _module.allocWireBytes(value);")
         );
+        // The argument keeps its length prefix; the return does not need one,
+        // since the packed value already carries the length.
         assert!(browser.contents().contains(
-            "return _module.takePackedWireBytes((_exports.boltffi_function_demo_echo_bytes as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
+            "return _module.takePackedBytes((_exports.boltffi_function_demo_echo_bytes as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
         ));
         assert!(browser.contents().contains(
             "export function echoVecI32(value: readonly number[] | Int32Array): Int32Array"

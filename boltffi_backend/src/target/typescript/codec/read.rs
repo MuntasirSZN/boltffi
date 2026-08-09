@@ -19,6 +19,7 @@ pub enum ReadKind {
     String,
     Utf8String,
     Bytes,
+    RawBytes,
     ErrorRecord(RecordId),
     ErrorEnum(EnumId),
 }
@@ -115,6 +116,13 @@ impl ReadExpression {
         }
     }
 
+    fn raw_bytes(expression: Expression) -> Self {
+        Self {
+            expression,
+            kind: Some(ReadKind::RawBytes),
+        }
+    }
+
     fn primitive(primitive: Primitive, expression: Expression) -> Self {
         Self {
             expression,
@@ -194,6 +202,18 @@ impl CodecRead for Reader<'_> {
 
     fn bytes(&mut self) -> Self::Expr {
         Ok(ReadExpression::bytes(Expression::call(
+            Expression::identifier(self.reader.clone()),
+            Identifier::known("readBytes"),
+            ArgumentList::default(),
+        )))
+    }
+
+    /// Only ever the whole of a returned buffer, so there is no reader position
+    /// to advance and nothing to read a length from. The expression here is a
+    /// placeholder: the return path keys off the kind and takes the buffer
+    /// directly.
+    fn raw_bytes(&mut self) -> Self::Expr {
+        Ok(ReadExpression::raw_bytes(Expression::call(
             Expression::identifier(self.reader.clone()),
             Identifier::known("readBytes"),
             ArgumentList::default(),

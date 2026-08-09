@@ -60,6 +60,11 @@ impl<'expansion, 'lowered, S: RenderSurface> Value<'expansion, 'lowered, S> {
             OwnedWireEncoding::Bytes => {
                 quote! { ::boltffi::__private::FfiBuf::wire_encode_owned_bytes(#value) }
             }
+            // The call hands back the length, so the buffer does not have to
+            // carry one, and the bytes stay where they were allocated.
+            OwnedWireEncoding::RawBytes => {
+                quote! { ::boltffi::__private::FfiBuf::from_vec(#value) }
+            }
             _ => {
                 quote! { ::boltffi::__private::FfiBuf::wire_encode(&#value) }
             }

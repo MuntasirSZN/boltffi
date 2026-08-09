@@ -8,7 +8,12 @@ use super::{
 
 #[derive(Clone, Copy)]
 pub enum RootEncoding {
+    /// Root of a value handed to the surface, where the surface picks the shape.
     Surface,
+    /// Root of a value returned to the surface, which additionally knows the
+    /// buffer length from the call itself.
+    SurfaceReturn,
+    /// Root of a value the wire frames itself, because nothing carries its length.
     Framed,
 }
 
@@ -21,7 +26,12 @@ impl RootEncoding {
         value: ValueRef,
     ) -> Result<CodecNode, LowerError> {
         match (self, type_expr) {
-            (Self::Surface, TypeExpr::String) => Ok(S::root_string_codec()),
+            (Self::Surface | Self::SurfaceReturn, TypeExpr::String) => Ok(S::root_string_codec()),
+            (Self::SurfaceReturn, TypeExpr::Vec(inner) | TypeExpr::Slice(inner))
+                if types::is_byte_primitive(inner) =>
+            {
+                Ok(S::root_bytes_return_codec())
+            }
             _ => node(index, ids, type_expr, value),
         }
     }
