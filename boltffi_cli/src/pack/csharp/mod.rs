@@ -60,6 +60,9 @@ pub(crate) fn pack_csharp(
             &plan.artifact_name,
             plan.generation_cargo_args.clone(),
             plan.generation_toolchain_selector.clone(),
+            // Pack pipelines keep the previous behaviour: the flag belongs to
+            // `generate`, where a caller can ask for it.
+            false,
         )?;
         step.finish_success();
     }

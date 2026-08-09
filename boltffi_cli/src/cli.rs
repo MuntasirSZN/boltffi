@@ -117,6 +117,12 @@ pub enum Commands {
 
         #[arg(long, help = "Render through the IR-AST metadata pipeline")]
         ir: bool,
+
+        #[arg(
+            long,
+            help = "Fail instead of emitting a binding with declarations left out"
+        )]
+        deny_skipped: bool,
     },
 
     #[command(
@@ -479,6 +485,7 @@ pub(crate) fn execute_command(
             output,
             experimental,
             ir,
+            deny_skipped,
         } => {
             let config = load_config(config_paths)?;
             let options = GenerateOptions {
@@ -499,6 +506,7 @@ pub(crate) fn execute_command(
                 experimental,
                 ir,
                 cargo_args: cargo_args.clone(),
+                deny_skipped,
             };
             run_generate_with_output(&config, options)
         }
@@ -867,6 +875,7 @@ fn run_release(
             experimental: false,
             ir: false,
             cargo_args: cargo_args.clone(),
+            deny_skipped: false,
         },
     )?;
     println!();
