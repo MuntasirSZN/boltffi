@@ -142,6 +142,16 @@ pub enum Commands {
         #[arg(
             long,
             global = true,
+            default_value = "true",
+            default_missing_value = "true",
+            num_args = 0..=1,
+            action = clap::ArgAction::Set
+        )]
+        regenerate: bool,
+
+        #[arg(
+            long,
+            global = true,
             help = "Fail instead of emitting a binding with declarations left out"
         )]
         deny_skipped: bool,
@@ -211,9 +221,6 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         release: bool,
 
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
-
         #[arg(long)]
         no_build: bool,
 
@@ -240,9 +247,6 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         version: Option<String>,
 
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
-
         #[arg(long)]
         no_build: bool,
 
@@ -264,9 +268,6 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         release: bool,
 
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
-
         #[arg(long)]
         no_build: bool,
 
@@ -283,9 +284,6 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         release: bool,
 
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
-
         #[arg(long)]
         no_build: bool,
 
@@ -301,9 +299,6 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         release: bool,
 
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
-
         #[arg(long)]
         no_build: bool,
     },
@@ -316,15 +311,6 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         release: bool,
 
-        #[arg(
-            long,
-            default_value = "true",
-            default_missing_value = "true",
-            num_args = 0..=1,
-            action = clap::ArgAction::Set
-        )]
-        regenerate: bool,
-
         #[arg(long)]
         no_build: bool,
     },
@@ -336,9 +322,6 @@ pub(crate) enum PackTargetArg {
     Python {
         #[arg(long)]
         release: bool,
-
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
 
         #[arg(long)]
         no_build: bool,
@@ -363,9 +346,6 @@ pub(crate) enum PackTargetArg {
         #[arg(long)]
         release: bool,
 
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
-
         #[arg(long)]
         no_build: bool,
 
@@ -380,9 +360,6 @@ pub(crate) enum PackTargetArg {
     Csharp {
         #[arg(long)]
         release: bool,
-
-        #[arg(long, default_value = "true")]
-        regenerate: bool,
 
         #[arg(long)]
         no_build: bool,
@@ -532,6 +509,7 @@ pub(crate) fn execute_command(
         }
 
         Commands::Pack {
+            regenerate,
             deny_skipped,
             target,
         } => {
@@ -539,7 +517,6 @@ pub(crate) fn execute_command(
             let command = match target {
                 PackTargetArg::All {
                     release,
-                    regenerate,
                     no_build,
                     experimental,
                     python_interpreters,
@@ -557,7 +534,6 @@ pub(crate) fn execute_command(
                 PackTargetArg::Apple {
                     release,
                     version,
-                    regenerate,
                     no_build,
                     spm_only,
                     xcframework_only,
@@ -581,7 +557,6 @@ pub(crate) fn execute_command(
                 }),
                 PackTargetArg::Android {
                     release,
-                    regenerate,
                     no_build,
                     experimental: _,
                 } => PackCommand::Android(PackAndroidOptions {
@@ -595,7 +570,6 @@ pub(crate) fn execute_command(
                 }),
                 PackTargetArg::Kmp {
                     release,
-                    regenerate,
                     no_build,
                     experimental,
                 } => PackCommand::Kmp(PackKmpOptions {
@@ -608,11 +582,7 @@ pub(crate) fn execute_command(
                     ),
                     experimental,
                 }),
-                PackTargetArg::Wasm {
-                    release,
-                    regenerate,
-                    no_build,
-                } => PackCommand::Wasm(PackWasmOptions {
+                PackTargetArg::Wasm { release, no_build } => PackCommand::Wasm(PackWasmOptions {
                     execution: pack_execution_options(
                         release,
                         regenerate,
@@ -621,11 +591,7 @@ pub(crate) fn execute_command(
                         cargo_args.clone(),
                     ),
                 }),
-                PackTargetArg::Java {
-                    release,
-                    regenerate,
-                    no_build,
-                } => PackCommand::Java(PackJavaOptions {
+                PackTargetArg::Java { release, no_build } => PackCommand::Java(PackJavaOptions {
                     execution: pack_execution_options(
                         release,
                         regenerate,
@@ -637,7 +603,6 @@ pub(crate) fn execute_command(
                 }),
                 PackTargetArg::Python {
                     release,
-                    regenerate,
                     no_build,
                     experimental: _,
                     python_interpreters,
@@ -653,7 +618,6 @@ pub(crate) fn execute_command(
                 }),
                 PackTargetArg::Dart {
                     release,
-                    regenerate,
                     no_build,
                     experimental,
                 } => PackCommand::Dart(PackDartOptions {
@@ -666,19 +630,17 @@ pub(crate) fn execute_command(
                     ),
                     experimental,
                 }),
-                PackTargetArg::Csharp {
-                    release,
-                    regenerate,
-                    no_build,
-                } => PackCommand::CSharp(PackCSharpOptions {
-                    execution: pack_execution_options(
-                        release,
-                        regenerate,
-                        no_build,
-                        deny_skipped,
-                        cargo_args,
-                    ),
-                }),
+                PackTargetArg::Csharp { release, no_build } => {
+                    PackCommand::CSharp(PackCSharpOptions {
+                        execution: pack_execution_options(
+                            release,
+                            regenerate,
+                            no_build,
+                            deny_skipped,
+                            cargo_args,
+                        ),
+                    })
+                }
             };
             run_pack(&config, command, reporter)
         }
@@ -1534,7 +1496,8 @@ enabled = true
             cli.command,
             Commands::Pack {
                 deny_skipped: _,
-                target: PackTargetArg::Python { .. }
+                target: PackTargetArg::Python { .. },
+                ..
             }
         ));
     }
@@ -1548,50 +1511,51 @@ enabled = true
             cli.command,
             Commands::Pack {
                 deny_skipped: _,
-                target: PackTargetArg::Csharp { .. }
+                target: PackTargetArg::Csharp { .. },
+                ..
             }
         ));
     }
 
     #[test]
-    fn cli_parses_java_regeneration_selection() {
-        let default =
-            Cli::try_parse_from(["boltffi", "pack", "java"]).expect("cli parse should succeed");
-        let enabled = Cli::try_parse_from(["boltffi", "pack", "java", "--regenerate"])
-            .expect("cli parse should succeed");
-        let disabled = Cli::try_parse_from(["boltffi", "pack", "java", "--regenerate", "false"])
-            .expect("cli parse should succeed");
+    fn cli_parses_regeneration_selection_for_every_pack_target() {
+        [
+            "all", "apple", "android", "kmp", "wasm", "java", "python", "dart", "csharp",
+        ]
+        .into_iter()
+        .for_each(|target| {
+            let default = Cli::try_parse_from(["boltffi", "pack", target])
+                .unwrap_or_else(|error| panic!("pack {target} should parse: {error}"));
+            let enabled = Cli::try_parse_from(["boltffi", "pack", target, "--regenerate"])
+                .unwrap_or_else(|error| panic!("pack {target} --regenerate should parse: {error}"));
+            let disabled =
+                Cli::try_parse_from(["boltffi", "pack", target, "--regenerate", "false"])
+                    .unwrap_or_else(|error| {
+                        panic!("pack {target} --regenerate false should parse: {error}")
+                    });
 
-        assert!(matches!(
-            default.command,
-            Commands::Pack {
-                deny_skipped: _,
-                target: PackTargetArg::Java {
+            assert!(matches!(
+                default.command,
+                Commands::Pack {
                     regenerate: true,
                     ..
                 }
-            }
-        ));
-        assert!(matches!(
-            enabled.command,
-            Commands::Pack {
-                deny_skipped: _,
-                target: PackTargetArg::Java {
+            ));
+            assert!(matches!(
+                enabled.command,
+                Commands::Pack {
                     regenerate: true,
                     ..
                 }
-            }
-        ));
-        assert!(matches!(
-            disabled.command,
-            Commands::Pack {
-                deny_skipped: _,
-                target: PackTargetArg::Java {
+            ));
+            assert!(matches!(
+                disabled.command,
+                Commands::Pack {
                     regenerate: false,
                     ..
                 }
-            }
-        ));
+            ));
+        });
     }
 
     #[test]
@@ -1611,7 +1575,8 @@ enabled = true
                 target: PackTargetArg::Android {
                     experimental: true,
                     ..
-                }
+                },
+                ..
             }
         ));
     }
@@ -1628,7 +1593,8 @@ enabled = true
                 target: PackTargetArg::Kmp {
                     experimental: true,
                     ..
-                }
+                },
+                ..
             }
         ));
     }
@@ -1645,7 +1611,8 @@ enabled = true
                 target: PackTargetArg::Python {
                     experimental: true,
                     ..
-                }
+                },
+                ..
             }
         ));
     }
@@ -1670,7 +1637,8 @@ enabled = true
                 target: PackTargetArg::Python {
                     python_interpreters,
                     ..
-                }
+                },
+                ..
             } if python_interpreters == vec!["python3.12".to_string(), "python3.13".to_string()]
         ));
     }
