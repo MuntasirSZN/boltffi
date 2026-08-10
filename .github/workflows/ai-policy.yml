@@ -1,11 +1,10 @@
 name: AI Policy
 
-on:
-  pull_request:
-    branches: [main]
+on: pull_request_target
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   commit-attribution:
@@ -15,7 +14,75 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - run: .github/scripts/check-ai-attribution.sh "$BASE_REVISION" "$HEAD_REVISION"
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Fetch pull request commits
+        run: git fetch --no-tags origin "refs/heads/${BASE_BRANCH}:refs/remotes/pull/base" "pull/${PR_NUMBER}/head:refs/remotes/pull/head"
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+      - name: Check commit attribution
+        id: attribution
+        run: |
+          set +e
+          .github/scripts/check-ai-attribution.sh "$BASE_REVISION" "$HEAD_REVISION" >"$RUNNER_TEMP/ai-attribution.txt" 2>&1
+          attribution_status=$?
+          set -e
+          if [[ "$attribution_status" -eq 0 ]]; then
+            echo 'failed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'failed=true' >> "$GITHUB_OUTPUT"
+          fi
         env:
           BASE_REVISION: ${{ github.event.pull_request.base.sha }}
           HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
+      - name: Update policy comment
+        uses: actions/github-script@v9
+        env:
+          ATTRIBUTION_FAILED: ${{ steps.attribution.outputs.failed }}
+          DIAGNOSTIC_PATH: ${{ runner.temp }}/ai-attribution.txt
+        with:
+          script: |
+            const marker = "<!-- boltffi-ai-attribution-policy -->"
+            const pullRequestNumber = context.payload.pull_request.number
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: pullRequestNumber,
+              per_page: 100,
+            })
+            const existingComment = comments.find(comment =>
+              comment.user?.login === "github-actions[bot]" && comment.body?.includes(marker)
+            )
+            const attributionFailed = process.env.ATTRIBUTION_FAILED === "true"
+
+            if (attributionFailed) {
+              const diagnostic = require("fs").readFileSync(process.env.DIAGNOSTIC_PATH, "utf8").trim()
+              const indentedDiagnostic = diagnostic
+                .split(/\r?\n/)
+                .map(line => `    ${line}`)
+                .join("\n")
+              const body = `${marker}\n\nThe commit attribution check found a policy violation. AI-assisted work is welcome, but AI tools must not be listed as commit co-authors. [Read the AI policy](https://github.com/boltffi/boltffi/blob/main/AI_POLICY.md).\n\n${indentedDiagnostic}`
+
+              if (existingComment) {
+                await github.rest.issues.updateComment({
+                  ...context.repo,
+                  comment_id: existingComment.id,
+                  body,
+                })
+              } else {
+                await github.rest.issues.createComment({
+                  ...context.repo,
+                  issue_number: pullRequestNumber,
+                  body,
+                })
+              }
+            } else if (existingComment) {
+              await github.rest.issues.deleteComment({
+                ...context.repo,
+                comment_id: existingComment.id,
+              })
+            }
+      - name: Reject AI-attributed commits
+        if: steps.attribution.outputs.failed == 'true'
+        run: |
+          cat "$RUNNER_TEMP/ai-attribution.txt"
+          exit 1
