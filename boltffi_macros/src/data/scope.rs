@@ -205,11 +205,11 @@ impl Declaration {
 
     /// Byte offset of a `proc_macro::Span` location.
     ///
-    /// Both fields arrive 1-indexed from the compiler. `LineColumn` is a
-    /// `proc_macro2` type whose own column convention is 0-indexed, so reading
-    /// the column straight out of it lands one byte past the identifier: for
-    /// `pub struct S`, on the space after `S`, and no declaration is found
-    /// there.
+    /// The compiler counts both fields from one, and counts the column in
+    /// characters while everything downstream works in bytes. Adding the
+    /// column to a byte offset is only correct for a line that is entirely
+    /// ASCII up to the declaration; `pub /* \u{3b1} */ struct S` is off by the
+    /// extra byte, and the identifier is missed.
     fn source_offset(source: &str, location: LineColumn) -> Option<usize> {
         let line_start = std::iter::once(0)
             .chain(
@@ -219,7 +219,14 @@ impl Declaration {
                     .filter_map(|(index, byte)| (byte == b'\n').then_some(index + 1)),
             )
             .nth(location.line.checked_sub(1)?)?;
-        Some(line_start + location.column.checked_sub(1)?)
+        let line = source[line_start..]
+            .split_once('\n')
+            .map_or(&source[line_start..], |(line, _)| line);
+        let column = line
+            .char_indices()
+            .nth(location.column.checked_sub(1)?)
+            .map(|(column, _)| column)?;
+        Some(line_start + column)
     }
 
     fn declaration_ordinal(
@@ -363,18 +370,32 @@ mod tests {
     /// `source_offset` feeds `declaration_ordinal`, and the two agree only if
     /// the offset lands inside the identifier.
     ///
-    /// The compiler reports both line and column 1-indexed. Reading the column
-    /// as 0-indexed puts the offset one byte past the name, which still lands
-    /// inside anything at least two characters long: every declaration in this
-    /// repository, and so nothing here caught it. A one-character name is the
-    /// only case where the off-by-one leaves the identifier.
+    /// The compiler counts both fields from one, and counts the column in
+    /// characters. Two separate things can put the offset outside the name:
+    /// reading the column as 0-indexed moves it one byte forward, and adding a
+    /// character column to a byte offset moves it back by one for every extra
+    /// byte earlier in the line.
+    ///
+    /// Either slip stays hidden behind a name of two characters or more, which
+    /// every declaration in this repository has. The one-character rows are
+    /// what make the arithmetic observable.
     #[test]
-    fn locates_a_declaration_from_a_one_indexed_column() {
+    fn locates_a_declaration_from_a_one_indexed_character_column() {
         for (source, name, line, column) in [
             ("#[data]\npub struct S { pub a: u32 }\n", "S", 2, 12),
             ("#[data]\npub struct Point { pub a: u32 }\n", "Point", 2, 12),
             ("    #[data]\n    pub struct T;\n", "T", 2, 16),
             ("#[data]\npub enum E { A }\n", "E", 2, 10),
+            // One multi-byte character before the name, then two: the column
+            // and the byte offset drift apart by one byte each.
+            ("#[data]\npub /* \u{3b1} */ struct S;\n", "S", 2, 20),
+            ("#[data]\npub /* \u{3b1}\u{3b2} */ struct S;\n", "S", 2, 21),
+            (
+                "#[data]\npub /* \u{1f600} */ struct Point;\n",
+                "Point",
+                2,
+                20,
+            ),
         ] {
             let kind = match source.contains("enum") {
                 true => DeclarationKind::Enumeration,
