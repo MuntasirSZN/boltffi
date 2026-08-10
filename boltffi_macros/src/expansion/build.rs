@@ -15,7 +15,7 @@ use boltffi_binding::{
 };
 use boltffi_scan::{ActiveCfg, ScanError, ScanInput};
 use proc_macro2::{Span, TokenStream};
-use quote::quote_spanned;
+use quote::{quote, quote_spanned};
 use serde::Deserialize;
 
 use crate::data::scope::{DataId, Declaration};
@@ -141,11 +141,35 @@ impl BuildContext {
     }
 
     fn render(&self) -> Result<TokenStream, BuildError> {
-        match self.request.emission {
+        let emitted_items = match self.request.emission {
             Emission::Bindings => self.render_root(),
             Emission::DataRuntime | Emission::SourceOnly => Ok(TokenStream::new()),
             Emission::Metadata => self.render_metadata(),
-        }
+        }?;
+        let expansion_build = BINDING_EXPANSION_BUILD_ENV;
+        let expansion_root = BINDING_EXPANSION_ROOT_ENV;
+        let expansion_source = BINDING_EXPANSION_SOURCE_ENV;
+        let expansion_surface = BINDING_EXPANSION_SURFACE_ENV;
+        let metadata_build = BINDING_METADATA_BUILD_ENV;
+        let metadata_features = BINDING_METADATA_FEATURES_ENV;
+        let metadata_root = BINDING_METADATA_ROOT_ENV;
+        let metadata_source = BINDING_METADATA_SOURCE_ENV;
+        let metadata_surface = BINDING_METADATA_SURFACE_ENV;
+        Ok(quote! {
+            const _: () = {
+                let _ = ::core::option_env!(#expansion_build);
+                let _ = ::core::option_env!(#expansion_root);
+                let _ = ::core::option_env!(#expansion_source);
+                let _ = ::core::option_env!(#expansion_surface);
+                let _ = ::core::option_env!(#metadata_build);
+                let _ = ::core::option_env!(#metadata_features);
+                let _ = ::core::option_env!(#metadata_root);
+                let _ = ::core::option_env!(#metadata_source);
+                let _ = ::core::option_env!(#metadata_surface);
+                let _ = ::core::option_env!("CARGO_PRIMARY_PACKAGE");
+            };
+            #emitted_items
+        })
     }
 
     fn render_data(&self, declaration: &Declaration) -> Result<TokenStream, BuildError> {
