@@ -704,6 +704,30 @@ mod tests {
         assert_generated_crate_checks("expander_ownerless_stream", ownerless_stream_crate(tokens));
     }
 
+    /// A hyphenated package scans and expands as one chain.
+    ///
+    /// `root_type` decides whether a declaration is local by comparing the id's
+    /// first segment against the package name with hyphens replaced, so the
+    /// scan has to write the id with the module name rather than the package
+    /// name. Constructing the contract by hand proves nothing here: the two
+    /// halves have to meet. Every fixture is named `demo`, which has no second
+    /// spelling to disagree about.
+    #[test]
+    fn scans_and_expands_a_hyphenated_package() {
+        let source = boltffi_scan::scan_file(
+            syn::parse_str("#[data]\n#[repr(C)]\npub struct Point { pub x: u8 }\n")
+                .expect("valid source"),
+            PackageInfo::new("my-root", None),
+        )
+        .expect("source scans");
+        let lowered = lower_with_declarations::<Native>(&source).expect("contract lowers");
+        let expansion = Expansion::new(&lowered);
+
+        expander::Expander::new(&source)
+            .native(&expansion)
+            .expect("a declaration of this crate expands");
+    }
+
     #[test]
     fn renders_associated_constant_access_through_its_owner() {
         let mut source = SourceContract::new(PackageInfo::new("demo", None));

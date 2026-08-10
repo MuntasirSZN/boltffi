@@ -450,6 +450,32 @@ mod tests {
         SourceTree::in_memory(crate_name, parse(source).items).expect("source tree")
     }
 
+    /// Declaration ids are Rust paths, so the crate segment is the module name.
+    ///
+    /// Cargo allows a hyphen in a package name where the module tree has an
+    /// underscore. Carrying the package name through unchanged produced ids
+    /// like `my-root::Point`, which no consumer can match against a crate
+    /// path: the macro compares them to `CARGO_PKG_NAME` with hyphens
+    /// replaced, and rejects the declaration as belonging to another crate.
+    /// Every fixture here is named `demo`, so nothing caught it.
+    #[test]
+    fn declaration_ids_use_the_module_name_of_a_hyphenated_package() {
+        let contract = scan_file(
+            parse("#[data]\npub struct Point { pub x: f64 }\n"),
+            PackageInfo::new("my-root", None),
+        )
+        .expect("scan");
+
+        assert_eq!(
+            contract
+                .records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["my_root::Point"],
+        );
+    }
+
     fn point(contract: &SourceContract) -> &RecordDef {
         contract
             .records

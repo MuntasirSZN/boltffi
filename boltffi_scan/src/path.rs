@@ -9,9 +9,15 @@ pub(super) struct ModulePath {
 }
 
 impl ModulePath {
+    /// Root of a crate's module path.
+    ///
+    /// Segments are Rust identifiers, and a package name is not one: cargo
+    /// allows hyphens where the module tree has underscores. Dependencies
+    /// arrive already normalised, through `ExportedPackage::module_name`, so
+    /// only the root reaches this with a raw package name.
     pub(super) fn root(crate_name: impl Into<String>) -> Self {
         Self {
-            segments: vec![crate_name.into()],
+            segments: vec![crate_name.into().replace('-', "_")],
         }
     }
 
