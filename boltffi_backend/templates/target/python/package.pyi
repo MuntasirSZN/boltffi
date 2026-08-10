@@ -24,22 +24,25 @@ PACKAGE_VERSION: str | None
 {% for record in records %}
 @dataclass(frozen=True, slots=True)
 class {{ record.class_name }}:
+{{- record.documentation.docstring("    ") }}
 {%- for constant in record.constants %}
     {{ constant.python_name }}: ClassVar[{{ constant.annotation }}]
+{{- constant.documentation.docstring("    ") }}
 {%- endfor %}
 {%- for field in record.fields %}
     {{ field.name }}: {{ field.annotation }}{% if let Some(default) = field.default %} = {{ default }}{% endif %}
+{{- field.documentation.docstring("    ") }}
 {%- endfor %}
 {%- for constructor in record.constructors %}
     @classmethod
-    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}": ...
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}":{% if constructor.documentation.is_empty() %} ...{% else %}{{ constructor.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in record.static_methods %}
     @staticmethod
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in record.instance_methods %}
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 
 {% if let Some(exception_name) = record.exception_name %}
@@ -52,30 +55,34 @@ class {{ exception_name }}(RuntimeError):
 {% for enumeration in enums %}
 {%- if let Some(wire) = enumeration.wire %}
 class {{ enumeration.class_name }}:
+{{- enumeration.documentation.docstring("    ") }}
 {%- if enumeration.constructors.is_empty() && enumeration.static_methods.is_empty() && enumeration.instance_methods.is_empty() && enumeration.constants.is_empty() %}
     pass
 {%- endif %}
 {%- for constant in enumeration.constants %}
     {{ constant.python_name }}: ClassVar[{{ constant.annotation }}]
+{{- constant.documentation.docstring("    ") }}
 {%- endfor %}
 {%- for constructor in enumeration.constructors %}
     @classmethod
-    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}": ...
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":{% if constructor.documentation.is_empty() %} ...{% else %}{{ constructor.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in enumeration.static_methods %}
     @staticmethod
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in enumeration.instance_methods %}
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 
 {% for variant in wire.variants %}
 @dataclass(frozen=True, slots=True)
 class {{ variant.class_name }}({{ enumeration.class_name }}):
+{{- variant.documentation.docstring("    ") }}
 {%- if variant.has_fields() %}
 {%- for field in variant.fields %}
     {{ field.name }}: {{ field.annotation }}{% if let Some(default) = field.default %} = {{ default }}{% endif %}
+{{- field.documentation.docstring("    ") }}
 {%- endfor %}
 {%- else %}
     pass
@@ -84,22 +91,24 @@ class {{ variant.class_name }}({{ enumeration.class_name }}):
 {% endfor %}
 {%- else %}
 class {{ enumeration.class_name }}(IntEnum):
+{{- enumeration.documentation.docstring("    ") }}
 {%- for variant in enumeration.variants %}
     {{ variant.name }} = {{ variant.value }}
 {%- endfor %}
 {%- for constant in enumeration.constants %}
     {{ constant.python_name }}: ClassVar[{{ constant.annotation }}]
+{{- constant.documentation.docstring("    ") }}
 {%- endfor %}
 {%- for constructor in enumeration.constructors %}
     @classmethod
-    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}": ...
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":{% if constructor.documentation.is_empty() %} ...{% else %}{{ constructor.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in enumeration.static_methods %}
     @staticmethod
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in enumeration.instance_methods %}
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 
 {%- endif %}
@@ -112,13 +121,15 @@ class {{ exception_name }}(RuntimeError):
 {% endfor %}
 {% for class in classes %}
 class {{ class.class_name }}:
+{{- class.documentation.docstring("    ") }}
     _handle: int
 {%- for constant in class.constants %}
     {{ constant.python_name }}: ClassVar[{{ constant.annotation }}]
+{{- constant.documentation.docstring("    ") }}
 {%- endfor %}
 {% if !class.init.is_empty() %}
 {% for init in class.init %}
-    def __init__(self{% for parameter in init.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> None: ...
+    def __init__(self{% for parameter in init.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> None:{% if init.documentation.is_empty() %} ...{% else %}{{ init.documentation.docstring("        ") }}{% endif %}
 {% endfor %}
 {% else %}
     def __init__(self) -> None: ...
@@ -128,17 +139,17 @@ class {{ class.class_name }}:
     def __del__(self) -> None: ...
 {%- for constructor in class.constructors %}
     @classmethod
-    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ class.class_name }}": ...
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ class.class_name }}":{% if constructor.documentation.is_empty() %} ...{% else %}{{ constructor.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in class.static_methods %}
     @staticmethod
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for method in class.instance_methods %}
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}: ...
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:{% if method.documentation.is_empty() %} ...{% else %}{{ method.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 {%- for stream in class.streams %}
-    def {{ stream.python_name }}(self) -> "{{ stream.subscription_class }}": ...
+    def {{ stream.python_name }}(self) -> "{{ stream.subscription_class }}":{% if stream.documentation.is_empty() %} ...{% else %}{{ stream.documentation.docstring("        ") }}{% endif %}
 {%- endfor %}
 
 {% for stream in class.streams %}
@@ -156,7 +167,8 @@ class {{ stream.subscription_class }}:
 {% endfor %}
 {% for constant in constants %}
 {{ constant.python_name }}: {{ constant.annotation }}
+{{- constant.documentation.docstring("") }}
 {% endfor %}
 {% for function in functions %}
-{% if function.asynchronous %}async {% endif %}def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_annotation }}: ...
+{% if function.asynchronous %}async {% endif %}def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_annotation }}:{% if function.documentation.is_empty() %} ...{% else %}{{ function.documentation.docstring("    ") }}{% endif %}
 {%- endfor %}

@@ -8,11 +8,12 @@ use crate::{
     },
 };
 
-use super::super::Package;
+use super::super::{Documentation, Package};
 use super::{body::CallableBody, parameter::ParameterStub, return_value::ReturnStub};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FunctionStub {
+    pub documentation: Documentation,
     pub python_name: Identifier,
     pub parameters: Vec<ParameterStub>,
     pub return_annotation: TypeAnnotation,
@@ -48,6 +49,7 @@ impl FunctionStub {
         let uses_wire_helpers =
             parameters.iter().any(ParameterStub::uses_wire_helpers) || returned.uses_wire_helpers();
         Ok(Self {
+            documentation: Documentation::new(function.meta().doc()),
             python_name: Name::new(function.name()).function()?,
             parameters,
             return_annotation: returned.into_annotation(),

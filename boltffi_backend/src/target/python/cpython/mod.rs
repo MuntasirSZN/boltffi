@@ -1622,6 +1622,175 @@ mod tests {
     }
 
     #[test]
+    fn python_target_renders_doc_comments_as_docstrings() {
+        let output = target()
+            .render(&bindings(
+                r#"
+                /// A geometric point.
+                ///
+                /// Coordinates are plain `f64`.
+                #[repr(C)]
+                #[data]
+                pub struct Point {
+                    /// Horizontal coordinate.
+                    pub x: f64,
+                    pub y: f64,
+                }
+
+                #[data(impl)]
+                impl Point {
+                    /// Builds the origin.
+                    pub fn origin() -> Self {
+                        Self { x: 0.0, y: 0.0 }
+                    }
+
+                    /// Returns the distance from the origin.
+                    pub fn magnitude(&self) -> f64 {
+                        0.0
+                    }
+                }
+
+                /// A named label.
+                #[data]
+                pub struct Label {
+                    /// The visible text.
+                    pub text: String,
+                }
+
+                pub struct Counter {
+                    value: u32,
+                }
+
+                /// A counter that lives in Rust.
+                #[export(single_threaded)]
+                impl Counter {
+                    /// Creates a counter starting at `value`.
+                    pub fn new(value: u32) -> Self {
+                        Self { value }
+                    }
+
+                    /// Bumps the counter.
+                    pub fn bump(&mut self) {
+                        self.value += 1;
+                    }
+                }
+
+                /// The answer to everything.
+                #[export]
+                pub const ANSWER: u32 = 42;
+
+                /// Greets someone by name.
+                #[export]
+                pub fn greet(name: String) -> String {
+                    name
+                }
+
+                #[export]
+                pub fn undocumented(value: i32) -> i32 {
+                    value
+                }
+                "#,
+            ))
+            .expect("Python target should render doc comments");
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
+
+        assert!(init.contains(
+            r#"Point.__doc__ = """A geometric point.
+
+Coordinates are plain `f64`.
+"""
+"#
+        ));
+        assert!(stub.contains(
+            r#"class Point:
+    """A geometric point.
+
+    Coordinates are plain `f64`.
+    """
+"#
+        ));
+        assert!(stub.contains(
+            r#"    x: float
+    """Horizontal coordinate."""
+    y: float
+"#
+        ));
+        assert!(init.contains(
+            r#"def _boltffi_attach_Point_magnitude(self) -> float:
+    """Returns the distance from the origin."""
+"#
+        ));
+        assert!(stub.contains(
+            r#"    def origin(cls) -> "Point":
+        """Builds the origin."""
+"#
+        ));
+        assert!(stub.contains(
+            r#"    def magnitude(self) -> float:
+        """Returns the distance from the origin."""
+"#
+        ));
+
+        let label = r#"class Label:
+    """A named label."""
+    text: str
+    """The visible text."""
+"#;
+        assert!(init.contains(label));
+        assert!(stub.contains(label));
+
+        let counter = "class Counter:\n    \"\"\"A counter that lives in Rust.\"\"\"\n";
+        assert!(init.contains(counter));
+        assert!(stub.contains(counter));
+        assert!(init.contains(
+            r#"    def __init__(self, value: int) -> None:
+        """Creates a counter starting at `value`."""
+"#
+        ));
+        assert!(stub.contains(
+            r#"    def bump(self) -> None:
+        """Bumps the counter."""
+"#
+        ));
+
+        assert!(init.contains("answer: int = 42\n\"\"\"The answer to everything.\"\"\"\n"));
+        assert!(stub.contains("answer: int\n\"\"\"The answer to everything.\"\"\"\n"));
+
+        let greet = "def greet(name: str) -> str:\n    \"\"\"Greets someone by name.\"\"\"\n";
+        assert!(init.contains(greet));
+        assert!(stub.contains(greet));
+
+        assert!(stub.contains("def undocumented(value: int) -> int: ...\n"));
+        assert!(init.contains(
+            "def undocumented(value: int) -> int:\n    return _native.undocumented(value)\n"
+        ));
+    }
+
+    #[test]
+    fn python_target_escapes_docstring_delimiters_and_backslashes() {
+        let output = target()
+            .render(&bindings(
+                r##"
+                /// Spelled """like this""", with a raw regex \d+ and a trailing \
+                #[data]
+                pub struct Awkward {
+                    pub text: String,
+                }
+                "##,
+            ))
+            .expect("Python target should render awkward doc comments");
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
+
+        let docstring = r#"    """Spelled \"\""like this\"\"", with a raw regex \\d+ and a trailing \\"""
+"#;
+        assert!(init.contains(docstring));
+        assert!(stub.contains(docstring));
+        assert!(!init.contains(r#"Spelled """like"#));
+    }
+
+    #[test]
     fn python_target_renders_record_field_defaults() {
         let output = target()
             .render(&bindings(
