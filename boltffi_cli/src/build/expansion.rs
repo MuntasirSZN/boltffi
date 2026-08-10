@@ -296,6 +296,12 @@ impl BindingExpansion {
             surface: BindingMetadataSurface::Native,
         }
     }
+
+    /// The feature list `configure_rustc` passes to the `#[data]` macro.
+    pub(crate) fn fixture_features(mut self, features: &str) -> Self {
+        self.features = features.into();
+        self
+    }
 }
 
 #[cfg(test)]
