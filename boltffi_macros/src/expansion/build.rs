@@ -42,9 +42,10 @@ pub struct DataExpansion {
 
 #[derive(Clone, Copy)]
 enum Emission {
-    Root,
-    TypeSupport,
+    Bindings,
+    DataRuntime,
     Metadata,
+    SourceOnly,
 }
 
 struct Request {
@@ -141,13 +142,19 @@ impl BuildContext {
 
     fn render(&self) -> Result<TokenStream, BuildError> {
         match self.request.emission {
-            Emission::Root => self.render_root(),
-            Emission::TypeSupport => Ok(TokenStream::new()),
+            Emission::Bindings => self.render_root(),
+            Emission::DataRuntime | Emission::SourceOnly => Ok(TokenStream::new()),
             Emission::Metadata => self.render_metadata(),
         }
     }
 
     fn render_data(&self, declaration: &Declaration) -> Result<TokenStream, BuildError> {
+        if matches!(
+            self.request.emission,
+            Emission::Metadata | Emission::SourceOnly
+        ) {
+            return Ok(TokenStream::new());
+        }
         if let Some(scope) = declaration.local_scope() {
             let contract = boltffi_scan::scan_file(scope.clone(), self.request.package.clone())?;
             let id = declaration
@@ -254,10 +261,10 @@ impl Request {
                 manifest_dir,
                 PathBuf::from(required_env(BINDING_EXPANSION_SOURCE_ENV)?),
                 surface,
-                Emission::Root,
+                Emission::Bindings,
             );
         }
-        Self::local(manifest_dir, surface, Emission::TypeSupport)
+        Self::local(manifest_dir, surface, Emission::DataRuntime)
     }
 
     fn metadata_build() -> Result<Self, BuildError> {
@@ -272,7 +279,7 @@ impl Request {
                 Emission::Metadata,
             );
         }
-        Self::local(manifest_dir, surface, Emission::TypeSupport)
+        Self::local(manifest_dir, surface, Emission::SourceOnly)
     }
 
     fn cargo_build() -> Result<Self, BuildError> {
@@ -282,8 +289,8 @@ impl Request {
             _ => BindingMetadataSurface::Native,
         };
         let emission = match env::var_os("CARGO_PRIMARY_PACKAGE") {
-            Some(_) => Emission::Root,
-            None => Emission::TypeSupport,
+            Some(_) => Emission::Bindings,
+            None => Emission::DataRuntime,
         };
         Self::local(manifest_dir, surface, emission)
     }
@@ -333,7 +340,7 @@ impl Request {
     }
 
     fn active_cfg(&self) -> ActiveCfg {
-        let features = matches!(self.emission, Emission::Root | Emission::Metadata)
+        let features = matches!(self.emission, Emission::Bindings | Emission::Metadata)
             .then(|| env::var(BINDING_METADATA_FEATURES_ENV).ok())
             .flatten()
             .into_iter()
