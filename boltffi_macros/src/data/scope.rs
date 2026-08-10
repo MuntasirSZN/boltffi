@@ -203,6 +203,13 @@ impl Declaration {
         path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
     }
 
+    /// Byte offset of a `proc_macro::Span` location.
+    ///
+    /// Both fields arrive 1-indexed from the compiler. `LineColumn` is a
+    /// `proc_macro2` type whose own column convention is 0-indexed, so reading
+    /// the column straight out of it lands one byte past the identifier: for
+    /// `pub struct S`, on the space after `S`, and no declaration is found
+    /// there.
     fn source_offset(source: &str, location: LineColumn) -> Option<usize> {
         let line_start = std::iter::once(0)
             .chain(
@@ -212,7 +219,7 @@ impl Declaration {
                     .filter_map(|(index, byte)| (byte == b'\n').then_some(index + 1)),
             )
             .nth(location.line.checked_sub(1)?)?;
-        Some(line_start + location.column)
+        Some(line_start + location.column.checked_sub(1)?)
     }
 
     fn declaration_ordinal(
@@ -350,7 +357,43 @@ impl<'syntax> Visit<'syntax> for ScopeFinder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeclarationKind, Scope, ScopeFinder};
+    use super::{Declaration, DeclarationKind, Scope, ScopeFinder};
+    use proc_macro2::LineColumn;
+
+    /// `source_offset` feeds `declaration_ordinal`, and the two agree only if
+    /// the offset lands inside the identifier.
+    ///
+    /// The compiler reports both line and column 1-indexed. Reading the column
+    /// as 0-indexed puts the offset one byte past the name, which still lands
+    /// inside anything at least two characters long: every declaration in this
+    /// repository, and so nothing here caught it. A one-character name is the
+    /// only case where the off-by-one leaves the identifier.
+    #[test]
+    fn locates_a_declaration_from_a_one_indexed_column() {
+        for (source, name, line, column) in [
+            ("#[data]\npub struct S { pub a: u32 }\n", "S", 2, 12),
+            ("#[data]\npub struct Point { pub a: u32 }\n", "Point", 2, 12),
+            ("    #[data]\n    pub struct T;\n", "T", 2, 16),
+            ("#[data]\npub enum E { A }\n", "E", 2, 10),
+        ] {
+            let kind = match source.contains("enum") {
+                true => DeclarationKind::Enumeration,
+                false => DeclarationKind::Record,
+            };
+            let offset = Declaration::source_offset(source, LineColumn { line, column })
+                .unwrap_or_else(|| panic!("`{name}` has an offset"));
+            assert_eq!(
+                &source[offset..offset + name.len()],
+                name,
+                "offset for `{name}` should land on the name",
+            );
+            assert_eq!(
+                Declaration::declaration_ordinal(source, name, kind, offset),
+                Some(0),
+                "`{name}` should resolve to its own declaration",
+            );
+        }
+    }
 
     #[test]
     fn finds_data_declarations_in_their_function_block() {
