@@ -33,6 +33,7 @@ fi
 printf '%s\n' 'BoltFFI does not accept commits attributed to AI tools.' >&2
 printf '%s\n' 'AI-assisted work is welcome, but AI is a tool rather than a substitute for human ownership.' >&2
 printf '%s\n' 'Contributors must understand and verify the change and take responsibility for it.' >&2
+printf '%s\n' 'Read the AI policy: https://github.com/boltffi/boltffi/blob/main/AI_POLICY.md' >&2
 printf '%s\n' 'Remove the AI Co-authored-by trailer and amend each listed commit:' >&2
 printf '%s\n' "$violations" >&2
 exit 1
