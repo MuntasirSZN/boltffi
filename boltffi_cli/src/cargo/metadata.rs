@@ -137,7 +137,7 @@ impl CargoMetadata {
                     "lib"
                 } else {
                     match t.platform() {
-                        Platform::Wasm => "",
+                        Platform::Wasm | Platform::Windows => "",
                         Platform::Android
                         | Platform::Ios
                         | Platform::IosSimulator
@@ -150,6 +150,7 @@ impl CargoMetadata {
                         Platform::Wasm => "wasm",
                         Platform::Android | Platform::Linux => "so",
                         Platform::MacOs | Platform::Ios | Platform::IosSimulator => "dylib",
+                        Platform::Windows => "dll",
                     }
                 } else if crate_type.is_staticlib() {
                     "a"
