@@ -15,11 +15,13 @@ use crate::{
 };
 
 use super::{
-    AssociatedCallable, ConstantStub, NameScope, constant::DefaultExpression, type_hint::TypeHint,
+    AssociatedCallable, ConstantStub, Documentation, NameScope, constant::DefaultExpression,
+    type_hint::TypeHint,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordClass {
+    pub documentation: Documentation,
     pub class_name: Identifier,
     pub exception_name: Option<Identifier>,
     pub register_method: Identifier,
@@ -43,6 +45,7 @@ impl RecordClass {
                 })?;
         let symbols = record_render::Symbols::from_direct(record, c_record)?;
         Ok(Self {
+            documentation: Documentation::new(record.meta().doc()),
             class_name: symbols.class_name().clone(),
             exception_name: record
                 .is_error_payload()
@@ -79,6 +82,7 @@ impl RecordClass {
             .map(|field| EncodedRecordField::from_field(field, package))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
+            documentation: Documentation::new(record.meta().doc()),
             class_name: symbols.class_name().clone(),
             exception_name: record
                 .is_error_payload()
@@ -217,6 +221,7 @@ impl RecordClass {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordField {
+    pub documentation: Documentation,
     pub name: Identifier,
     pub annotation: TypeAnnotation,
     pub default: Option<Expression>,
@@ -225,6 +230,7 @@ pub struct RecordField {
 impl RecordField {
     pub fn from_encoded(field: &EncodedFieldDecl, package: &Package) -> Result<Self> {
         Ok(Self {
+            documentation: Documentation::new(field.meta().doc()),
             name: Self::name(field.key())?,
             annotation: TypeHint::from_type_ref(field.ty(), package)?.into_annotation(),
             default: field
@@ -271,6 +277,7 @@ impl RecordField {
 
     fn from_direct(field: &DirectFieldDecl, package: &Package) -> Result<Self> {
         Ok(Self {
+            documentation: Documentation::new(field.meta().doc()),
             name: Self::name(field.key())?,
             annotation: TypeHint::from_primitive(field.ty().primitive())?.into_annotation(),
             default: field

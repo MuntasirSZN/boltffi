@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    super::Package,
+    super::{Documentation, Package},
     body::CallableBody,
     parameter::ParameterStub,
     return_value::{ReturnStub, ReturnedValue},
@@ -20,6 +20,7 @@ use super::{
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssociatedCallable {
+    pub documentation: Documentation,
     pub receiver: bool,
     pub python_name: Identifier,
     pub native_name: Identifier,
@@ -38,6 +39,7 @@ impl AssociatedCallable {
         symbols: &class_render::Symbols,
         package: &Package,
     ) -> Result<Self> {
+        let documentation = Documentation::new(initializer.meta().doc());
         let parameters = initializer
             .callable()
             .params()
@@ -56,6 +58,7 @@ impl AssociatedCallable {
         )?;
         let uses_wire_helpers = parameters.iter().any(ParameterStub::uses_wire_helpers);
         Ok(Self {
+            documentation,
             receiver: false,
             python_name: Name::new(initializer.name()).function()?,
             asynchronous: body.is_async(),
@@ -74,6 +77,7 @@ impl AssociatedCallable {
         symbols: &class_render::Symbols,
         package: &Package,
     ) -> Result<Self> {
+        let documentation = Documentation::new(method.meta().doc());
         let receiver = method.callable().receiver().is_some();
         let parameters = method
             .callable()
@@ -95,6 +99,7 @@ impl AssociatedCallable {
         let uses_wire_helpers =
             parameters.iter().any(ParameterStub::uses_wire_helpers) || returned.uses_wire_helpers();
         Ok(Self {
+            documentation,
             receiver,
             python_name: Name::new(method.name()).function()?,
             asynchronous: body.is_async(),
@@ -113,6 +118,7 @@ impl AssociatedCallable {
         native_name: Identifier,
         package: &Package,
     ) -> Result<Self> {
+        let documentation = Documentation::new(initializer.meta().doc());
         let parameters = Self::parameters(initializer.callable().params(), package)?;
         let returned = ReturnStub::from_callable(initializer.callable(), package)?;
         let arguments = Self::arguments(None, &parameters);
@@ -126,6 +132,7 @@ impl AssociatedCallable {
         let uses_wire_helpers =
             parameters.iter().any(ParameterStub::uses_wire_helpers) || returned.uses_wire_helpers();
         Ok(Self {
+            documentation,
             receiver: false,
             python_name: Name::new(initializer.name()).function()?,
             asynchronous: body.is_async(),
@@ -146,6 +153,7 @@ impl AssociatedCallable {
         mutated_receiver_type: Option<TypeAnnotation>,
         package: &Package,
     ) -> Result<Self> {
+        let documentation = Documentation::new(method.meta().doc());
         let parameters = Self::parameters(method.callable().params(), package)?;
         let returned = match mutated_receiver_type {
             Some(annotation) => ReturnStub::native(annotation),
@@ -162,6 +170,7 @@ impl AssociatedCallable {
         let uses_wire_helpers =
             parameters.iter().any(ParameterStub::uses_wire_helpers) || returned.uses_wire_helpers();
         Ok(Self {
+            documentation,
             receiver: receiver.is_some(),
             python_name: Name::new(method.name()).function()?,
             asynchronous: body.is_async(),

@@ -14,10 +14,11 @@ use crate::{
     },
 };
 
-use super::type_hint::TypeHint;
+use super::{Documentation, type_hint::TypeHint};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClassStream {
+    pub documentation: Documentation,
     pub python_name: Identifier,
     pub subscribe_method: Identifier,
     pub subscription_class: Identifier,
@@ -40,6 +41,7 @@ impl ClassStream {
         let pop_batch_body = item.pop_batch_body(symbols.pop_batch()?)?;
         let uses_wire_helpers = item.uses_wire_helpers;
         Ok(Self {
+            documentation: Documentation::new(declaration.meta().doc()),
             python_name: Name::new(declaration.name()).function()?,
             subscribe_method: symbols.subscribe()?,
             subscription_class: Identifier::parse(format!(

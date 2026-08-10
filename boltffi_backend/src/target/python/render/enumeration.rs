@@ -14,8 +14,8 @@ use crate::{
 };
 
 use super::{
-    AssociatedCallable, ConstantStub, NameScope, Package, record::EncodedRecordField,
-    record::RecordField,
+    AssociatedCallable, ConstantStub, Documentation, NameScope, Package,
+    record::EncodedRecordField, record::RecordField,
 };
 
 pub enum VariantStyle {
@@ -47,6 +47,7 @@ impl VariantStyle {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnumClass {
+    pub documentation: Documentation,
     pub class_name: Identifier,
     pub exception_name: Option<Identifier>,
     pub register_method: Identifier,
@@ -69,6 +70,7 @@ impl EnumClass {
         )?;
         let symbols = enumeration_render::Symbols::from_c_style(enumeration, c_enum)?;
         Ok(Self {
+            documentation: Documentation::new(enumeration.meta().doc()),
             class_name: class.class_name().clone(),
             exception_name: enumeration
                 .is_error_payload()
@@ -92,6 +94,7 @@ impl EnumClass {
         let symbols = enumeration_render::Symbols::from_data(enumeration)?;
         let class_name = symbols.class_name().clone();
         Ok(Self {
+            documentation: Documentation::new(enumeration.meta().doc()),
             class_name: class_name.clone(),
             exception_name: enumeration
                 .is_error_payload()
@@ -293,6 +296,7 @@ pub struct DataEnumWire {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataEnumVariant {
+    pub documentation: Documentation,
     pub class_name: Identifier,
     pub tag: u32,
     pub fields: Vec<RecordField>,
@@ -311,6 +315,7 @@ impl DataEnumVariant {
     ) -> Result<Self> {
         let fields = Self::payload_fields(variant.payload())?;
         Ok(Self {
+            documentation: Documentation::new(variant.meta().doc()),
             class_name: Identifier::parse(format!(
                 "{}{}",
                 enum_class_name,
