@@ -7,7 +7,7 @@ use crate::declared_types::DeclaredTypes;
 use crate::input::ScanInput;
 use crate::marked::MarkedItems;
 use crate::package_graph::{ExportedPackage, LoadError, PackageGraph};
-use crate::path::ImportLookup;
+use crate::path::{ImportLookup, module_name};
 use crate::source_tree::SourceTree;
 use crate::{ModuleScope, ScanError, items};
 
@@ -129,11 +129,15 @@ pub fn scan_package(input: &ScanInput) -> Result<PackageScan, ScanError> {
         scan_marked_with_declarations(&root_marked, &declared_types, input.package().clone())?;
     let complete =
         scan_marked_with_declarations(&complete_marked, &declared_types, input.package().clone())?;
+    // The ids being matched here carry the module name, so the root has to be
+    // spelled the same way: a hyphenated package would match nothing, and its
+    // own items would be emitted unqualified.
+    let root_module = module_name(&input.package().name);
     let root_visible_paths = root_visible_paths(
         &declared_types,
         &complete_tree,
         &complete_marked,
-        &input.package().name,
+        &root_module,
         &direct_dependency_modules,
     );
     Ok(PackageScan {
