@@ -1,10 +1,10 @@
 use askama::Template as AskamaTemplate;
 use boltffi_binding::{
     CallbackId, ClassId, ClosureReturn, DirectValueType, DirectVectorElementType, Direction,
-    EnumId, ErrorChannel, ErrorPlacement, ExecutionDecl, ExportedCallable, FunctionDecl,
-    HandlePresence, HandleTarget, IncomingParam, IntoRust, Native, NativeSymbol, OutOfRust,
-    ParamDecl, ParamPlan, ParamPlanRender, Primitive, Receive, RecordId, ReturnPlanRender,
-    ReturnValueSlot, Surface, TypeRef, native,
+    DocComment, EnumId, ErrorChannel, ErrorPlacement, ExecutionDecl, ExportedCallable,
+    FunctionDecl, HandlePresence, HandleTarget, IncomingParam, IntoRust, Native, NativeSymbol,
+    OutOfRust, ParamDecl, ParamPlan, ParamPlanRender, Primitive, Receive, RecordId,
+    ReturnPlanRender, ReturnValueSlot, Surface, TypeRef, native,
 };
 
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
         name_style::{KotlinPackage, Name},
         primitive::KotlinPrimitive,
         render::{
+            Documentation,
             callback::CallbackHandle,
             class::ClassHandle,
             closure::Closure,
@@ -39,6 +40,7 @@ struct FunctionTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Function {
     name: Identifier,
+    documentation: Documentation,
     parameters: Vec<ExportedParameter>,
     returns: Option<TypeName>,
     setup: Vec<Statement>,
@@ -50,6 +52,7 @@ pub struct Function {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportedCall {
     name: Identifier,
+    documentation: Documentation,
     parameters: Vec<ExportedParameter>,
     returns: Option<TypeName>,
     setup: Vec<Statement>,
@@ -231,6 +234,7 @@ impl Function {
                 decl.callable(),
                 None,
             )
+            .map(|call| call.documented(decl.meta().doc()))
             .map(Self::from_call)
     }
 
@@ -242,6 +246,10 @@ impl Function {
 
     pub fn name(&self) -> &Identifier {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn parameters(&self) -> &[ExportedParameter] {
@@ -275,6 +283,7 @@ impl Function {
     fn from_call(call: ExportedCall) -> Self {
         Self {
             name: call.name,
+            documentation: call.documentation,
             parameters: call.parameters,
             returns: call.returns,
             setup: call.setup,
@@ -414,6 +423,7 @@ impl<'render> ExportedCallRenderer<'render> {
         match callable.execution() {
             ExecutionDecl::Synchronous(_) => Ok(ExportedCall {
                 name,
+                documentation: Documentation::default(),
                 parameters,
                 returns,
                 setup,
@@ -433,6 +443,7 @@ impl<'render> ExportedCallRenderer<'render> {
                 ..
             }) => Ok(ExportedCall {
                 name,
+                documentation: Documentation::default(),
                 parameters,
                 returns,
                 setup: Vec::new(),
@@ -483,6 +494,11 @@ impl ReceiverCarrier {
 }
 
 impl ExportedCall {
+    pub fn documented(mut self, documentation: Option<&DocComment>) -> Self {
+        self.documentation = Documentation::new(documentation);
+        self
+    }
+
     pub(crate) fn requalify_types(mut self, requalify: &dyn Fn(TypeName) -> TypeName) -> Self {
         self.returns = self.returns.take().map(requalify);
         for parameter in &mut self.parameters {
@@ -494,6 +510,10 @@ impl ExportedCall {
 
     pub fn name(&self) -> &Identifier {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn parameters(&self) -> &[ExportedParameter] {

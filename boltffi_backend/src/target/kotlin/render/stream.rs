@@ -13,8 +13,8 @@ use crate::{
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
-            class::Class, direct_vector::DirectVector, enumeration::Enumeration, record::Record,
-            type_name::KotlinType,
+            Documentation, class::Class, direct_vector::DirectVector, enumeration::Enumeration,
+            record::Record, type_name::KotlinType,
         },
         syntax::{ArgumentList, Expression, Identifier, Statement, TypeName},
     },
@@ -29,6 +29,7 @@ struct StreamTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Stream {
     name: Identifier,
+    documentation: Documentation,
     receiver: Option<TypeName>,
     item: TypeName,
     delivery: Delivery,
@@ -70,6 +71,7 @@ impl Stream {
         let item = StreamItem::from_plan(declaration.item(), host, context)?;
         Ok(Self {
             name: Name::new(declaration.name()).function()?,
+            documentation: Documentation::new(declaration.meta().doc()),
             receiver: declaration
                 .owner()
                 .map(|owner| Class::type_name_from_id(owner, context))
@@ -95,6 +97,10 @@ impl Stream {
 
     pub fn name(&self) -> &Identifier {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn receiver(&self) -> Option<&TypeName> {
