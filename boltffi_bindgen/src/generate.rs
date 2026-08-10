@@ -938,10 +938,6 @@ mod tests {
         SourceName::from_canonical(SourceCanonicalName::single(part))
     }
 
-    fn name(part: &str) -> SourceName {
-        source_name(part)
-    }
-
     fn file<'output>(output: &'output GeneratedOutput, path: &str) -> &'output str {
         output
             .files()

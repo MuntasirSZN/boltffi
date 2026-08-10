@@ -1,4 +1,7 @@
-use boltffi_ast::{CanonicalName, NamePart, SourceName};
+use boltffi_ast::{CanonicalName, SourceName};
+
+#[cfg(test)]
+use boltffi_ast::NamePart;
 
 pub(super) fn source(ident: &syn::Ident) -> SourceName {
     SourceName::new(ident.to_string(), canonical(ident))
@@ -13,17 +16,7 @@ pub(super) fn canonical(ident: &syn::Ident) -> CanonicalName {
 }
 
 pub(super) fn canonical_segment(segment: &str) -> CanonicalName {
-    CanonicalName::new(
-        snake_case(segment)
-            .split('_')
-            .filter(|part| !part.is_empty())
-            .map(NamePart::new)
-            .collect(),
-    )
-}
-
-pub(super) fn symbol_segment(segment: &str) -> String {
-    snake_case(segment)
+    CanonicalName::from(segment)
 }
 
 fn ident_source(ident: &syn::Ident) -> String {
@@ -31,36 +24,6 @@ fn ident_source(ident: &syn::Ident) -> String {
         .to_string()
         .strip_prefix("r#")
         .map_or_else(|| ident.to_string(), ToOwned::to_owned)
-}
-
-fn snake_case(name: &str) -> String {
-    let characters = name.chars().collect::<Vec<_>>();
-    characters.iter().enumerate().fold(
-        String::with_capacity(name.len()),
-        |mut normalized, (index, character)| {
-            if *character == '_' {
-                if !normalized.is_empty() && !normalized.ends_with('_') {
-                    normalized.push('_');
-                }
-                return normalized;
-            }
-
-            if character.is_uppercase() && index > 0 {
-                let previous = characters[index - 1];
-                let next = characters.get(index + 1).copied();
-                let previous_is_word = previous.is_lowercase() || previous.is_ascii_digit();
-                let acronym_boundary =
-                    previous.is_uppercase() && next.is_some_and(char::is_lowercase);
-
-                if (previous_is_word || acronym_boundary) && !normalized.ends_with('_') {
-                    normalized.push('_');
-                }
-            }
-
-            normalized.extend(character.to_lowercase());
-            normalized
-        },
-    )
 }
 
 #[cfg(test)]

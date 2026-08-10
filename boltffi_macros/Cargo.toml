@@ -17,10 +17,11 @@ syn = { workspace = true, features = ["printing"] }
 quote.workspace = true
 proc-macro2.workspace = true
 proc-macro-crate = "3.5"
-boltffi_ffi_rules.workspace = true
 boltffi_ast.workspace = true
 boltffi_binding.workspace = true
 boltffi_scan.workspace = true
+serde.workspace = true
+toml = "1.0"
 
 [dev-dependencies]
 boltffi_bindgen.workspace = true

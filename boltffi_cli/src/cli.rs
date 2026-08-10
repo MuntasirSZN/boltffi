@@ -115,9 +115,6 @@ pub enum Commands {
         #[arg(long, help = "Enable experimental targets/features")]
         experimental: bool,
 
-        #[arg(long, help = "Render through the IR-AST metadata pipeline")]
-        ir: bool,
-
         #[arg(
             long,
             help = "Fail instead of emitting a binding with declarations left out"
@@ -491,7 +488,6 @@ pub(crate) fn execute_command(
             target,
             output,
             experimental,
-            ir,
             deny_skipped,
         } => {
             let config = load_config(config_paths)?;
@@ -511,7 +507,6 @@ pub(crate) fn execute_command(
                     .unwrap_or(GenerateTarget::All),
                 output,
                 experimental,
-                ir,
                 cargo_args: cargo_args.clone(),
                 deny_skipped,
             };
@@ -904,7 +899,6 @@ fn run_release(
             target: GenerateTarget::All,
             output: None,
             experimental: false,
-            ir: false,
             cargo_args: cargo_args.clone(),
             deny_skipped: false,
         },

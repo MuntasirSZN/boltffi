@@ -128,7 +128,7 @@ Three places connect the host to the `boltffi` command.
 
 The IR driver in `boltffi_bindgen/src/generate.rs` needs an arm in `Generation::render` and a `render_<lang>` method that builds the host, calls `into_target` on it to get the composed target, and renders. `render_python` is the pattern to copy, where it builds the host, calls `host.into_target(&bindings)`, and passes the result through `render_backend`.
 
-The generate command in `boltffi_cli/src/commands/generate/ir.rs` and `boltffi_cli/src/commands/generate/mod.rs` needs the new target routed into `run_ir_generation`, guarded by `config.should_process` so the experimental gate applies.
+The generate command in `boltffi_cli/src/commands/generate/bindings.rs` and `boltffi_cli/src/commands/generate/mod.rs` needs the new target routed into `run_generation`, guarded by `config.should_process` so the experimental gate applies.
 
 The argument parsing in `boltffi_cli/src/cli.rs` (the `GenerateTargetArg` and `PackTargetArg` enums) and the config in `boltffi_cli/src/config/` (a `[targets.<lang>]` section in `targets.rs` plus output paths in `config/mod.rs`) expose the target and its settings.
 
@@ -170,7 +170,7 @@ Work through it in that order. Generate the demo through the new target:
 just demo-generate <lang>
 ```
 
-The two coverage modes serve two different moments. While bringing a kind up, `just demo-generate` runs the CLI through the `--ir` path in `CoverageMode::Partial` (set in `boltffi_cli/src/commands/generate/ir.rs`): it skips declarations the host cannot render yet, collects them into the coverage report, and prints what it skipped instead of failing. That is what keeps the demo usable mid-build, so you see every remaining gap in one pass.
+The two coverage modes serve two different moments. While bringing a kind up, `just demo-generate` runs the CLI in `CoverageMode::Partial` (set in `boltffi_cli/src/commands/generate/bindings.rs`): it skips declarations the host cannot render yet, collects them into the coverage report, and prints what it skipped instead of failing. That is what keeps the demo usable mid-build, so you see every remaining gap in one pass.
 
 `CoverageMode::Complete` is the stabilization check, and it is the default on `Generation`. Under it, anything not built yet stops generation. A declaration kind still marked `unsupported` is rejected up front by the capability gate with `Error::BindingCapability`. A shape a stable renderer cannot handle yet either returns a render error or records a coverage diagnostic, and a complete render with any incomplete coverage fails with `Error::IncompleteCoverage` naming the declaration and reason. Run complete mode to prove a feature is actually done, and each failure names the next task, so build that case, mark the kind `stable` once it fully works, and run again.
 
@@ -218,7 +218,7 @@ just demo-test-report
 
 It prints each case, which targets support it, and the exclusion counts per target.
 
-Before a feature PR goes up, run the same checks every backend change runs. The focused backend test for the target, the demo generation through the `--ir` command, and then the workspace gates:
+Before a feature PR goes up, run the same checks every backend change runs. The focused backend test for the target, the demo generation command, and then the workspace gates:
 
 ```bash
 just test-crate boltffi_backend
