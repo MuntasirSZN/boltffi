@@ -9,7 +9,7 @@ use proc_macro2::TokenStream;
 #[cfg(test)]
 use quote::format_ident;
 use quote::quote;
-use syn::Type;
+use syn::{Path as RustPath, Type};
 
 use crate::expansion::{contract::Expansion, error::Error, metadata, rust_api, wrapper};
 
@@ -24,6 +24,11 @@ struct SurfaceExpander<'expansion, 'lowered> {
     support: &'lowered SourceContract,
     visible_paths: &'expansion HashMap<String, Path>,
     expansion: ExpansionSurface<'expansion, 'lowered>,
+}
+
+struct StreamOwner<'source> {
+    declaration: &'source ClassDef,
+    rust_type: RustPath,
 }
 
 #[derive(Clone, Copy)]
@@ -170,34 +175,32 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
             .map_err(|_| Error::SourceSyntaxMismatch("source data path is not a Rust type"))
     }
 
-    fn stream_owner(&self, stream: &StreamDef) -> Result<Option<&'lowered ClassDef>, Error> {
-        stream
-            .owner
-            .as_ref()
-            .map(|owner| {
-                self.support
-                    .classes
-                    .iter()
-                    .find(|class| &class.id == owner)
-                    .ok_or(Error::SourceSyntaxMismatch("stream owner class is missing"))
-            })
-            .transpose()
+    fn stream_owner(&self, stream: &StreamDef) -> Result<Option<StreamOwner<'lowered>>, Error> {
+        let Some(owner_id) = stream.owner.as_ref() else {
+            return Ok(None);
+        };
+        let declaration = self
+            .support
+            .classes
+            .iter()
+            .find(|class| &class.id == owner_id)
+            .ok_or(Error::SourceSyntaxMismatch("stream owner class is missing"))?;
+        let rust_type = self.owner_path(owner_id.as_str())?;
+        Ok(Some(StreamOwner {
+            declaration,
+            rust_type,
+        }))
     }
 
     fn constant_owner(
         &self,
         constant: &ConstantDef,
-    ) -> Result<Option<(rust_api::CallableOwner<'lowered>, TokenStream)>, Error> {
+    ) -> Result<Option<(rust_api::CallableOwner<'lowered>, RustPath)>, Error> {
         let Some(owner) = constant.owner.as_ref() else {
             return Ok(None);
         };
         let owner_id = owner.as_str();
-        let rust_type = self
-            .visible_paths
-            .get(owner_id)
-            .map(Self::path_tokens)
-            .transpose()?
-            .unwrap_or(Self::source_type(owner_id)?);
+        let rust_type = self.owner_path(owner_id)?;
         let owner = match owner {
             ConstantOwner::Record(id) => self
                 .support
@@ -224,17 +227,27 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
         Ok(Some((owner, rust_type)))
     }
 
-    fn source_type(id: &str) -> Result<TokenStream, Error> {
-        let name = id.rsplit("::").next().ok_or(Error::SourceSyntaxMismatch(
-            "associated constant owner id is empty",
-        ))?;
-        syn::parse_str::<syn::Ident>(name)
-            .map(|name| quote! { #name })
-            .map_err(|_| {
-                Error::SourceSyntaxMismatch(
-                    "associated constant owner name is not a Rust identifier",
-                )
-            })
+    fn owner_path(&self, id: &str) -> Result<RustPath, Error> {
+        if let Some(path) = self.visible_paths.get(id) {
+            return syn::parse2(Self::path_tokens(path)?)
+                .map_err(|_| Error::SourceSyntaxMismatch("visible owner path is not Rust syntax"));
+        }
+        let package = self.source.package.name.replace('-', "_");
+        if id.split("::").next() != Some(package.as_str()) {
+            return Err(Error::UnsupportedExpansion(
+                "dependency callable owner is not visible",
+            ));
+        }
+        Self::source_path(id)
+    }
+
+    fn source_path(id: &str) -> Result<RustPath, Error> {
+        let name = id
+            .rsplit("::")
+            .next()
+            .ok_or(Error::SourceSyntaxMismatch("callable owner id is empty"))?;
+        syn::parse_str(name)
+            .map_err(|_| Error::SourceSyntaxMismatch("callable owner name is not a Rust path"))
     }
 }
 
@@ -522,7 +535,7 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
     }
 
     fn streams(&self) -> Result<Vec<TokenStream>, Error> {
-        self.source
+        self.support
             .streams
             .iter()
             .map(|source| {
@@ -531,7 +544,8 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
                     (ExpansionSurface::Native(expansion), Some(owner)) => {
                         wrapper::stream::Stream::new(
                             expansion.stream(source)?,
-                            expansion.class(owner)?,
+                            expansion.class(owner.declaration)?,
+                            owner.rust_type,
                             expansion,
                         )
                         .render()
@@ -543,7 +557,8 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
                     (ExpansionSurface::Wasm32(expansion), Some(owner)) => {
                         wrapper::stream::Stream::new(
                             expansion.stream(source)?,
-                            expansion.class(owner)?,
+                            expansion.class(owner.declaration)?,
+                            owner.rust_type,
                             expansion,
                         )
                         .render()
@@ -558,7 +573,7 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
     }
 
     fn constants(&self) -> Result<Vec<TokenStream>, Error> {
-        self.source
+        self.support
             .constants
             .iter()
             .map(|source| {
@@ -879,6 +894,25 @@ mod tests {
     }
 
     #[test]
+    fn native_expander_compiles_visible_dependency_class_streams_and_constants() {
+        let (root, support, visible_paths) = dependency_class_member_support();
+        let lowered = lower_with_declarations::<Native>(&support).expect("contract lowers");
+        let expansion = Expansion::new(&lowered);
+
+        let tokens = expander::Expander::with_support(&root, &support, visible_paths)
+            .native(&expansion)
+            .expect("contract expands");
+        let rendered = tokens.to_string();
+
+        assert!(rendered.contains("boltffi_stream_model_foreign_counter_ticks_subscribe"));
+        assert!(rendered.contains("boltffi_const_model_foreign_counter_banner"));
+        assert_generated_crate_checks(
+            "expander_dependency_class_members",
+            dependency_class_member_crate(tokens),
+        );
+    }
+
+    #[test]
     fn native_data_runtime_emits_only_the_selected_runtime_contracts() {
         let (_, support, visible_paths) = dependency_data_method_support();
         let lowered = lower_with_declarations::<Native>(&support).expect("contract lowers");
@@ -1107,6 +1141,47 @@ mod tests {
         (root, support, visible_paths)
     }
 
+    fn dependency_class_member_support() -> (
+        SourceContract,
+        SourceContract,
+        Vec<(String, boltffi_ast::Path)>,
+    ) {
+        let root = SourceContract::new(PackageInfo::new("demo", None));
+        let mut support = root.clone();
+        let class_id = boltffi_ast::ClassId::new("model::ForeignCounter");
+        support.classes.push(ClassDef::new(
+            class_id.clone(),
+            CanonicalName::single("ForeignCounter"),
+        ));
+        let mut stream = StreamDef::new(
+            StreamId::new("model::ForeignCounter::ticks"),
+            CanonicalName::single("ticks"),
+            TypeExpr::Primitive(Primitive::U32),
+        );
+        stream.owner = Some(class_id.clone());
+        support.streams.push(stream);
+        let mut banner = ConstantDef::new(
+            ConstantId::new("model::ForeignCounter::BANNER"),
+            SourceName::new("BANNER", CanonicalName::single("BANNER")),
+            TypeExpr::slice(TypeExpr::Primitive(Primitive::U8)),
+            ConstExpr::Literal(Literal::Bytes(b"model".to_vec())),
+        );
+        banner.owner = Some(ConstantOwner::Class(class_id));
+        support.constants.push(banner);
+        let visible_paths = vec![(
+            "model::ForeignCounter".to_owned(),
+            boltffi_ast::Path::new(
+                PathRoot::Relative,
+                vec![
+                    PathSegment::new("model"),
+                    PathSegment::new("ForeignCounter"),
+                ],
+            ),
+        )];
+
+        (root, support, visible_paths)
+    }
+
     fn listener_trait() -> TraitDef {
         let mut listener = TraitDef::new(
             TraitId::new("demo::Listener"),
@@ -1272,6 +1347,31 @@ mod tests {
                     pub fn code() -> u32 {
                         11
                     }
+                }
+            }
+
+            #tokens
+        }
+    }
+
+    fn dependency_class_member_crate(tokens: TokenStream) -> TokenStream {
+        quote! {
+            #![allow(dead_code)]
+
+            mod model {
+                use std::sync::Arc;
+                use boltffi::{EventSubscription, StreamProducer};
+
+                pub struct ForeignCounter {
+                    producer: StreamProducer<u32>,
+                }
+
+                impl ForeignCounter {
+                    pub fn ticks(&self) -> Arc<EventSubscription<u32>> {
+                        self.producer.subscribe()
+                    }
+
+                    pub const BANNER: &'static [u8] = b"model";
                 }
             }
 
