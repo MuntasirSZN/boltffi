@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use boltffi_ast::{EnumId, RecordId, SourceContract, SourceSpan};
 use proc_macro2::LineColumn;
 use syn::visit::Visit;
 
@@ -10,17 +11,22 @@ pub enum DeclarationKind {
     Enumeration,
 }
 
+pub enum DataId {
+    Record(RecordId),
+    Enumeration(EnumId),
+}
+
 pub struct Declaration {
     name: String,
     kind: DeclarationKind,
     source: PathBuf,
-    offset: usize,
+    module_path: Vec<String>,
     local_scope: Option<syn::File>,
 }
 
 #[derive(Clone)]
 enum Scope {
-    Module,
+    Module(Vec<String>),
     Block(Vec<syn::Item>),
 }
 
@@ -70,7 +76,7 @@ impl Declaration {
                 format!("read data source `{}`: {error}", source.display()),
             )
         })?;
-        let offset = Self::source_offset(&source_text, location).ok_or_else(|| {
+        let invocation_offset = Self::source_offset(&source_text, location).ok_or_else(|| {
             syn::Error::new(
                 proc_macro2::Span::call_site(),
                 format!(
@@ -81,18 +87,20 @@ impl Declaration {
                 ),
             )
         })?;
-        let target_ordinal = Self::declaration_ordinal(&source_text, &name, kind, offset)
-            .ok_or_else(|| {
-                syn::Error::new(
-                    proc_macro2::Span::call_site(),
-                    format!(
-                        "locate data declaration `{name}` at {}:{} in `{}`",
-                        location.line,
-                        location.column,
-                        source.display()
-                    ),
-                )
-            })?;
+        let target_ordinal =
+            Self::declaration_ordinal(&source_text, &name, kind, invocation_offset).ok_or_else(
+                || {
+                    syn::Error::new(
+                        proc_macro2::Span::call_site(),
+                        format!(
+                            "locate data declaration `{name}` at {}:{} in `{}`",
+                            location.line,
+                            location.column,
+                            source.display()
+                        ),
+                    )
+                },
+            )?;
         let syntax = syn::parse_file(&source_text)?;
         let scope = ScopeFinder::find(&syntax, &name, kind, target_ordinal).ok_or_else(|| {
             syn::Error::new(
@@ -105,19 +113,22 @@ impl Declaration {
                 ),
             )
         })?;
-        let local_scope = match scope {
-            Scope::Module => None,
-            Scope::Block(items) => Some(syn::File {
-                shebang: None,
-                attrs: Vec::new(),
-                items,
-            }),
+        let (module_path, local_scope) = match scope {
+            Scope::Module(module_path) => (module_path, None),
+            Scope::Block(items) => (
+                Vec::new(),
+                Some(syn::File {
+                    shebang: None,
+                    attrs: Vec::new(),
+                    items,
+                }),
+            ),
         };
         Ok(Self {
             name,
             kind,
             source,
-            offset,
+            module_path,
             local_scope,
         })
     }
@@ -126,20 +137,70 @@ impl Declaration {
         &self.name
     }
 
-    pub fn kind(&self) -> DeclarationKind {
-        self.kind
-    }
-
     pub fn source(&self) -> &Path {
         &self.source
     }
 
-    pub fn offset(&self) -> usize {
-        self.offset
-    }
-
     pub fn local_scope(&self) -> Option<&syn::File> {
         self.local_scope.as_ref()
+    }
+
+    pub fn resolve(&self, contract: &SourceContract) -> Option<DataId> {
+        match self.kind {
+            DeclarationKind::Record => contract
+                .records
+                .iter()
+                .find(|record| {
+                    self.matches_contract_declaration(
+                        record.id.as_str(),
+                        record.name.spelling(),
+                        record.source_span.as_ref(),
+                    )
+                })
+                .map(|record| DataId::Record(record.id.clone())),
+            DeclarationKind::Enumeration => contract
+                .enums
+                .iter()
+                .find(|enumeration| {
+                    self.matches_contract_declaration(
+                        enumeration.id.as_str(),
+                        enumeration.name.spelling(),
+                        enumeration.source_span.as_ref(),
+                    )
+                })
+                .map(|enumeration| DataId::Enumeration(enumeration.id.clone())),
+        }
+    }
+
+    fn matches_contract_declaration(
+        &self,
+        id: &str,
+        name: &str,
+        span: Option<&SourceSpan>,
+    ) -> bool {
+        if name != self.name {
+            return false;
+        }
+        self.local_scope.is_some()
+            || span.is_some_and(|span| self.matches_source(span) && self.matches_module(id))
+    }
+
+    fn matches_source(&self, span: &SourceSpan) -> bool {
+        Self::canonical(Path::new(span.file.as_str())) == Self::canonical(&self.source)
+    }
+
+    fn matches_module(&self, id: &str) -> bool {
+        let mut candidate = id.rsplit("::");
+        self.module_path
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(self.name.as_str()))
+            .rev()
+            .all(|segment| candidate.next() == Some(segment))
+    }
+
+    fn canonical(path: &Path) -> PathBuf {
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
     }
 
     fn source_offset(source: &str, location: LineColumn) -> Option<usize> {
@@ -215,7 +276,7 @@ impl<'target> ScopeFinder<'target> {
             kind,
             target_ordinal,
             observed: 0,
-            current: Scope::Module,
+            current: Scope::Module(Vec::new()),
             scope: None,
         };
         finder.visit_file(syntax);
@@ -236,7 +297,7 @@ impl<'target> ScopeFinder<'target> {
 
 impl<'syntax> Visit<'syntax> for ScopeFinder<'_> {
     fn visit_file(&mut self, syntax: &'syntax syn::File) {
-        self.current = Scope::Module;
+        self.current = Scope::Module(Vec::new());
         syntax.items.iter().for_each(|item| self.visit_item(item));
     }
 
@@ -244,7 +305,16 @@ impl<'syntax> Visit<'syntax> for ScopeFinder<'_> {
         let Some((_, items)) = &module.content else {
             return;
         };
-        let enclosing = std::mem::replace(&mut self.current, Scope::Module);
+        let nested = match &self.current {
+            Scope::Module(path) => Scope::Module(
+                path.iter()
+                    .cloned()
+                    .chain(std::iter::once(module.ident.to_string()))
+                    .collect(),
+            ),
+            Scope::Block(items) => Scope::Block(items.clone()),
+        };
+        let enclosing = std::mem::replace(&mut self.current, nested);
         items.iter().for_each(|item| self.visit_item(item));
         self.current = enclosing;
     }
@@ -300,7 +370,7 @@ mod tests {
         let scope =
             ScopeFinder::find(&syntax, "Point", DeclarationKind::Record, 0).expect("scope exists");
 
-        assert!(matches!(scope, Scope::Module));
+        assert!(matches!(scope, Scope::Module(path) if path.is_empty()));
     }
 
     #[test]
@@ -313,5 +383,15 @@ mod tests {
             ScopeFinder::find(&syntax, "Point", DeclarationKind::Record, 1).expect("scope exists");
 
         assert!(matches!(scope, Scope::Block(items) if items.len() == 2));
+    }
+
+    #[test]
+    fn distinguishes_same_named_declarations_by_inline_module() {
+        let syntax = syn::parse_file("mod first { struct Point; }\nmod second { struct Point; }\n")
+            .expect("source parses");
+        let scope =
+            ScopeFinder::find(&syntax, "Point", DeclarationKind::Record, 1).expect("scope exists");
+
+        assert!(matches!(scope, Scope::Module(path) if path == ["second"]));
     }
 }

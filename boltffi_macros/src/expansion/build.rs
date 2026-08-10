@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use boltffi_ast::{EnumId, PackageInfo, RecordId, SourceContract, SourceSpan};
+use boltffi_ast::{PackageInfo, SourceContract};
 use boltffi_binding::{
     BINDING_EXPANSION_BUILD_ENV, BINDING_EXPANSION_ROOT_ENV, BINDING_EXPANSION_SOURCE_ENV,
     BINDING_EXPANSION_SURFACE_ENV, BINDING_METADATA_BUILD_ENV, BINDING_METADATA_FEATURES_ENV,
@@ -18,7 +18,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote_spanned;
 use serde::Deserialize;
 
-use crate::data::scope::{Declaration, DeclarationKind};
+use crate::data::scope::{DataId, Declaration};
 use crate::expansion::{
     contract::Expansion, error::Error as ExpansionError, expander::Expander, metadata,
     rust_api::RootModuleTypes,
@@ -60,11 +60,6 @@ struct BuildContext {
     root: SourceContract,
     support: SourceContract,
     visible_paths: Vec<(String, boltffi_ast::Path)>,
-}
-
-enum DataId {
-    Record(RecordId),
-    Enumeration(EnumId),
 }
 
 #[derive(Deserialize)]
@@ -153,17 +148,24 @@ impl BuildContext {
     }
 
     fn render_data(&self, declaration: &Declaration) -> Result<TokenStream, BuildError> {
-        match declaration.local_scope() {
-            Some(scope) => {
-                let source = boltffi_scan::scan_file(scope.clone(), self.request.package.clone())?;
-                let id = Self::local_data_id(&source, declaration)?;
-                self.render_data_id(&source, id)
-            }
-            None => {
-                let id = self.package_data_id(declaration)?;
-                self.render_data_id(&self.support, id)
-            }
+        if let Some(scope) = declaration.local_scope() {
+            let contract = boltffi_scan::scan_file(scope.clone(), self.request.package.clone())?;
+            let id = declaration
+                .resolve(&contract)
+                .ok_or_else(|| BuildError::MissingData(declaration.name().to_owned()))?;
+            return self.render_data_id(&contract, id);
         }
+        if let Some(id) = declaration.resolve(&self.support) {
+            return self.render_data_id(&self.support, id);
+        }
+        let contract =
+            boltffi_scan::scan_source(declaration.source(), self.request.package.clone())?;
+        let root_types = RootModuleTypes::with_visible_paths(&contract.package, std::iter::empty());
+        let contract = root_types.contract(&contract);
+        let id = declaration
+            .resolve(&contract)
+            .ok_or_else(|| BuildError::MissingData(declaration.name().to_owned()))?;
+        self.render_data_id(&contract, id)
     }
 
     fn render_root(&self) -> Result<TokenStream, BuildError> {
@@ -229,63 +231,6 @@ impl BuildContext {
                 .map_err(Into::into)
             }
         }
-    }
-
-    fn local_data_id(
-        source: &SourceContract,
-        declaration: &Declaration,
-    ) -> Result<DataId, BuildError> {
-        match declaration.kind() {
-            DeclarationKind::Record => source
-                .records
-                .iter()
-                .find(|record| record.name.spelling() == declaration.name())
-                .map(|record| DataId::Record(record.id.clone()))
-                .ok_or_else(|| BuildError::MissingData(declaration.name().to_owned())),
-            DeclarationKind::Enumeration => source
-                .enums
-                .iter()
-                .find(|enumeration| enumeration.name.spelling() == declaration.name())
-                .map(|enumeration| DataId::Enumeration(enumeration.id.clone()))
-                .ok_or_else(|| BuildError::MissingData(declaration.name().to_owned())),
-        }
-    }
-
-    fn package_data_id(&self, declaration: &Declaration) -> Result<DataId, BuildError> {
-        match declaration.kind() {
-            DeclarationKind::Record => self
-                .root
-                .records
-                .iter()
-                .find(|record| {
-                    record.name.spelling() == declaration.name()
-                        && record
-                            .source_span
-                            .as_ref()
-                            .is_some_and(|span| self.matches_declaration(declaration, span))
-                })
-                .map(|record| DataId::Record(record.id.clone()))
-                .ok_or_else(|| BuildError::MissingData(declaration.name().to_owned())),
-            DeclarationKind::Enumeration => self
-                .root
-                .enums
-                .iter()
-                .find(|enumeration| {
-                    enumeration.name.spelling() == declaration.name()
-                        && enumeration
-                            .source_span
-                            .as_ref()
-                            .is_some_and(|span| self.matches_declaration(declaration, span))
-                })
-                .map(|enumeration| DataId::Enumeration(enumeration.id.clone()))
-                .ok_or_else(|| BuildError::MissingData(declaration.name().to_owned())),
-        }
-    }
-
-    fn matches_declaration(&self, declaration: &Declaration, span: &SourceSpan) -> bool {
-        canonical(Path::new(span.file.as_str())) == canonical(declaration.source())
-            && span.start <= declaration.offset()
-            && declaration.offset() <= span.end
     }
 }
 
