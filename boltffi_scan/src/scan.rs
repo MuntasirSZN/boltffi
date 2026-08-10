@@ -7,7 +7,7 @@ use crate::declared_types::DeclaredTypes;
 use crate::input::ScanInput;
 use crate::marked::MarkedItems;
 use crate::package_graph::{ExportedPackage, LoadError, PackageGraph};
-use crate::path::ImportLookup;
+use crate::path::{ImportLookup, module_name};
 use crate::source_tree::SourceTree;
 use crate::{ModuleScope, ScanError, items};
 
@@ -129,11 +129,15 @@ pub fn scan_package(input: &ScanInput) -> Result<PackageScan, ScanError> {
         scan_marked_with_declarations(&root_marked, &declared_types, input.package().clone())?;
     let complete =
         scan_marked_with_declarations(&complete_marked, &declared_types, input.package().clone())?;
+    // The ids being matched here carry the module name, so the root has to be
+    // spelled the same way: a hyphenated package would match nothing, and its
+    // own items would be emitted unqualified.
+    let root_module = module_name(&input.package().name);
     let root_visible_paths = root_visible_paths(
         &declared_types,
         &complete_tree,
         &complete_marked,
-        &input.package().name,
+        &root_module,
         &direct_dependency_modules,
     );
     Ok(PackageScan {
@@ -448,6 +452,32 @@ mod tests {
 
     fn source_tree(crate_name: &str, source: &str) -> SourceTree {
         SourceTree::in_memory(crate_name, parse(source).items).expect("source tree")
+    }
+
+    /// Declaration ids are Rust paths, so the crate segment is the module name.
+    ///
+    /// Cargo allows a hyphen in a package name where the module tree has an
+    /// underscore. Carrying the package name through unchanged produced ids
+    /// like `my-root::Point`, which no consumer can match against a crate
+    /// path: the macro compares them to `CARGO_PKG_NAME` with hyphens
+    /// replaced, and rejects the declaration as belonging to another crate.
+    /// Every fixture here is named `demo`, so nothing caught it.
+    #[test]
+    fn declaration_ids_use_the_module_name_of_a_hyphenated_package() {
+        let contract = scan_file(
+            parse("#[data]\npub struct Point { pub x: f64 }\n"),
+            PackageInfo::new("my-root", None),
+        )
+        .expect("scan");
+
+        assert_eq!(
+            contract
+                .records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["my_root::Point"],
+        );
     }
 
     fn point(contract: &SourceContract) -> &RecordDef {
