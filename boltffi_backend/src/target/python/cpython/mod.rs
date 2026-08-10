@@ -1824,6 +1824,36 @@ Coordinates are plain `f64`.
     }
 
     #[test]
+    fn python_target_defines_enum_before_record_with_enum_variant_default() {
+        let output = target()
+            .render(&bindings(
+                r#"
+                #[repr(i32)]
+                #[data]
+                pub enum Mode {
+                    Off = 0,
+                    On = 1,
+                }
+
+                #[data]
+                pub struct Config {
+                    #[boltffi::default(Mode::Off)]
+                    pub mode: Mode,
+                }
+                "#,
+            ))
+            .expect("Python target should render enum record defaults");
+        let init = file(&output, "demo/__init__.py");
+        let stub = file(&output, "demo/__init__.pyi");
+        let enumeration = init.find("class Mode(IntEnum):").expect("Mode declaration");
+        let record = init.find("class Config:").expect("Config declaration");
+
+        assert!(enumeration < record);
+        assert!(init.contains("mode: Mode = Mode.OFF"));
+        assert!(stub.contains("mode: Mode = Mode.OFF"));
+    }
+
+    #[test]
     fn python_target_renders_empty_encoded_record_without_zero_length_array() {
         let output = target()
             .render(&bindings(

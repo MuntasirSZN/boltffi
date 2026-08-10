@@ -64,7 +64,11 @@ where
     let type_expr = substitute_self_type(owner, &parameter.type_expr)?;
     let receive = receive_for_passing(parameter.passing);
     let canonical_name = CanonicalName::from(&parameter.name);
-    let meta = metadata::element_meta(parameter.doc.as_ref(), None, parameter.default.as_ref())?;
+    let meta = metadata::element_meta(
+        parameter.doc.as_ref(),
+        None,
+        metadata::default_value(parameter.default.as_ref())?,
+    );
     if let Some(closure) = ClosureSource::from_type_expr(&type_expr) {
         if !matches!(receive, Receive::ByValue) {
             return Err(LowerError::unsupported_type(
