@@ -1,5 +1,5 @@
 {%- if record.empty() %}
-object {{ record.name() }}{% if record.error() %} : Exception(){% endif %} {
+{{ record.documentation() }}object {{ record.name() }}{% if record.error() %} : Exception(){% endif %} {
 {%- if record.encoded() %}
     internal fun wireSize(): Int = 0
 
@@ -33,7 +33,7 @@ object {{ record.name() }}{% if record.error() %} : Exception(){% endif %} {
 {%- endfor %}
 {%- for initializer in record.initializers() %}
 
-    fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
+{{ initializer.documentation().indented("    ") }}    fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
 {%- for statement in initializer.setup() %}
         {{ statement }}
 {%- endfor %}
@@ -56,7 +56,7 @@ object {{ record.name() }}{% if record.error() %} : Exception(){% endif %} {
 {%- endfor %}
 {%- for method in record.static_methods() %}
 
-    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("    ") }}    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
         return boltffiCallAsync(
@@ -112,9 +112,9 @@ object {{ record.name() }}{% if record.error() %} : Exception(){% endif %} {
 {%- endfor %}
 }
 {%- else if record.encoded() %}
-data class {{ record.name() }}(
+{{ record.documentation() }}data class {{ record.name() }}(
 {%- for field in record.fields() %}
-    {% if record.error() && field.is_string_message() %}override {% endif %}val {{ field.name() }}: {{ field.ty() }}{% if let Some(default) = field.default() %} = {{ default }}{% endif %}{% if !loop.last %},{% endif %}
+{{ field.documentation().indented("    ") }}    {% if record.error() && field.is_string_message() %}override {% endif %}val {{ field.name() }}: {{ field.ty() }}{% if let Some(default) = field.default() %} = {{ default }}{% endif %}{% if !loop.last %},{% endif %}
 {%- endfor %}
 ){% if record.error() %} : Exception({% if let Some(message) = record.error_message() %}{{ message }}{% endif %}){% endif %} {
 {%- if let Some(wire_size) = record.wire_size() %}
@@ -159,7 +159,7 @@ data class {{ record.name() }}(
 {%- endfor %}
 {%- for initializer in record.initializers() %}
 
-        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
+{{ initializer.documentation().indented("        ") }}        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
 {%- for statement in initializer.setup() %}
             {{ statement }}
 {%- endfor %}
@@ -182,7 +182,7 @@ data class {{ record.name() }}(
 {%- endfor %}
 {%- for method in record.static_methods() %}
 
-        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("        ") }}        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
             return boltffiCallAsync(
@@ -239,7 +239,7 @@ data class {{ record.name() }}(
     }
 {%- for method in record.instance_methods() %}
 
-    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("    ") }}    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- for statement in method.setup() %}
         {{ statement }}
 {%- endfor %}
@@ -262,9 +262,9 @@ data class {{ record.name() }}(
 {%- endfor %}
 }
 {%- else %}
-data class {{ record.name() }}(
+{{ record.documentation() }}data class {{ record.name() }}(
 {%- for field in record.fields() %}
-    {% if record.error() && field.is_string_message() %}override {% endif %}val {{ field.name() }}: {{ field.ty() }}{% if let Some(default) = field.default() %} = {{ default }}{% endif %}{% if !loop.last %},{% endif %}
+{{ field.documentation().indented("    ") }}    {% if record.error() && field.is_string_message() %}override {% endif %}val {{ field.name() }}: {{ field.ty() }}{% if let Some(default) = field.default() %} = {{ default }}{% endif %}{% if !loop.last %},{% endif %}
 {%- endfor %}
 ){% if record.error() %} : Exception({% if let Some(message) = record.error_message() %}{{ message }}{% endif %}){% endif %} {
 {%- if let Some(wire_size) = record.wire_size() %}
@@ -334,7 +334,7 @@ data class {{ record.name() }}(
 {%- endfor %}
 {%- for initializer in record.initializers() %}
 
-        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
+{{ initializer.documentation().indented("        ") }}        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
 {%- for statement in initializer.setup() %}
             {{ statement }}
 {%- endfor %}
@@ -357,7 +357,7 @@ data class {{ record.name() }}(
 {%- endfor %}
 {%- for method in record.static_methods() %}
 
-        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("        ") }}        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
             return boltffiCallAsync(
@@ -414,7 +414,7 @@ data class {{ record.name() }}(
     }
 {%- for method in record.instance_methods() %}
 
-    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("    ") }}    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- for statement in method.setup() %}
         {{ statement }}
 {%- endfor %}

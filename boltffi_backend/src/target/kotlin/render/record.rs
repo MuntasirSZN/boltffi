@@ -14,7 +14,7 @@ use crate::{
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
-            AssociatedConstants,
+            AssociatedConstants, Documentation,
             default_value::DefaultExpression,
             field::EncodedField,
             function::{ExportedCall, ExportedCallRenderer, ReceiverCarrier, ReceiverMutation},
@@ -33,6 +33,7 @@ struct RecordTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
     name: TypeName,
+    documentation: Documentation,
     body: RecordBody,
     error: bool,
     fields: Vec<Field>,
@@ -62,6 +63,7 @@ struct Receiver {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Field {
     name: Identifier,
+    documentation: Documentation,
     ty: TypeName,
     read: Expression,
     read_from_base: Option<Expression>,
@@ -99,6 +101,10 @@ impl Record {
 
     pub fn name(&self) -> &TypeName {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn size(&self) -> u64 {
@@ -223,6 +229,7 @@ impl Record {
             })?;
         Ok(Self {
             name: Name::new(record.name()).type_name(),
+            documentation: Documentation::new(record.meta().doc()),
             body: RecordBody::Direct {
                 size: record.layout().size().get(),
                 wire_size: record
@@ -277,6 +284,7 @@ impl Record {
             .unwrap_or_else(|| Expression::integer(0));
         Ok(Self {
             name: Name::new(record.name()).type_name(),
+            documentation: Documentation::new(record.meta().doc()),
             body: RecordBody::Encoded { size },
             error: record.is_error_payload(),
             constants: AssociatedConstants::from_owner(
@@ -318,12 +326,14 @@ impl Record {
         initializers
             .iter()
             .map(|initializer| {
-                calls.exported(
-                    Name::new(initializer.name()).function()?,
-                    initializer.symbol(),
-                    initializer.callable(),
-                    None,
-                )
+                calls
+                    .exported(
+                        Name::new(initializer.name()).function()?,
+                        initializer.symbol(),
+                        initializer.callable(),
+                        None,
+                    )
+                    .map(|call| call.documented(initializer.meta().doc()))
             })
             .collect()
     }
@@ -339,8 +349,8 @@ impl Record {
         methods
             .iter()
             .filter(|method| method.callable().receiver().is_some() == receiver.is_some())
-            .map(
-                |method| match (method.callable().receiver(), receiver.clone()) {
+            .map(|method| {
+                match (method.callable().receiver(), receiver.clone()) {
                     (Some(Receive::ByMutRef), Some(receiver)) => calls.with_receiver_mutation(
                         Name::new(method.name()).function()?,
                         method.target(),
@@ -361,8 +371,9 @@ impl Record {
                         None,
                     ),
                     _ => Err(KotlinHost::unsupported("record method receiver")),
-                },
-            )
+                }
+                .map(|call| call.documented(method.meta().doc()))
+            })
             .collect()
     }
 
@@ -404,6 +415,10 @@ impl Record {
 impl Field {
     pub fn name(&self) -> &Identifier {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn is_string_message(&self) -> bool {
@@ -468,6 +483,7 @@ impl Field {
             .map(|value| DefaultExpression::render(&TypeRef::Primitive(primitive), value, context))
             .transpose()?;
         Ok(Self {
+            documentation: Documentation::new(field.meta().doc()),
             ty: KotlinPrimitive::new(primitive).api_type()?,
             read: Expression::call(
                 Expression::identifier(reader.clone()),
@@ -511,8 +527,10 @@ impl Field {
             .default()
             .map(|value| DefaultExpression::render(field.ty(), value, context))
             .transpose()?;
+        let documentation = Documentation::new(field.meta().doc());
         let field = EncodedField::from_declaration(field, host, context, reader, writer, current)?;
         Ok(Self {
+            documentation,
             ty: field.ty().clone(),
             read: field.read().clone(),
             read_from_base: None,

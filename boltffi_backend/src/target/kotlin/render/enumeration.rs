@@ -15,7 +15,7 @@ use crate::{
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
-            AssociatedConstants,
+            AssociatedConstants, Documentation,
             field::EncodedField,
             function::{ExportedCall, ExportedCallRenderer, ReceiverCarrier, ReceiverMutation},
         },
@@ -33,6 +33,7 @@ struct EnumerationTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Enumeration {
     name: TypeName,
+    documentation: Documentation,
     error: bool,
     body: Body,
     constants: AssociatedConstants,
@@ -114,12 +115,14 @@ fn flush_token(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CStyleVariant {
     name: Identifier,
+    documentation: Documentation,
     value: Expression,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataVariant {
     name: Identifier,
+    documentation: Documentation,
     tag: Expression,
     fields: Vec<EncodedField>,
     read: Expression,
@@ -186,6 +189,10 @@ impl Enumeration {
 
     pub fn name(&self) -> &TypeName {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn c_style(&self) -> bool {
@@ -332,6 +339,7 @@ impl Enumeration {
         };
         Ok(Self {
             name,
+            documentation: Documentation::new(enumeration.meta().doc()),
             error,
             constants: AssociatedConstants::from_c_style_enum(enumeration, host, bridge, context)?,
             body: Body::CStyle {
@@ -415,6 +423,7 @@ impl Enumeration {
                 .collect::<Vec<_>>()
         };
         Ok(Self {
+            documentation: Documentation::new(enumeration.meta().doc()),
             body: Body::Data {
                 variants: enumeration
                     .variants()
@@ -472,20 +481,23 @@ impl Enumeration {
                 let calls = ExportedCallRenderer::new(host, bridge, context);
                 initializers
                     .iter()
-                    .map(|initializer| match package {
-                        Some(package) => calls.with_package(
-                            Name::new(initializer.name()).function()?,
-                            initializer.symbol(),
-                            initializer.callable(),
-                            None,
-                            package,
-                        ),
-                        None => calls.exported(
-                            Name::new(initializer.name()).function()?,
-                            initializer.symbol(),
-                            initializer.callable(),
-                            None,
-                        ),
+                    .map(|initializer| {
+                        match package {
+                            Some(package) => calls.with_package(
+                                Name::new(initializer.name()).function()?,
+                                initializer.symbol(),
+                                initializer.callable(),
+                                None,
+                                package,
+                            ),
+                            None => calls.exported(
+                                Name::new(initializer.name()).function()?,
+                                initializer.symbol(),
+                                initializer.callable(),
+                                None,
+                            ),
+                        }
+                        .map(|call| call.documented(initializer.meta().doc()))
                     })
                     .collect()
             },
@@ -507,8 +519,8 @@ impl Enumeration {
                 methods
                     .iter()
                     .filter(|method| method.callable().receiver().is_some() == receiver.is_some())
-                    .map(
-                        |method| match (method.callable().receiver(), receiver.clone()) {
+                    .map(|method| {
+                        match (method.callable().receiver(), receiver.clone()) {
                             (Some(Receive::ByMutRef), Some(receiver)) => receiver
                                 .writeback
                                 .ok_or(KotlinHost::unsupported("mutable c-style enum receiver"))
@@ -559,8 +571,9 @@ impl Enumeration {
                                 ),
                             },
                             _ => Err(KotlinHost::unsupported("enum method receiver")),
-                        },
-                    )
+                        }
+                        .map(|call| call.documented(method.meta().doc()))
+                    })
                     .collect()
             },
         )
@@ -578,6 +591,10 @@ impl CStyleVariant {
         &self.name
     }
 
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
+    }
+
     pub fn value(&self) -> &Expression {
         &self.value
     }
@@ -592,6 +609,7 @@ impl CStyleVariant {
                 true => Name::new(variant.name()).variant()?,
                 false => Name::new(variant.name()).enum_entry()?,
             },
+            documentation: Documentation::new(variant.meta().doc()),
             value: KotlinPrimitive::new(enumeration.repr().primitive())
                 .native_integer_literal(variant.discriminant())?,
         })
@@ -601,6 +619,10 @@ impl CStyleVariant {
 impl DataVariant {
     pub fn name(&self) -> &Identifier {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn tag(&self) -> &Expression {
@@ -649,6 +671,7 @@ impl DataVariant {
         ));
         Ok(Self {
             name,
+            documentation: Documentation::new(variant.meta().doc()),
             tag,
             fields,
             read,

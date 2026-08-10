@@ -69,6 +69,18 @@ fn kotlin_target_renders_direct_records_and_function_bridges() {
 }
 
 #[test]
+fn kotlin_target_renders_kdoc_for_documented_records_and_enum_methods() {
+    insta::assert_snapshot!(rendered_fixture(
+        "associated/direct_record_and_enum_callables"
+    ));
+}
+
+#[test]
+fn kotlin_target_renders_kdoc_for_documented_classes_and_data_enums() {
+    insta::assert_snapshot!(rendered_fixture("exports/documented_class_and_data_enum"));
+}
+
+#[test]
 fn kotlin_target_returns_mutated_direct_record_receivers_from_the_shared_buffer() {
     insta::assert_snapshot!(rendered_fixture("associated/mutable_record_receiver"));
 }
