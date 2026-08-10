@@ -181,7 +181,7 @@ static PyType_Slot {{ prefix }}_type_slots[] = {
 };
 
 static PyType_Spec {{ prefix }}_type_spec = {
-    "{{ class_name }}",
+    "{{ module_name }}.{{ class_name }}",
     sizeof({{ object_struct }}),
     0,
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
