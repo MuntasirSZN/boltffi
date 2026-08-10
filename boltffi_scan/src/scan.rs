@@ -46,7 +46,7 @@ impl PackageScan {
             .iter()
             .cloned()
             .map(|mut record| {
-                if !self.exposes_support_methods(&root, record.id.as_str()) {
+                if !self.exposes_declaration(&root, record.id.as_str()) {
                     record.methods.clear();
                 }
                 record
@@ -58,7 +58,7 @@ impl PackageScan {
             .iter()
             .cloned()
             .map(|mut enumeration| {
-                if !self.exposes_support_methods(&root, enumeration.id.as_str()) {
+                if !self.exposes_declaration(&root, enumeration.id.as_str()) {
                     enumeration.methods.clear();
                 }
                 enumeration
@@ -67,14 +67,35 @@ impl PackageScan {
         source.classes = self.complete.classes.clone();
         source.traits = self.complete.traits.clone();
         source.customs = self.complete.customs.clone();
+        source.streams = self
+            .complete
+            .streams
+            .iter()
+            .filter(|stream| {
+                stream.owner.as_ref().map_or_else(
+                    || self.exposes_declaration(&root, stream.id.as_str()),
+                    |owner| self.exposes_declaration(&root, owner.as_str()),
+                )
+            })
+            .cloned()
+            .collect();
+        source.constants = self
+            .complete
+            .constants
+            .iter()
+            .filter(|constant| {
+                constant.owner.as_ref().map_or_else(
+                    || self.exposes_declaration(&root, constant.id.as_str()),
+                    |owner| self.exposes_declaration(&root, owner.as_str()),
+                )
+            })
+            .cloned()
+            .collect();
         source.functions = self
             .complete
             .functions
             .iter()
-            .filter(|function| {
-                root.owns(function.id.as_str())
-                    || self.root_visible_paths.contains_key(function.id.as_str())
-            })
+            .filter(|function| self.exposes_declaration(&root, function.id.as_str()))
             .cloned()
             .collect();
         source
@@ -88,7 +109,7 @@ impl PackageScan {
         RootCrate::new(&self.root.package.name)
     }
 
-    fn exposes_support_methods(&self, root: &RootCrate, id: &str) -> bool {
+    fn exposes_declaration(&self, root: &RootCrate, id: &str) -> bool {
         root.owns(id) || self.root_visible_paths.contains_key(id)
     }
 }
@@ -1258,6 +1279,56 @@ mod tests {
             .expect("dependency class stays in root support contract");
 
         assert_eq!(counter.methods.len(), 2);
+    }
+
+    #[test]
+    fn root_with_support_keeps_visible_dependency_class_streams_and_constants() {
+        let root = source_tree("demo", "");
+        let model = source_tree(
+            "model",
+            "use std::sync::Arc; \
+             use boltffi::EventSubscription; \
+             #[export] pub const BANNER: &str = \"model\"; \
+             pub struct ForeignCounter { value: i32 } \
+             #[export] impl ForeignCounter { \
+                 pub fn new(initial: i32) -> Self { Self { value: initial } } \
+                 #[ffi_stream(item = i32)] \
+                 pub fn ticks(&self) -> Arc<EventSubscription<i32>> { todo!() } \
+                 pub const VERSION: u32 = 1; \
+             }",
+        );
+        let complete = SourceTree::combine([model, root.clone()]);
+        let scan = PackageScan {
+            root: scan_tree(root, PackageInfo::new("demo", None)).expect("root scans"),
+            complete: scan_tree(complete, PackageInfo::new("demo", None)).expect("complete scans"),
+            root_visible_paths: HashMap::from([(
+                "model::ForeignCounter".to_owned(),
+                Path::new(
+                    PathRoot::Relative,
+                    vec![
+                        PathSegment::new("model"),
+                        PathSegment::new("ForeignCounter"),
+                    ],
+                ),
+            )]),
+        };
+        let source = scan.root_with_support();
+
+        assert!(source.streams.iter().any(|stream| {
+            stream.id == StreamId::new("model::ForeignCounter::ticks")
+                && stream.owner == Some(ClassId::new("model::ForeignCounter"))
+        }));
+        assert!(source.constants.iter().any(|constant| {
+            constant.id == ConstantId::new("model::ForeignCounter::VERSION")
+                && constant.owner
+                    == Some(ConstantOwner::Class(ClassId::new("model::ForeignCounter")))
+        }));
+        assert!(
+            !source
+                .constants
+                .iter()
+                .any(|constant| constant.id == ConstantId::new("model::BANNER"))
+        );
     }
 
     #[test]

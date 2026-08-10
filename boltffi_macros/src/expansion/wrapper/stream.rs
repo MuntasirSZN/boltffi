@@ -5,7 +5,7 @@ use boltffi_binding::{
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Ident, Type};
+use syn::{Ident, Path, Type};
 
 use crate::expansion::{
     contract::{DeclarationPair, Expansion},
@@ -42,18 +42,25 @@ struct StreamItemType {
 
 enum Subscription<'lowered, S: boltffi_binding::SurfaceLower> {
     Function,
-    Method(DeclarationPair<'lowered, ClassDef, ClassDecl<S>>),
+    Method {
+        owner: DeclarationPair<'lowered, ClassDef, ClassDecl<S>>,
+        rust_type: Path,
+    },
 }
 
 impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Stream<'expansion, 'lowered, S> {
     pub fn new(
         stream: DeclarationPair<'lowered, StreamDef, StreamDecl<S>>,
         owner: DeclarationPair<'lowered, ClassDef, ClassDecl<S>>,
+        owner_rust_type: Path,
         expansion: &'expansion Expansion<'lowered, S>,
     ) -> Self {
         Self {
             stream,
-            subscription: Subscription::Method(owner),
+            subscription: Subscription::Method {
+                owner,
+                rust_type: owner_rust_type,
+            },
             expansion,
         }
     }
@@ -186,7 +193,7 @@ impl<'expansion, 'lowered> Stream<'expansion, 'lowered, Native> {
                 }
                 Ok(())
             }
-            Subscription::Method(owner) => {
+            Subscription::Method { owner, .. } => {
                 if self.stream.source().owner.as_ref() != Some(&owner.source().id) {
                     return Err(Error::SourceSyntaxMismatch(
                         "source stream owner does not match source class",
@@ -217,7 +224,7 @@ impl<'expansion, 'lowered> Stream<'expansion, 'lowered, Native> {
                     ::std::sync::Arc::into_raw(subscription) as usize as #stream_handle_type
                 }
             }),
-            Subscription::Method(owner) => {
+            Subscription::Method { owner, rust_type } => {
                 let class = names::SourceSpelling::new(&owner.source().name)
                     .ident("source class name is not a Rust identifier")?;
                 let handle_type = names::Class::new(&class).handle();
@@ -233,7 +240,7 @@ impl<'expansion, 'lowered> Stream<'expansion, 'lowered, Native> {
                             return #stream_handle_zero;
                         }
                         let #receiver_handle = #receiver as usize as *mut #handle_type;
-                        let #receiver: &#class = unsafe {
+                        let #receiver: &#rust_type = unsafe {
                             #handle_type::shared(#receiver_handle)
                         };
                         let subscription = #receiver.#method();
@@ -474,7 +481,7 @@ impl<'expansion, 'lowered> Stream<'expansion, 'lowered, Wasm32> {
                 }
                 Ok(())
             }
-            Subscription::Method(owner) => {
+            Subscription::Method { owner, .. } => {
                 if self.stream.source().owner.as_ref() != Some(&owner.source().id) {
                     return Err(Error::SourceSyntaxMismatch(
                         "source stream owner does not match source class",
@@ -505,7 +512,7 @@ impl<'expansion, 'lowered> Stream<'expansion, 'lowered, Wasm32> {
                     ::std::sync::Arc::into_raw(subscription) as usize as #stream_handle_type
                 }
             }),
-            Subscription::Method(owner) => {
+            Subscription::Method { owner, rust_type } => {
                 let class = names::SourceSpelling::new(&owner.source().name)
                     .ident("source class name is not a Rust identifier")?;
                 let handle_type = names::Class::new(&class).handle();
@@ -521,7 +528,7 @@ impl<'expansion, 'lowered> Stream<'expansion, 'lowered, Wasm32> {
                             return #stream_handle_zero;
                         }
                         let #receiver_handle = #receiver as usize as *mut #handle_type;
-                        let #receiver: &#class = unsafe {
+                        let #receiver: &#rust_type = unsafe {
                             #handle_type::shared(#receiver_handle)
                         };
                         let subscription = #receiver.#method();

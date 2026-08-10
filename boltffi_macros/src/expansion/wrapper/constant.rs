@@ -1,6 +1,8 @@
 use boltffi_ast::ConstantDef;
 use boltffi_binding::{ConstantDecl, ConstantValueDecl};
 use proc_macro2::TokenStream;
+use quote::quote;
+use syn::Path;
 
 use crate::expansion::{
     contract::{DeclarationPair, Expansion},
@@ -32,14 +34,10 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Constant<'expansion
         }
     }
 
-    pub fn with_owner(
-        mut self,
-        owner: rust_api::CallableOwner<'lowered>,
-        rust_type: TokenStream,
-    ) -> Self {
+    pub fn with_owner(mut self, owner: rust_api::CallableOwner<'lowered>, rust_type: Path) -> Self {
         self.owner = Some(AssociatedOwner {
             callable: owner,
-            rust_type,
+            rust_type: quote! { #rust_type },
         });
         self
     }

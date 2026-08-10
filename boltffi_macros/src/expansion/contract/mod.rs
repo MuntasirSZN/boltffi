@@ -375,9 +375,13 @@ mod tests {
             stream: &'lowered StreamDef,
             owner: &'lowered ClassDef,
         ) -> Result<TokenStream, Error> {
+            let owner_rust_type = syn::parse_str(owner.name.spelling()).map_err(|_| {
+                Error::SourceSyntaxMismatch("source stream owner name is not a Rust path")
+            })?;
             wrapper::stream::Stream::new(
                 expansion.stream(stream)?,
                 expansion.class(owner)?,
+                owner_rust_type,
                 expansion,
             )
             .render()
@@ -446,9 +450,13 @@ mod tests {
             stream: &'lowered StreamDef,
             owner: &'lowered ClassDef,
         ) -> Result<TokenStream, Error> {
+            let owner_rust_type = syn::parse_str(owner.name.spelling()).map_err(|_| {
+                Error::SourceSyntaxMismatch("source stream owner name is not a Rust path")
+            })?;
             wrapper::stream::Stream::new(
                 expansion.stream(stream)?,
                 expansion.class(owner)?,
+                owner_rust_type,
                 expansion,
             )
             .render()
