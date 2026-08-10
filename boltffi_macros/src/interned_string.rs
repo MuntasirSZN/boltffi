@@ -1,4 +1,3 @@
-use boltffi_ffi_rules::naming;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
@@ -86,7 +85,9 @@ fn render(spec: PoolSpec) -> proc_macro2::TokenStream {
     let constants = entries.iter().enumerate().map(|(index, entry)| {
         let constant = format_ident!(
             "{}",
-            naming::to_snake_case(&entry.name.to_string()).to_uppercase()
+            boltffi_ast::CanonicalName::from(entry.name.to_string().as_str())
+                .to_string()
+                .to_uppercase()
         );
         let id = index as u32;
         quote! {

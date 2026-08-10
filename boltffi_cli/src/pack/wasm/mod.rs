@@ -112,7 +112,6 @@ pub(crate) fn pack_wasm(
                 target: GenerateTarget::Typescript,
                 output: Some(config.wasm_typescript_output()),
                 experimental: false,
-                ir: true,
                 cargo_args: build_cargo_args.clone(),
                 deny_skipped: options.execution.deny_skipped,
             },

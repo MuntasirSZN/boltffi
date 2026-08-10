@@ -15,7 +15,7 @@ use crate::build::{
     failed_targets,
 };
 use crate::cli::{CliError, Result};
-use crate::commands::generate::ir::print_coverage;
+use crate::commands::generate::bindings::print_coverage;
 use crate::commands::pack::PackAppleOptions;
 use crate::config::{Config, SpmDistribution, SpmLayout};
 use crate::pack::PackError;

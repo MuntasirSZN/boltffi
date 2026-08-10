@@ -1,4 +1,3 @@
-use boltffi_ffi_rules::naming;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::Parse;
@@ -97,7 +96,7 @@ impl CustomTypeExpansion {
             try_from_ffi,
         } = self.spec;
 
-        let snake = naming::to_snake_case(&name.to_string());
+        let snake = boltffi_ast::CanonicalName::from(name.to_string().as_str()).to_string();
         let into_fn_name = format_ident!("__boltffi_custom_type_{}_into_ffi", snake);
         let try_from_fn_name = format_ident!("__boltffi_custom_type_{}_try_from_ffi", snake);
 

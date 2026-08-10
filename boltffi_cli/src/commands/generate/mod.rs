@@ -1,17 +1,9 @@
-mod generator;
-mod header;
-pub(crate) mod ir;
+pub(crate) mod bindings;
 pub(crate) mod java;
 
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-use boltffi_bindgen::CHeaderLowerer;
 use boltffi_bindgen::target::Target;
-#[cfg(test)]
-use generator::ScanPointerWidth;
-use generator::{GenerateRequest, run_generator};
-use header::HeaderGenerator;
 
 use crate::cli::Result;
 use crate::config::Config;
@@ -33,40 +25,30 @@ pub struct GenerateOptions {
     pub target: GenerateTarget,
     pub output: Option<PathBuf>,
     pub experimental: bool,
-    pub ir: bool,
     pub cargo_args: Vec<String>,
     /// Turn skipped declarations into a failure instead of a printed table.
     pub deny_skipped: bool,
 }
 
 pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Result<()> {
-    if options.ir {
-        return ir::run_ir_generation(config, &options);
-    }
-
-    let legacy_request = || GenerateRequest::for_current_crate(config, options.output.clone());
-
     match &options.target {
-        GenerateTarget::Swift => ir::run_ir_generation(config, &options),
-        GenerateTarget::Kotlin => ir::run_ir_generation(config, &options),
-        GenerateTarget::KotlinMultiplatform => ir::run_ir_generation(config, &options),
-        GenerateTarget::Java => ir::run_ir_generation(config, &options),
-        GenerateTarget::Header => {
-            run_generator::<HeaderGenerator>(&legacy_request(), options.experimental)
-        }
-        GenerateTarget::Typescript => ir::run_ir_generation(config, &options),
-        GenerateTarget::Dart => ir::run_ir_generation(config, &options),
-        GenerateTarget::Python => ir::run_ir_generation(config, &options),
-        GenerateTarget::CSharp => ir::run_ir_generation(config, &options),
+        GenerateTarget::Swift => bindings::run_generation(config, &options),
+        GenerateTarget::Kotlin => bindings::run_generation(config, &options),
+        GenerateTarget::KotlinMultiplatform => bindings::run_generation(config, &options),
+        GenerateTarget::Java => bindings::run_generation(config, &options),
+        GenerateTarget::Header => bindings::run_generation(config, &options),
+        GenerateTarget::Typescript => bindings::run_generation(config, &options),
+        GenerateTarget::Dart => bindings::run_generation(config, &options),
+        GenerateTarget::Python => bindings::run_generation(config, &options),
+        GenerateTarget::CSharp => bindings::run_generation(config, &options),
         GenerateTarget::All => {
             if config.should_process(Target::Swift, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::Swift,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -74,13 +56,12 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::Kotlin, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::Kotlin,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -88,13 +69,12 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::KotlinMultiplatform, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::KotlinMultiplatform,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -102,13 +82,12 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::Java, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::Java,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -116,13 +95,12 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::TypeScript, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::Typescript,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -130,13 +108,12 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::Dart, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::Dart,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -144,13 +121,12 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::Python, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::Python,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -158,13 +134,12 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             }
 
             if config.should_process(Target::CSharp, options.experimental) {
-                ir::run_ir_generation(
+                bindings::run_generation(
                     config,
                     &GenerateOptions {
                         target: GenerateTarget::CSharp,
                         output: options.output.clone(),
                         experimental: options.experimental,
-                        ir: true,
                         cargo_args: options.cargo_args.clone(),
                         deny_skipped: options.deny_skipped,
                     },
@@ -183,7 +158,7 @@ pub fn run_generate_java_with_generations(
     generations: impl IntoIterator<Item = java::TargetGeneration>,
     deny_skipped: bool,
 ) -> Result<()> {
-    ir::run_java_generations(config, output, artifact_name, generations, deny_skipped)
+    bindings::run_java_generations(config, output, artifact_name, generations, deny_skipped)
 }
 
 #[cfg(test)]
@@ -197,20 +172,13 @@ pub fn run_generate_header_with_output_from_source_dir(
         .as_ref()
         .cloned()
         .unwrap_or_else(|| config.android_header_output());
-    let request = GenerateRequest::new(
-        config,
-        output,
-        generator::SourceCrate::new(source_directory, crate_name),
-    );
-
-    let output_path = output_directory.join(format!("{}.h", config.library_name()));
-
-    request.ensure_output_directory(&output_directory)?;
-    let lowered_crate = request.lowered_crate(ScanPointerWidth::Flexible)?;
-    let header_source =
-        CHeaderLowerer::new(&lowered_crate.ffi_contract, &lowered_crate.abi_contract).generate();
-
-    request.write_output(&output_path, header_source)
+    bindings::run_c_header_generation(
+        output_directory,
+        source_directory.join("Cargo.toml"),
+        crate_name.to_owned(),
+        Vec::new(),
+        None,
+    )
 }
 
 pub fn run_generate_python_with_manifest(
@@ -222,7 +190,7 @@ pub fn run_generate_python_with_manifest(
     toolchain_selector: Option<String>,
     deny_skipped: bool,
 ) -> Result<()> {
-    ir::run_python_generation(
+    bindings::run_python_generation(
         config,
         output,
         manifest_path,
@@ -242,7 +210,7 @@ pub fn run_generate_kmp_with_manifest(
     toolchain_selector: Option<String>,
     deny_skipped: bool,
 ) -> Result<()> {
-    ir::run_kmp_generation(
+    bindings::run_kmp_generation(
         config,
         output,
         manifest_path,
@@ -260,7 +228,7 @@ pub fn run_generate_c_header_with_manifest(
     cargo_args: Vec<String>,
     toolchain_selector: Option<String>,
 ) -> Result<()> {
-    ir::run_c_header_generation(
+    bindings::run_c_header_generation(
         output_directory,
         manifest_path,
         header_name,
@@ -278,7 +246,7 @@ pub fn run_generate_csharp_with_output_from_source_dir(
     toolchain_selector: Option<String>,
     deny_skipped: bool,
 ) -> Result<()> {
-    ir::run_csharp_generation(
+    bindings::run_csharp_generation(
         config,
         output,
         source_directory.join("Cargo.toml"),
@@ -325,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn kotlin_multiplatform_generate_uses_ir_route_without_ir_flag() {
+    fn kotlin_multiplatform_generate_uses_binding_ir() {
         let config = parse_config(
             r#"
 experimental = ["kotlin_multiplatform"]
@@ -344,7 +312,6 @@ enabled = true
                 target: super::GenerateTarget::KotlinMultiplatform,
                 output: None,
                 experimental: false,
-                ir: false,
                 cargo_args: vec![
                     "--manifest-path".to_string(),
                     "/definitely/missing/boltffi/Cargo.toml".to_string(),
@@ -361,7 +328,7 @@ enabled = true
     }
 
     #[test]
-    fn typescript_generate_uses_ir_route_without_ir_flag() {
+    fn typescript_generate_uses_binding_ir() {
         let config = parse_config(
             r#"
 [package]
@@ -378,7 +345,6 @@ enabled = false
                 target: super::GenerateTarget::Typescript,
                 output: None,
                 experimental: false,
-                ir: false,
                 cargo_args: Vec::new(),
                 deny_skipped: false,
             },
@@ -392,7 +358,7 @@ enabled = false
     }
 
     #[test]
-    fn csharp_generate_uses_ir_route_without_ir_flag() {
+    fn csharp_generate_uses_binding_ir() {
         let config = parse_config(
             r#"
 [package]
@@ -409,7 +375,6 @@ enabled = true
                 target: super::GenerateTarget::CSharp,
                 output: None,
                 experimental: false,
-                ir: false,
                 cargo_args: vec![
                     "--manifest-path".to_string(),
                     "/definitely/missing/boltffi/Cargo.toml".to_string(),
@@ -500,7 +465,6 @@ Email = { type = "java.net.URI", conversion = "url_string" }
                 target: super::GenerateTarget::KotlinMultiplatform,
                 output: Some(output_directory.clone()),
                 experimental: false,
-                ir: false,
                 cargo_args: vec![
                     "--manifest-path".to_string(),
                     demo_manifest_path().display().to_string(),
@@ -589,7 +553,6 @@ package = "com.boltffi.demo"
                 target: super::GenerateTarget::KotlinMultiplatform,
                 output: Some(output_directory.clone()),
                 experimental: false,
-                ir: false,
                 cargo_args: vec![
                     "--manifest-path".to_string(),
                     demo_manifest_path().display().to_string(),

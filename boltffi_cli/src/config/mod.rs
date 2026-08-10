@@ -348,7 +348,7 @@ impl Config {
     }
 
     pub fn crate_artifact_name(&self) -> String {
-        boltffi_bindgen::library_name(self.library_name()).into_string()
+        self.library_name().replace('-', "_")
     }
 
     pub fn swift_module_name(&self) -> String {
@@ -602,7 +602,8 @@ impl Config {
     }
 
     pub fn resolved_android_kotlin_desktop_library_name(&self) -> String {
-        boltffi_bindgen::library_name(&self.resolved_android_kotlin_library_name()).into_string()
+        self.resolved_android_kotlin_library_name()
+            .replace('-', "_")
     }
 
     pub fn android_kotlin_desktop_loader(&self) -> KotlinDesktopLoader {

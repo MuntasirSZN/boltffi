@@ -64,7 +64,7 @@ demo-verify *args:
 
 # Generate demo bindings through the IR path
 demo-generate target *args:
-    cd examples/demo && cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- generate {{target}} --experimental --ir {{args}}
+    cd examples/demo && cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- generate {{target}} --experimental {{args}}
 
 # Audit semantic demo test cases against platform test markers
 demo-test-audit:
