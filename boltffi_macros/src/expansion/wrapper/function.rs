@@ -5,8 +5,8 @@ use quote::quote;
 use syn::{Ident, parse_str};
 
 use crate::expansion::{
+    contract::{DeclarationPair, Expansion},
     error::Error,
-    expansion::{DeclarationPair, Expansion},
     rust_api,
     wrapper::names,
 };

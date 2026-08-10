@@ -3,8 +3,8 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::expansion::{
+    contract::Expansion,
     error::Error,
-    expansion::Expansion,
     rust_api,
     wrapper::{self, names},
 };

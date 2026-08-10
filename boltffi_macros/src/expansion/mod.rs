@@ -2,7 +2,7 @@ pub mod build;
 mod error;
 mod metadata;
 
+pub mod contract;
 pub mod expander;
-pub mod expansion;
 mod rust_api;
 mod wrapper;

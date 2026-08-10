@@ -9,8 +9,8 @@ use quote::{quote, quote_spanned};
 use syn::Ident;
 
 use crate::expansion::{
+    contract::{DeclarationPair, Expansion},
     error::Error,
-    expansion::{DeclarationPair, Expansion},
     rust_api,
     wrapper::{self, associated_fn, export, names},
 };

@@ -4,7 +4,7 @@ use boltffi_binding::{
 };
 use proc_macro2::TokenStream;
 
-use crate::expansion::{error::Error, expansion::Expansion, rust_api};
+use crate::expansion::{contract::Expansion, error::Error, rust_api};
 
 pub mod closure;
 pub mod direct;

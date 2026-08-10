@@ -3,8 +3,8 @@ use boltffi_binding::{ConstantDecl, ConstantValueDecl};
 use proc_macro2::TokenStream;
 
 use crate::expansion::{
+    contract::{DeclarationPair, Expansion},
     error::Error,
-    expansion::{DeclarationPair, Expansion},
     rust_api,
     wrapper::{export, names},
 };

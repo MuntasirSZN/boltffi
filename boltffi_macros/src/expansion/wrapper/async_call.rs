@@ -8,8 +8,8 @@ use quote::quote;
 use syn::{Type, parse_quote};
 
 use crate::expansion::{
+    contract::Expansion,
     error::Error,
-    expansion::Expansion,
     rust_api,
     wrapper::{
         self, export, names,
@@ -522,12 +522,12 @@ struct PlainComplete {
 }
 
 impl Complete {
-    fn native<'expansion, 'plan>(
+    fn native<'plan>(
         owner: syn::Ident,
         callable: &'plan ExportedCallable<Native>,
         source: rust_api::Return<'plan>,
         rust_return_type: &Type,
-        expansion: &'expansion Expansion<'plan, Native>,
+        expansion: &Expansion<'plan, Native>,
     ) -> Result<Self, Error> {
         if !matches!(callable.error(), ErrorDecl::None(_)) {
             return FallibleComplete::native(
@@ -542,12 +542,12 @@ impl Complete {
         PlainComplete::native(owner, callable, source, rust_return_type, expansion).map(Self::Plain)
     }
 
-    fn wasm32<'expansion, 'plan>(
+    fn wasm32<'plan>(
         owner: syn::Ident,
         callable: &'plan ExportedCallable<Wasm32>,
         source: rust_api::Return<'plan>,
         rust_return_type: &Type,
-        expansion: &'expansion Expansion<'plan, Wasm32>,
+        expansion: &Expansion<'plan, Wasm32>,
     ) -> Result<Self, Error> {
         if !matches!(callable.error(), ErrorDecl::None(_)) {
             return FallibleComplete::wasm32(
@@ -577,12 +577,12 @@ impl Complete {
 }
 
 impl PlainComplete {
-    fn native<'expansion, 'plan>(
+    fn native<'plan>(
         owner: syn::Ident,
         callable: &'plan ExportedCallable<Native>,
         source: rust_api::Return<'plan>,
         rust_return_type: &Type,
-        expansion: &'expansion Expansion<'plan, Native>,
+        expansion: &Expansion<'plan, Native>,
     ) -> Result<Self, Error> {
         let result = names::Locals::new(proc_macro2::Span::call_site()).result();
         match callable.returns().plan() {
@@ -740,12 +740,12 @@ impl PlainComplete {
         }
     }
 
-    fn wasm32<'expansion, 'plan>(
+    fn wasm32<'plan>(
         owner: syn::Ident,
         callable: &'plan ExportedCallable<Wasm32>,
         source: rust_api::Return<'plan>,
         rust_return_type: &Type,
-        expansion: &'expansion Expansion<'plan, Wasm32>,
+        expansion: &Expansion<'plan, Wasm32>,
     ) -> Result<Self, Error> {
         let result = names::Locals::new(proc_macro2::Span::call_site()).result();
         match callable.returns().plan() {
@@ -958,12 +958,12 @@ struct FallibleComplete {
 }
 
 impl FallibleComplete {
-    fn native<'expansion, 'plan>(
+    fn native<'plan>(
         owner: syn::Ident,
         callable: &'plan ExportedCallable<Native>,
         source: rust_api::Fallible<'plan>,
         rust_return_type: &Type,
-        expansion: &'expansion Expansion<'plan, Native>,
+        expansion: &Expansion<'plan, Native>,
     ) -> Result<Self, Error> {
         let ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } = callable.error() else {
             return Err(Error::UnsupportedExpansion("async error channel"));
@@ -977,12 +977,12 @@ impl FallibleComplete {
         Self::finish(error, encoded_error, empty_error, success, rust_return_type)
     }
 
-    fn wasm32<'expansion, 'plan>(
+    fn wasm32<'plan>(
         owner: syn::Ident,
         callable: &'plan ExportedCallable<Wasm32>,
         source: rust_api::Fallible<'plan>,
         rust_return_type: &Type,
-        expansion: &'expansion Expansion<'plan, Wasm32>,
+        expansion: &Expansion<'plan, Wasm32>,
     ) -> Result<Self, Error> {
         let ErrorDecl::EncodedViaReturnSlot { codec, shape, .. } = callable.error() else {
             return Err(Error::UnsupportedExpansion("async error channel"));

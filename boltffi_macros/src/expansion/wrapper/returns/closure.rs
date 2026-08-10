@@ -6,8 +6,8 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::expansion::{
+    contract::Expansion,
     error::Error,
-    expansion::Expansion,
     rust_api,
     wrapper::{self, names},
 };

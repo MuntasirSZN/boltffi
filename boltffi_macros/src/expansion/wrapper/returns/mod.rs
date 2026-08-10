@@ -4,8 +4,8 @@ use quote::quote;
 use syn::Type;
 
 use crate::expansion::{
+    contract::Expansion,
     error::Error,
-    expansion::Expansion,
     rust_api,
     wrapper::{self, names},
 };

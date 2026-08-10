@@ -4,7 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Ident, Type};
 
-use crate::expansion::{error::Error, expansion::Expansion, rust_api, wrapper::names};
+use crate::expansion::{contract::Expansion, error::Error, rust_api, wrapper::names};
 
 pub struct Value<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> {
     codec: &'lowered CodecNode,

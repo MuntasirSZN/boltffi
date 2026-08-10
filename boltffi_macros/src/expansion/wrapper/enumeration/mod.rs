@@ -5,11 +5,11 @@ use boltffi_binding::{
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Ident, Type, parse_quote, parse_str};
+use syn::{Ident, Type, parse_str};
 
 use crate::expansion::{
+    contract::{DeclarationPair, Expansion},
     error::Error,
-    expansion::{DeclarationPair, Expansion},
     rust_api,
     wrapper::{self, names},
 };
@@ -42,44 +42,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Enumeration<'expans
     ) -> Self {
         Self { pair, expansion }
     }
-}
-
-impl<'expansion, 'lowered> Enumeration<'expansion, 'lowered, Native> {
-    pub fn render(self) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            EnumDecl::CStyle(binding) => CStyle {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
-            EnumDecl::Data(binding) => Data {
-                source: self.pair.source(),
-                binding: binding.as_ref(),
-                expansion: self.expansion,
-            }
-            .render(),
-            _ => Err(Error::UnsupportedExpansion("unknown enum declaration")),
-        }
-    }
-
-    pub fn render_exports(self, rust_type: Type) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            EnumDecl::CStyle(binding) => CStyle {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .exports(rust_type),
-            EnumDecl::Data(binding) => Data {
-                source: self.pair.source(),
-                binding: binding.as_ref(),
-                expansion: self.expansion,
-            }
-            .exports(rust_type),
-            _ => Err(Error::UnsupportedExpansion("unknown enum declaration")),
-        }
-    }
 
     pub fn render_runtime(self) -> Result<TokenStream, Error> {
         match self.pair.binding() {
@@ -95,30 +57,32 @@ impl<'expansion, 'lowered> Enumeration<'expansion, 'lowered, Native> {
                 expansion: self.expansion,
             }
             .runtime(),
+            _ => Err(Error::UnsupportedExpansion("unknown enum declaration")),
+        }
+    }
+}
+
+impl<'expansion, 'lowered> Enumeration<'expansion, 'lowered, Native> {
+    pub fn render_exports(self, rust_type: Type) -> Result<TokenStream, Error> {
+        match self.pair.binding() {
+            EnumDecl::CStyle(binding) => CStyle {
+                source: self.pair.source(),
+                binding,
+                expansion: self.expansion,
+            }
+            .exports(rust_type),
+            EnumDecl::Data(binding) => Data {
+                source: self.pair.source(),
+                binding: binding.as_ref(),
+                expansion: self.expansion,
+            }
+            .exports(rust_type),
             _ => Err(Error::UnsupportedExpansion("unknown enum declaration")),
         }
     }
 }
 
 impl<'expansion, 'lowered> Enumeration<'expansion, 'lowered, Wasm32> {
-    pub fn render(self) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            EnumDecl::CStyle(binding) => CStyle {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
-            EnumDecl::Data(binding) => Data {
-                source: self.pair.source(),
-                binding: binding.as_ref(),
-                expansion: self.expansion,
-            }
-            .render(),
-            _ => Err(Error::UnsupportedExpansion("unknown enum declaration")),
-        }
-    }
-
     pub fn render_exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         match self.pair.binding() {
             EnumDecl::CStyle(binding) => CStyle {
@@ -133,24 +97,6 @@ impl<'expansion, 'lowered> Enumeration<'expansion, 'lowered, Wasm32> {
                 expansion: self.expansion,
             }
             .exports(rust_type),
-            _ => Err(Error::UnsupportedExpansion("unknown enum declaration")),
-        }
-    }
-
-    pub fn render_runtime(self) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            EnumDecl::CStyle(binding) => CStyle {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .runtime(),
-            EnumDecl::Data(binding) => Data {
-                source: self.pair.source(),
-                binding: binding.as_ref(),
-                expansion: self.expansion,
-            }
-            .runtime(),
             _ => Err(Error::UnsupportedExpansion("unknown enum declaration")),
         }
     }
@@ -304,17 +250,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> CStyle<'expansion, 
 }
 
 impl<'expansion, 'lowered> CStyle<'expansion, 'lowered, Native> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let enumeration = names::SourceSpelling::new(&self.source.name)
-            .ident("source enum name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #enumeration })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         exports::Exports::new(
             self.source,
@@ -332,17 +267,6 @@ impl<'expansion, 'lowered> CStyle<'expansion, 'lowered, Native> {
 }
 
 impl<'expansion, 'lowered> CStyle<'expansion, 'lowered, Wasm32> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let enumeration = names::SourceSpelling::new(&self.source.name)
-            .ident("source enum name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #enumeration })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         exports::Exports::new(
             self.source,
@@ -464,17 +388,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Data<'expansion, 'l
 }
 
 impl<'expansion, 'lowered> Data<'expansion, 'lowered, Native> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let enumeration = names::SourceSpelling::new(&self.source.name)
-            .ident("source enum name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #enumeration })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         exports::Exports::new(
             self.source,
@@ -492,17 +405,6 @@ impl<'expansion, 'lowered> Data<'expansion, 'lowered, Native> {
 }
 
 impl<'expansion, 'lowered> Data<'expansion, 'lowered, Wasm32> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let enumeration = names::SourceSpelling::new(&self.source.name)
-            .ident("source enum name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #enumeration })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         exports::Exports::new(
             self.source,

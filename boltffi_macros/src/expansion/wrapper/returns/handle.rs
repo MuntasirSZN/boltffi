@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Type;
 
-use crate::expansion::{error::Error, expansion::Expansion, rust_api, wrapper};
+use crate::expansion::{contract::Expansion, error::Error, rust_api, wrapper};
 
 pub struct ValueInput<'expansion, 'lowered, S: boltffi_binding::SurfaceLower, C> {
     expansion: &'expansion Expansion<'lowered, S>,

@@ -50,13 +50,13 @@ pub fn data(attribute: TokenStream, item: TokenStream) -> TokenStream {
     if attribute.to_string().trim() == "impl" {
         expand(item)
     } else {
-        expand(data::repr::materialize(item))
+        expand_data(data::repr::materialize(item))
     }
 }
 
 #[proc_macro_attribute]
 pub fn error(_attribute: TokenStream, item: TokenStream) -> TokenStream {
-    expand(data::repr::materialize(item))
+    expand_data(data::repr::materialize(item))
 }
 
 #[proc_macro_attribute]
@@ -105,6 +105,34 @@ fn expand(item: TokenStream) -> TokenStream {
             })
         }
         expansion::build::Item::Error(tokens) => TokenStream::from(tokens),
+    }
+}
+
+fn expand_data(item: TokenStream) -> TokenStream {
+    let declaration = match data::scope::Declaration::from_macro_input(&item) {
+        Ok(declaration) => declaration,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    match expansion::build::data(&declaration) {
+        expansion::build::DataItem::Tokens(expansion) => {
+            let item = proc_macro2::TokenStream::from(strip_boltffi_attrs(item));
+            let runtime = expansion.runtime();
+            let root = expansion.root().map(|root| {
+                quote! {
+                    mod __boltffi_expansion {
+                        use crate::*;
+
+                        #root
+                    }
+                }
+            });
+            TokenStream::from(quote! {
+                #item
+                #runtime
+                #root
+            })
+        }
+        expansion::build::DataItem::Error(tokens) => TokenStream::from(tokens),
     }
 }
 

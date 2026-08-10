@@ -6,7 +6,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Index;
 
-use crate::expansion::{error::Error, expansion::Expansion, wrapper};
+use crate::expansion::{contract::Expansion, error::Error, wrapper};
 
 mod converter;
 

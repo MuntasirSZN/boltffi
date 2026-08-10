@@ -1,17 +1,17 @@
 use std::collections::HashMap;
 
 use boltffi_ast::{
-    ClassDef, ConstantDef, ConstantOwner, EnumDef, Path, PathRoot, RecordDef, SourceContract,
-    StreamDef, TraitDef,
+    ClassDef, ConstantDef, ConstantOwner, EnumDef, EnumId, Path, PathRoot, RecordDef, RecordId,
+    SourceContract, StreamDef, TraitDef,
 };
-use boltffi_binding::{Native, SerializedBindings, Wasm32};
+use boltffi_binding::{Native, SerializedBindings, SurfaceLower, Wasm32};
 use proc_macro2::TokenStream;
 #[cfg(test)]
 use quote::format_ident;
 use quote::quote;
 use syn::Type;
 
-use crate::expansion::{error::Error, expansion::Expansion, metadata, rust_api, wrapper};
+use crate::expansion::{contract::Expansion, error::Error, metadata, rust_api, wrapper};
 
 pub struct Expander<'lowered> {
     source: &'lowered SourceContract,
@@ -152,6 +152,24 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
             .and_then(Self::path_type)
     }
 
+    fn root_type(&self, id: &str) -> Result<Type, Error> {
+        let package = self.source.package.name.replace('-', "_");
+        let mut path = id.split("::");
+        if path.next() != Some(package.as_str()) {
+            return Err(Error::SourceSyntaxMismatch(
+                "source data declaration belongs to another crate",
+            ));
+        }
+        let path = path
+            .map(|segment| {
+                syn::parse_str::<syn::Ident>(segment)
+                    .map_err(|_| Error::SourceSyntaxMismatch("source data path is not Rust syntax"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        syn::parse2(quote! { crate::#(#path)::* })
+            .map_err(|_| Error::SourceSyntaxMismatch("source data path is not a Rust type"))
+    }
+
     fn stream_owner(&self, stream: &StreamDef) -> Result<Option<&'lowered ClassDef>, Error> {
         stream
             .owner
@@ -266,20 +284,33 @@ impl<'lowered> Expander<'lowered> {
         })
     }
 
-    pub fn native_type_support(
+    pub fn record_runtime<S: SurfaceLower>(
         &self,
-        expansion: &Expansion<'lowered, Native>,
+        id: &RecordId,
+        expansion: &Expansion<'lowered, S>,
     ) -> Result<TokenStream, Error> {
-        SurfaceExpander::native(self.source, self.support, &self.visible_paths, expansion)
-            .type_support()
+        let source = self
+            .source
+            .records
+            .iter()
+            .find(|record| &record.id == id)
+            .ok_or(Error::WrongDeclaration)?;
+        wrapper::record::Record::new(expansion.record(source)?, expansion).render_runtime()
     }
 
-    pub fn wasm32_type_support(
+    pub fn enumeration_runtime<S: SurfaceLower>(
         &self,
-        expansion: &Expansion<'lowered, Wasm32>,
+        id: &EnumId,
+        expansion: &Expansion<'lowered, S>,
     ) -> Result<TokenStream, Error> {
-        SurfaceExpander::wasm32(self.source, self.support, &self.visible_paths, expansion)
-            .type_support()
+        let source = self
+            .source
+            .enums
+            .iter()
+            .find(|enumeration| &enumeration.id == id)
+            .ok_or(Error::WrongDeclaration)?;
+        wrapper::enumeration::Enumeration::new(expansion.enumeration(source)?, expansion)
+            .render_runtime()
     }
 
     #[cfg(test)]
@@ -345,48 +376,6 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
         })
     }
 
-    fn type_support(self) -> Result<TokenStream, Error> {
-        let imports = self.record_and_enum_imports()?;
-        let records = self
-            .source
-            .records
-            .iter()
-            .map(|source| match self.expansion {
-                ExpansionSurface::Native(expansion) => {
-                    wrapper::record::Record::new(expansion.record(source)?, expansion)
-                        .render_runtime()
-                }
-                ExpansionSurface::Wasm32(expansion) => {
-                    wrapper::record::Record::new(expansion.record(source)?, expansion)
-                        .render_runtime()
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let enumerations = self
-            .source
-            .enums
-            .iter()
-            .map(|source| match self.expansion {
-                ExpansionSurface::Native(expansion) => wrapper::enumeration::Enumeration::new(
-                    expansion.enumeration(source)?,
-                    expansion,
-                )
-                .render_runtime(),
-                ExpansionSurface::Wasm32(expansion) => wrapper::enumeration::Enumeration::new(
-                    expansion.enumeration(source)?,
-                    expansion,
-                )
-                .render_runtime(),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(quote! {
-            #(#imports)*
-            #(#records)*
-            #(#enumerations)*
-        })
-    }
-
     fn callbacks(&self) -> Result<Vec<TokenStream>, Error> {
         self.support
             .traits
@@ -411,12 +400,17 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
             .source
             .records
             .iter()
-            .map(|source| match self.expansion {
-                ExpansionSurface::Native(expansion) => {
-                    wrapper::record::Record::new(expansion.record(source)?, expansion).render()
-                }
-                ExpansionSurface::Wasm32(expansion) => {
-                    wrapper::record::Record::new(expansion.record(source)?, expansion).render()
+            .map(|source| {
+                let rust_type = self.root_type(source.id.as_str())?;
+                match self.expansion {
+                    ExpansionSurface::Native(expansion) => {
+                        wrapper::record::Record::new(expansion.record(source)?, expansion)
+                            .render_exports(rust_type)
+                    }
+                    ExpansionSurface::Wasm32(expansion) => {
+                        wrapper::record::Record::new(expansion.record(source)?, expansion)
+                            .render_exports(rust_type)
+                    }
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -429,17 +423,20 @@ impl<'expansion, 'lowered> SurfaceExpander<'expansion, 'lowered> {
             .source
             .enums
             .iter()
-            .map(|source| match self.expansion {
-                ExpansionSurface::Native(expansion) => wrapper::enumeration::Enumeration::new(
-                    expansion.enumeration(source)?,
-                    expansion,
-                )
-                .render(),
-                ExpansionSurface::Wasm32(expansion) => wrapper::enumeration::Enumeration::new(
-                    expansion.enumeration(source)?,
-                    expansion,
-                )
-                .render(),
+            .map(|source| {
+                let rust_type = self.root_type(source.id.as_str())?;
+                match self.expansion {
+                    ExpansionSurface::Native(expansion) => wrapper::enumeration::Enumeration::new(
+                        expansion.enumeration(source)?,
+                        expansion,
+                    )
+                    .render_exports(rust_type),
+                    ExpansionSurface::Wasm32(expansion) => wrapper::enumeration::Enumeration::new(
+                        expansion.enumeration(source)?,
+                        expansion,
+                    )
+                    .render_exports(rust_type),
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         enumerations.extend(self.support_enumerations()?);
@@ -643,31 +640,51 @@ mod tests {
     use proc_macro2::TokenStream;
     use quote::quote;
 
-    use crate::expansion::{expander, expansion::Expansion};
+    use crate::expansion::{contract::Expansion, expander};
 
     #[test]
     fn expands_all_declaration_families_in_contract_order() {
         let source = source_contract();
         let lowered = lower_with_declarations::<Native>(&source).expect("contract lowers");
         let expansion = Expansion::new(&lowered);
+        let expander = expander::Expander::new(&source);
 
-        let tokens = expander::Expander::new(&source)
-            .native(&expansion)
-            .expect("contract expands");
-        let rendered = tokens.to_string();
+        let exports = expander.native(&expansion).expect("contract expands");
+        let record_runtimes = source
+            .records
+            .iter()
+            .map(|record| expander.record_runtime(&record.id, &expansion))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("record runtimes expand");
+        let enumeration_runtimes = source
+            .enums
+            .iter()
+            .map(|enumeration| expander.enumeration_runtime(&enumeration.id, &expansion))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("enum runtimes expand");
+        let rendered = exports.to_string();
 
         assert_in_order(
             &rendered,
             &[
                 "boltffi_register_callback_demo_listener",
-                "unsafe impl :: boltffi :: __private :: Passable for Point",
-                "unsafe impl :: boltffi :: __private :: Passable for Status",
                 "fn boltffi_release_class_demo_engine",
                 "fn boltffi_stream_demo_engine_values_subscribe",
                 "fn boltffi_const_demo_magic",
                 "fn boltffi_function_demo_answer",
             ],
         );
+        let runtimes = quote! {
+            #(#record_runtimes)*
+            #(#enumeration_runtimes)*
+        };
+        let rendered_runtimes = runtimes.to_string();
+        assert!(rendered_runtimes.contains("Passable for Point"));
+        assert!(rendered_runtimes.contains("Passable for Status"));
+        let tokens = quote! {
+            #runtimes
+            #exports
+        };
         assert_generated_crate_checks("expander_all_declarations", full_contract_crate(tokens));
     }
 
@@ -712,11 +729,17 @@ mod tests {
         source.constants.push(black);
         let lowered = lower_with_declarations::<Native>(&source).expect("contract lowers");
         let expansion = Expansion::new(&lowered);
+        let expander = expander::Expander::new(&source);
 
-        let tokens = expander::Expander::new(&source)
-            .native(&expansion)
-            .expect("contract expands");
-        let rendered = tokens.to_string();
+        let exports = expander.native(&expansion).expect("contract expands");
+        let runtime = expander
+            .record_runtime(&source.records[0].id, &expansion)
+            .expect("record runtime expands");
+        let rendered = exports.to_string();
+        let tokens = quote! {
+            #runtime
+            #exports
+        };
 
         assert!(rendered.contains("Color :: BLACK"));
         assert_generated_crate_checks(
@@ -832,14 +855,22 @@ mod tests {
     }
 
     #[test]
-    fn native_type_support_emits_only_local_data_runtime_contracts() {
+    fn native_data_runtime_emits_only_the_selected_runtime_contracts() {
         let (_, support, visible_paths) = dependency_data_method_support();
         let lowered = lower_with_declarations::<Native>(&support).expect("contract lowers");
         let expansion = Expansion::new(&lowered);
+        let expander = expander::Expander::with_support(&support, &support, visible_paths);
 
-        let tokens = expander::Expander::with_support(&support, &support, visible_paths)
-            .native_type_support(&expansion)
-            .expect("type support expands");
+        let record = expander
+            .record_runtime(&support.records[0].id, &expansion)
+            .expect("record runtime expands");
+        let enumeration = expander
+            .enumeration_runtime(&support.enums[0].id, &expansion)
+            .expect("enum runtime expands");
+        let tokens = quote! {
+            #record
+            #enumeration
+        };
         let rendered = tokens.to_string();
 
         assert!(rendered.contains("Passable for ForeignPoint"));

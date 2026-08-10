@@ -1,7 +1,7 @@
 use boltffi_binding::{ExecutionDecl, ExportedCallable};
 use proc_macro2::TokenStream;
 
-use crate::expansion::{error::Error, expansion::Expansion, rust_api, wrapper};
+use crate::expansion::{contract::Expansion, error::Error, rust_api, wrapper};
 
 pub struct Input<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> {
     callable: &'lowered ExportedCallable<S>,

@@ -2,7 +2,7 @@ use boltffi_binding::{CodecNode, Native, ReadPlan, Wasm32, native, wasm32};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::expansion::{error::Error, expansion::Expansion, wrapper::encoded};
+use crate::expansion::{contract::Expansion, error::Error, wrapper::encoded};
 
 pub struct Input<'expansion, 'codec, 'lowered, S: boltffi_binding::SurfaceLower> {
     codec: &'codec CodecNode,

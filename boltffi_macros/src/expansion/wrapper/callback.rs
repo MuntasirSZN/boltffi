@@ -15,8 +15,8 @@ use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Type, parse_str};
 
 use crate::expansion::{
+    contract::{DeclarationPair, Expansion},
     error::Error,
-    expansion::{DeclarationPair, Expansion},
     rust_api, wrapper,
 };
 

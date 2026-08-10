@@ -332,15 +332,35 @@ mod tests {
             expansion: &Expansion<'lowered, Self>,
             source: &'lowered RecordDef,
         ) -> Result<TokenStream, Error> {
-            wrapper::record::Record::new(expansion.record(source)?, expansion).render()
+            let runtime = wrapper::record::Record::new(expansion.record(source)?, expansion)
+                .render_runtime()?;
+            let rust_type = syn::parse_str(source.name.spelling()).map_err(|_| {
+                Error::SourceSyntaxMismatch("source record name is not a Rust type")
+            })?;
+            let exports = wrapper::record::Record::new(expansion.record(source)?, expansion)
+                .render_exports(rust_type)?;
+            Ok(quote! {
+                #runtime
+                #exports
+            })
         }
 
         fn enumeration<'lowered>(
             expansion: &Expansion<'lowered, Self>,
             source: &'lowered EnumDef,
         ) -> Result<TokenStream, Error> {
-            wrapper::enumeration::Enumeration::new(expansion.enumeration(source)?, expansion)
-                .render()
+            let runtime =
+                wrapper::enumeration::Enumeration::new(expansion.enumeration(source)?, expansion)
+                    .render_runtime()?;
+            let rust_type = syn::parse_str(source.name.spelling())
+                .map_err(|_| Error::SourceSyntaxMismatch("source enum name is not a Rust type"))?;
+            let exports =
+                wrapper::enumeration::Enumeration::new(expansion.enumeration(source)?, expansion)
+                    .render_exports(rust_type)?;
+            Ok(quote! {
+                #runtime
+                #exports
+            })
         }
 
         fn class<'lowered>(
@@ -383,15 +403,35 @@ mod tests {
             expansion: &Expansion<'lowered, Self>,
             source: &'lowered RecordDef,
         ) -> Result<TokenStream, Error> {
-            wrapper::record::Record::new(expansion.record(source)?, expansion).render()
+            let runtime = wrapper::record::Record::new(expansion.record(source)?, expansion)
+                .render_runtime()?;
+            let rust_type = syn::parse_str(source.name.spelling()).map_err(|_| {
+                Error::SourceSyntaxMismatch("source record name is not a Rust type")
+            })?;
+            let exports = wrapper::record::Record::new(expansion.record(source)?, expansion)
+                .render_exports(rust_type)?;
+            Ok(quote! {
+                #runtime
+                #exports
+            })
         }
 
         fn enumeration<'lowered>(
             expansion: &Expansion<'lowered, Self>,
             source: &'lowered EnumDef,
         ) -> Result<TokenStream, Error> {
-            wrapper::enumeration::Enumeration::new(expansion.enumeration(source)?, expansion)
-                .render()
+            let runtime =
+                wrapper::enumeration::Enumeration::new(expansion.enumeration(source)?, expansion)
+                    .render_runtime()?;
+            let rust_type = syn::parse_str(source.name.spelling())
+                .map_err(|_| Error::SourceSyntaxMismatch("source enum name is not a Rust type"))?;
+            let exports =
+                wrapper::enumeration::Enumeration::new(expansion.enumeration(source)?, expansion)
+                    .render_exports(rust_type)?;
+            Ok(quote! {
+                #runtime
+                #exports
+            })
         }
 
         fn class<'lowered>(
@@ -484,8 +524,8 @@ mod tests {
         S::class(expansion, source)
     }
 
-    fn expand_stream<'expansion, 'lowered, S>(
-        expansion: &'expansion Expansion<'lowered, S>,
+    fn expand_stream<'lowered, S>(
+        expansion: &Expansion<'lowered, S>,
         stream: &'lowered StreamDef,
         owner: &'lowered ClassDef,
     ) -> Result<TokenStream, Error>
@@ -7005,7 +7045,7 @@ mod tests {
             rendered
                 .contains("impl :: boltffi :: __private :: ArcFromCallbackHandle for dyn Listener")
         );
-        assert!(rendered.contains("pub (crate) fn __boltffi_local_demo_listener_handle"));
+        assert!(rendered.contains("pub fn __boltffi_local_demo_listener_handle"));
         assert!(rendered.contains("static __BOLTFFI_LOCAL_LISTENER_VTABLE"));
     }
 
@@ -7047,7 +7087,7 @@ mod tests {
         assert!(!local_drop.contains("__boltffi_callback_lifecycle_demo_listener_free"));
         assert!(rendered.contains("static __BOLTFFI_LOCAL_LISTENER_REGISTRY"));
         assert!(rendered.contains("pub extern \"C\" fn __boltffi_local_demo_listener_on_value"));
-        assert!(rendered.contains("pub (crate) fn __boltffi_local_demo_listener_handle"));
+        assert!(rendered.contains("pub fn __boltffi_local_demo_listener_handle"));
     }
 
     #[test]

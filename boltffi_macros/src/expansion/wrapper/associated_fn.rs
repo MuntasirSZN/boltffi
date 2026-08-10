@@ -6,8 +6,8 @@ use proc_macro2::TokenStream;
 use syn::{Ident, parse_quote};
 
 use crate::expansion::{
+    contract::Expansion,
     error::Error,
-    expansion::Expansion,
     rust_api,
     wrapper::{export, names},
 };

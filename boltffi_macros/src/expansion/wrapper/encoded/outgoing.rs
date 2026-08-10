@@ -2,7 +2,7 @@ use boltffi_binding::{CodecNode, OwnedWireEncoding};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::expansion::{error::Error, expansion::Expansion};
+use crate::expansion::{contract::Expansion, error::Error};
 
 pub struct Value<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> {
     codec: &'lowered CodecNode,

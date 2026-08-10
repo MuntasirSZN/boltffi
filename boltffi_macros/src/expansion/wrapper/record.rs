@@ -5,11 +5,11 @@ use boltffi_binding::{
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Ident, Type, parse_quote};
+use syn::{Ident, Type};
 
 use crate::expansion::{
+    contract::{DeclarationPair, Expansion},
     error::Error,
-    expansion::{DeclarationPair, Expansion},
     rust_api,
     wrapper::{self, associated_fn, encoded, export, names},
 };
@@ -40,6 +40,8 @@ struct EncodedField<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> {
 }
 
 struct EncodedFieldTokens {
+    fixed_size_check: TokenStream,
+    fixed_size: TokenStream,
     wire_size: TokenStream,
     encode_to: TokenStream,
     decode_from: TokenStream,
@@ -66,44 +68,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Record<'expansion, 
     ) -> Self {
         Self { pair, expansion }
     }
-}
-
-impl<'expansion, 'lowered> Record<'expansion, 'lowered, Native> {
-    pub fn render(self) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            RecordDecl::Direct(binding) => Direct {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
-            RecordDecl::Encoded(binding) => Encoded {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
-            _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
-        }
-    }
-
-    pub fn render_exports(self, rust_type: Type) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            RecordDecl::Direct(binding) => Direct {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .exports(rust_type),
-            RecordDecl::Encoded(binding) => Encoded {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .exports(rust_type),
-            _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
-        }
-    }
 
     pub fn render_runtime(self) -> Result<TokenStream, Error> {
         match self.pair.binding() {
@@ -119,30 +83,32 @@ impl<'expansion, 'lowered> Record<'expansion, 'lowered, Native> {
                 expansion: self.expansion,
             }
             .runtime(),
+            _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
+        }
+    }
+}
+
+impl<'expansion, 'lowered> Record<'expansion, 'lowered, Native> {
+    pub fn render_exports(self, rust_type: Type) -> Result<TokenStream, Error> {
+        match self.pair.binding() {
+            RecordDecl::Direct(binding) => Direct {
+                source: self.pair.source(),
+                binding,
+                expansion: self.expansion,
+            }
+            .exports(rust_type),
+            RecordDecl::Encoded(binding) => Encoded {
+                source: self.pair.source(),
+                binding,
+                expansion: self.expansion,
+            }
+            .exports(rust_type),
             _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
         }
     }
 }
 
 impl<'expansion, 'lowered> Record<'expansion, 'lowered, Wasm32> {
-    pub fn render(self) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            RecordDecl::Direct(binding) => Direct {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
-            RecordDecl::Encoded(binding) => Encoded {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .render(),
-            _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
-        }
-    }
-
     pub fn render_exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         match self.pair.binding() {
             RecordDecl::Direct(binding) => Direct {
@@ -157,24 +123,6 @@ impl<'expansion, 'lowered> Record<'expansion, 'lowered, Wasm32> {
                 expansion: self.expansion,
             }
             .exports(rust_type),
-            _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
-        }
-    }
-
-    pub fn render_runtime(self) -> Result<TokenStream, Error> {
-        match self.pair.binding() {
-            RecordDecl::Direct(binding) => Direct {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .runtime(),
-            RecordDecl::Encoded(binding) => Encoded {
-                source: self.pair.source(),
-                binding,
-                expansion: self.expansion,
-            }
-            .runtime(),
             _ => Err(Error::UnsupportedExpansion("unknown record declaration")),
         }
     }
@@ -275,17 +223,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Direct<'expansion, 
 }
 
 impl<'expansion, 'lowered> Direct<'expansion, 'lowered, Native> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let record = names::SourceSpelling::new(&self.source.name)
-            .ident("source record name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #record })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         associated_fn::AssociatedFunctions::new(
             RecordOwner {
@@ -303,17 +240,6 @@ impl<'expansion, 'lowered> Direct<'expansion, 'lowered, Native> {
 }
 
 impl<'expansion, 'lowered> Direct<'expansion, 'lowered, Wasm32> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let record = names::SourceSpelling::new(&self.source.name)
-            .ident("source record name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #record })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         associated_fn::AssociatedFunctions::new(
             RecordOwner {
@@ -339,6 +265,14 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Encoded<'expansion,
             .iter()
             .map(|field| &field.wire_size)
             .collect::<Vec<_>>();
+        let fixed_size_checks = fields
+            .iter()
+            .map(|field| &field.fixed_size_check)
+            .collect::<Vec<_>>();
+        let fixed_sizes = fields
+            .iter()
+            .map(|field| &field.fixed_size)
+            .collect::<Vec<_>>();
         let encoders = fields
             .iter()
             .map(|field| &field.encode_to)
@@ -355,8 +289,18 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Encoded<'expansion,
             unsafe impl ::boltffi::__private::WirePassable for #record {}
 
             impl ::boltffi::__private::wire::WireEncode for #record {
+                fn is_fixed_size() -> bool {
+                    true #(&& #fixed_size_checks)*
+                }
+
+                fn fixed_size() -> Option<usize> {
+                    <Self as ::boltffi::__private::wire::WireEncode>::is_fixed_size()
+                        .then(|| 0 #(+ #fixed_sizes)*)
+                }
+
                 fn wire_size(&self) -> usize {
-                    0 #(+ #wire_sizes)*
+                    <Self as ::boltffi::__private::wire::WireEncode>::fixed_size()
+                        .unwrap_or_else(|| 0 #(+ #wire_sizes)*)
                 }
 
                 fn encode_to(&self, buffer: &mut [u8]) -> usize {
@@ -415,17 +359,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Encoded<'expansion,
 }
 
 impl<'expansion, 'lowered> Encoded<'expansion, 'lowered, Native> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let record = names::SourceSpelling::new(&self.source.name)
-            .ident("source record name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #record })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         associated_fn::AssociatedFunctions::new(
             RecordOwner {
@@ -445,17 +378,6 @@ impl<'expansion, 'lowered> Encoded<'expansion, 'lowered, Native> {
 }
 
 impl<'expansion, 'lowered> Encoded<'expansion, 'lowered, Wasm32> {
-    fn render(self) -> Result<TokenStream, Error> {
-        let record = names::SourceSpelling::new(&self.source.name)
-            .ident("source record name is not a Rust identifier")?;
-        let runtime = self.runtime()?;
-        let exports = self.exports(parse_quote! { #record })?;
-        Ok(quote! {
-            #runtime
-            #exports
-        })
-    }
-
     fn exports(self, rust_type: Type) -> Result<TokenStream, Error> {
         associated_fn::AssociatedFunctions::new(
             RecordOwner {
@@ -487,10 +409,25 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> EncodedField<'expan
         let codec = self.binding.codec().write().root();
         encoded::require_runtime_wire(codec)?;
         rust_api::IncomingEncodedType::new(&self.source.type_expr).require_supported()?;
+        let conversion = encoded::BorrowedOutgoing::new(codec, self.expansion);
+        let (fixed_size_check, fixed_size) = match conversion.has_custom_conversion() {
+            true => (quote! { false }, quote! { 0 }),
+            false => (
+                quote! {
+                    <#rust_type as ::boltffi::__private::wire::WireEncode>::is_fixed_size()
+                },
+                quote! {
+                    <#rust_type as ::boltffi::__private::wire::WireEncode>::fixed_size()
+                        .unwrap_or(0)
+                },
+            ),
+        };
         let wire_size = self.wire_size(&field, &wire, codec)?;
         let encode_to = self.encode_to(&field, &wire, codec)?;
         let decode_from = self.decode_from(&field, &decoded, &used, &rust_type, codec)?;
         Ok(EncodedFieldTokens {
+            fixed_size_check,
+            fixed_size,
             wire_size,
             encode_to,
             decode_from,

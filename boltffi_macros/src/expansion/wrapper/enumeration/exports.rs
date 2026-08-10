@@ -8,8 +8,8 @@ use quote::quote;
 use syn::{Ident, Type};
 
 use crate::expansion::{
+    contract::Expansion,
     error::Error,
-    expansion::Expansion,
     rust_api,
     wrapper::{self, associated_fn, export, names},
 };
