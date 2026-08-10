@@ -75,3 +75,16 @@ impl FixturePoint {
         }
     }
 }
+
+/// Deliberately one character.
+///
+/// `#[data]` locates its own declaration by byte offset, and an offset that is
+/// off by one still lands inside any longer name. Every other declaration in
+/// this crate is long enough to hide that, so this one is the tripwire: it
+/// fails to compile if the offset leaves the identifier.
+#[data]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct R {
+    pub value: u32,
+}
