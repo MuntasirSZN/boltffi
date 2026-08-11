@@ -134,7 +134,12 @@ impl CargoMetadata {
         for t in package_targets {
             for crate_type in &library_target.crate_types {
                 let prefix = if crate_type.is_staticlib() {
-                    "lib"
+                    // MSVC's `.lib` archives drop the Unix `lib` prefix;
+                    // every other staticlib-producing toolchain keeps it.
+                    match t.platform() {
+                        Platform::Windows => "",
+                        _ => "lib",
+                    }
                 } else {
                     match t.platform() {
                         Platform::Wasm | Platform::Windows => "",
@@ -153,7 +158,10 @@ impl CargoMetadata {
                         Platform::Windows => "dll",
                     }
                 } else if crate_type.is_staticlib() {
-                    "a"
+                    match t.platform() {
+                        Platform::Windows => "lib",
+                        _ => "a",
+                    }
                 } else {
                     continue;
                 };
