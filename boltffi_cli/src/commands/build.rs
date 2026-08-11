@@ -124,13 +124,16 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
 // must build as a binding expansion for the #[data]/#[error] macros to see
 // active features -- a plain `cargo build` silently drops feature-gated
 // modules from the FFI surface (same bug fixed for `pack dart` and, before
-// that, `pack python` in 8bd6ab4a).
+// that, `pack python` in 8bd6ab4a). resolve_preferred keeps the configured/
+// default artifact selected even when the package has more than one
+// FFI-capable cargo target.
 fn expanded_builder(
     config: &Config,
     release: bool,
     cargo_args: Vec<String>,
 ) -> Result<Builder<'_>> {
-    let expansion = BindingExpansion::resolve(config, &cargo_args)?;
+    let expansion =
+        BindingExpansion::resolve_preferred(config, &cargo_args, &config.crate_artifact_name())?;
     Ok(Builder::new(
         config,
         expanded_build_options(expansion, release),
@@ -151,7 +154,12 @@ fn wasm_builder(config: &Config, release: bool, cargo_args: Vec<String>) -> Resu
 }
 
 fn wasm_expansion(config: &Config, cargo_args: &[String]) -> Result<BindingExpansion> {
-    BindingExpansion::resolve_for_surface(config, cargo_args, BindingMetadataSurface::Wasm32)
+    BindingExpansion::resolve_preferred_for_surface(
+        config,
+        cargo_args,
+        BindingMetadataSurface::Wasm32,
+        &config.crate_artifact_name(),
+    )
 }
 
 fn expanded_build_options(expansion: BindingExpansion, release: bool) -> BuildOptions {
@@ -199,10 +207,14 @@ fn print_build_results(results: &[BuildResult]) {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use boltffi_binding::BindingMetadataSurface;
 
-    use super::{BindingExpansion, BuildSelection, expanded_build_options, wasm_expansion};
+    use super::{
+        BindingExpansion, BuildSelection, expanded_build_options, expanded_builder, wasm_builder,
+        wasm_expansion,
+    };
     use crate::config::Config;
 
     fn demo_manifest_path() -> PathBuf {
@@ -213,6 +225,49 @@ mod tests {
         let parsed: Config = toml::from_str(input).expect("toml parse failed");
         parsed.validate().expect("config validation failed");
         parsed
+    }
+
+    /// A crate with a second FFI-capable cargo target (here, a cdylib
+    /// example) alongside its normal lib -- reproduces the ambiguity
+    /// `SelectedLibrary::resolve` rejects when nothing tells it which
+    /// target to prefer.
+    fn write_multi_ffi_target_fixture() -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let crate_dir =
+            std::env::temp_dir().join(format!("boltffi-multi-ffi-target-test-{unique_suffix}"));
+        std::fs::create_dir_all(crate_dir.join("src")).expect("create src dir");
+        std::fs::create_dir_all(crate_dir.join("examples")).expect("create examples dir");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\n\
+             name = \"demo_multi\"\n\
+             version = \"0.1.0\"\n\
+             edition = \"2021\"\n\n\
+             [lib]\n\
+             crate-type = [\"cdylib\", \"rlib\"]\n\n\
+             [[example]]\n\
+             name = \"extra\"\n\
+             crate-type = [\"cdylib\"]\n",
+        )
+        .expect("write Cargo.toml");
+        std::fs::write(crate_dir.join("src/lib.rs"), "").expect("write lib.rs");
+        std::fs::write(crate_dir.join("examples/extra.rs"), "fn main() {}\n")
+            .expect("write example");
+        crate_dir
+    }
+
+    fn multi_ffi_target_config() -> Config {
+        parse_config("[package]\nname = \"demo_multi\"\n")
+    }
+
+    fn multi_ffi_target_cargo_args(crate_dir: &std::path::Path) -> Vec<String> {
+        vec![
+            "--manifest-path".to_string(),
+            crate_dir.join("Cargo.toml").display().to_string(),
+        ]
     }
 
     /// `boltffi build` (apple/android/wasm/dart/all) must go through the same
@@ -248,5 +303,33 @@ mod tests {
         let expansion = wasm_expansion(&config, &cargo_args).expect("wasm expansion resolves");
 
         assert_eq!(expansion.surface(), BindingMetadataSurface::Wasm32);
+    }
+
+    /// A crate whose only other FFI-capable target is a cdylib example must
+    /// still resolve through the configured/default artifact rather than
+    /// erroring on the ambiguity -- regresses to the old plain-`cargo
+    /// build` behavior otherwise.
+    #[test]
+    fn expanded_builder_prefers_the_configured_artifact_over_an_ambiguous_ffi_target_set() {
+        let crate_dir = write_multi_ffi_target_fixture();
+        let config = multi_ffi_target_config();
+        let cargo_args = multi_ffi_target_cargo_args(&crate_dir);
+
+        let builder = expanded_builder(&config, false, cargo_args);
+
+        std::fs::remove_dir_all(&crate_dir).expect("cleanup temp dir");
+        assert!(builder.is_ok(), "{:?}", builder.err());
+    }
+
+    #[test]
+    fn wasm_builder_prefers_the_configured_artifact_over_an_ambiguous_ffi_target_set() {
+        let crate_dir = write_multi_ffi_target_fixture();
+        let config = multi_ffi_target_config();
+        let cargo_args = multi_ffi_target_cargo_args(&crate_dir);
+
+        let builder = wasm_builder(&config, false, cargo_args);
+
+        std::fs::remove_dir_all(&crate_dir).expect("cleanup temp dir");
+        assert!(builder.is_ok(), "{:?}", builder.err());
     }
 }
