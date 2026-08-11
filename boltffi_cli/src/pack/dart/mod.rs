@@ -1,7 +1,9 @@
+use boltffi_binding::BindingMetadataSurface;
+
 use crate::{
     build::{
-        BuildOptions, BuildSelection, Builder, CargoBuildProfile, OutputCallback, all_successful,
-        failed_targets, resolve_build_profile,
+        BindingExpansion, BuildOptions, BuildSelection, Builder, CargoBuildProfile, OutputCallback,
+        all_successful, failed_targets, resolve_build_profile,
     },
     cargo::Cargo,
     cli::{CliError, Result},
@@ -26,15 +28,16 @@ fn build_dart_targets(
         None
     };
 
-    let build_options = BuildOptions {
-        release,
-        selection: BuildSelection::Package {
-            package: config.library_name().to_string(),
-            cargo_args: build_cargo_args.to_vec(),
-        },
-        on_output,
-    };
-    let builder = Builder::new(config, build_options);
+    // Cargo only sets CARGO_FEATURE_* for build scripts, so this must build
+    // as a binding expansion for the macros to see active features (same
+    // fix as the Python target's cdylib build).
+    let expansion = BindingExpansion::resolve_for_surface(
+        config,
+        build_cargo_args,
+        BindingMetadataSurface::Native,
+    )?;
+
+    let builder = Builder::new(config, dart_build_options(expansion, release, on_output));
     let results = builder.build_targets(&config.dart_targets())?;
 
     if all_successful(&results) {
@@ -43,6 +46,18 @@ fn build_dart_targets(
 
     let failed = failed_targets(&results);
     Err(CliError::Pack(PackError::BuildFailed { targets: failed }))
+}
+
+fn dart_build_options(
+    expansion: BindingExpansion,
+    release: bool,
+    on_output: Option<OutputCallback>,
+) -> BuildOptions {
+    BuildOptions {
+        release,
+        selection: BuildSelection::Expanded(Box::new(expansion)),
+        on_output,
+    }
 }
 
 pub(crate) fn pack_dart(
@@ -138,4 +153,27 @@ pub(crate) fn pack_dart(
 
     reporter.finish();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BindingExpansion, BuildSelection, dart_build_options};
+
+    /// `pack dart` must build the cdylib as a binding expansion, not a plain
+    /// `cargo build`: the #[data]/#[error] macros read active features from
+    /// BINDING_METADATA_FEATURES_ENV, which only `BuildSelection::Expanded`
+    /// wires up (see `Builder::apply_expansion`). A plain build silently
+    /// drops every #[cfg(feature = ...)]-gated module from the FFI surface.
+    #[test]
+    fn dart_cdylib_builds_as_a_binding_expansion() {
+        let expansion = BindingExpansion::fixture(
+            "/workspace/Cargo.toml",
+            "/workspace/demo/Cargo.toml",
+            ["--features".to_string(), "ffi".to_string()],
+        );
+
+        let options = dart_build_options(expansion, false, None);
+
+        assert!(matches!(options.selection, BuildSelection::Expanded(_)));
+    }
 }

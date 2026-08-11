@@ -342,6 +342,10 @@ impl BindingExpansion {
         self.features = features.into();
         self
     }
+
+    pub(crate) fn surface(&self) -> BindingMetadataSurface {
+        self.surface
+    }
 }
 
 #[cfg(test)]
