@@ -1,7 +1,11 @@
 [workspace]
 resolver = "3"
 members = ["boltffi", "boltffi_core", "boltffi_macros", "boltffi_bindgen", "boltffi_cli", "boltffi_ast", "boltffi_binding", "boltffi_backend", "boltffi_scan", "boltffi_verify", "boltffi_tests"]
-exclude = ["benchmarks/adapters/uniffi", "examples/demo"]
+exclude = [
+  "benchmarks/adapters/uniffi",
+  "examples/demo",
+  "boltffi_cli/tests/fixtures/wasm_wake_link",
+]
 
 [workspace.package]
 version = "0.29.3"
