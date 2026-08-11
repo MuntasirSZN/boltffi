@@ -159,6 +159,16 @@ impl CargoTargetFixture {
         }
     }
 
+    /// An `[[example]]`, which cargo lets a package build as a cdylib too.
+    pub(crate) fn example(
+        name: impl Into<String>,
+        crate_types: impl IntoIterator<Item = CargoCrateType>,
+    ) -> Self {
+        let target = Self::library(name, crate_types);
+        let src_path = PathBuf::from(format!("examples/{}.rs", target.name));
+        Self { src_path, ..target }
+    }
+
     pub(crate) fn bin(name: impl Into<String>) -> Self {
         Self::library(name, [CargoCrateType::Bin])
     }

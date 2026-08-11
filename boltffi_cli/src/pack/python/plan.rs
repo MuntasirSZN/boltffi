@@ -140,8 +140,15 @@ impl PythonPackagingPlan {
         }
 
         // after the host/target validations above, so their errors stay the ones a
-        // caller sees for an unsupported cargo --target
-        let expansion = BindingExpansion::resolve(config, &build_cargo_args)?;
+        // caller sees for an unsupported cargo --target. The same preferred
+        // artifact the lookup above used, so a package that owns a second
+        // FFI-capable cargo target — an `[[example]]` built as a cdylib, say —
+        // expands the library just selected instead of failing as ambiguous.
+        let expansion = BindingExpansion::resolve_preferred(
+            config,
+            &build_cargo_args,
+            &config.crate_artifact_name(),
+        )?;
 
         Ok(Self {
             distribution_name: config.package.name.clone(),
@@ -374,6 +381,60 @@ mod tests {
             CliError::CommandFailed { command, status: None }
                 if command.contains("remove cargo build.target 'aarch64-apple-darwin'")
         ));
+    }
+
+    /// A cargo package may own a second FFI-capable target beside its library —
+    /// an `[[example]]` built as a cdylib, say. `pack python` selects the library
+    /// by artifact name, so the expansion it plans must be given the same name;
+    /// selecting afresh finds two cdylib targets and rejects a valid package.
+    #[test]
+    fn plans_a_package_that_owns_a_second_cdylib_cargo_target() {
+        let project = tempfile::tempdir().expect("temporary cargo project");
+        write_cdylib_package_with_cdylib_example(project.path());
+        let mut config = config();
+        // no `[package].crate`, so the artifact name comes from the package name
+        config.package.name = "demo_ffi".to_string();
+        config.package.crate_name = None;
+
+        let plan = PythonPackagingPlan::from_config(
+            &config,
+            false,
+            &[
+                "--manifest-path".to_string(),
+                project.path().join("Cargo.toml").display().to_string(),
+            ],
+            &[],
+        )
+        .expect("a package with a second cdylib cargo target should still be packable");
+
+        assert_eq!(plan.cargo_context.artifact_name, "demo_ffi");
+        assert_eq!(plan.expansion.artifact_name(), "demo_ffi");
+    }
+
+    fn write_cdylib_package_with_cdylib_example(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("src")).expect("library source directory");
+        std::fs::create_dir_all(root.join("examples")).expect("example source directory");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            r#"[workspace]
+
+[package]
+name = "demo_ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "demo_ffi"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "plugin"
+crate-type = ["cdylib"]
+"#,
+        )
+        .expect("cargo manifest");
+        std::fs::write(root.join("src/lib.rs"), "").expect("library source");
+        std::fs::write(root.join("examples/plugin.rs"), "fn main() {}\n").expect("example source");
     }
 
     #[test]
