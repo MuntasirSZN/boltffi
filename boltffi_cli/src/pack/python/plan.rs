@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Component, PathBuf};
 
-use crate::build::{CargoBuildProfile, resolve_build_profile};
+use crate::build::{BindingExpansion, CargoBuildProfile, resolve_build_profile};
 use crate::cargo::Cargo;
 use crate::cli::{CliError, Result};
 use crate::config::Config;
@@ -67,6 +67,11 @@ pub struct PythonPackagingPlan {
     pub interpreters: Vec<PythonInterpreterSelection>,
     pub layout: PythonPackageLayout,
     pub cargo_context: PythonCargoContext,
+    /// The expansion handle every other `pack` backend resolves. It carries the
+    /// active feature set the `#[data]` macro must see, and the `--cfg` that
+    /// keeps an expansion build from sharing a fingerprint with a plain
+    /// `cargo build`.
+    pub(crate) expansion: BindingExpansion,
 }
 
 impl PythonPackagingPlan {
@@ -134,6 +139,17 @@ impl PythonPackagingPlan {
             });
         }
 
+        // after the host/target validations above, so their errors stay the ones a
+        // caller sees for an unsupported cargo --target. The same preferred
+        // artifact the lookup above used, so a package that owns a second
+        // FFI-capable cargo target — an `[[example]]` built as a cdylib, say —
+        // expands the library just selected instead of failing as ambiguous.
+        let expansion = BindingExpansion::resolve_preferred(
+            config,
+            &build_cargo_args,
+            &config.crate_artifact_name(),
+        )?;
+
         Ok(Self {
             distribution_name: config.package.name.clone(),
             module_name,
@@ -153,7 +169,70 @@ impl PythonPackagingPlan {
                 cargo_command_args: cargo.probe_command_arguments(),
                 toolchain_selector: cargo.toolchain_selector().map(str::to_owned),
             },
+            expansion,
         })
+    }
+
+    #[cfg(test)]
+    pub fn fixture(release: bool, artifact_name: &str) -> Self {
+        Self::build_fixture(
+            release,
+            artifact_name,
+            ["--features".to_string(), "ffi".to_string()],
+        )
+    }
+
+    /// Same fixture, with the cargo args the expansion parses.
+    #[cfg(test)]
+    pub fn fixture_with_cargo_args<'a>(cargo_args: impl IntoIterator<Item = &'a str>) -> Self {
+        Self::build_fixture(
+            true,
+            "demo_ffi",
+            cargo_args
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[cfg(test)]
+    fn build_fixture(
+        release: bool,
+        artifact_name: &str,
+        cargo_args: impl IntoIterator<Item = String>,
+    ) -> Self {
+        // production fills both from the same `cargo.probe_command_arguments()`
+        let cargo_args = cargo_args.into_iter().collect::<Vec<_>>();
+        Self {
+            distribution_name: "demo-package".to_string(),
+            module_name: "demo_ffi".to_string(),
+            package_version: Some("0.1.0".to_string()),
+            host_platform: NativeHostPlatform::current().expect("supported current host"),
+            interpreters: Vec::new(),
+            layout: PythonPackageLayout::new("dist/python", "demo_ffi"),
+            cargo_context: PythonCargoContext {
+                release,
+                build_profile: if release {
+                    CargoBuildProfile::Release
+                } else {
+                    CargoBuildProfile::Debug
+                },
+                artifact_name: artifact_name.to_string(),
+                cargo_manifest_path: PathBuf::from("/tmp/workspace/Cargo.toml"),
+                manifest_path: PathBuf::from("/tmp/workspace/member/Cargo.toml"),
+                library_source_path: PathBuf::from("/tmp/workspace/member/src/lib.rs"),
+                package_selector: Some("workspace-member".to_string()),
+                target_directory: PathBuf::from("/tmp/boltffi-target"),
+                cargo_command_args: cargo_args.clone(),
+                toolchain_selector: None,
+            },
+            expansion: BindingExpansion::fixture(
+                "/tmp/workspace/Cargo.toml",
+                "/tmp/workspace/member/Cargo.toml",
+                cargo_args,
+            )
+            .fixture_features("ffi"),
+        }
     }
 
     pub fn built_shared_library_path(&self) -> PathBuf {
@@ -234,15 +313,11 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{
-        PythonCargoContext, PythonInterpreterSelection, PythonPackageLayout, PythonPackagingPlan,
-    };
-    use crate::build::CargoBuildProfile;
+    use super::PythonPackagingPlan;
     use crate::cli::CliError;
     use crate::config::{
         CargoConfig, Config, PackageConfig, PythonConfig, PythonWheelConfig, TargetsConfig,
     };
-    use crate::target::NativeHostPlatform;
 
     fn config() -> Config {
         Config {
@@ -308,32 +383,64 @@ mod tests {
         ));
     }
 
+    /// A cargo package may own a second FFI-capable target beside its library —
+    /// an `[[example]]` built as a cdylib, say. `pack python` selects the library
+    /// by artifact name, so the expansion it plans must be given the same name;
+    /// selecting afresh finds two cdylib targets and rejects a valid package.
+    #[test]
+    fn plans_a_package_that_owns_a_second_cdylib_cargo_target() {
+        let project = tempfile::tempdir().expect("temporary cargo project");
+        write_cdylib_package_with_cdylib_example(project.path());
+        let mut config = config();
+        // no `[package].crate`, so the artifact name comes from the package name
+        config.package.name = "demo_ffi".to_string();
+        config.package.crate_name = None;
+
+        let plan = PythonPackagingPlan::from_config(
+            &config,
+            false,
+            &[
+                "--manifest-path".to_string(),
+                project.path().join("Cargo.toml").display().to_string(),
+            ],
+            &[],
+        )
+        .expect("a package with a second cdylib cargo target should still be packable");
+
+        assert_eq!(plan.cargo_context.artifact_name, "demo_ffi");
+        assert_eq!(plan.expansion.artifact_name(), "demo_ffi");
+    }
+
+    fn write_cdylib_package_with_cdylib_example(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("src")).expect("library source directory");
+        std::fs::create_dir_all(root.join("examples")).expect("example source directory");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            r#"[workspace]
+
+[package]
+name = "demo_ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "demo_ffi"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "plugin"
+crate-type = ["cdylib"]
+"#,
+        )
+        .expect("cargo manifest");
+        std::fs::write(root.join("src/lib.rs"), "").expect("library source");
+        std::fs::write(root.join("examples/plugin.rs"), "fn main() {}\n").expect("example source");
+    }
+
     #[test]
     fn resolves_built_and_packaged_shared_library_paths() {
-        let host_platform = NativeHostPlatform::current().expect("supported current host");
-        let plan = PythonPackagingPlan {
-            distribution_name: "demo-package".to_string(),
-            module_name: "demo_ffi".to_string(),
-            package_version: Some("0.1.0".to_string()),
-            host_platform,
-            interpreters: vec![
-                PythonInterpreterSelection::new("python3.13")
-                    .expect("python interpreter selection"),
-            ],
-            layout: PythonPackageLayout::new("dist/python", "demo_ffi"),
-            cargo_context: PythonCargoContext {
-                release: true,
-                build_profile: CargoBuildProfile::Release,
-                artifact_name: "demo_ffi".to_string(),
-                cargo_manifest_path: PathBuf::from("/tmp/workspace/Cargo.toml"),
-                manifest_path: PathBuf::from("/tmp/workspace/member/Cargo.toml"),
-                library_source_path: PathBuf::from("/tmp/workspace/member/src/lib.rs"),
-                package_selector: Some("workspace-member".to_string()),
-                target_directory: PathBuf::from("/tmp/boltffi-target"),
-                cargo_command_args: Vec::new(),
-                toolchain_selector: None,
-            },
-        };
+        let plan = PythonPackagingPlan::fixture(true, "demo_ffi");
+        let host_platform = plan.host_platform;
 
         assert_eq!(
             plan.built_shared_library_path(),
@@ -349,27 +456,7 @@ mod tests {
 
     #[test]
     fn retains_selected_package_manifest_for_python_generation() {
-        let host_platform = NativeHostPlatform::current().expect("supported current host");
-        let plan = PythonPackagingPlan {
-            distribution_name: "demo-package".to_string(),
-            module_name: "demo_ffi".to_string(),
-            package_version: Some("0.1.0".to_string()),
-            host_platform,
-            interpreters: vec![],
-            layout: PythonPackageLayout::new("dist/python", "demo_ffi"),
-            cargo_context: PythonCargoContext {
-                release: false,
-                build_profile: CargoBuildProfile::Debug,
-                artifact_name: "workspace_member_ffi".to_string(),
-                cargo_manifest_path: PathBuf::from("/tmp/workspace/Cargo.toml"),
-                manifest_path: PathBuf::from("/tmp/workspace/member/Cargo.toml"),
-                library_source_path: PathBuf::from("/tmp/workspace/member/src/lib.rs"),
-                package_selector: Some("workspace-member".to_string()),
-                target_directory: PathBuf::from("/tmp/boltffi-target"),
-                cargo_command_args: Vec::new(),
-                toolchain_selector: None,
-            },
-        };
+        let plan = PythonPackagingPlan::fixture(false, "workspace_member_ffi");
 
         assert_eq!(
             plan.cargo_context.manifest_path,
