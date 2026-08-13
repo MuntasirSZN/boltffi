@@ -436,7 +436,7 @@ impl Generation {
             }
             Target::Swift => self.render_swift(),
             Target::TypeScript => self.render_typescript(),
-            Target::Header => Err(GenerationError::UnsupportedTarget { target }),
+            Target::Header | Target::C => Err(GenerationError::UnsupportedTarget { target }),
         }
     }
 
@@ -471,7 +471,7 @@ impl Generation {
             Target::KotlinMultiplatform => self.render_kmp_bindings(bindings),
             Target::CSharp => self.render_csharp_bindings(bindings),
             Target::Dart => self.render_dart_bindings(bindings),
-            Target::Swift | Target::TypeScript | Target::Header => {
+            Target::Swift | Target::TypeScript | Target::Header | Target::C => {
                 Err(GenerationError::UnsupportedTarget { target })
             }
         }
