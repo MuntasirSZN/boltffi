@@ -757,6 +757,7 @@ impl Config {
             Target::Dart => self.is_dart_enabled(),
             Target::Python => self.is_python_enabled(),
             Target::CSharp => self.is_csharp_enabled(),
+            Target::C => false,
         }
     }
 
