@@ -1,13 +1,15 @@
 use boltffi_ast::{
     DefaultValue as SourceDefaultValue, DeprecationInfo as SourceDeprecationInfo,
-    DocComment as SourceDocComment, FloatLiteral as SourceFloatLiteral,
+    DocComment as SourceDocComment, FloatLiteral as SourceFloatLiteral, Path as SourcePath,
+    TypeExpr, VariantPayload,
 };
 
 use crate::{
-    DeclMeta, DefaultValue, DeprecationInfo, DocComment, ElementMeta, FloatValue, IntegerValue,
+    CanonicalName, DeclMeta, DefaultValue, DeprecationInfo, DocComment, ElementMeta, FloatValue,
+    IntegerValue,
 };
 
-use super::{LowerError, error::UnsupportedType};
+use super::{LowerError, error::UnsupportedType, index::Index};
 
 pub fn decl_meta(
     doc: Option<&SourceDocComment>,
@@ -19,12 +21,23 @@ pub fn decl_meta(
 pub fn element_meta(
     doc: Option<&SourceDocComment>,
     deprecated: Option<&SourceDeprecationInfo>,
+) -> ElementMeta {
+    ElementMeta::new(doc.map(DocComment::from), deprecated.map(Into::into), None)
+}
+
+pub fn value_meta(
+    index: &Index,
+    type_expr: &TypeExpr,
+    doc: Option<&SourceDocComment>,
+    deprecated: Option<&SourceDeprecationInfo>,
     default: Option<&SourceDefaultValue>,
 ) -> Result<ElementMeta, LowerError> {
     Ok(ElementMeta::new(
         doc.map(DocComment::from),
         deprecated.map(Into::into),
-        default.map(DefaultValue::try_from).transpose()?,
+        default
+            .map(|default| lower_default(index, type_expr, default))
+            .transpose()?,
     ))
 }
 
@@ -59,6 +72,46 @@ impl TryFrom<&SourceDefaultValue> for DefaultValue {
             }
         }
     }
+}
+
+fn lower_default(
+    index: &Index,
+    type_expr: &TypeExpr,
+    default: &SourceDefaultValue,
+) -> Result<DefaultValue, LowerError> {
+    match default {
+        SourceDefaultValue::Path(path) => enum_variant(index, type_expr, path),
+        default => DefaultValue::try_from(default),
+    }
+}
+
+fn enum_variant(
+    index: &Index,
+    type_expr: &TypeExpr,
+    path: &SourcePath,
+) -> Result<DefaultValue, LowerError> {
+    let TypeExpr::Enum { id, .. } = type_expr else {
+        return Err(LowerError::unsupported_type(UnsupportedType::DefaultValue));
+    };
+    let enumeration = index
+        .enumeration(id)
+        .ok_or_else(|| LowerError::unsupported_type(UnsupportedType::DefaultValue))?;
+    let segment = path
+        .last()
+        .filter(|segment| segment.arguments.is_empty())
+        .ok_or_else(|| LowerError::unsupported_type(UnsupportedType::DefaultValue))?;
+    let variant = enumeration
+        .variants
+        .iter()
+        .find(|variant| {
+            matches!(variant.payload, VariantPayload::Unit)
+                && variant.name.spelling() == segment.name.as_str()
+        })
+        .ok_or_else(|| LowerError::unsupported_type(UnsupportedType::DefaultValue))?;
+    Ok(DefaultValue::EnumVariant {
+        enum_name: CanonicalName::from(&enumeration.name),
+        variant_name: CanonicalName::from(&variant.name),
+    })
 }
 
 /// Parses a Rust-source float literal spelling into an
