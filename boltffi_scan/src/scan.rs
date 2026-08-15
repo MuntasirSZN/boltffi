@@ -9,7 +9,7 @@ use crate::marked::MarkedItems;
 use crate::package_graph::{ExportedPackage, LoadError, PackageGraph};
 use crate::path::{ImportLookup, module_name};
 use crate::source_tree::SourceTree;
-use crate::{ModuleScope, ScanError, items};
+use crate::{ActiveCfg, ModuleScope, ScanError, items};
 
 pub fn scan(input: &ScanInput) -> Result<SourceContract, ScanError> {
     let source_tree = SourceTree::load_with_cfg(input.root(), &input.package().name, input.cfg())?;
@@ -135,7 +135,7 @@ impl RootCrate {
 
 pub fn scan_package(input: &ScanInput) -> Result<PackageScan, ScanError> {
     let root_tree = SourceTree::load_with_cfg(input.root(), &input.package().name, input.cfg())?;
-    let dependencies = dependencies(input.manifest_dir())?;
+    let dependencies = dependencies(input.manifest_dir(), input.cfg())?;
     let direct_dependency_modules = dependencies.direct_modules();
     let complete_tree = SourceTree::combine(
         dependencies
@@ -250,7 +250,10 @@ impl PackageDependencies {
     }
 }
 
-fn dependencies(manifest_dir: Option<&FsPath>) -> Result<PackageDependencies, ScanError> {
+fn dependencies(
+    manifest_dir: Option<&FsPath>,
+    active_cfg: &ActiveCfg,
+) -> Result<PackageDependencies, ScanError> {
     let Some(manifest_dir) = manifest_dir else {
         return Ok(PackageDependencies::empty());
     };
@@ -261,13 +264,21 @@ fn dependencies(manifest_dir: Option<&FsPath>) -> Result<PackageDependencies, Sc
     let reachable = graph
         .reachable_exported_dependencies(graph.root_id())
         .into_iter()
-        .map(dependency_tree)
+        .map(|package| dependency_tree(package, active_cfg))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PackageDependencies { direct, reachable })
 }
 
-fn dependency_tree(package: ExportedPackage) -> Result<SourceTree, ScanError> {
-    SourceTree::load(package.source_file(), package.module_name())
+fn dependency_tree(
+    package: ExportedPackage,
+    active_cfg: &ActiveCfg,
+) -> Result<SourceTree, ScanError> {
+    let dependency_cfg = active_cfg.for_package(package.resolved_features());
+    SourceTree::load_with_cfg(
+        package.source_file(),
+        package.module_name(),
+        &dependency_cfg,
+    )
 }
 
 fn package_graph_error(error: LoadError) -> ScanError {

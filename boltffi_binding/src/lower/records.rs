@@ -2317,6 +2317,33 @@ mod tests {
     }
 
     #[test]
+    fn parameter_enum_variant_default_rejects_another_enum_qualifier() {
+        let mut mode = EnumDef::new("demo::Mode".into(), name("Mode"));
+        mode.variants = vec![VariantDef::unit(name("Fast"))];
+        let mut selected = value_param("selected", enum_type("demo::Mode", "Mode"));
+        selected.default = Some(SourceDefaultValue::Path(SourcePath::new(
+            PathRoot::Relative,
+            vec![PathSegment::new("OtherMode"), PathSegment::new("Fast")],
+        )));
+        let mut contract = package();
+        contract.records = vec![point_record_with_methods(vec![method_with(
+            "select",
+            Receiver::Mutable,
+            vec![selected],
+            ReturnDef::Void,
+        )])];
+        contract.enums = vec![mode];
+
+        let error = lower::<Native>(&contract)
+            .expect_err("a default path qualified by another enum must reject");
+
+        assert!(matches!(
+            error.kind(),
+            LowerErrorKind::UnsupportedType(UnsupportedType::DefaultValue)
+        ));
+    }
+
+    #[test]
     fn enum_variant_record_field_default_lowers_against_its_declared_type() {
         let mut mode = EnumDef::new("demo::Mode".into(), name("Mode"));
         mode.variants = vec![VariantDef::unit(name("Off")), VariantDef::unit(name("On"))];
