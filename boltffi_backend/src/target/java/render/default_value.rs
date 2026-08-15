@@ -1,10 +1,11 @@
-use boltffi_binding::{DefaultValue, FloatValue, Primitive as BindingPrimitive, TypeRef};
+use boltffi_binding::{DefaultValue, FloatValue, Native, Primitive as BindingPrimitive, TypeRef};
 
 use crate::{
-    core::Result,
+    core::{RenderContext, Result},
     target::java::{
         JavaHost, JavaVersion,
         primitive::Primitive,
+        render::{Enumeration, VariantInitialization},
         syntax::{Expression, Identifier, StringLiteral, TypeIdentifier, TypeName},
     },
 };
@@ -12,11 +13,16 @@ use crate::{
 pub struct DefaultExpression;
 
 impl DefaultExpression {
-    pub fn render(ty: &TypeRef, value: &DefaultValue, version: JavaVersion) -> Result<Expression> {
+    pub fn render(
+        ty: &TypeRef,
+        value: &DefaultValue,
+        version: JavaVersion,
+        context: &RenderContext<Native>,
+    ) -> Result<Expression> {
         if let TypeRef::Optional(inner) = ty {
             return match value {
                 DefaultValue::Null => Ok(Self::optional("empty", None, version)),
-                _ => Self::render(inner, value, version)
+                _ => Self::render(inner, value, version, context)
                     .map(|value| Self::optional("of", Some(value), version)),
             };
         }
@@ -30,7 +36,16 @@ impl DefaultExpression {
             DefaultValue::String(value) => {
                 Ok(Expression::string(StringLiteral::new(value.clone())))
             }
-            DefaultValue::EnumVariant { .. } => Err(JavaHost::unsupported("enum default value")),
+            DefaultValue::EnumVariant { variant_name, .. } => match ty {
+                TypeRef::Enum(id) => Enumeration::unit_variant_expression(
+                    *id,
+                    variant_name,
+                    VariantInitialization::External,
+                    version,
+                    context,
+                ),
+                _ => Err(JavaHost::unsupported("enum default type")),
+            },
             DefaultValue::Null => Ok(Expression::null()),
             _ => Err(JavaHost::unsupported("unknown default value")),
         }
