@@ -171,6 +171,13 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
         let create_ident = RustIdent::new(protocol.create_handle().name().as_str())?;
         let free_slot = RustIdent::new(vtable.free_slot().as_str())?;
         let clone_slot = RustIdent::new(vtable.clone_slot().as_str())?;
+        let dart_shim_methods = methods
+            .iter()
+            .zip(method_abis.iter())
+            .filter(|(_, abi)| !matches!(abi.callable.execution(), ExecutionDecl::Asynchronous(_)))
+            .map(|(method, abi)| abi.dart_shim_method(method.binding.target()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let dart_shim_tokens = super::dart_shim::render(&names.trait_ident, &dart_shim_methods);
         let cfg = quote! { #[cfg(not(target_arch = "wasm32"))] };
         let local_protocol_tokens = local_names
             .map(|local_names| {
@@ -357,6 +364,8 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
             #trait_object_tokens
 
             #local_protocol_tokens
+
+            #dart_shim_tokens
         })
     }
 }
@@ -872,6 +881,77 @@ where
                 "unknown callback method execution",
             )),
         }
+    }
+
+    fn dart_shim_method(
+        &self,
+        slot: &VTableSlot,
+    ) -> Result<super::dart_shim::DartShimMethod, Error> {
+        let slot_ident = RustIdent::new(slot.as_str())?;
+        let fast_field = format_ident!("{}_fast", slot_ident.as_ident());
+        let listener_field = format_ident!("{}_listener", slot_ident.as_ident());
+        let parameters = self.parameters()?;
+        let return_tokens = self.return_tokens()?;
+        let is_async = matches!(self.callable.execution(), ExecutionDecl::Asynchronous(_));
+
+        let mut params = Vec::new();
+        let mut args = Vec::new();
+        for param in return_tokens.foreign_ffi_parameters() {
+            params.push(param.clone());
+            args.push(leading_ident(param));
+        }
+
+        for (index, ty) in parameters.ffi_types.iter().enumerate() {
+            let name = format_ident!("p{index}");
+            params.push(quote! { #name: #ty });
+            args.push(quote! { #name });
+        }
+
+        if is_async {
+            let completion = return_tokens.native_async_completion_type()?;
+            params.push(quote! { completion: #completion });
+            params.push(quote! { completion_data: *mut ::core::ffi::c_void });
+            args.push(quote! { completion });
+            args.push(quote! { completion_data });
+        }
+
+        let return_type_tokens = return_tokens.foreign_return_type();
+        let is_void_return = return_type_tokens.is_empty();
+        let rust_ret = if is_void_return {
+            quote! { () }
+        } else {
+            strip_return_arrow(return_type_tokens.clone())
+        };
+
+        let param_types = named_params_to_types(&params);
+        let listener_has_out = !is_void_return;
+        let fast_fn_type = if is_void_return {
+            quote! { unsafe extern "C" fn(u64 #(, #param_types)*) }
+        } else {
+            quote! { unsafe extern "C" fn(u64 #(, #param_types)*) -> #rust_ret }
+        };
+        let listener_fn_type = if listener_has_out {
+            quote! {
+                unsafe extern "C" fn(u64 #(, #param_types)*, *mut ::core::ffi::c_void, *mut #rust_ret)
+            }
+        } else {
+            quote! {
+                unsafe extern "C" fn(u64 #(, #param_types)*, *mut ::core::ffi::c_void)
+            }
+        };
+
+        Ok(super::dart_shim::DartShimMethod {
+            slot: slot_ident.into_ident(),
+            fast_field,
+            listener_field,
+            fast_fn_type,
+            listener_fn_type,
+            params,
+            args,
+            is_void_return,
+            listener_has_out,
+            return_type: rust_ret,
+        })
     }
 
     fn native_vtable_field(&self, slot: &VTableSlot) -> Result<TokenStream, Error> {
@@ -4890,6 +4970,44 @@ impl<'expansion, 'lowered, S: SurfaceLower> PackedEncodedValue<'expansion, 'lowe
             self.packed,
             self.failure,
         )
+    }
+}
+
+fn leading_ident(tokens: &TokenStream) -> TokenStream {
+    tokens
+        .clone()
+        .into_iter()
+        .find_map(|tree| match tree {
+            proc_macro2::TokenTree::Ident(ident) => Some(quote! { #ident }),
+            _ => None,
+        })
+        .unwrap_or_else(|| quote! { __unnamed })
+}
+
+fn named_params_to_types(params: &[TokenStream]) -> Vec<TokenStream> {
+    params.iter().map(type_after_colon).collect()
+}
+
+fn type_after_colon(param: &TokenStream) -> TokenStream {
+    let tokens: Vec<proc_macro2::TokenTree> = param.clone().into_iter().collect();
+    if let Some(pos) = tokens.iter().position(
+        |tree| matches!(tree, proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':'),
+    ) {
+        tokens.into_iter().skip(pos + 1).collect()
+    } else {
+        param.clone()
+    }
+}
+
+fn strip_return_arrow(tokens: TokenStream) -> TokenStream {
+    let tokens: Vec<proc_macro2::TokenTree> = tokens.into_iter().collect();
+    if matches!(
+        tokens.first(),
+        Some(proc_macro2::TokenTree::Punct(punct)) if punct.as_char() == '-'
+    ) {
+        tokens.into_iter().skip(2).collect()
+    } else {
+        tokens.into_iter().collect()
     }
 }
 

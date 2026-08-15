@@ -1,5 +1,11 @@
 extern crate self as boltffi;
 
+/// Re-exported so generated user-crate stubs and Dart `@Native` bindings
+/// can reach the dual-path runtime without a second crate dependency.
+#[cfg(feature = "dart")]
+#[doc(hidden)]
+pub use boltffi_dart_runtime as __dart_runtime;
+
 pub use boltffi_core::{
     ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType, CallbackHandle,
     CustomFfiConvertible, CustomTypeConversionError, EventSubscription, FfiType, InternedString,

@@ -1,7 +1,7 @@
 use crate::{
     build::{
-        BindingExpansion, BuildOptions, BuildSelection, Builder, CargoBuildProfile, OutputCallback,
-        all_successful, failed_targets, resolve_build_profile,
+        BindingExpansion, BuildOptions, BuildResult, BuildSelection, Builder, CargoBuildProfile,
+        OutputCallback, all_successful, failed_targets, resolve_build_profile,
     },
     cargo::Cargo,
     cli::{CliError, Result},
@@ -11,32 +11,42 @@ use crate::{
     },
     config::Config,
     pack::{PackError, print_cargo_line, resolve_build_cargo_args},
-    reporter::{Reporter, Step},
+    reporter::Reporter,
 };
 
-fn build_dart_targets(
+/// Shared by `pack dart` and `boltffi build dart`/`build all`'s Dart leg.
+/// Enables `boltffi/dart` (links the runtime) and `--cfg boltffi_dart` so
+/// user-crate macros emit the dual-path stubs. Other packs do not set this
+/// cfg, so those artifacts stay unbloated.
+pub(crate) fn build_dart_targets(
     config: &Config,
     release: bool,
     build_cargo_args: &[String],
-    step: &Step,
-) -> Result<()> {
-    let on_output: Option<OutputCallback> = if step.is_verbose() {
+    verbose: bool,
+) -> Result<Vec<BuildResult>> {
+    let on_output: Option<OutputCallback> = if verbose {
         Some(Box::new(|line: &str| print_cargo_line(line)))
     } else {
         None
     };
 
-    let expansion = dart_expansion(config, build_cargo_args)?;
+    let mut dart_cargo_args = build_cargo_args.to_vec();
+    dart_cargo_args.push("--features".to_string());
+    dart_cargo_args.push("boltffi/dart".to_string());
 
-    let builder = Builder::new(config, dart_build_options(expansion, release, on_output));
-    let results = builder.build_targets(&config.dart_targets())?;
+    let expansion = dart_expansion(config, &dart_cargo_args)?;
 
-    if all_successful(&results) {
-        return Ok(());
-    }
+    let mut options = dart_build_options(expansion, release, on_output);
+    let rustflags = match std::env::var("RUSTFLAGS") {
+        Ok(existing) if !existing.is_empty() => {
+            format!("{existing} --cfg boltffi_dart --check-cfg=cfg(boltffi_dart)")
+        }
+        _ => "--cfg boltffi_dart --check-cfg=cfg(boltffi_dart)".to_string(),
+    };
+    options.extra_env.push(("RUSTFLAGS".to_string(), rustflags));
 
-    let failed = failed_targets(&results);
-    Err(CliError::Pack(PackError::BuildFailed { targets: failed }))
+    let builder = Builder::new(config, options);
+    builder.build_targets(&config.dart_targets())
 }
 
 // Cargo only sets CARGO_FEATURE_* for build scripts, so this must build as
@@ -57,6 +67,7 @@ fn dart_build_options(
         release,
         selection: BuildSelection::Expanded(Box::new(expansion)),
         on_output,
+        extra_env: Vec::new(),
     }
 }
 
@@ -77,17 +88,6 @@ pub(crate) fn pack_dart(
     let build_cargo_args = resolve_build_cargo_args(config, &options.execution.cargo_args);
     let build_profile = resolve_build_profile(options.execution.release, &build_cargo_args);
 
-    if !options.execution.no_build {
-        let step = reporter.step("Building Rust cdylib");
-        build_dart_targets(
-            config,
-            matches!(build_profile, CargoBuildProfile::Release),
-            &build_cargo_args,
-            &step,
-        )?;
-        step.finish_success();
-    }
-
     if options.execution.regenerate {
         let step = reporter.step("Generating Dart bindings");
         run_generate_with_output(
@@ -101,6 +101,22 @@ pub(crate) fn pack_dart(
             },
         )?;
 
+        step.finish_success();
+    }
+
+    if !options.execution.no_build {
+        let step = reporter.step("Building Rust cdylib");
+        let results = build_dart_targets(
+            config,
+            matches!(build_profile, CargoBuildProfile::Release),
+            &build_cargo_args,
+            step.is_verbose(),
+        )?;
+        if !all_successful(&results) {
+            return Err(CliError::Pack(PackError::BuildFailed {
+                targets: failed_targets(&results),
+            }));
+        }
         step.finish_success();
     }
 
