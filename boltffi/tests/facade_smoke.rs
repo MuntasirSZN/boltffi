@@ -15,6 +15,20 @@ fn add(a: Point, b: Point) -> Point {
     }
 }
 
+struct ConditionalClass;
+
+#[export]
+impl ConditionalClass {
+    pub fn new() -> Self {
+        Self
+    }
+
+    #[cfg(any())]
+    pub fn unavailable(&mut self, value: UnavailableType) {
+        drop(value);
+    }
+}
+
 #[test]
 fn smoke() {
     let a = Point { x: 1.0, y: 2.0 };

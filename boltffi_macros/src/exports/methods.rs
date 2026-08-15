@@ -75,15 +75,36 @@ impl ClassExportConfig {
             return Ok(());
         }
 
-        Err(syn::Error::new_spanned(
-            item_impl,
+        Err(Self::mutable_method_error(item_impl))
+    }
+
+    fn conditional_validation_errors(&self, item_impl: &syn::ItemImpl) -> proc_macro2::TokenStream {
+        if self.single_threaded {
+            return proc_macro2::TokenStream::new();
+        }
+
+        item_impl
+            .items
+            .iter()
+            .filter_map(ExportableMethod::from_item)
+            .filter(|method| method.is_public_mut_self() && method.is_conditionally_compiled())
+            .map(|method| {
+                method
+                    .condition_exports(Self::mutable_method_error(method.method).to_compile_error())
+            })
+            .collect()
+    }
+
+    fn mutable_method_error(tokens: impl quote::ToTokens) -> syn::Error {
+        syn::Error::new_spanned(
+            tokens,
             "BoltFFI: `&mut self` methods are not thread-safe in FFI contexts\n\n\
              Two threads calling `&mut self` on the same instance = undefined behavior.\n\n\
              Options:\n\
              1. Use `&self` with interior mutability (Mutex, RwLock, atomics) [recommended]\n\
              2. Add #[export(single_threaded)] ONLY if you enforce thread safety in the target \
                 language and want to avoid synchronization overhead you don't need",
-        ))
+        )
     }
 
     fn thread_safety_assertion(&self, type_name: &syn::Ident) -> proc_macro2::TokenStream {
@@ -112,11 +133,8 @@ impl ClassExportConfig {
         item_impl
             .items
             .iter()
-            .filter_map(|item| match item {
-                syn::ImplItem::Fn(method) => Some(ExportableMethod { method }),
-                _ => None,
-            })
-            .any(|method| method.is_public_mut_self())
+            .filter_map(ExportableMethod::from_item)
+            .any(|method| method.is_public_mut_self() && !method.is_conditionally_compiled())
     }
 }
 
@@ -161,6 +179,32 @@ impl<'a> ExportableMethod<'a> {
 
     fn callable(&self) -> MethodCallable<'a> {
         MethodCallable::new(self.method)
+    }
+
+    fn is_conditionally_compiled(&self) -> bool {
+        self.compilation_conditions().next().is_some()
+    }
+
+    fn compilation_conditions(&self) -> impl Iterator<Item = &syn::Attribute> {
+        self.method.attrs.iter().filter(|attribute| {
+            attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr")
+        })
+    }
+
+    fn condition_exports(&self, exports: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let conditions = self.compilation_conditions().collect::<Vec<_>>();
+        if conditions.is_empty() {
+            return exports;
+        }
+
+        match syn::parse2::<syn::File>(exports) {
+            Ok(file) => file
+                .items
+                .into_iter()
+                .map(|item| quote! { #(#conditions)* #item })
+                .collect(),
+            Err(error) => error.to_compile_error(),
+        }
     }
 }
 
@@ -489,43 +533,50 @@ pub fn export_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
         .filter(|method| method.is_exported())
         .filter_map(|exportable_method| {
             let callable = exportable_method.callable();
-            if let Some(item_type) = exportable_method.stream_item_type() {
-                return Some(generate_stream_exports(
+            let exports = if let Some(item_type) = exportable_method.stream_item_type() {
+                Some(generate_stream_exports(
                     &type_name,
                     &type_name_str,
                     callable,
                     &return_lowering,
                     &item_type,
-                ));
-            }
-            match (callable.form(), callable.execution_kind()) {
-                (CallableForm::InstanceMethod, ExecutionKind::Sync)
-                | (CallableForm::StaticMethod, ExecutionKind::Sync) => generate_sync_method_export(
-                    callable,
-                    &type_name,
-                    &type_name_str,
-                    &return_lowering,
-                    &callback_registry,
-                ),
-                (CallableForm::InstanceMethod, ExecutionKind::Async) => {
-                    generate_async_method_export(
-                        callable,
-                        &type_name,
-                        &type_name_str,
-                        &return_lowering,
-                        &callback_registry,
-                    )
+                ))
+            } else {
+                match (callable.form(), callable.execution_kind()) {
+                    (CallableForm::InstanceMethod, ExecutionKind::Sync)
+                    | (CallableForm::StaticMethod, ExecutionKind::Sync) => {
+                        generate_sync_method_export(
+                            callable,
+                            &type_name,
+                            &type_name_str,
+                            &return_lowering,
+                            &callback_registry,
+                        )
+                    }
+                    (CallableForm::InstanceMethod, ExecutionKind::Async) => {
+                        generate_async_method_export(
+                            callable,
+                            &type_name,
+                            &type_name_str,
+                            &return_lowering,
+                            &callback_registry,
+                        )
+                    }
+                    (CallableForm::StaticMethod, ExecutionKind::Async) => None,
+                    (CallableForm::Function, _) => None,
                 }
-                (CallableForm::StaticMethod, ExecutionKind::Async) => None,
-                (CallableForm::Function, _) => None,
-            }
+            };
+            exports.map(|exports| exportable_method.condition_exports(exports))
         })
         .collect();
 
     let thread_safety_assertion = export_config.thread_safety_assertion(&type_name);
+    let conditional_validation_errors = export_config.conditional_validation_errors(&input);
 
     let expanded = quote! {
         #input
+
+        #conditional_validation_errors
 
         #thread_safety_assertion
 
@@ -1794,6 +1845,70 @@ mod tests {
             "#,
         );
         assert!(!has_mut_self_methods(&impl_block));
+    }
+
+    #[test]
+    fn has_mut_self_methods_defers_conditional_validation() {
+        let impl_block = parse_impl(
+            r#"
+            impl Counter {
+                #[cfg(feature = "mutable")]
+                pub fn increment(&mut self) { self.value += 1; }
+            }
+            "#,
+        );
+        assert!(!has_mut_self_methods(&impl_block));
+        let errors = ClassExportConfig {
+            single_threaded: false,
+        }
+        .conditional_validation_errors(&impl_block)
+        .to_string();
+
+        assert!(errors.contains("cfg (feature = \"mutable\")"));
+        assert!(errors.contains("compile_error"));
+    }
+
+    #[test]
+    fn conditional_method_attributes_apply_to_every_generated_export() {
+        let impl_block = parse_impl(
+            r#"
+            impl Events {
+                #[cfg(feature = "streaming")]
+                #[cfg_attr(feature = "deprecated-streaming", deprecated)]
+                #[ffi_stream(item = i32)]
+                pub fn values(&self) -> std::sync::Arc<EventSubscription<i32>> {
+                    todo!()
+                }
+            }
+            "#,
+        );
+        let method = impl_block
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Fn(method) => Some(method),
+                _ => None,
+            })
+            .expect("stream method");
+        let item_type = extract_ffi_stream_item(&method.attrs).expect("stream item type");
+        let exports = generate_stream_exports(
+            &parse_quote!(Events),
+            "Events",
+            MethodCallable::new(method),
+            &return_lowering(),
+            &item_type,
+        );
+        let conditioned = ExportableMethod { method }.condition_exports(exports);
+        let generated = syn::parse2::<syn::File>(conditioned).expect("generated exports");
+
+        assert!(generated.items.len() > 1);
+        generated.items.iter().for_each(|item| {
+            let rendered = quote!(#item).to_string();
+            assert!(rendered.contains("cfg (feature = \"streaming\")"));
+            assert!(
+                rendered.contains("cfg_attr (feature = \"deprecated-streaming\" , deprecated)")
+            );
+        });
     }
 
     #[test]
