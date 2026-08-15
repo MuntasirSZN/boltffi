@@ -4,7 +4,7 @@ use boltffi_binding::{Primitive, RecordId};
 use crate::{
     bridge::c::{
         CBridgeContract, CallbackSlot, ClosureParameter, ClosureReturnParameter, Function,
-        Parameter, ParameterGroup, ParameterIndex, Type,
+        Parameter, ParameterIndex, Type,
     },
     core::{Error, Result},
 };
@@ -251,21 +251,7 @@ pub fn declaration(function: &Function) -> Result<String> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    // rust_future_poll returns i8; the C contract still lists Void.
-    let returns = if matches!(function.returns(), Type::Void)
-        && function
-            .params()
-            .first()
-            .is_some_and(|parameter| matches!(parameter.ty(), Type::FutureHandle))
-        && function
-            .parameter_groups()
-            .iter()
-            .any(|group| matches!(group, ParameterGroup::Continuation(_)))
-    {
-        NativeType::integer("$$ffi.Int8")
-    } else {
-        NativeType::from_c(function.returns())?
-    };
+    let returns = NativeType::from_c(function.returns())?;
     let declaration = NativeFunction {
         returns,
         name: Identifier::parse(function.name())?,

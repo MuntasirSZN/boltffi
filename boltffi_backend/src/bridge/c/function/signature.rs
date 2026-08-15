@@ -746,7 +746,8 @@ impl Signature {
                     Parameter::continuation_data("callback")?,
                     Parameter::continuation_callback("callback", Type::Int8)?,
                 ],
-                Type::Void,
+                // Matches rust_future_poll / expanded poll symbols (Ready/MaybeReady as i8).
+                Type::Int8,
             )?,
             Function::exported_with_channel(
                 declaration,
