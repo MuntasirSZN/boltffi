@@ -821,18 +821,34 @@ fn render_async_entry(
         format!("final implementation = _k$handles.get({handle});"),
         missing_implementation,
     ];
-    let decode = parameters
+    // Materialize every argument into Dart-owned values *before* the first
+    // await. Entry setup may build WireDecoder views over temporary native
+    // buffers that Rust frees as soon as this FFI entry returns; reading
+    // them after `await` (or racing that free) corrupts payloads and can
+    // surface as CallStatus::Error on the infallible completion path.
+    statements.extend(
+        parameters
+            .iter()
+            .flat_map(|parameter| parameter.entry_setup().iter().cloned()),
+    );
+    let owned_arguments = parameters
         .iter()
-        .flat_map(|parameter| parameter.entry_setup().iter().cloned())
+        .enumerate()
+        .map(|(index, parameter)| {
+            let local = format!("_l$arg{index}");
+            statements.push(format!(
+                "final {local} = {};",
+                parameter.entry_argument()
+            ));
+            local
+        })
         .collect::<Vec<_>>();
-    let arguments = parameters
-        .iter()
-        .map(CallbackParameter::entry_argument)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let call = format!("await implementation.{method}({arguments})");
+    let call = format!(
+        "await implementation.{method}({})",
+        owned_arguments.join(", ")
+    );
     let has_payload = completion_parameters.len() == 3;
-    let mut success = decode;
+    let mut success = Vec::new();
     success.extend(async_success_payload(
         declaration.callable().returns().plan(),
         &call,

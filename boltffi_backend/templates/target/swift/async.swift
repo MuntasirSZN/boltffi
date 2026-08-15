@@ -63,13 +63,15 @@ private final class BoltFFIFutureState<T>: @unchecked Sendable {
 
 private final class BoltFFIAsyncPollDriver: @unchecked Sendable {
     let futureHandle: RustFutureHandle?
-    let poll: (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void
+    // rust_future_poll returns Ready/MaybeReady as Int8 (and may also invoke the
+    // continuation). Match the C ABI so Clang-imported symbols type-check.
+    let poll: (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Int8
     let ready: () -> Void
     let canPoll: () -> Bool
 
     init(
         futureHandle: RustFutureHandle?,
-        poll: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+        poll: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Int8,
         ready: @escaping () -> Void,
         canPoll: @escaping () -> Bool
     ) {
@@ -80,7 +82,13 @@ private final class BoltFFIAsyncPollDriver: @unchecked Sendable {
     }
 
     func start() {
-        poll(futureHandle, UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque())), boltffiAsyncPollCallback)
+        let result = poll(
+            futureHandle,
+            UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque())),
+            boltffiAsyncPollCallback
+        )
+        // Ready also fires the continuation; handle is idempotent via finish().
+        handle(result)
     }
 
     func handle(_ result: Int8) {
@@ -101,7 +109,7 @@ private let boltffiAsyncPollCallback: @convention(c) (UInt64, Int8) -> Void = { 
 
 func boltffiAsyncCall<T>(
     futureHandle: RustFutureHandle?,
-    poll: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+    poll: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Int8,
     cancel: @escaping (RustFutureHandle?) -> Void,
     free: @escaping (RustFutureHandle?) -> Void,
     complete: @escaping (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?) throws -> T
