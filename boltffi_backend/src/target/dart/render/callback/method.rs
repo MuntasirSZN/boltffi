@@ -836,10 +836,7 @@ fn render_async_entry(
         .enumerate()
         .map(|(index, parameter)| {
             let local = format!("_l$arg{index}");
-            statements.push(format!(
-                "final {local} = {};",
-                parameter.entry_argument()
-            ));
+            statements.push(format!("final {local} = {};", parameter.entry_argument()));
             local
         })
         .collect::<Vec<_>>();

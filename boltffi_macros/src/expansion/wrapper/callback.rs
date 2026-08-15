@@ -1426,8 +1426,6 @@ impl<'expansion, 'lowered, S: CallbackMethodSurface> MethodParameter<'expansion,
         let ident = RustIdent::new(self.source.name.spelling())?;
         let parameter_names = wrapper::names::Parameter::new(ident.as_ident());
         let buffer = parameter_names.buffer();
-        let pointer = parameter_names.pointer();
-        let length = parameter_names.length();
         let outgoing = wrapper::encoded::outgoing::Value::new(codec.root(), self.expansion);
         let foreign_value = match self.source.passing {
             ParameterPassing::Value => outgoing.buffer(quote! { #ident })?,
