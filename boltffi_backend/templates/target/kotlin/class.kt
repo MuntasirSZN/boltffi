@@ -1,4 +1,4 @@
-class {{ class.name() }} internal constructor(internal val handle: Long) : AutoCloseable {
+{{ class.documentation() }}class {{ class.name() }} internal constructor(internal val handle: Long) : AutoCloseable {
     private val __boltffi_closed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun close() {
@@ -14,7 +14,7 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
 {%- for initializer in class.initializers() %}
 {%- if initializer.constructor() %}
 
-    constructor({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}) : this({{ initializer.call().name() }}({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}{% if !loop.last %}, {% endif %}{% endfor %}).handle)
+{{ initializer.call().documentation().indented("    ") }}    constructor({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}) : this({{ initializer.call().name() }}({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}{% if !loop.last %}, {% endif %}{% endfor %}).handle)
 {%- endif %}
 {%- endfor %}
 {%- if !class.initializers().is_empty() || !class.static_methods().is_empty() || !constants.is_empty() %}
@@ -25,7 +25,39 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
 {{ constant }}
 {%- endfor %}
 {%- for initializer in class.initializers() %}
-        fun {{ initializer.call().name() }}({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.call().returns() %}: {{ return_type }}{% endif %} {
+{{ initializer.call().documentation().indented("        ") }}        {% if initializer.call().async_call().is_some() %}suspend {% endif %}fun {{ initializer.call().name() }}({% for parameter in initializer.call().parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.call().returns() %}: {{ return_type }}{% endif %} {
+{%- if let Some(async_call) = initializer.call().async_call() %}
+{%- if async_call.returns_value() %}
+            return boltffiCallAsync(
+{%- else %}
+            boltffiCallAsync(
+{%- endif %}
+                createFuture = {
+{%- for statement in async_call.create_setup() %}
+                    {{ statement }}
+{%- endfor %}
+{%- if async_call.has_create_cleanup() %}
+                    try {
+                        {{ async_call.create() }}
+                    } finally {
+{%- for statement in async_call.create_cleanup() %}
+                        {{ statement }}
+{%- endfor %}
+                    }
+{%- else %}
+                    {{ async_call.create() }}
+{%- endif %}
+                },
+                poll = { future, contHandle -> Native.{{ async_call.poll() }}(future, contHandle) },
+                complete = { future ->
+{%- for statement in async_call.complete_body() %}
+                    {{ statement }}
+{%- endfor %}
+                },
+                free = { future -> Native.{{ async_call.free() }}(future) },
+                cancel = { future -> Native.{{ async_call.cancel() }}(future) },
+            )
+{%- else %}
 {%- for statement in initializer.call().setup() %}
             {{ statement }}
 {%- endfor %}
@@ -44,10 +76,11 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
             {{ statement }}
 {%- endfor %}
 {%- endif %}
+{%- endif %}
         }
 {%- endfor %}
 {%- for method in class.static_methods() %}
-        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("        ") }}        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
             return boltffiCallAsync(
@@ -105,7 +138,7 @@ class {{ class.name() }} internal constructor(internal val handle: Long) : AutoC
 {%- endif %}
 {%- for method in class.instance_methods() %}
 
-    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("    ") }}    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
         return boltffiCallAsync(

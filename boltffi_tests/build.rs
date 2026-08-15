@@ -246,7 +246,7 @@ impl<'paths> GeneratedContract<'paths> {
             .ty(function.returns(), SignaturePosition::Output);
         quote! {
             const _: unsafe extern "C" fn(#(#params),*) -> #returns =
-                crate::__boltffi_ir_expansion::#symbol;
+                crate::__boltffi_expansion::#symbol;
         }
     }
 }

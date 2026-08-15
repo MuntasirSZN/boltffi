@@ -156,7 +156,7 @@ impl Spec {
     fn macro_helper(&self, module: &ModulePath, role: &str) -> Path {
         let helper = format!(
             "__boltffi_custom_type_{}_{}",
-            name::symbol_segment(&self.name.to_string()),
+            name::canonical(&self.name),
             role
         );
         let segments = module

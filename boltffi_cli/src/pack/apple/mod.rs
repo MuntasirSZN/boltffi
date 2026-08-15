@@ -15,6 +15,7 @@ use crate::build::{
     failed_targets,
 };
 use crate::cli::{CliError, Result};
+use crate::commands::generate::bindings::print_coverage;
 use crate::commands::pack::PackAppleOptions;
 use crate::config::{Config, SpmDistribution, SpmLayout};
 use crate::pack::PackError;
@@ -81,7 +82,14 @@ pub(crate) fn pack_apple(
     if options.execution.regenerate {
         scratch_directory.recreate()?;
         let step = reporter.step("Generating Apple bindings");
-        generate_apple_bindings(config, layout, &package_root, &headers_dir, &selected_crate)?;
+        generate_apple_bindings(
+            config,
+            layout,
+            &package_root,
+            &headers_dir,
+            &selected_crate,
+            options.execution.deny_skipped,
+        )?;
         step.finish_success();
     }
 
@@ -225,6 +233,7 @@ fn generate_apple_bindings(
     package_root: &Path,
     header_output_directory: &Path,
     selected_crate: &BindingExpansion,
+    deny_skipped: bool,
 ) -> Result<()> {
     let swift_output_directory = match layout {
         SpmLayout::Bundled => config
@@ -244,7 +253,7 @@ fn generate_apple_bindings(
         .render(BindgenTarget::Swift)
         .map_err(swift_generation_error)?;
 
-    print_coverage(&output);
+    print_coverage(BindgenTarget::Swift.name(), &output, deny_skipped)?;
     write_apple_binding_output(output, &swift_output_directory, header_output_directory)
 }
 
@@ -292,24 +301,6 @@ fn write_generated_file(path: &Path, contents: &str) -> Result<()> {
         path: path.to_path_buf(),
         source,
     })
-}
-
-fn print_coverage(output: &GeneratedOutput) {
-    let unsupported = output.coverage().unsupported();
-    if unsupported.is_empty() {
-        return;
-    }
-
-    eprintln!("swift generation skipped unsupported declarations");
-    eprintln!("{:<12} {:<48} reason", "kind", "name");
-    unsupported.iter().for_each(|item| {
-        eprintln!(
-            "{:<12} {:<48} {}",
-            item.declaration().kind(),
-            item.declaration().name(),
-            item.reason()
-        );
-    });
 }
 
 fn swift_generation_error(error: GenerationError) -> CliError {

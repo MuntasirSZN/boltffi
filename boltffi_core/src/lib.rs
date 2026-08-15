@@ -18,8 +18,7 @@ pub mod wasm;
 pub mod wire;
 
 pub use boltffi_macros::{
-    Data, FfiType, custom_ffi, custom_type, data, default, error, export, ffi_export, ffi_stream,
-    ffi_trait, name, skip,
+    FfiType, custom_ffi, custom_type, data, default, error, export, ffi_stream, name, skip,
 };
 
 /// Defines a static interned-string pool.

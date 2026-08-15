@@ -8,10 +8,11 @@ use crate::{
     },
 };
 
-use super::{Package, callable::ReturnStub, type_hint::TypeHint};
+use super::{Documentation, Package, callable::ReturnStub, type_hint::TypeHint};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConstantStub {
+    pub documentation: Documentation,
     pub owner: Option<Identifier>,
     pub python_name: Identifier,
     pub annotation: TypeAnnotation,
@@ -32,9 +33,10 @@ impl ConstantStub {
             || Name::new(constant.name()).function(),
             |_| Name::new(constant.name()).constant(),
         )?;
+        let documentation = Documentation::new(constant.meta().doc());
         match constant.value() {
             ConstantValueDecl::Inline { ty, value, .. } => {
-                Self::from_inline(owner, python_name, ty, value, package)
+                Self::from_inline(documentation, owner, python_name, ty, value, package)
             }
             ConstantValueDecl::Accessor { callable, .. } => {
                 let returned = ReturnStub::from_plan(callable.returns().plan(), package)?;
@@ -49,6 +51,7 @@ impl ConstantStub {
                 let expression = returned.expression(native_call)?;
                 let uses_wire_helpers = returned.uses_wire_helpers();
                 Ok(Self {
+                    documentation,
                     owner,
                     python_name,
                     annotation: returned.into_annotation(),
@@ -82,6 +85,7 @@ impl ConstantStub {
     }
 
     fn from_inline(
+        documentation: Documentation,
         owner: Option<Identifier>,
         python_name: Identifier,
         ty: &TypeRef,
@@ -89,6 +93,7 @@ impl ConstantStub {
         package: &Package,
     ) -> Result<Self> {
         Ok(Self {
+            documentation,
             owner,
             python_name,
             annotation: TypeHint::from_type_ref(ty, package)?.into_annotation(),

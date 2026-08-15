@@ -20,6 +20,7 @@ use crate::{
         name_style::Name,
         primitive::KotlinPrimitive,
         render::{
+            Documentation,
             class::ClassHandle,
             direct_vector::DirectVector,
             enumeration::Enumeration,
@@ -42,6 +43,7 @@ struct CallbackTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Callback {
     name: TypeName,
+    documentation: Documentation,
     map_name: TypeName,
     callbacks_name: TypeName,
     bridge_name: TypeName,
@@ -54,6 +56,7 @@ pub struct Callback {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Method {
     name: Identifier,
+    documentation: Documentation,
     jvm_name: Identifier,
     public_parameters: Vec<Parameter>,
     jvm_parameters: Vec<Parameter>,
@@ -236,6 +239,7 @@ impl Callback {
             });
         }
         Ok(Self {
+            documentation: Documentation::new(decl.meta().doc()),
             map_name: TypeName::new(format!("{name}Map")),
             callbacks_name: TypeName::new(format!("{name}Callbacks")),
             bridge_name: TypeName::new(format!("{name}Bridge")),
@@ -255,6 +259,10 @@ impl Callback {
 
     pub fn name(&self) -> &TypeName {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn map_name(&self) -> &TypeName {
@@ -296,6 +304,10 @@ impl Callback {
 impl Method {
     pub fn name(&self) -> &Identifier {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn jvm_name(&self) -> &Identifier {
@@ -435,6 +447,7 @@ impl Method {
             .transpose()?;
         Ok(Self {
             name: Name::new(source.name()).function()?,
+            documentation: Documentation::new(source.meta().doc()),
             jvm_name: Identifier::escape(method.method().as_str())?,
             public_parameters: parameters
                 .iter()

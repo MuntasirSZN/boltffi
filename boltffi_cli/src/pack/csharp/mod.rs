@@ -60,6 +60,7 @@ pub(crate) fn pack_csharp(
             &plan.artifact_name,
             plan.generation_cargo_args.clone(),
             plan.generation_toolchain_selector.clone(),
+            options.execution.deny_skipped,
         )?;
         step.finish_success();
     }
@@ -830,6 +831,7 @@ mod tests {
                 release: false,
                 regenerate: true,
                 no_build: false,
+                deny_skipped: false,
                 cargo_args: Vec::new(),
             },
         }

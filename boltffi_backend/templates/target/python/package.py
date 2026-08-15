@@ -482,142 +482,10 @@ def {{ encoder.name() }}({{ encoder.argument() }}) -> bytes:
 _native._register_wire_codec({{ encoder.key() }}, {{ encoder.name() }})
 
 {% endfor %}
-{% for record in records %}
-{%- match record.wire %}
-{%- when RecordWire::Fixed(fixed) %}
-{{ record.class_name }} = _native.{{ record.class_name }}
-{{ record.class_name }}.__module__ = __name__
-{{ record.class_name }}.__match_args__ = ({% for field in record.fields %}"{{ field.name }}",{% endfor %})
-{{ record.class_name }}.__annotations__ = {{ "{" }}{% for field in record.fields %}"{{ field.name }}": {{ field.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}{{ "}" }}
-{{ fixed.struct_global() }} = struct.Struct("{{ fixed.format() }}")
-
-
-def _boltffi_attach_{{ record.class_name }}_wire(self) -> bytes:
-    return {{ fixed.struct_global() }}.pack({% for field in record.fields %}self.{{ field.name }}{% if !loop.last %}, {% endif %}{% endfor %})
-
-
-def _boltffi_attach_{{ record.class_name }}_from_wire(cls, data: bytes) -> "{{ record.class_name }}":
-    reader = _BoltFfiWireReader(data)
-    try:
-        value = cls._boltffi_from_reader(reader)
-    except struct.error as error:
-        raise ValueError("truncated BoltFFI wire bytes") from error
-    reader.finish()
-    return value
-
-
-def _boltffi_attach_{{ record.class_name }}_from_reader(cls, reader: "_BoltFfiWireReader") -> "{{ record.class_name }}":
-    return cls(*reader.fixed({{ fixed.struct_global() }}))
-
-
-{{ record.class_name }}._boltffi_wire = _boltffi_attach_{{ record.class_name }}_wire
-{{ record.class_name }}._boltffi_from_wire = classmethod(_boltffi_attach_{{ record.class_name }}_from_wire)
-{{ record.class_name }}._boltffi_from_reader = classmethod(_boltffi_attach_{{ record.class_name }}_from_reader)
-{%- for constructor in record.constructors %}
-
-
-{% if constructor.asynchronous %}async {% endif %}def _boltffi_attach_{{ record.class_name }}_{{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}":
-{%- for line in constructor.body %}
-    {{ line }}
-{%- endfor %}
-
-
-{{ record.class_name }}.{{ constructor.python_name }} = classmethod(_boltffi_attach_{{ record.class_name }}_{{ constructor.python_name }})
-{%- endfor %}
-{%- for method in record.static_methods %}
-
-
-{% if method.asynchronous %}async {% endif %}def _boltffi_attach_{{ record.class_name }}_{{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-{%- for line in method.body %}
-    {{ line }}
-{%- endfor %}
-
-
-{{ record.class_name }}.{{ method.python_name }} = staticmethod(_boltffi_attach_{{ record.class_name }}_{{ method.python_name }})
-{%- endfor %}
-{%- for method in record.instance_methods %}
-
-
-{% if method.asynchronous %}async {% endif %}def _boltffi_attach_{{ record.class_name }}_{{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-{%- for line in method.body %}
-    {{ line }}
-{%- endfor %}
-
-
-{{ record.class_name }}.{{ method.python_name }} = _boltffi_attach_{{ record.class_name }}_{{ method.python_name }}
-{%- endfor %}
-{%- when RecordWire::Fields(wire_fields) %}
-@dataclass(frozen=True, slots=True)
-class {{ record.class_name }}:
-{%- for field in record.fields %}
-    {{ field.name }}: {{ field.annotation }}{% if let Some(default) = field.default %} = {{ default }}{% endif %}
-{%- endfor %}
-
-    def _boltffi_wire(self) -> bytes:
-        return b"".join((
-{%- for field in wire_fields %}
-            {{ field.encode }},
-{%- endfor %}
-        ))
-
-    @classmethod
-    def _boltffi_from_wire(cls, data: bytes) -> "{{ record.class_name }}":
-        reader = _BoltFfiWireReader(data)
-        try:
-            value = cls._boltffi_from_reader(reader)
-        except struct.error as error:
-            raise ValueError("truncated BoltFFI wire bytes") from error
-        reader.finish()
-        return value
-
-    @classmethod
-    def _boltffi_from_reader(cls, reader: "_BoltFfiWireReader") -> "{{ record.class_name }}":
-        return cls(
-{%- for field in wire_fields %}
-            {{ field.name }}={{ field.decode }},
-{%- endfor %}
-        )
-{%- for constructor in record.constructors %}
-
-    @classmethod
-    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}":
-{%- for line in constructor.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-{%- for method in record.static_methods %}
-
-    @staticmethod
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
-{%- for line in method.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-{%- for method in record.instance_methods %}
-
-    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
-{%- for line in method.body %}
-        {{ line }}
-{%- endfor %}
-{%- endfor %}
-
-
-_native.{{ record.register_method }}({{ record.class_name }})
-{%- endmatch %}
-{% if let Some(exception_name) = record.exception_name %}
-
-class {{ exception_name }}(RuntimeError):
-    __slots__ = ("error",)
-
-    def __init__(self, error: {{ record.class_name }}) -> None:
-        self.error = error
-        super().__init__(error)
-{% endif %}
-
-{% endfor %}
 {% for enumeration in enums %}
 {%- if let Some(wire) = enumeration.wire %}
 class {{ enumeration.class_name }}:
+{{- enumeration.documentation.docstring("    ") }}
     __slots__ = ()
 
     @classmethod
@@ -642,6 +510,7 @@ class {{ enumeration.class_name }}:
 
     @classmethod
     {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
+{{- constructor.documentation.docstring("        ") }}
 {%- for line in constructor.body %}
         {{ line }}
 {%- endfor %}
@@ -650,6 +519,7 @@ class {{ enumeration.class_name }}:
 
     @staticmethod
     {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
 {%- for line in method.body %}
         {{ line }}
 {%- endfor %}
@@ -657,6 +527,7 @@ class {{ enumeration.class_name }}:
 {%- for method in enumeration.instance_methods %}
 
     {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
 {%- for line in method.body %}
         {{ line }}
 {%- endfor %}
@@ -665,9 +536,11 @@ class {{ enumeration.class_name }}:
 {% for variant in wire.variants %}
 @dataclass(frozen=True, slots=True)
 class {{ variant.class_name }}({{ enumeration.class_name }}):
+{{- variant.documentation.docstring("    ") }}
 {%- if variant.has_fields() %}
 {%- for field in variant.fields %}
     {{ field.name }}: {{ field.annotation }}{% if let Some(default) = field.default %} = {{ default }}{% endif %}
+{{- field.documentation.docstring("    ") }}
 {%- endfor %}
 {%- else %}
     pass
@@ -699,6 +572,7 @@ class {{ variant.class_name }}({{ enumeration.class_name }}):
 {% endfor %}
 {%- else %}
 class {{ enumeration.class_name }}(IntEnum):
+{{- enumeration.documentation.docstring("    ") }}
 {%- for variant in enumeration.variants %}
     {{ variant.name }} = {{ variant.value }}
 {%- endfor %}
@@ -706,6 +580,7 @@ class {{ enumeration.class_name }}(IntEnum):
 
     @classmethod
     {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ enumeration.class_name }}":
+{{- constructor.documentation.docstring("        ") }}
 {%- for line in constructor.body %}
         {{ line }}
 {%- endfor %}
@@ -714,6 +589,7 @@ class {{ enumeration.class_name }}(IntEnum):
 
     @staticmethod
     {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
 {%- for line in method.body %}
         {{ line }}
 {%- endfor %}
@@ -721,6 +597,7 @@ class {{ enumeration.class_name }}(IntEnum):
 {%- for method in enumeration.instance_methods %}
 
     {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
 {%- for line in method.body %}
         {{ line }}
 {%- endfor %}
@@ -740,13 +617,159 @@ class {{ exception_name }}(RuntimeError):
 {% endif %}
 
 {% endfor %}
+{% for record in records %}
+{%- match record.wire %}
+{%- when RecordWire::Fixed(fixed) %}
+{{ record.class_name }} = _native.{{ record.class_name }}
+{{ record.class_name }}.__module__ = __name__
+{%- if !record.documentation.is_empty() %}
+{{ record.class_name }}.__doc__ = {{ record.documentation.literal() }}
+{%- endif %}
+{{ record.class_name }}.__match_args__ = ({% for field in record.fields %}"{{ field.name }}",{% endfor %})
+{{ record.class_name }}.__annotations__ = {{ "{" }}{% for field in record.fields %}"{{ field.name }}": {{ field.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}{{ "}" }}
+{{ fixed.struct_global() }} = struct.Struct("{{ fixed.format() }}")
+
+
+def _boltffi_attach_{{ record.class_name }}_wire(self) -> bytes:
+    return {{ fixed.struct_global() }}.pack({% for field in record.fields %}self.{{ field.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+
+
+def _boltffi_attach_{{ record.class_name }}_from_wire(cls, data: bytes) -> "{{ record.class_name }}":
+    reader = _BoltFfiWireReader(data)
+    try:
+        value = cls._boltffi_from_reader(reader)
+    except struct.error as error:
+        raise ValueError("truncated BoltFFI wire bytes") from error
+    reader.finish()
+    return value
+
+
+def _boltffi_attach_{{ record.class_name }}_from_reader(cls, reader: "_BoltFfiWireReader") -> "{{ record.class_name }}":
+    return cls(*reader.fixed({{ fixed.struct_global() }}))
+
+
+{{ record.class_name }}._boltffi_wire = _boltffi_attach_{{ record.class_name }}_wire
+{{ record.class_name }}._boltffi_from_wire = classmethod(_boltffi_attach_{{ record.class_name }}_from_wire)
+{{ record.class_name }}._boltffi_from_reader = classmethod(_boltffi_attach_{{ record.class_name }}_from_reader)
+{%- for constructor in record.constructors %}
+
+
+{% if constructor.asynchronous %}async {% endif %}def _boltffi_attach_{{ record.class_name }}_{{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}":
+{{- constructor.documentation.docstring("    ") }}
+{%- for line in constructor.body %}
+    {{ line }}
+{%- endfor %}
+
+
+{{ record.class_name }}.{{ constructor.python_name }} = classmethod(_boltffi_attach_{{ record.class_name }}_{{ constructor.python_name }})
+{%- endfor %}
+{%- for method in record.static_methods %}
+
+
+{% if method.asynchronous %}async {% endif %}def _boltffi_attach_{{ record.class_name }}_{{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("    ") }}
+{%- for line in method.body %}
+    {{ line }}
+{%- endfor %}
+
+
+{{ record.class_name }}.{{ method.python_name }} = staticmethod(_boltffi_attach_{{ record.class_name }}_{{ method.python_name }})
+{%- endfor %}
+{%- for method in record.instance_methods %}
+
+
+{% if method.asynchronous %}async {% endif %}def _boltffi_attach_{{ record.class_name }}_{{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("    ") }}
+{%- for line in method.body %}
+    {{ line }}
+{%- endfor %}
+
+
+{{ record.class_name }}.{{ method.python_name }} = _boltffi_attach_{{ record.class_name }}_{{ method.python_name }}
+{%- endfor %}
+{%- when RecordWire::Fields(wire_fields) %}
+@dataclass(frozen=True, slots=True)
+class {{ record.class_name }}:
+{{- record.documentation.docstring("    ") }}
+{%- for field in record.fields %}
+    {{ field.name }}: {{ field.annotation }}{% if let Some(default) = field.default %} = {{ default }}{% endif %}
+{{- field.documentation.docstring("    ") }}
+{%- endfor %}
+
+    def _boltffi_wire(self) -> bytes:
+        return b"".join((
+{%- for field in wire_fields %}
+            {{ field.encode }},
+{%- endfor %}
+        ))
+
+    @classmethod
+    def _boltffi_from_wire(cls, data: bytes) -> "{{ record.class_name }}":
+        reader = _BoltFfiWireReader(data)
+        try:
+            value = cls._boltffi_from_reader(reader)
+        except struct.error as error:
+            raise ValueError("truncated BoltFFI wire bytes") from error
+        reader.finish()
+        return value
+
+    @classmethod
+    def _boltffi_from_reader(cls, reader: "_BoltFfiWireReader") -> "{{ record.class_name }}":
+        return cls(
+{%- for field in wire_fields %}
+            {{ field.name }}={{ field.decode }},
+{%- endfor %}
+        )
+{%- for constructor in record.constructors %}
+
+    @classmethod
+    {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ record.class_name }}":
+{{- constructor.documentation.docstring("        ") }}
+{%- for line in constructor.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+{%- for method in record.static_methods %}
+
+    @staticmethod
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+{%- for method in record.instance_methods %}
+
+    {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
+{%- for line in method.body %}
+        {{ line }}
+{%- endfor %}
+{%- endfor %}
+
+
+_native.{{ record.register_method }}({{ record.class_name }})
+{%- endmatch %}
+{% if let Some(exception_name) = record.exception_name %}
+
+class {{ exception_name }}(RuntimeError):
+    __slots__ = ("error",)
+
+    def __init__(self, error: {{ record.class_name }}) -> None:
+        self.error = error
+        super().__init__(error)
+{% endif %}
+
+{% endfor %}
 {% for class in classes %}
 class {{ class.class_name }}:
+{{- class.documentation.docstring("    ") }}
     __slots__ = ("_handle",)
 
 {% if !class.init.is_empty() %}
 {% for init in class.init %}
     def __init__(self{% for parameter in init.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> None:
+{{- init.documentation.docstring("        ") }}
         self._handle = _native.{{ init.native_name }}({{ init.arguments }})
 {% endfor %}
 {% else %}
@@ -769,6 +792,7 @@ class {{ class.class_name }}:
 
     @classmethod
     {% if constructor.asynchronous %}async {% endif %}def {{ constructor.python_name }}(cls{% for parameter in constructor.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> "{{ class.class_name }}":
+{{- constructor.documentation.docstring("        ") }}
 {%- for line in constructor.body %}
         {{ line }}
 {%- endfor %}
@@ -777,6 +801,7 @@ class {{ class.class_name }}:
 
     @staticmethod
     {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}({% for parameter in method.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
 {%- for line in method.body %}
         {{ line }}
 {%- endfor %}
@@ -784,6 +809,7 @@ class {{ class.class_name }}:
 {%- for method in class.instance_methods %}
 
     {% if method.asynchronous %}async {% endif %}def {{ method.python_name }}(self{% for parameter in method.parameters %}, {{ parameter.name }}: {{ parameter.annotation }}{% endfor %}) -> {{ method.return_annotation }}:
+{{- method.documentation.docstring("        ") }}
 {%- for line in method.body %}
         {{ line }}
 {%- endfor %}
@@ -791,6 +817,7 @@ class {{ class.class_name }}:
 {%- for stream in class.streams %}
 
     def {{ stream.python_name }}(self) -> "{{ stream.subscription_class }}":
+{{- stream.documentation.docstring("        ") }}
         return {{ stream.subscription_class }}._from_handle(_native.{{ stream.subscribe_method }}(self._handle))
 {%- endfor %}
 
@@ -842,9 +869,11 @@ class {{ stream.subscription_class }}:
 {% endfor %}
 {% for constant in constants %}
 {{ constant.python_name }}: {{ constant.annotation }} = {{ constant.expression }}
+{{- constant.documentation.docstring("") }}
 {% endfor %}
 {% for function in functions %}
 {% if function.asynchronous %}async {% endif %}def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.annotation }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_annotation }}:
+{{- function.documentation.docstring("    ") }}
 {%- for line in function.body %}
     {{ line }}
 {%- endfor %}

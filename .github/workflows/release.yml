@@ -117,6 +117,14 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: boltffi-linux-x86_64-musl
+            musl_linker: CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: boltffi-linux-aarch64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: boltffi-linux-aarch64-musl
+            musl_linker: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: boltffi-darwin-x86_64
@@ -126,6 +134,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: boltffi-windows-x86_64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: boltffi-windows-arm64
     steps:
       - uses: actions/checkout@v7
         with:
@@ -138,12 +149,12 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Install musl-tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: matrix.musl_linker
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Configure musl linker
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+        if: matrix.musl_linker
+        run: echo "${{ matrix.musl_linker }}=musl-gcc" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
         with:

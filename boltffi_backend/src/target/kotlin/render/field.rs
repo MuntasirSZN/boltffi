@@ -7,7 +7,7 @@ use crate::{
         codec::{Reader, Sizer, Writer},
         name_style::KotlinPackage,
         name_style::Name,
-        render::type_name::KotlinType,
+        render::{Documentation, type_name::KotlinType},
         syntax::{Expression, Identifier, Statement, TypeName},
     },
 };
@@ -15,6 +15,7 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EncodedField {
     name: Identifier,
+    documentation: Documentation,
     ty: TypeName,
     read: Expression,
     write: Statement,
@@ -80,6 +81,7 @@ impl EncodedField {
         match write.as_slice() {
             [write] => Ok(Self {
                 name: Self::identifier(field.key())?,
+                documentation: Documentation::new(field.meta().doc()),
                 ty,
                 read: field.read().render_with(&mut reader)?.into_expression(),
                 write: write.clone(),
@@ -94,6 +96,10 @@ impl EncodedField {
 
     pub fn name(&self) -> &Identifier {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn ty(&self) -> &TypeName {

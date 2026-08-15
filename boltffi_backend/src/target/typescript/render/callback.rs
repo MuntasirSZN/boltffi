@@ -11,7 +11,7 @@ use super::super::{
     name_style::Name,
     primitive::Scalar,
     syntax::{
-        ArgumentList, Expression, Identifier, MemberName, MethodDeclaration, Statement,
+        ArgumentList, Expression, Identifier, InterfaceMemberName, MethodDeclaration, Statement,
         StringLiteral, TypeName,
     },
 };
@@ -35,7 +35,7 @@ pub struct Callback {
 }
 
 struct Method {
-    name: MemberName,
+    name: InterfaceMemberName,
     import: StringLiteral,
     parameters: Vec<Parameter>,
     public_return: TypeName,
@@ -66,7 +66,7 @@ struct VectorReturn {
 }
 
 struct AsyncMethod {
-    name: MemberName,
+    name: InterfaceMemberName,
     import: StringLiteral,
     complete: Identifier,
     parameters: Vec<Parameter>,
@@ -195,12 +195,17 @@ impl Method {
             .map(|parameter| Parameter::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
         let return_shape = match &fallible {
+            Some((public_type, _))
+                if matches!(method.callable().returns().plan(), ReturnPlan::Void) =>
+            {
+                ReturnShape::fallible_without_success_pointer(public_type.clone())
+            }
             Some((public_type, _)) => ReturnShape::fallible(public_type.clone()),
             None => Self::return_shape(method.callable().returns().plan(), context)?,
         };
-        let invocation = Expression::call(
+        let invocation = Expression::call_member(
             Expression::identifier(Identifier::known("callback")),
-            Name::new(method.name()).identifier()?,
+            &Name::new(method.name()).member()?,
             parameters
                 .iter()
                 .map(|parameter| parameter.argument.clone())
@@ -213,7 +218,7 @@ impl Method {
             _ => invocation,
         };
         Ok(Self {
-            name: Name::new(method.name()).member()?,
+            name: InterfaceMemberName::new(Name::new(method.name()).member()?),
             import: StringLiteral::new(method.target().name().as_str()),
             parameters,
             public_return: return_shape.public_type,
@@ -319,6 +324,11 @@ impl Method {
                     )?;
                     (super::Type::from_ref(ty, context)?, setup, true)
                 }
+                // A callback that reports only failure has no success value to
+                // write. The infallible paths already handle `Void`; without
+                // this arm a `Result<(), E>` callback is dropped from the
+                // binding.
+                ReturnPlan::Void => (TypeName::void(), Vec::new(), false),
                 _ => return Err(Self::unsupported("callback fallible success")),
             };
         Ok(Some((
@@ -456,9 +466,9 @@ impl AsyncMethod {
             .iter()
             .map(|parameter| Parameter::from_declaration(parameter, context))
             .collect::<Result<Vec<_>>>()?;
-        let invocation = Expression::call(
+        let invocation = Expression::call_member(
             Expression::identifier(Identifier::known("callback")),
-            Name::new(method.name()).identifier()?,
+            &Name::new(method.name()).member()?,
             parameters
                 .iter()
                 .map(|parameter| parameter.argument.clone())
@@ -504,6 +514,8 @@ impl AsyncMethod {
                             context,
                         )?,
                     ),
+                    // As above, for the async shape.
+                    ReturnPlan::Void => (TypeName::void(), Vec::new()),
                     _ => {
                         return Err(Method::unsupported("callback async fallible success"));
                     }
@@ -518,7 +530,12 @@ impl AsyncMethod {
                         ),
                     ),
                     success_setup,
-                    false,
+                    // A `()` success writes nothing, so the completion reports
+                    // zero pointer, length and capacity. Without this the
+                    // success branch referenced a `resultWriter` only the error
+                    // branch declares, so every success threw and the catch
+                    // reported it as completion code -2.
+                    matches!(method.callable().returns().plan(), ReturnPlan::Void),
                     Some(AsyncFallible {
                         error_setup: Self::encoding(
                             error_codec,
@@ -531,7 +548,7 @@ impl AsyncMethod {
             _ => return Err(Method::unsupported("callback async error")),
         };
         Ok(Self {
-            name: Name::new(method.name()).member()?,
+            name: InterfaceMemberName::new(Name::new(method.name()).member()?),
             import: StringLiteral::new(method.target().name().as_str()),
             complete: Identifier::parse(complete.name().as_str())?,
             parameters,
@@ -759,13 +776,25 @@ impl ReturnShape {
 
     fn fallible(public_type: TypeName) -> Self {
         Self {
+            return_pointer: Some(Identifier::known("successPointer")),
+            ..Self::fallible_without_success_pointer(public_type)
+        }
+    }
+
+    /// A fallible shape whose success carries nothing.
+    ///
+    /// The Rust wasm ABI omits the success out-pointer when the success type is
+    /// `()`, so declaring one here would shift every following parameter by one
+    /// and hand the callback the pointer where its first argument should be.
+    fn fallible_without_success_pointer(public_type: TypeName) -> Self {
+        Self {
             public_type,
             carrier_type: TypeName::bigint(),
             returns_void: false,
             returns_string: false,
             returns_scalar_option: false,
             scalar_option_pack: Identifier::known("packOptionScalar"),
-            return_pointer: Some(Identifier::known("successPointer")),
+            return_pointer: None,
             setup: Vec::new(),
             vector_return: None,
             direct_record: false,

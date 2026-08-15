@@ -1,0 +1,120 @@
+---
+source: boltffi_backend/tests/kotlin/exports.rs
+expression: "rendered_fixture(\"associated/direct_record_and_enum_callables\")"
+---
+===== com/boltffi/demo/Demo.kt =====
+@file:OptIn(kotlin.ExperimentalUnsignedTypes::class)
+
+package com.boltffi.demo
+@Suppress("FunctionName")
+private object Native {
+    @JvmStatic external fun boltffi_init_record_demo_point_origin(): ByteArray?
+    @JvmStatic external fun boltffi_method_record_demo_point_distance(`receiver`: java.nio.ByteBuffer, other: java.nio.ByteBuffer): Double
+    @JvmStatic external fun boltffi_init_enum_demo_mode_default(): Byte
+    @JvmStatic external fun boltffi_method_enum_demo_mode_code(`receiver`: Byte): Byte
+}
+
+
+/**
+ * A point on a two-dimensional plane.
+ */
+data class Point(
+    /**
+     * The horizontal coordinate.
+     */
+    val x: Double,
+    /**
+     * The vertical coordinate.
+     */
+    val y: Double
+) {
+    internal fun toByteArray(): ByteArray {
+        val buffer = java.nio.ByteBuffer
+            .allocate(STRUCT_SIZE)
+            .order(java.nio.ByteOrder.nativeOrder())
+        writeTo(buffer, 0)
+        return buffer.array()
+    }
+
+    internal fun toDirectBuffer(): java.nio.ByteBuffer {
+        val buffer = java.nio.ByteBuffer
+            .allocateDirect(STRUCT_SIZE)
+            .order(java.nio.ByteOrder.nativeOrder())
+        writeTo(buffer, 0)
+        return buffer
+    }
+
+    internal fun writeTo(buffer: java.nio.ByteBuffer, offset: Int) {
+        buffer.putDouble(offset, x)
+        buffer.putDouble(offset + 8, y)
+    }
+
+    companion object {
+        internal const val STRUCT_SIZE: Int = 16
+
+        internal fun fromByteArray(bytes: ByteArray): Point {
+            require(bytes.size == STRUCT_SIZE)
+            val buffer = java.nio.ByteBuffer
+                .wrap(bytes)
+                .order(java.nio.ByteOrder.nativeOrder())
+            return fromBuffer(buffer, 0)
+        }
+
+        internal fun fromBuffer(buffer: java.nio.ByteBuffer, offset: Int): Point {
+            return Point(
+                buffer.getDouble(offset),
+                buffer.getDouble(offset + 8)
+            )
+        }
+
+        /**
+         * Returns the origin point.
+         */
+        fun origin(): Point {
+            val __boltffi_result = Native.boltffi_init_record_demo_point_origin() ?: throw IllegalStateException("null buffer returned")
+            return Point.fromByteArray(__boltffi_result)
+        }
+    }
+
+    /**
+     * Returns the horizontal distance from another point.
+     */
+    fun distance(other: Point): Double {
+        val __boltffi_receiver = this.toDirectBuffer()
+        return Native.boltffi_method_record_demo_point_distance(__boltffi_receiver, other.toDirectBuffer())
+    }
+}
+
+
+/**
+ * A mode selected by the caller.
+ */
+enum class Mode(val value: Byte) {
+    /**
+     * Favor fast work.
+     */
+    FAST(1.toByte()),
+    /**
+     * Favor careful work.
+     */
+    SLOW(2.toByte());
+
+    companion object {
+        fun fromValue(value: Byte): Mode =
+            entries.first { it.value == value }
+
+        /**
+         * Returns the default mode.
+         */
+        fun default(): Mode {
+            return Mode.fromValue(Native.boltffi_init_enum_demo_mode_default())
+        }
+    }
+
+    /**
+     * Returns the wire code for this mode.
+     */
+    fun code(): UByte {
+        return Native.boltffi_method_enum_demo_mode_code(this.value.toByte()).toUByte()
+    }
+}

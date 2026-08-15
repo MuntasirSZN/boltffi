@@ -1,5 +1,5 @@
 {%- if stream.async_delivery() %}
-{% if let Some(receiver) = stream.receiver() %}fun {{ receiver }}.{{ stream.name() }}(){% else %}fun {{ stream.name() }}(){% endif %}: kotlinx.coroutines.flow.Flow<{{ stream.item() }}> = kotlinx.coroutines.flow.callbackFlow {
+{{ stream.documentation() }}{% if let Some(receiver) = stream.receiver() %}fun {{ receiver }}.{{ stream.name() }}(){% else %}fun {{ stream.name() }}(){% endif %}: kotlinx.coroutines.flow.Flow<{{ stream.item() }}> = kotlinx.coroutines.flow.callbackFlow {
     val subscription = Native.{{ stream.subscribe() }}({% if stream.receiver().is_some() %}boltffiHandle(){% endif %})
     if (subscription == 0L) {
         close()
@@ -29,7 +29,7 @@
 }
 {%- endif %}
 {%- if let Some(subscription) = stream.batch_subscription() %}
-{% if let Some(receiver) = stream.receiver() %}fun {{ receiver }}.{{ stream.name() }}(){% else %}fun {{ stream.name() }}(){% endif %}: {{ subscription }} =
+{{ stream.documentation() }}{% if let Some(receiver) = stream.receiver() %}fun {{ receiver }}.{{ stream.name() }}(){% else %}fun {{ stream.name() }}(){% endif %}: {{ subscription }} =
     {{ subscription }}(
         handle = Native.{{ stream.subscribe() }}({% if stream.receiver().is_some() %}boltffiHandle(){% endif %}),
         popBatch = Native::{{ stream.pop_batch() }},
@@ -77,7 +77,7 @@ class {{ subscription }}(
 }
 {%- endif %}
 {%- if let Some(cancellable) = stream.callback_cancellable() %}
-{% if let Some(receiver) = stream.receiver() %}fun {{ receiver }}.{{ stream.name() }}(callback: ({{ stream.item() }}) -> Unit){% else %}fun {{ stream.name() }}(callback: ({{ stream.item() }}) -> Unit){% endif %}: {{ cancellable }} {
+{{ stream.documentation() }}{% if let Some(receiver) = stream.receiver() %}fun {{ receiver }}.{{ stream.name() }}(callback: ({{ stream.item() }}) -> Unit){% else %}fun {{ stream.name() }}(callback: ({{ stream.item() }}) -> Unit){% endif %}: {{ cancellable }} {
     val subscription = Native.{{ stream.subscribe() }}({% if stream.receiver().is_some() %}boltffiHandle(){% endif %})
     if (subscription == 0L) return {{ cancellable }} {}
     val context = BoltFfiStreamContext(

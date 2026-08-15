@@ -2,10 +2,9 @@ extern crate self as boltffi;
 
 pub use boltffi_core::{
     ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType, CallbackHandle,
-    CustomFfiConvertible, CustomTypeConversionError, Data, EventSubscription, FfiType,
-    InternedString, InternedStringPool, InternedStringRepr, StreamProducer,
-    UnexpectedFfiCallbackError, custom_ffi, custom_type, data, default, error, export, ffi_stream,
-    name, skip,
+    CustomFfiConvertible, CustomTypeConversionError, EventSubscription, FfiType, InternedString,
+    InternedStringPool, InternedStringRepr, StreamProducer, UnexpectedFfiCallbackError, custom_ffi,
+    custom_type, data, default, error, export, ffi_stream, name, skip,
 };
 
 /// Defines a static interned-string pool.

@@ -8,10 +8,11 @@ use crate::{
     },
 };
 
-use super::{AssociatedCallable, ClassStream, ConstantStub, NameScope, Package};
+use super::{AssociatedCallable, ClassStream, ConstantStub, Documentation, NameScope, Package};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Class {
+    pub documentation: Documentation,
     pub class_name: Identifier,
     pub release_method: Identifier,
     pub constants: Vec<ConstantStub>,
@@ -63,6 +64,7 @@ impl Class {
             .map(|stream| ClassStream::from_declaration(stream, &class_name, package))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
+            documentation: Documentation::new(declaration.meta().doc()),
             class_name,
             release_method: symbols.release()?,
             constants: package.constants_for_owner(ConstantOwner::Class(declaration.id()))?,

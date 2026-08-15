@@ -13,7 +13,7 @@ use crate::{
         KotlinFactoryStyle, KotlinHost,
         name_style::Name,
         render::{
-            AssociatedConstants,
+            AssociatedConstants, Documentation,
             function::{ExportedCall, ExportedCallRenderer, ReceiverCarrier},
             signature::validate_reserved_members,
         },
@@ -31,6 +31,7 @@ struct ClassTemplate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Class {
     name: TypeName,
+    documentation: Documentation,
     release: Identifier,
     constants: AssociatedConstants,
     initializers: Vec<Initializer>,
@@ -97,6 +98,7 @@ impl Class {
                 .map(ExportedCall::name),
         )?;
         Ok(Self {
+            documentation: Documentation::new(decl.meta().doc()),
             release: Identifier::escape(decl.release().name().as_str())?,
             constants: AssociatedConstants::from_owner(
                 ConstantOwner::Class(decl.id()),
@@ -133,6 +135,10 @@ impl Class {
 
     pub fn name(&self) -> &TypeName {
         &self.name
+    }
+
+    pub fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     pub fn release(&self) -> &Identifier {
@@ -176,12 +182,14 @@ impl Class {
                         return Err(KotlinHost::unsupported("class method receiver"));
                     }
                 };
-                calls.exported(
-                    Name::new(method.name()).function()?,
-                    method.target(),
-                    method.callable(),
-                    receiver,
-                )
+                calls
+                    .exported(
+                        Name::new(method.name()).function()?,
+                        method.target(),
+                        method.callable(),
+                        receiver,
+                    )
+                    .map(|call| call.documented(method.meta().doc()))
             })
             .collect()
     }
@@ -201,9 +209,12 @@ impl Initializer {
                 initializer.callable(),
                 None,
             )
+            .map(|call| call.documented(initializer.meta().doc()))
             .map(|call| Self {
+                // A secondary constructor cannot delegate to a `suspend` call, so asynchronous
+                // initializers are companion factories only.
+                constructor: call.async_call().is_none(),
                 call,
-                constructor: true,
             })
     }
 

@@ -233,7 +233,7 @@ Completed:
 - Kept `commonMain` expect declarations KMP-owned.
 - Kept strict mode fail-closed when no delegate covers a function.
 - Added backend tests for delegated primitive sync functions, native-symbol/type/name matching, package mismatch rejection, and preview-prune duplicate handling.
-- Added an IR CLI regression test proving production `generate kmp --ir` remains fail-closed for unsupported KMP surfaces.
+- Added a CLI regression test proving production `generate kmp` remains fail-closed for unsupported KMP surfaces.
 
 M2a non-goals at the time:
 
@@ -358,7 +358,7 @@ Goal: make IR generation the only production KMP JVM/Android path before startin
 Completed:
 
 - Removed the legacy CLI generator path in `boltffi_cli/src/commands/generate/languages/kmp.rs`; stale generated-output cleanup now lives with the IR KMP writer.
-- Kept `boltffi generate kmp --experimental` routed through `commands::generate::ir` and `Generation::render(Target::KotlinMultiplatform)`.
+- Kept `boltffi generate kmp --experimental` routed through `commands::generate::bindings` and `Generation::render(Target::KotlinMultiplatform)`.
 - Deleted tests that depended on `KMPEmitter::emit` and retained route-level, backend, delegate-adapter, and packaging tests under their current owners.
 - Deleted the monolithic `boltffi_bindgen/src/render/kmp/mod.rs` renderer body; `render/kmp` now only exposes the JVM-family delegate adapter.
 - Moved generated support metadata parsing and the generated-header directory constant to `boltffi_backend::target::kmp`.

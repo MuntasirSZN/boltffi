@@ -26,6 +26,7 @@ use crate::{
 mod callable;
 mod class;
 mod constant;
+mod documentation;
 mod enumeration;
 mod name_scope;
 mod record;
@@ -36,6 +37,7 @@ use self::{
     callable::{AssociatedCallable, FunctionStub},
     class::Class,
     constant::ConstantStub,
+    documentation::Documentation,
     enumeration::EnumClass,
     name_scope::NameScope,
     record::{RecordClass, RecordWire},

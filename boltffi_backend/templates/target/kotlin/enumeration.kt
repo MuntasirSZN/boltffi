@@ -1,15 +1,15 @@
 {%- if enumeration.c_style() %}
 {%- if let Some(value_type) = enumeration.value_type() %}
 {%- if enumeration.error() %}
-sealed class {{ enumeration.name() }}(val value: {{ value_type }}) : Exception() {
+{{ enumeration.documentation() }}sealed class {{ enumeration.name() }}(val value: {{ value_type }}) : Exception() {
 {%- else %}
-enum class {{ enumeration.name() }}(val value: {{ value_type }}) {
+{{ enumeration.documentation() }}enum class {{ enumeration.name() }}(val value: {{ value_type }}) {
 {%- endif %}
 {%- for variant in enumeration.c_style_variants() %}
 {%- if enumeration.error() %}
-    object {{ variant.name() }} : {{ enumeration.name() }}({{ variant.value() }})
+{{ variant.documentation().indented("    ") }}    object {{ variant.name() }} : {{ enumeration.name() }}({{ variant.value() }})
 {%- else %}
-    {{ variant.name() }}({{ variant.value() }}){% if !loop.last %},{% else %};{% endif %}
+{{ variant.documentation().indented("    ") }}    {{ variant.name() }}({{ variant.value() }}){% if !loop.last %},{% else %};{% endif %}
 {%- endif %}
 {%- endfor %}
 
@@ -31,7 +31,7 @@ enum class {{ enumeration.name() }}(val value: {{ value_type }}) {
 {%- endfor %}
 {%- for initializer in enumeration.initializers() %}
 
-        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
+{{ initializer.documentation().indented("        ") }}        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
 {%- for statement in initializer.setup() %}
             {{ statement }}
 {%- endfor %}
@@ -54,7 +54,7 @@ enum class {{ enumeration.name() }}(val value: {{ value_type }}) {
 {%- endfor %}
 {%- for method in enumeration.static_methods() %}
 
-        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("        ") }}        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
             return boltffiCallAsync(
@@ -111,7 +111,7 @@ enum class {{ enumeration.name() }}(val value: {{ value_type }}) {
     }
 {%- for method in enumeration.instance_methods() %}
 
-    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("    ") }}    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
         return boltffiCallAsync(
@@ -168,7 +168,7 @@ enum class {{ enumeration.name() }}(val value: {{ value_type }}) {
 }
 {%- endif %}
 {%- else if enumeration.data() %}
-sealed class {{ enumeration.name() }}{% if enumeration.error() %} : Exception(){% endif %} {
+{{ enumeration.documentation() }}sealed class {{ enumeration.name() }}{% if enumeration.error() %} : Exception(){% endif %} {
     internal abstract fun wireSize(): {{ enumeration.wire_size_type() }}
 
     internal abstract fun writeTo(writer: WireWriter)
@@ -186,7 +186,7 @@ sealed class {{ enumeration.name() }}{% if enumeration.error() %} : Exception(){
 
 {% for variant in enumeration.data_variants() %}
 {%- if variant.unit() %}
-    object {{ variant.name() }} : {{ enumeration.name() }}() {
+{{ variant.documentation().indented("    ") }}    object {{ variant.name() }} : {{ enumeration.name() }}() {
         internal override fun wireSize(): {{ enumeration.wire_size_type() }} {
             return {{ variant.size() }}
         }
@@ -196,9 +196,9 @@ sealed class {{ enumeration.name() }}{% if enumeration.error() %} : Exception(){
         }
     }
 {%- else %}
-    data class {{ variant.name() }}(
+{{ variant.documentation().indented("    ") }}    data class {{ variant.name() }}(
 {%- for field in variant.fields() %}
-        val {{ field.name() }}: {{ field.ty() }}{% if !loop.last %},{% endif %}
+{{ field.documentation().indented("        ") }}        val {{ field.name() }}: {{ field.ty() }}{% if !loop.last %},{% endif %}
 {%- endfor %}
     ) : {{ enumeration.name() }}() {
         internal override fun wireSize(): {{ enumeration.wire_size_type() }} {
@@ -236,7 +236,7 @@ sealed class {{ enumeration.name() }}{% if enumeration.error() %} : Exception(){
 {%- endfor %}
 {%- for initializer in enumeration.initializers() %}
 
-        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
+{{ initializer.documentation().indented("        ") }}        fun {{ initializer.name() }}({% for parameter in initializer.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = initializer.returns() %}: {{ return_type }}{% endif %} {
 {%- for statement in initializer.setup() %}
             {{ statement }}
 {%- endfor %}
@@ -259,7 +259,7 @@ sealed class {{ enumeration.name() }}{% if enumeration.error() %} : Exception(){
 {%- endfor %}
 {%- for method in enumeration.static_methods() %}
 
-        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("        ") }}        {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
             return boltffiCallAsync(
@@ -316,7 +316,7 @@ sealed class {{ enumeration.name() }}{% if enumeration.error() %} : Exception(){
     }
 {%- for method in enumeration.instance_methods() %}
 
-    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
+{{ method.documentation().indented("    ") }}    {% if method.async_call().is_some() %}suspend {% endif %}fun {{ method.name() }}({% for parameter in method.parameters() %}{{ parameter.name() }}: {{ parameter.ty() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(return_type) = method.returns() %}: {{ return_type }}{% endif %} {
 {%- if let Some(async_call) = method.async_call() %}
 {%- if async_call.returns_value() %}
         return boltffiCallAsync(

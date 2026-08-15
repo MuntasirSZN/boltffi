@@ -17,6 +17,8 @@ pub struct PackExecutionOptions {
     pub release: bool,
     pub regenerate: bool,
     pub no_build: bool,
+    /// Fail instead of emitting a binding with declarations left out.
+    pub deny_skipped: bool,
     pub cargo_args: Vec<String>,
 }
 

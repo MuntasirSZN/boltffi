@@ -161,8 +161,8 @@ mod tests {
         DeprecationInfo as SourceDeprecationInfo, DocComment as SourceDocComment, EnumDef,
         ExecutionKind, FieldDef, FnSig, FnTrait, FnTraitKind, IntegerLiteral, MapKind, MethodDef,
         MethodId as SourceMethodId, PackageInfo as SourcePackage, ParameterDef, ParameterPassing,
-        Path as SourcePath, Primitive, Receiver, RecordDef, ReprAttr, ReprItem, ReturnDef, Source,
-        SourceContract, TypeExpr, VariantDef, VariantPayload,
+        Path as SourcePath, PathRoot, PathSegment, Primitive, Receiver, RecordDef, ReprAttr,
+        ReprItem, ReturnDef, Source, SourceContract, TypeExpr, VariantDef, VariantPayload,
     };
 
     use crate::lower::lower;
@@ -2291,7 +2291,10 @@ mod tests {
             VariantDef::unit(name("Slow")),
         ];
         let mut selected = value_param("selected", enum_type("demo::Mode", "Mode"));
-        selected.default = Some(SourceDefaultValue::Path(SourcePath::single("Fast")));
+        selected.default = Some(SourceDefaultValue::Path(SourcePath::new(
+            PathRoot::Relative,
+            vec![PathSegment::new("Mode"), PathSegment::new("Fast")],
+        )));
 
         let bindings = lower_contract::<Native>(
             vec![point_record_with_methods(vec![method_with(
@@ -2311,6 +2314,32 @@ mod tests {
                 variant_name: CanonicalName::single("Fast"),
             })
         );
+    }
+
+    #[test]
+    fn enum_variant_record_field_default_lowers_against_its_declared_type() {
+        let mut mode = EnumDef::new("demo::Mode".into(), name("Mode"));
+        mode.variants = vec![VariantDef::unit(name("Off")), VariantDef::unit(name("On"))];
+        let mut mode_field = field("mode", enum_type("demo::Mode", "Mode"));
+        mode_field.default = Some(SourceDefaultValue::Path(SourcePath::new(
+            PathRoot::Relative,
+            vec![PathSegment::new("Mode"), PathSegment::new("Off")],
+        )));
+
+        let bindings = lower_contract::<Native>(
+            vec![record("demo::Config", "Config", vec![mode_field])],
+            vec![mode],
+        );
+        let default = encoded_record(&bindings).fields()[0].meta().default();
+
+        assert!(matches!(
+            default,
+            Some(DefaultValue::EnumVariant {
+                enum_name,
+                variant_name,
+            }) if enum_name == &CanonicalName::single("Mode")
+                && variant_name == &CanonicalName::single("Off")
+        ));
     }
 
     #[test]

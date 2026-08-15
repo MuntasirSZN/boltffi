@@ -11,7 +11,7 @@ pub struct FixturePoint {
     pub y: f64,
 }
 
-pub use __boltffi_ir_expansion::*;
+pub use __boltffi_expansion::*;
 
 mod asynchronous;
 mod bytes;

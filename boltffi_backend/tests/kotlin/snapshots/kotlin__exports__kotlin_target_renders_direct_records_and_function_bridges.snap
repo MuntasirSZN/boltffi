@@ -13,8 +13,17 @@ private object Native {
 }
 
 
+/**
+ * A two-dimensional point.
+ */
 data class Point(
+    /**
+     * The horizontal coordinate.
+     */
     val x: Int,
+    /**
+     * The vertical coordinate.
+     */
     val y: Int
 ) {
     internal fun toByteArray(): ByteArray {
@@ -59,8 +68,17 @@ data class Point(
 }
 
 
+/**
+ * How fast the operation should run.
+ */
 enum class Mode(val value: Byte) {
+    /**
+     * Prioritize speed.
+     */
     FAST(1.toByte()),
+    /**
+     * Prioritize patience.
+     */
     SLOW(2.toByte());
 
     companion object {
@@ -69,11 +87,17 @@ enum class Mode(val value: Byte) {
     }
 }
 
+/**
+ * Returns the point unchanged.
+ */
 fun echoPoint(point: Point): Point {
     val __boltffi_result = Native.boltffi_function_demo_echo_point(point.toDirectBuffer()) ?: throw IllegalStateException("null buffer returned")
     return Point.fromByteArray(__boltffi_result)
 }
 
+/**
+ * Returns the mode unchanged.
+ */
 fun echoMode(mode: Mode): Mode {
     return Mode.fromValue(Native.boltffi_function_demo_echo_mode(mode.value.toByte()))
 }

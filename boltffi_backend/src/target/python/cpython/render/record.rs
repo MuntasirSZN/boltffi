@@ -24,6 +24,7 @@ use crate::{
 #[derive(AskamaTemplate)]
 #[template(path = "target/python/record.c", escape = "none")]
 struct DirectTemplate {
+    module_name: String,
     class_name: PythonIdentifier,
     c_type: TypeFragment,
     type_object: Identifier,
@@ -73,12 +74,17 @@ impl Record {
     pub fn render(self) -> Result<Emitted> {
         let symbols = self.symbols;
         let source = match self.shape {
-            Shape::Direct { fields, .. } => {
+            Shape::Direct {
+                fields,
+                module_name,
+                ..
+            } => {
                 let c_type = symbols.c_type()?.clone();
                 let object_struct = symbols.object_struct()?;
                 let prefix = symbols.prefix()?;
                 let type_setup = symbols.type_setup()?;
                 DirectTemplate {
+                    module_name,
                     class_name: symbols.class_name,
                     c_type,
                     type_object: symbols.type_object,
@@ -235,7 +241,11 @@ impl Record {
         let callables = Self::direct_callables(record, &symbols, bridge, context)?;
         Ok(Self {
             symbols,
-            shape: Shape::Direct { primitives, fields },
+            shape: Shape::Direct {
+                primitives,
+                fields,
+                module_name: bridge.module().as_str().to_owned(),
+            },
             method: None,
             callables,
         })
@@ -485,6 +495,7 @@ enum Shape {
     Direct {
         fields: Vec<Field>,
         primitives: Vec<primitive::Runtime>,
+        module_name: String,
     },
     Encoded {
         codec: EncodedCodec,

@@ -80,6 +80,15 @@ pub trait SurfaceLower:
     #[doc(hidden)]
     fn root_string_codec() -> crate::CodecNode;
 
+    /// Codec for a byte buffer returned from an exported callable.
+    ///
+    /// Surfaces that carry the buffer length alongside the pointer can take the
+    /// bytes unframed and skip the shift that making room for a length prefix
+    /// costs.
+    fn root_bytes_return_codec() -> crate::CodecNode {
+        crate::CodecNode::Bytes
+    }
+
     #[doc(hidden)]
     fn direct_record_return_slot() -> ReturnValueSlot;
 
@@ -210,6 +219,10 @@ impl SurfaceLower for Wasm32 {
 
     fn root_string_codec() -> crate::CodecNode {
         crate::CodecNode::Utf8String
+    }
+
+    fn root_bytes_return_codec() -> crate::CodecNode {
+        crate::CodecNode::RawBytes
     }
 
     fn direct_record_return_slot() -> ReturnValueSlot {

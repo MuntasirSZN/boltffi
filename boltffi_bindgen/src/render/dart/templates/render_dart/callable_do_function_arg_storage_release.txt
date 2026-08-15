@@ -1,9 +1,0 @@
-{%- match param.passing %}
-{%- when super::DartFFIValuePassing::WireEncoded %}
-_$$BoltStoragePool.releaseStorage({{ param.storage_name() }});
-{%- when super::DartFFIValuePassing::Bytes with (_) %}
-_$$BoltStoragePool.releaseStorage({{ param.storage_name() }});
-{%- when super::DartFFIValuePassing::List with (_) %}
-_$$BoltStoragePool.releaseStorage({{ param.storage_name() }});
-{%- when _ %}
-{%- endmatch %}

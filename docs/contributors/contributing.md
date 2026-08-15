@@ -7,6 +7,10 @@ Anyone is welcome to help with BoltFFI. If you are not sure where to start, open
 
 By contributing, you agree that your work is licensed under the project license, [MIT](../../LICENSE).
 
+## AI-assisted contributions
+
+AI tools are welcome when they help a human contributor do the work. The contributor must understand, verify, and take responsibility for the result. Read the [AI policy](../../AI_POLICY.md) before submitting an issue, commit, pull request, or review comment.
+
 ## Building the project
 
 You need a working Rust toolchain. We recommend installing Rust through [`rustup`](https://rustup.rs/) and using the toolchain pinned by the repository.

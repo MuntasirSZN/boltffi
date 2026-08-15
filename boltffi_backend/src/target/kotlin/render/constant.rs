@@ -11,6 +11,7 @@ use crate::{
         KotlinHost,
         name_style::Name,
         render::{
+            Documentation,
             default_value::DefaultExpression,
             function::{ExportedCall, ExportedCallRenderer},
             type_name::KotlinType,
@@ -27,6 +28,7 @@ struct ConstantTemplate<'constant> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Constant {
+    documentation: Documentation,
     body: Body,
 }
 
@@ -87,9 +89,11 @@ impl Constant {
         let name = scope.name(declaration)?;
         match declaration.value() {
             ConstantValueDecl::Inline { ty, value, .. } => Ok(Self {
+                documentation: Documentation::new(declaration.meta().doc()),
                 body: Body::Inline(scope.inline(InlineValue::new(name, ty, value, context)?)),
             }),
             ConstantValueDecl::Accessor { symbol, callable } => Ok(Self {
+                documentation: Documentation::new(declaration.meta().doc()),
                 body: Body::Accessor(Box::new(Self::build_accessor(
                     name, symbol, callable, host, bridge, context,
                 )?)),
@@ -117,6 +121,10 @@ impl Constant {
             .render()?
             .trim()
             .to_owned())
+    }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     fn body(&self) -> &Body {

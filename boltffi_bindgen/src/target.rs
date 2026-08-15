@@ -11,6 +11,7 @@ pub enum Target {
     Dart,
     Python,
     CSharp,
+    C,
 }
 
 impl Target {
@@ -25,6 +26,7 @@ impl Target {
             Target::Dart => "dart",
             Target::Python => "python",
             Target::CSharp => "csharp",
+            Target::C => "c",
         }
     }
 }
@@ -32,5 +34,15 @@ impl Target {
 impl fmt::Display for Target {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Target;
+
+    #[test]
+    fn c_target_name_is_c() {
+        assert_eq!(Target::C.name(), "c");
     }
 }

@@ -44,10 +44,45 @@ impl BindingExpansion {
         Self::resolve_for_surface(config, build_cargo_args, BindingMetadataSurface::Native)
     }
 
+    /// The expansion for a caller that already selected its library by artifact
+    /// name. Selects like [`SelectedLibrary::resolve_preferred`]: that artifact
+    /// when the package has it, the package's unique FFI library otherwise.
+    pub fn resolve_preferred(
+        config: &Config,
+        build_cargo_args: &[String],
+        preferred_artifact: &str,
+    ) -> Result<Self> {
+        Self::resolve_selection(
+            config,
+            build_cargo_args,
+            BindingMetadataSurface::Native,
+            Some(preferred_artifact),
+        )
+    }
+
     pub fn resolve_for_surface(
         config: &Config,
         build_cargo_args: &[String],
         surface: BindingMetadataSurface,
+    ) -> Result<Self> {
+        Self::resolve_selection(config, build_cargo_args, surface, None)
+    }
+
+    /// Like [`Self::resolve_preferred`], but for a non-`Native` surface.
+    pub fn resolve_preferred_for_surface(
+        config: &Config,
+        build_cargo_args: &[String],
+        surface: BindingMetadataSurface,
+        preferred_artifact: &str,
+    ) -> Result<Self> {
+        Self::resolve_selection(config, build_cargo_args, surface, Some(preferred_artifact))
+    }
+
+    fn resolve_selection(
+        config: &Config,
+        build_cargo_args: &[String],
+        surface: BindingMetadataSurface,
+        preferred_artifact: Option<&str>,
     ) -> Result<Self> {
         let cargo = Cargo::current(build_cargo_args)?;
         let cargo_args = LibraryCargoArgs::parse(cargo.probe_command_arguments())?;
@@ -60,6 +95,7 @@ impl BindingExpansion {
             &cargo_manifest_path,
             cargo_args,
             surface,
+            preferred_artifact,
         )
     }
 
@@ -114,19 +150,33 @@ impl BindingExpansion {
         cargo_manifest_path: &std::path::Path,
         cargo_args: LibraryCargoArgs,
         surface: BindingMetadataSurface,
+        preferred_artifact: Option<&str>,
     ) -> Result<Self> {
-        let preferred_artifact = config
-            .package
-            .crate_name
-            .as_ref()
-            .map(|_| config.crate_artifact_name());
-        let library = SelectedLibrary::resolve(
-            config,
-            cargo,
-            metadata,
-            cargo_manifest_path,
-            preferred_artifact.as_deref(),
-        )?;
+        let library = match preferred_artifact {
+            // a caller that already selected this artifact keeps its selection,
+            // so a second FFI-capable cargo target cannot make it ambiguous here
+            Some(preferred_artifact) => SelectedLibrary::resolve_preferred(
+                config,
+                cargo,
+                metadata,
+                cargo_manifest_path,
+                preferred_artifact,
+            )?,
+            None => {
+                let configured_artifact = config
+                    .package
+                    .crate_name
+                    .as_ref()
+                    .map(|_| config.crate_artifact_name());
+                SelectedLibrary::resolve(
+                    config,
+                    cargo,
+                    metadata,
+                    cargo_manifest_path,
+                    configured_artifact.as_deref(),
+                )?
+            }
+        };
         let features = metadata
             .packages
             .iter()
@@ -296,6 +346,16 @@ impl BindingExpansion {
             surface: BindingMetadataSurface::Native,
         }
     }
+
+    /// The feature list `configure_rustc` passes to the `#[data]` macro.
+    pub(crate) fn fixture_features(mut self, features: &str) -> Self {
+        self.features = features.into();
+        self
+    }
+
+    pub(crate) fn surface(&self) -> BindingMetadataSurface {
+        self.surface
+    }
 }
 
 #[cfg(test)]
@@ -420,6 +480,7 @@ mod tests {
             cargo_manifest_path,
             LibraryCargoArgs::default(),
             BindingMetadataSurface::Native,
+            None,
         )
         .expect("hyphenated configured library should select its normalized Cargo artifact");
 
@@ -430,6 +491,70 @@ mod tests {
             std::path::Path::new("/tmp/target")
         );
         assert!(expansion.package_id().contains("#ffi-package@1.2.3"));
+    }
+
+    /// A package may own a second FFI-capable cargo target — an `[[example]]`
+    /// built as a cdylib, say. That makes the unique-library inference ambiguous,
+    /// so a caller that already selected its library must be able to say which
+    /// one the expansion is for.
+    #[test]
+    fn expands_a_caller_selected_library_beside_a_second_ffi_target() {
+        let cargo_manifest_path = std::path::Path::new("/tmp/workspace/Cargo.toml");
+        let metadata = CargoMetadataFixture::new("/tmp/target")
+            .package(
+                CargoPackageFixture::manifest_package("demo-ffi", cargo_manifest_path, "0.1.0")
+                    .target(CargoTargetFixture::library(
+                        "demo_ffi",
+                        [CargoCrateType::Cdylib],
+                    ))
+                    .target(CargoTargetFixture::example(
+                        "plugin",
+                        [CargoCrateType::Cdylib],
+                    )),
+            )
+            .metadata();
+        let cargo = Cargo::in_working_directory("/tmp/workspace".into(), &[]);
+        // no `[package].crate`, so the expansion has no configured artifact of its own
+        let config = Config {
+            experimental: Vec::new(),
+            cargo: CargoConfig::default(),
+            package: PackageConfig {
+                name: "demo-ffi".to_string(),
+                crate_name: None,
+                version: None,
+                description: None,
+                license: None,
+                repository: None,
+            },
+            targets: TargetsConfig::default(),
+        };
+
+        let expansion = BindingExpansion::from_metadata(
+            &config,
+            &cargo,
+            &metadata,
+            cargo_manifest_path,
+            LibraryCargoArgs::default(),
+            BindingMetadataSurface::Native,
+            Some(&config.crate_artifact_name()),
+        )
+        .expect("a caller-selected artifact should survive a second FFI cargo target");
+
+        assert_eq!(expansion.artifact_name(), "demo_ffi");
+
+        assert!(
+            BindingExpansion::from_metadata(
+                &config,
+                &cargo,
+                &metadata,
+                cargo_manifest_path,
+                LibraryCargoArgs::default(),
+                BindingMetadataSurface::Native,
+                None,
+            )
+            .is_err(),
+            "the second cdylib is what makes selection without a preferred artifact ambiguous",
+        );
     }
 
     #[test]

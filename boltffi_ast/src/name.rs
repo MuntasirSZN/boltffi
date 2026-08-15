@@ -107,6 +107,33 @@ impl CanonicalName {
     }
 }
 
+impl fmt::Display for CanonicalName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.parts
+            .iter()
+            .map(NamePart::as_str)
+            .enumerate()
+            .try_for_each(|(index, part)| {
+                if index > 0 {
+                    formatter.write_str("_")?;
+                }
+                formatter.write_str(part)
+            })
+    }
+}
+
+impl From<&str> for CanonicalName {
+    fn from(source: &str) -> Self {
+        Self::new(
+            snake_case(source)
+                .split('_')
+                .filter(|part| !part.is_empty())
+                .map(NamePart::new)
+                .collect(),
+        )
+    }
+}
+
 /// A source name with its exact Rust spelling and canonical API projection.
 ///
 /// `spelling` preserves the token text the scanner saw, such as `HTTPRequest`
@@ -166,6 +193,33 @@ impl From<&SourceName> for CanonicalName {
     fn from(name: &SourceName) -> Self {
         name.canonical.clone()
     }
+}
+
+fn snake_case(name: &str) -> String {
+    let characters = name.chars().collect::<Vec<_>>();
+    characters.iter().enumerate().fold(
+        String::with_capacity(name.len()),
+        |mut normalized, (index, character)| {
+            if *character == '_' {
+                if !normalized.is_empty() && !normalized.ends_with('_') {
+                    normalized.push('_');
+                }
+                return normalized;
+            }
+            if character.is_uppercase() && index > 0 {
+                let previous = characters[index - 1];
+                let next = characters.get(index + 1).copied();
+                let previous_is_word = previous.is_lowercase() || previous.is_ascii_digit();
+                let acronym_boundary =
+                    previous.is_uppercase() && next.is_some_and(char::is_lowercase);
+                if (previous_is_word || acronym_boundary) && !normalized.ends_with('_') {
+                    normalized.push('_');
+                }
+            }
+            normalized.extend(character.to_lowercase());
+            normalized
+        },
+    )
 }
 
 /// The root qualifier used by a Rust path.

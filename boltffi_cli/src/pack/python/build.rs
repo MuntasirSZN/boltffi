@@ -1,10 +1,5 @@
 use std::process::Command;
 
-use boltffi_binding::{
-    BINDING_EXPANSION_BUILD_ENV, BINDING_EXPANSION_ROOT_ENV, BINDING_EXPANSION_SOURCE_ENV,
-    BINDING_EXPANSION_SURFACE_ENV, BindingMetadataSurface,
-};
-
 use crate::build::{OutputCallback, run_command_streaming};
 use crate::cli::{CliError, Result};
 use crate::pack::{PackError, print_cargo_line};
@@ -40,13 +35,34 @@ impl<'a> PythonSharedLibraryBuilder<'a> {
         let verbose = step.is_verbose();
         let on_output: Option<OutputCallback> =
             verbose.then(|| Box::new(|line: &str| print_cargo_line(line)) as OutputCallback);
+        let mut command = self.cargo_command()?;
+
+        if !run_command_streaming(&mut command, on_output.as_ref()) {
+            return Err(PackError::BuildFailed {
+                targets: vec![self.plan.host_platform.canonical_name().to_string()],
+            }
+            .into());
+        }
+
+        self.existing()
+    }
+
+    /// The cdylib build, in the same shape `Builder` gives every other `pack`
+    /// backend for `BuildSelection::Expanded`.
+    fn cargo_command(&self) -> Result<Command> {
         let mut command = Command::new("cargo");
 
         if let Some(toolchain_selector) = self.plan.cargo_context.toolchain_selector.as_deref() {
             command.arg(toolchain_selector);
         }
 
-        command.arg("build");
+        // `cargo rustc`, not `cargo build`: the expansion is selected by
+        // `--cfg boltffi_binding_expansion`, which cargo includes in the unit
+        // fingerprint. A plain `cargo build` of the same package writes an
+        // otherwise identical cdylib to the same path, so without the cfg the two
+        // silently reuse each other's artifact and the packaged library can end up
+        // with no FFI exports at all. See `build.rs`' `Builder::apply_expansion`.
+        command.arg("rustc");
         command
             .arg("--manifest-path")
             .arg(&self.plan.cargo_context.cargo_manifest_path);
@@ -59,38 +75,89 @@ impl<'a> PythonSharedLibraryBuilder<'a> {
             command.arg("--release");
         }
 
-        command.args(&self.plan.cargo_context.cargo_command_args);
-        command.env(BINDING_EXPANSION_BUILD_ENV, "1");
-        command.env(
-            BINDING_EXPANSION_ROOT_ENV,
-            self.plan
-                .cargo_context
-                .manifest_path
-                .parent()
-                .ok_or_else(|| CliError::CommandFailed {
-                    command: format!(
-                        "manifest path '{}' has no parent directory",
-                        self.plan.cargo_context.manifest_path.display()
-                    ),
-                    status: None,
-                })?,
-        );
-        command.env(
-            BINDING_EXPANSION_SOURCE_ENV,
-            &self.plan.cargo_context.library_source_path,
-        );
-        command.env(
-            BINDING_EXPANSION_SURFACE_ENV,
-            BindingMetadataSurface::Native.as_str(),
+        // The expansion's parsed args, not the raw probe arguments: `LibraryCargoArgs`
+        // drops `--lib` so appending it below cannot duplicate it, and rejects a `--`
+        // tail, a package set and a non-library target up front — all three of which
+        // would otherwise reach cargo alongside the `--cfg` tail and fail obscurely.
+        command.args(self.plan.expansion.cargo_args().as_slice());
+        // The same env + `--cfg` every other pack backend gets from `Builder`.
+        // Notably `BOLTFFI_BINDING_METADATA_FEATURES`, which the `#[data]` macro
+        // reads to resolve `#[cfg(feature = ...)]`: cargo sets `CARGO_FEATURE_*`
+        // for build scripts only, never for rustc, so a macro that does not get it
+        // sees no active features and emits no exports for a feature-gated module.
+        command.arg("--lib");
+        self.plan.expansion.configure_rustc(&mut command)?;
+
+        Ok(command)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use boltffi_binding::BINDING_METADATA_FEATURES_ENV;
+
+    use super::super::plan::PythonPackagingPlan;
+    use super::PythonSharedLibraryBuilder;
+
+    /// `pack python` must build through the same expansion every other backend
+    /// uses. Two properties, both of which failed silently before: the `--cfg`
+    /// that keeps an expansion build's fingerprint distinct from a plain
+    /// `cargo build`, and the feature list the `#[data]` macro resolves `#[cfg]`
+    /// against — without it a feature-gated module compiles but exports nothing,
+    /// and the packaged wheel fails at consumer import time.
+    #[test]
+    fn builds_the_cdylib_as_an_expansion() {
+        let plan = PythonPackagingPlan::fixture(true, "demo_ffi");
+        let builder = PythonSharedLibraryBuilder::new(&plan);
+
+        let command = builder.cargo_command().expect("cargo command");
+
+        let args = command
+            .get_args()
+            .map(OsStr::to_string_lossy)
+            .map(|arg| arg.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(args.first().map(String::as_str), Some("rustc"));
+        assert_eq!(
+            args.iter().rev().take(4).rev().cloned().collect::<Vec<_>>(),
+            vec!["--lib", "--", "--cfg", "boltffi_binding_expansion"],
         );
 
-        if !run_command_streaming(&mut command, on_output.as_ref()) {
-            return Err(PackError::BuildFailed {
-                targets: vec![self.plan.host_platform.canonical_name().to_string()],
-            }
-            .into());
-        }
+        assert!(
+            command.get_envs().any(|(key, value)| {
+                key == OsStr::new(BINDING_METADATA_FEATURES_ENV) && value == Some(OsStr::new("ffi"))
+            }),
+            "the #[data] macro resolves cfg from {BINDING_METADATA_FEATURES_ENV}",
+        );
+    }
 
-        self.existing()
+    /// Passing the *parsed* expansion args rather than the raw probe arguments is
+    /// what keeps a caller's own `--lib` from being appended twice, and a `--` tail
+    /// from colliding with the `--cfg` one. `LibraryCargoArgs` drops the former and
+    /// rejects the latter.
+    #[test]
+    fn does_not_duplicate_a_caller_supplied_lib_flag() {
+        let plan = PythonPackagingPlan::fixture_with_cargo_args(["--lib", "--features", "ffi"]);
+        let builder = PythonSharedLibraryBuilder::new(&plan);
+
+        let command = builder.cargo_command().expect("cargo command");
+
+        let args = command
+            .get_args()
+            .map(OsStr::to_string_lossy)
+            .map(|arg| arg.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "--lib").count(),
+            1,
+            "{args:?}"
+        );
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "--").count(),
+            1,
+            "{args:?}"
+        );
     }
 }

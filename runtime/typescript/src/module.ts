@@ -163,7 +163,10 @@ export class AsyncFutureManager {
   }
 }
 
-export const WASM_ABI_VERSION = 2;
+// 3: byte buffers returned from an exported callable cross unframed. Checked
+// at instantiation, so a mismatched artifact fails there instead of handing
+// back a payload with the old length prefix still on the front.
+export const WASM_ABI_VERSION = 3;
 
 export interface BoltFFIExports {
   memory: WebAssembly.Memory;
@@ -1173,6 +1176,31 @@ export class BoltFFIModule {
     const bytes = new Uint8Array(this._memory.buffer, pointer, length);
     try {
       return this._decoder.decode(bytes);
+    } finally {
+      this.freePacked(pointer, length);
+    }
+  }
+
+  /**
+   * Takes a returned byte buffer whose length came with the call.
+   *
+   * The framed counterpart, `takePackedWireBytes`, reads a `u32` the buffer
+   * carries and then checks it equals `length - 4`, so the prefix never told
+   * it anything the packed value had not. Writing that prefix costs the Rust
+   * side a shift of the whole payload, which is why this shape exists.
+   */
+  takePackedBytes(packed: bigint): Uint8Array {
+    const { pointer, length } = this.unpackPacked(packed);
+    if (pointer === 0 || length === 0) {
+      return new Uint8Array(0);
+    }
+    try {
+      const bytes = this.getBytes();
+      if (pointer + length > bytes.length) {
+        throw new Error("Invalid packed bytes length");
+      }
+      // One allocation: building a view and then copying it made two.
+      return bytes.slice(pointer, pointer + length);
     } finally {
       this.freePacked(pointer, length);
     }

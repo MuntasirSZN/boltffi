@@ -341,6 +341,27 @@ mod tests {
         lower::<Wasm32>(&source).expect("source lowers")
     }
 
+    fn byte_return_bindings() -> Bindings<Wasm32> {
+        let source = boltffi_scan::scan_file(
+            syn::parse_str(
+                r#"
+                #[export]
+                pub fn owned() -> Vec<u8> { Vec::new() }
+
+                #[export]
+                pub fn borrowed() -> &'static [u8] { b"ffi" }
+
+                #[export]
+                pub const CONSTANT: &'static [u8] = b"ffi";
+                "#,
+            )
+            .expect("valid source"),
+            PackageInfo::new("demo", None),
+        )
+        .expect("source scans");
+        lower::<Wasm32>(&source).expect("source lowers")
+    }
+
     fn record_bindings() -> Bindings<Wasm32> {
         let source = boltffi_scan::scan_file(
             syn::parse_str(
@@ -611,6 +632,28 @@ mod tests {
         lower::<Wasm32>(&source).expect("source lowers")
     }
 
+    fn reserved_member_bindings() -> Bindings<Wasm32> {
+        let source = boltffi_scan::scan_file(
+            syn::parse_str(
+                r#"
+                #[export]
+                #[allow(async_fn_in_trait)]
+                pub trait Store {
+                    async fn delete(&self, key: String);
+                    fn r#new(&self, key: String);
+                }
+
+                #[export]
+                pub async fn evict(store: impl Store, key: String) { store.delete(key).await }
+                "#,
+            )
+            .expect("valid source"),
+            PackageInfo::new("demo", None),
+        )
+        .expect("source scans");
+        lower::<Wasm32>(&source).expect("source lowers")
+    }
+
     fn stream_bindings() -> Bindings<Wasm32> {
         let source = boltffi_scan::scan_file(
             syn::parse_str(
@@ -757,8 +800,10 @@ mod tests {
                 .contents()
                 .contains("const __boltffi_value_allocation = _module.allocWireBytes(value);")
         );
+        // The argument keeps its length prefix; the return does not need one,
+        // since the packed value already carries the length.
         assert!(browser.contents().contains(
-            "return _module.takePackedWireBytes((_exports.boltffi_function_demo_echo_bytes as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
+            "return _module.takePackedBytes((_exports.boltffi_function_demo_echo_bytes as Function)(__boltffi_value_allocation.ptr, __boltffi_value_allocation.len) as bigint);"
         ));
         assert!(browser.contents().contains(
             "export function echoVecI32(value: readonly number[] | Int32Array): Int32Array"
@@ -1379,5 +1424,90 @@ mod tests {
                 .contents()
                 .contains("export function keepTimestamp(value: Timestamp): Timestamp")
         );
+    }
+
+    /// Only an owned `Vec<u8>` crosses unframed.
+    ///
+    /// A borrowed slice is written by `borrowed_buffer`, which always frames,
+    /// so reading it unframed hands back the four-byte length prefix as the
+    /// start of the payload. Nothing downstream would notice: the array is
+    /// simply four bytes too long and starts with a little-endian length.
+    #[test]
+    fn only_owned_byte_returns_skip_the_length_prefix() {
+        let output = TypeScriptHost::new("demo")
+            .expect("host constructs")
+            .into_target()
+            .render(&byte_return_bindings())
+            .expect("target renders");
+
+        let browser = output
+            .files()
+            .iter()
+            .find(|file| file.path().as_path().ends_with("demo.ts"))
+            .expect("browser module");
+        let contents = browser.contents();
+
+        assert!(
+            contents.contains("takePackedBytes((_exports.boltffi_function_demo_owned"),
+            "an owned Vec<u8> return should skip the prefix",
+        );
+        for framed in [
+            "boltffi_function_demo_borrowed",
+            "boltffi_const_demo_constant",
+        ] {
+            assert!(
+                contents.contains(&format!("takePackedWireBytes((_exports.{framed}")),
+                "`{framed}` is written framed and must be read framed",
+            );
+        }
+    }
+
+    /// A property may be spelled with a reserved word, so a callback method
+    /// named `delete` is declared as `delete` — and must then be *invoked* as
+    /// `delete`. Escaping only the invocation compiles and renders fine, then
+    /// calls `_delete` on an object the same file says has `delete`: the call
+    /// yields `undefined`, the `.then` throws, and the failure surfaces to Rust
+    /// as a panicked completion instead of anything naming the real cause.
+    ///
+    /// `new` is the one name that cannot be declared bare: `new(key: string)`
+    /// in an interface is a construct signature, so the member would not exist
+    /// no matter how it is invoked. It is quoted, and reached by index.
+    #[test]
+    fn invokes_callback_methods_by_their_declared_reserved_names() {
+        let output = TypeScriptHost::new("demo")
+            .expect("host constructs")
+            .into_target()
+            .render(&reserved_member_bindings())
+            .expect("target renders");
+
+        let declarations = [
+            ("delete", "  delete(key: string)", "callback.delete("),
+            ("new", "  \"new\"(key: string)", "callback[\"new\"]("),
+        ];
+
+        for file in output.files() {
+            let contents = file.contents();
+            for (name, declaration, invocation) in declarations {
+                if !contents.contains(declaration) {
+                    continue;
+                }
+                assert!(
+                    contents.contains(invocation),
+                    "{} declares `{name}` as `{declaration}` but does not invoke it as `{invocation}`",
+                    file.path().as_path().display(),
+                );
+                assert!(
+                    !contents.contains(&format!("callback._{name}(")),
+                    "{} invokes the escaped `_{name}`",
+                    file.path().as_path().display(),
+                );
+            }
+        }
+
+        let declared = output
+            .files()
+            .iter()
+            .any(|file| file.contents().contains("  \"new\"(key: string)"));
+        assert!(declared, "no file declared the quoted `new` member");
     }
 }

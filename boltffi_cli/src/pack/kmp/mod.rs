@@ -71,6 +71,7 @@ pub(crate) fn pack_kmp(
             plan.artifact_name().to_string(),
             generation_cargo_args.clone(),
             generation_toolchain_selector.clone(),
+            options.execution.deny_skipped,
         )?;
         step.finish_success();
 

@@ -88,8 +88,8 @@ pub(crate) fn pack_android(
                 target: GenerateTarget::Kotlin,
                 output: Some(config.android_kotlin_output()),
                 experimental: false,
-                ir: false,
                 cargo_args: build_cargo_args.clone(),
+                deny_skipped: options.execution.deny_skipped,
             },
         )?;
         step.finish_success();
@@ -101,8 +101,8 @@ pub(crate) fn pack_android(
                 target: GenerateTarget::Header,
                 output: Some(config.android_header_output()),
                 experimental: false,
-                ir: false,
                 cargo_args: build_cargo_args.clone(),
+                deny_skipped: options.execution.deny_skipped,
             },
         )?;
         step.finish_success();
