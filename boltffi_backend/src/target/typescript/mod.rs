@@ -1276,12 +1276,17 @@ mod tests {
             .expect("browser module");
 
         assert!(browser.contents().contains(
-            "export async function asyncAdd(left: number, right: number, options?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<number>"
+            "export async function asyncAdd(left: number, right: number, options?: { signal?: AbortSignal; cancelId?: number }): Promise<number>"
         ));
         assert!(
             browser
                 .contents()
                 .contains("const __boltffiSignal = options?.signal;")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("const __boltffiCancelId = options?.cancelId;")
         );
         assert!(
             browser
@@ -1306,15 +1311,15 @@ mod tests {
                 .contains("import { BoltFFICancelledError,")
         );
         assert!(browser.contents().contains(
-            "export async function asyncName(value: string, options?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<string>"
+            "export async function asyncName(value: string, options?: { signal?: AbortSignal; cancelId?: number }): Promise<string>"
         ));
         assert!(browser.contents().contains("_module.takePackedUtf8String("));
         assert!(browser.contents().contains(
-            "export async function asyncValues(value: readonly number[] | Int32Array, options?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<Int32Array>"
+            "export async function asyncValues(value: readonly number[] | Int32Array, options?: { signal?: AbortSignal; cancelId?: number }): Promise<Int32Array>"
         ));
         assert!(browser.contents().contains("_module.takeSlotI32Array()"));
         assert!(browser.contents().contains(
-            "export async function asyncSize(options?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<number>"
+            "export async function asyncSize(options?: { signal?: AbortSignal; cancelId?: number }): Promise<number>"
         ));
         assert!(
             !browser
@@ -1332,10 +1337,10 @@ mod tests {
             )
         );
         assert!(browser.contents().contains(
-            "async get(options?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<number>"
+            "async get(options?: { signal?: AbortSignal; cancelId?: number }): Promise<number>"
         ));
         assert!(browser.contents().contains(
-            "async duplicate(options?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<Worker>"
+            "async duplicate(options?: { signal?: AbortSignal; cancelId?: number }): Promise<Worker>"
         ));
         assert!(browser.contents().contains("Worker._fromHandle("));
     }
@@ -1384,12 +1389,17 @@ mod tests {
             .expect("browser module");
 
         assert!(browser.contents().contains(
-            "export async function asyncEcho(options: string, __boltffiOptions?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<string>"
+            "export async function asyncEcho(options: string, __boltffiOptions?: { signal?: AbortSignal; cancelId?: number }): Promise<string>"
         ));
         assert!(
             browser
                 .contents()
                 .contains("const __boltffiSignal = __boltffiOptions?.signal;")
+        );
+        assert!(
+            browser
+                .contents()
+                .contains("const __boltffiCancelId = __boltffiOptions?.cancelId;")
         );
     }
 
@@ -1438,7 +1448,7 @@ mod tests {
             .expect("browser module");
 
         assert!(browser.contents().contains(
-            "export async function asyncEcho(options: string, boltffiOptions: string, __boltffiOptions?: { signal?: AbortSignal }, __boltffiCancelId?: number): Promise<string>"
+            "export async function asyncEcho(options: string, boltffiOptions: string, __boltffiOptions?: { signal?: AbortSignal; cancelId?: number }): Promise<string>"
         ));
     }
 

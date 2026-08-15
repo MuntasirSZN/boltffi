@@ -128,8 +128,12 @@ export class AsyncFutureManager {
     queueMicrotask(() => this.repollHandle(handle));
   }
 
-  // A lower-level counterpart to `signal` for callers that can pass a
-  // plain int but not cheaply build a real AbortController.
+  // Lower-level counterpart to `options.signal` for callers that can pass a
+  // plain int but not cheaply build a real AbortController (dart-web / KMP).
+  // `callId` must be unique among in-flight calls: reusing an id while the
+  // first call is still pending overwrites the mapping, and settling either
+  // call removes the key for both. Prefer an autoincrement or thread-local
+  // counter when the id is produced by another language's codegen.
   cancelById(callId: number): void {
     const handle = this.cancelIds.get(callId);
     if (handle === undefined) return;
@@ -192,6 +196,21 @@ export class AsyncFutureManager {
       );
     }
     return new Promise((resolve, reject) => {
+      // Most suspended calls never cancel. Skip the three extra closures and
+      // the abort listener setup unless the caller asked for cancellation.
+      const wantsCancel = signal !== undefined || cancelId !== undefined;
+      if (!wantsCancel) {
+        this.pendingFutures.set(handle, {
+          resolve,
+          reject,
+          pollSync,
+          panicMessage,
+          free,
+          cancel,
+        });
+        return;
+      }
+
       let onAbort: (() => void) | undefined;
       if (signal) {
         onAbort = () => this.cancel(handle);
