@@ -31,22 +31,71 @@ pub(crate) fn build_dart_targets(
     };
 
     let mut dart_cargo_args = build_cargo_args.to_vec();
+    let package_manifest = dart_expansion(config, build_cargo_args)?.manifest_path();
+    let dep = boltffi_dependency_key(&package_manifest).unwrap_or_else(|| "boltffi".into());
     dart_cargo_args.push("--features".to_string());
-    dart_cargo_args.push("boltffi/dart".to_string());
+    dart_cargo_args.push(format!("{dep}/dart"));
 
     let expansion = dart_expansion(config, &dart_cargo_args)?;
 
     let mut options = dart_build_options(expansion, release, on_output);
+    push_dart_cfg_env(&mut options.extra_env);
+
+    let builder = Builder::new(config, options);
+    builder.build_targets(&config.dart_targets())
+}
+
+/// Cargo requires `depname/feature` using the dependency key from the
+/// consumer manifest (`ffi/dart` when renamed), not always `boltffi/dart`.
+fn boltffi_dependency_key(package_manifest: impl AsRef<std::path::Path>) -> Option<String> {
+    let text = std::fs::read_to_string(package_manifest).ok()?;
+    let value = text.parse::<toml::Value>().ok()?;
+    let deps = value.get("dependencies")?.as_table()?;
+    for (key, dep) in deps {
+        match dep {
+            toml::Value::String(_) if key == "boltffi" => return Some(key.clone()),
+            toml::Value::Table(table) => {
+                let package = table
+                    .get("package")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(key.as_str());
+                if package == "boltffi" {
+                    return Some(key.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Append `--cfg boltffi_dart` through the channel Cargo will honor.
+/// When `CARGO_ENCODED_RUSTFLAGS` is set, plain `RUSTFLAGS` is ignored.
+fn push_dart_cfg_env(extra_env: &mut Vec<(String, String)>) {
+    const DART_FLAGS: &[&str] = &["--cfg", "boltffi_dart", "--check-cfg=cfg(boltffi_dart)"];
+    const SEP: char = '\u{1f}';
+
+    if let Ok(encoded) = std::env::var("CARGO_ENCODED_RUSTFLAGS") {
+        let mut parts: Vec<String> = encoded
+            .split(SEP)
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect();
+        parts.extend(DART_FLAGS.iter().map(|flag| (*flag).to_owned()));
+        extra_env.push((
+            "CARGO_ENCODED_RUSTFLAGS".to_string(),
+            parts.join(&SEP.to_string()),
+        ));
+        return;
+    }
+
     let rustflags = match std::env::var("RUSTFLAGS") {
         Ok(existing) if !existing.is_empty() => {
             format!("{existing} --cfg boltffi_dart --check-cfg=cfg(boltffi_dart)")
         }
         _ => "--cfg boltffi_dart --check-cfg=cfg(boltffi_dart)".to_string(),
     };
-    options.extra_env.push(("RUSTFLAGS".to_string(), rustflags));
-
-    let builder = Builder::new(config, options);
-    builder.build_targets(&config.dart_targets())
+    extra_env.push(("RUSTFLAGS".to_string(), rustflags));
 }
 
 // Cargo only sets CARGO_FEATURE_* for build scripts, so this must build as

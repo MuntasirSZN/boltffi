@@ -78,8 +78,12 @@ pub fn render(trait_name: &Ident, methods: &[DartShimMethod]) -> TokenStream {
         .collect();
 
     quote! {
-        #[cfg(boltffi_dart)]
+        // Nested like metadata emission: allow covers the inner custom cfg so
+        // destination crates with `-D unexpected-cfgs` still compile.
+        #[allow(unexpected_cfgs)]
         const _: () = {
+            #[cfg(boltffi_dart)]
+            const _: () = {
             #[repr(C)]
             struct #hooks_ident {
                 header: ::boltffi::__dart_runtime::HooksHeader,
@@ -183,6 +187,7 @@ pub fn render(trait_name: &Ident, methods: &[DartShimMethod]) -> TokenStream {
                     Some(unsafe { &*(handle as *const T) })
                 }
             }
+            };
         };
     }
 }
@@ -211,7 +216,12 @@ fn render_method_shim(prefix: &str, hooks_ident: &Ident, method: &DartShimMethod
                     return;
                 };
                 unsafe { (hooks.#listener_field)(handle, #(#args,)* pending.raw()) };
-                pending.wait();
+                let status = pending.wait();
+                if !matches!(status, ::boltffi::__dart_runtime::CallStatus::Ok) {
+                    // Void C ABI has no error channel; panic beats returning as
+                    // if the call completed (writeback out-slots stay uninit).
+                    ::core::panic!("Dart callback failed on a foreign thread");
+                }
             }
         }
     } else if listener_has_out {
@@ -256,7 +266,10 @@ fn render_method_shim(prefix: &str, hooks_ident: &Ident, method: &DartShimMethod
                     return unsafe { ::core::mem::zeroed() };
                 };
                 unsafe { (hooks.#listener_field)(handle, #(#args,)* pending.raw()) };
-                pending.wait();
+                let status = pending.wait();
+                if !matches!(status, ::boltffi::__dart_runtime::CallStatus::Ok) {
+                    return unsafe { ::core::mem::zeroed() };
+                }
                 unsafe { ::core::mem::zeroed() }
             }
         }

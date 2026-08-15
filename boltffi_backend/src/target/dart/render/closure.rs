@@ -27,6 +27,7 @@ use crate::target::dart::{
     name_style::Name,
     native::NativeFunctionSignature,
     syntax::{Identifier, Parameter, TypeFragment},
+    type_name,
 };
 
 pub struct ClosureArgument {
@@ -146,7 +147,21 @@ impl ClosureArgument {
             "final implementation = _map[_p$context.address];\n  if (implementation == null) {missing_return}\n{}",
             indent(&invoke_body.join("\n"), 2)
         );
-        let class = helper_class_name(&format!("{}__{}", public_type.as_str(), signature.native()));
+        // Error codec is part of the helper identity: same Dart/native
+        // signature with different Result error types must not share a body.
+        let error_key = match invoke.error() {
+            ErrorDecl::None(_) => "infallible".to_owned(),
+            ErrorDecl::EncodedViaReturnSlot { ty, .. } => {
+                type_name::type_ref(ty, context)?.to_string()
+            }
+            _ => return super::super::unsupported("Dart closure error channel"),
+        };
+        let class = helper_class_name(&format!(
+            "{}__{}__{}",
+            public_type.as_str(),
+            signature.native(),
+            error_key
+        ));
         let helper_id = HelperId::new(CanonicalName::single(class.clone()));
         let exceptional = exceptional_return_value(returns)?;
         let exceptional_clause = exceptional
