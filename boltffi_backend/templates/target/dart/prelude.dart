@@ -1262,12 +1262,25 @@ final class _$$BoltFFIAsync {
     $$ffi.NativeFunction<$$ffi.Void Function($$ffi.Uint64, $$ffi.Int8)>
   >
   _pollNative() {
-    _pollCallable ??= _$$boltTrackListener(
-      $$ffi.NativeCallable<
+    // Recreate on demand; closed again when `_pending` empties so a CLI that
+    // only awaited BoltFFI futures can exit without `shutdownBoltffi()`.
+    if (_pollCallable == null) {
+      final callable = $$ffi.NativeCallable<
         $$ffi.Void Function($$ffi.Uint64, $$ffi.Int8)
-      >.listener(_onPoll),
-    );
+      >.listener(_onPoll);
+      _$$boltTrackListener(callable);
+      _pollCallable = callable;
+    }
     return _pollCallable!.nativeFunction;
+  }
+
+  static void _releasePollCallableIfIdle() {
+    if (_pending.isNotEmpty) return;
+    final callable = _pollCallable;
+    if (callable == null) return;
+    _pollCallable = null;
+    _$$boltProcessListeners.remove(callable);
+    callable.close();
   }
 
   static void _onPoll(int data, int res) {
@@ -1286,6 +1299,7 @@ final class _$$BoltFFIAsync {
           } finally {
             wait.freeFuture(wait.handle);
           }
+          _releasePollCallableIfIdle();
           return;
         }
         try {
@@ -1295,6 +1309,7 @@ final class _$$BoltFFIAsync {
         } finally {
           wait.freeFuture(wait.handle);
         }
+        _releasePollCallableIfIdle();
       case _k$RustFuturePoll$MaybeReady:
         wait.pollFuture(wait.handle, data, _pollNative());
       case _:

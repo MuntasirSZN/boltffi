@@ -7,20 +7,20 @@
 //! The `u64` handle is a pointer to a generated `Hooks` struct whose first
 //! field is [`HooksHeader`].
 
-use std::cell::Cell;
+use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, Weak};
 
 thread_local! {
     static THREAD_KEY: u8 = const { 0 };
-    /// Sync-export depth on *this* thread. Foreign waiters only panic when
-    /// some other thread holds a non-zero depth (the blocked isolate).
-    static LOCAL_SYNC_FFI_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Process-wide count of in-flight synchronous Dart→Rust FFI entries.
-static SYNC_FFI_DEPTH: AtomicUsize = AtomicUsize::new(0);
+/// Per-thread depth of in-flight synchronous Dart→Rust FFI entries, keyed by
+/// [`current_thread_key`]. A foreign callback wait only panics when *its*
+/// owning isolate/thread is blocked in such an entry — not when some
+/// unrelated isolate or concurrent export is.
+static SYNC_FFI_BY_THREAD: LazyLock<Mutex<HashMap<usize, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Marks the duration of a sync BoltFFI export entered from the Dart isolate.
 pub struct SyncFfiScope;
@@ -28,28 +28,36 @@ pub struct SyncFfiScope;
 impl SyncFfiScope {
     #[inline]
     pub fn enter() -> Self {
-        LOCAL_SYNC_FFI_DEPTH.with(|depth| depth.set(depth.get() + 1));
-        SYNC_FFI_DEPTH.fetch_add(1, Ordering::Relaxed);
+        let key = current_thread_key();
+        let mut map = SYNC_FFI_BY_THREAD.lock().unwrap();
+        *map.entry(key).or_insert(0) += 1;
         Self
     }
 }
 
 impl Drop for SyncFfiScope {
     fn drop(&mut self) {
-        LOCAL_SYNC_FFI_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-        SYNC_FFI_DEPTH.fetch_sub(1, Ordering::Relaxed);
+        let key = current_thread_key();
+        let mut map = SYNC_FFI_BY_THREAD.lock().unwrap();
+        match map.get_mut(&key) {
+            Some(depth) if *depth > 1 => *depth -= 1,
+            Some(_) => {
+                map.remove(&key);
+            }
+            None => {}
+        }
     }
 }
 
 #[inline]
-fn foreign_wait_blocked_by_sync_ffi() -> bool {
-    let global = SYNC_FFI_DEPTH.load(Ordering::Relaxed);
-    if global == 0 {
-        return false;
-    }
-    // The isolate thread that entered the export is still inside it; a
-    // worker on this thread is not that isolate (local depth is 0).
-    LOCAL_SYNC_FFI_DEPTH.with(|depth| depth.get() == 0)
+fn owner_blocked_in_sync_ffi(owner: usize) -> bool {
+    SYNC_FFI_BY_THREAD
+        .lock()
+        .unwrap()
+        .get(&owner)
+        .copied()
+        .unwrap_or(0)
+        > 0
 }
 
 fn current_thread_key() -> usize {
@@ -77,6 +85,8 @@ struct OutFree {
 unsafe impl Send for OutFree {}
 
 pub struct Gate {
+    /// Thread key of the isolate that owns the callback hooks.
+    owner: usize,
     outcome: Mutex<GateOutcome>,
     cvar: Condvar,
     out_free: Mutex<Option<OutFree>>,
@@ -92,9 +102,10 @@ impl Gate {
     }
 
     pub fn wait(&self) -> CallStatus {
-        // Isolate blocked in a sync export cannot drain NativeCallable.listener
-        // posts, so a foreign wait would hang forever.
-        if foreign_wait_blocked_by_sync_ffi() {
+        // Only the callback's owning isolate can drain its listener. If that
+        // thread is blocked inside a sync export, this wait cannot complete.
+        // Unrelated sync exports on other isolates/threads must not panic.
+        if current_thread_key() != self.owner && owner_blocked_in_sync_ffi(self.owner) {
             panic!(
                 "Dart isolate is blocked inside a synchronous BoltFFI call; \
                  a worker-thread callback cannot complete until that call returns. \
@@ -193,6 +204,7 @@ impl HooksHeader {
 
     pub fn create_gate(&self) -> Option<PendingGate> {
         let gate = Arc::new(Gate {
+            owner: self.owner,
             outcome: Mutex::new(GateOutcome::Pending),
             cvar: Condvar::new(),
             out_free: Mutex::new(None),
@@ -300,11 +312,11 @@ mod tests {
     }
 
     #[test]
-    fn wait_panics_while_sync_ffi_active_on_another_thread() {
+    fn wait_panics_while_owning_isolate_is_in_sync_ffi() {
         let _lock = WAIT_TESTS.lock().unwrap();
         let _scope = SyncFfiScope::enter();
         let header = Arc::new(HooksHeader::new());
-        // Worker (local depth 0) waits while this thread holds the sync export.
+        // Owner is this thread (in SyncFfiScope); worker waits for its callback.
         let err = {
             let header = Arc::clone(&header);
             std::thread::spawn(move || {
@@ -323,6 +335,35 @@ mod tests {
             message.contains("blocked inside a synchronous BoltFFI call"),
             "unexpected panic payload: {message}"
         );
+    }
+
+    #[test]
+    fn wait_allows_unrelated_sync_export_on_another_thread() {
+        let _lock = WAIT_TESTS.lock().unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        // Unrelated isolate/thread is inside a sync export.
+        let unrelated = std::thread::spawn(move || {
+            let _scope = SyncFfiScope::enter();
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx.recv().unwrap();
+
+        // This header's owner is *this* thread, not the unrelated one.
+        let header = HooksHeader::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let gate = header.create_gate().unwrap();
+            tx.send(gate.raw() as usize).unwrap();
+            gate.wait()
+        });
+        let addr = rx.recv().unwrap();
+        unsafe { signal_gate_ok(addr as *mut c_void) };
+        assert_eq!(waiter.join().unwrap(), CallStatus::Ok);
+
+        release_tx.send(()).unwrap();
+        unrelated.join().unwrap();
     }
 
     #[test]
