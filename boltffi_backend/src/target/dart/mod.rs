@@ -332,7 +332,7 @@ mod tests {
         );
         assert!(
             source.contains("poll_continuation_noop"),
-            "first poll must use a rust no-op callable from any thread"
+            "runtime still exports a thread-safe no-op poll continuation"
         );
     }
 

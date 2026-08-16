@@ -173,8 +173,10 @@ impl ClosureArgument {
             .map(|parameter| parameter.to_string())
             .collect::<Vec<_>>()
             .join(", ");
+        // callPtr stays fromFunction (same-isolate invoke). releasePtr must be
+        // a listener: Rust may drop Send+Sync closures on worker threads.
         let helper = format!(
-            "final class {class} {{\n  static final _map = <int, {public_inner}>{{}};\n  static int _n = 1;\n\n  static int insert({public_inner} value) {{\n    final handle = _n += 2;\n    _map[handle] = value;\n    return handle;\n  }}\n\n  static {invoke_ret} call({invoke_params}) {{\n    {invoke_body}\n  }}\n\n  static void release($$ffi.Pointer<$$ffi.Void> _p$context) {{\n    _map.remove(_p$context.address);\n  }}\n\n  static final callPtr = $$ffi.Pointer.fromFunction<{native_signature}>(call{exceptional_clause});\n  static final releasePtr = $$ffi.Pointer.fromFunction<$$ffi.Void Function($$ffi.Pointer<$$ffi.Void>)>(release);\n}}\n",
+            "final class {class} {{\n  static final _map = <int, {public_inner}>{{}};\n  static int _n = 1;\n\n  static int insert({public_inner} value) {{\n    final handle = _n += 2;\n    _map[handle] = value;\n    return handle;\n  }}\n\n  static {invoke_ret} call({invoke_params}) {{\n    {invoke_body}\n  }}\n\n  static void release($$ffi.Pointer<$$ffi.Void> _p$context) {{\n    _map.remove(_p$context.address);\n  }}\n\n  static final callPtr = $$ffi.Pointer.fromFunction<{native_signature}>(call{exceptional_clause});\n  static final _releaseCallable = _$$boltTrackListener($$ffi.NativeCallable<$$ffi.Void Function($$ffi.Pointer<$$ffi.Void>)>.listener(release));\n  static final releasePtr = _releaseCallable.nativeFunction;\n}}\n",
             public_inner = public_type.as_str().trim_end_matches('?'),
             invoke_ret = signature.returns().dart(),
         );

@@ -1322,19 +1322,6 @@ final class _$$BoltFFIAsync {
       return $$async.Future<R>.error(const $$BoltCancelledException());
     }
     final handle = createFuture();
-    // First poll uses a no-op so already-ready futures never touch
-    // NativeCallable.listener (and never keep the isolate alive).
-    final ready = pollFuture(handle, 0, _noopNative);
-    if (ready == _k$RustFuturePoll$Ready) {
-      try {
-        final value = completeFuture(handle);
-        return $$async.Future<R>.value(value);
-      } catch (err, st) {
-        return $$async.Future<R>.error(err, st);
-      } finally {
-        freeFuture(handle);
-      }
-    }
     if (cancellationToken?.isCancelled ?? false) {
       try {
         cancelFuture(handle);
@@ -1343,6 +1330,12 @@ final class _$$BoltFFIAsync {
       }
       return $$async.Future<R>.error(const $$BoltCancelledException());
     }
+    // Single poll with the shared listener only. A first "probe" poll that
+    // parks `_noopNative` and a second poll that replaces it races with
+    // wake in ContinuationScheduler::store_continuation (Stored branch) and
+    // can leave the real callback unregistered — hang. Ready futures still
+    // complete synchronously via the poll return + _onPoll (idempotent if
+    // the listener also fires Ready).
     final completer = $$async.Completer<R>();
     final id = _nextId++;
     late final _$$BoltAsyncWait wait;

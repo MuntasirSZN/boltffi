@@ -48,25 +48,73 @@ pub(crate) fn build_dart_targets(
 /// Cargo requires `depname/feature` using the dependency key from the
 /// consumer manifest (`ffi/dart` when renamed), not always `boltffi/dart`.
 fn boltffi_dependency_key(package_manifest: impl AsRef<std::path::Path>) -> Option<String> {
+    let package_manifest = package_manifest.as_ref();
     let text = std::fs::read_to_string(package_manifest).ok()?;
-    let value = text.parse::<toml::Value>().ok()?;
+    let value = text.parse::<toml::Table>().ok()?;
     let deps = value.get("dependencies")?.as_table()?;
+    let workspace_deps = workspace_dependency_table(package_manifest);
+
     for (key, dep) in deps {
-        match dep {
-            toml::Value::String(_) if key == "boltffi" => return Some(key.clone()),
-            toml::Value::Table(table) => {
-                let package = table
-                    .get("package")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(key.as_str());
-                if package == "boltffi" {
-                    return Some(key.clone());
-                }
-            }
-            _ => {}
+        if dependency_is_boltffi(key, dep, workspace_deps.as_ref()) {
+            return Some(key.clone());
         }
     }
     None
+}
+
+fn dependency_is_boltffi(
+    key: &str,
+    dep: &toml::Value,
+    workspace_deps: Option<&toml::map::Map<String, toml::Value>>,
+) -> bool {
+    match dep {
+        toml::Value::String(_) => key == "boltffi",
+        toml::Value::Table(table) => {
+            if let Some(package) = table.get("package").and_then(|v| v.as_str()) {
+                return package == "boltffi";
+            }
+            // `ffi = { workspace = true }` inherits name/package from
+            // `[workspace.dependencies]`.
+            if table
+                .get("workspace")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                if let Some(workspace_deps) = workspace_deps {
+                    if let Some(workspace_dep) = workspace_deps.get(key) {
+                        return dependency_is_boltffi(key, workspace_dep, None);
+                    }
+                }
+            }
+            key == "boltffi"
+        }
+        _ => false,
+    }
+}
+
+/// Walk parents for a `Cargo.toml` that defines `[workspace]`.
+fn workspace_dependency_table(
+    package_manifest: &std::path::Path,
+) -> Option<toml::map::Map<String, toml::Value>> {
+    let mut dir = package_manifest.parent()?;
+    loop {
+        let candidate = dir.join("Cargo.toml");
+        if candidate.is_file() {
+            if let Ok(text) = std::fs::read_to_string(&candidate) {
+                if let Ok(value) = text.parse::<toml::Table>() {
+                    if let Some(workspace) = value.get("workspace").and_then(|v| v.as_table()) {
+                        if let Some(deps) = workspace.get("dependencies").and_then(|v| v.as_table())
+                        {
+                            return Some(deps.clone());
+                        }
+                        // Workspace root without dependency table still ends the walk.
+                        return None;
+                    }
+                }
+            }
+        }
+        dir = dir.parent()?;
+    }
 }
 
 /// Append `--cfg boltffi_dart` through the channel Cargo will honor.
@@ -224,13 +272,65 @@ pub(crate) fn pack_dart(
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{BindingExpansion, BuildSelection, dart_build_options, dart_expansion};
+    use super::{
+        BindingExpansion, BuildSelection, boltffi_dependency_key, dart_build_options,
+        dart_expansion,
+    };
     use crate::config::Config;
 
     fn parse_config(input: &str) -> Config {
         let parsed: Config = toml::from_str(input).expect("toml parse failed");
         parsed.validate().expect("config validation failed");
         parsed
+    }
+
+    #[test]
+    fn boltffi_dependency_key_resolves_renamed_and_workspace_inherited_facades() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("boltffi-dep-key-{unique_suffix}"));
+        let member = root.join("member");
+        std::fs::create_dir_all(member.join("src")).expect("create member src");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n\n\
+             [workspace.dependencies]\n\
+             ffi = { package = \"boltffi\", version = \"0.30.0\" }\n",
+        )
+        .expect("write workspace Cargo.toml");
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"member\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nffi = { workspace = true }\n",
+        )
+        .expect("write member Cargo.toml");
+
+        let key = boltffi_dependency_key(member.join("Cargo.toml"));
+        std::fs::remove_dir_all(&root).expect("cleanup");
+        assert_eq!(key.as_deref(), Some("ffi"));
+    }
+
+    #[test]
+    fn boltffi_dependency_key_resolves_inline_package_rename() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("boltffi-dep-key-inline-{unique_suffix}"));
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let manifest = dir.join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nmy_ffi = { package = \"boltffi\", version = \"0.30.0\" }\n",
+        )
+        .expect("write Cargo.toml");
+
+        let key = boltffi_dependency_key(&manifest);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+        assert_eq!(key.as_deref(), Some("my_ffi"));
     }
 
     /// `pack dart` must build the cdylib as a binding expansion, not a plain
