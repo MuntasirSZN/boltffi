@@ -84,19 +84,16 @@ impl Callback {
         }
 
         let name = declaration_name(declaration.name())?;
-        // Rust no_mangle shims use the trait's source spelling (`HTTPClient`),
-        // not the Dart type name (`HttpClient`).
-        let shim_trait = declaration
-            .name()
-            .source_spelling()
-            .unwrap_or(name.as_str())
-            .to_owned();
-        let free_clone = free_clone_wiring(&shim_trait)?;
+        // Dual-path no_mangle symbols share the C register path
+        // (`boltffi_register_callback_<id>`), not the trait leaf name, so
+        // same-named traits in different modules stay unique at link time.
+        let shim_key = protocol.register().name();
+        let free_clone = free_clone_wiring(shim_key)?;
         let methods = source_methods
             .iter()
             .zip(protocol.methods())
             .map(|(method, slot)| {
-                CallbackMethod::new(method, slot, &name, &shim_trait, bridge, context)
+                CallbackMethod::new(method, slot, &name, shim_key, bridge, context)
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
@@ -137,7 +134,7 @@ impl Callback {
                 let mut declarations = vec![free_clone.declarations.clone()];
                 declarations.extend(methods.iter().filter_map(CallbackMethod::shim_declarations));
                 declarations.push(shim_register_release_declaration(
-                    &shim_trait,
+                    shim_key,
                     &free_clone,
                     &methods,
                 )?);
@@ -157,11 +154,11 @@ impl Callback {
                     .collect::<Vec<_>>();
                 format!(
                     "_f${}({});",
-                    super::shim::register_symbol(&shim_trait),
+                    super::shim::register_symbol(shim_key),
                     arguments.join(", ")
                 )
             },
-            shim_release_symbol: super::shim::release_symbol(&shim_trait),
+            shim_release_symbol: super::shim::release_symbol(shim_key),
             name,
         })
     }

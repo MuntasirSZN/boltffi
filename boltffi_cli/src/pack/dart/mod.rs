@@ -32,9 +32,19 @@ pub(crate) fn build_dart_targets(
 
     let mut dart_cargo_args = build_cargo_args.to_vec();
     let package_manifest = dart_expansion(config, build_cargo_args)?.manifest_path();
-    let dep = boltffi_dependency_key(&package_manifest).unwrap_or_else(|| "boltffi".into());
+    // Every facade alias (top-level and per-target) must get `…/dart` so a
+    // host that only activates one renamed key still links the runtime.
+    let feature_list = boltffi_dependency_keys(&package_manifest)
+        .into_iter()
+        .map(|dep| format!("{dep}/dart"))
+        .collect::<Vec<_>>();
+    let features = if feature_list.is_empty() {
+        "boltffi/dart".to_owned()
+    } else {
+        feature_list.join(",")
+    };
     dart_cargo_args.push("--features".to_string());
-    dart_cargo_args.push(format!("{dep}/dart"));
+    dart_cargo_args.push(features);
 
     let expansion = dart_expansion(config, &dart_cargo_args)?;
 
@@ -45,45 +55,58 @@ pub(crate) fn build_dart_targets(
     builder.build_targets(&config.dart_targets())
 }
 
-fn boltffi_dependency_key(package_manifest: impl AsRef<std::path::Path>) -> Option<String> {
+fn boltffi_dependency_keys(package_manifest: impl AsRef<std::path::Path>) -> Vec<String> {
     let package_manifest = package_manifest.as_ref();
-    let text = std::fs::read_to_string(package_manifest).ok()?;
-    let value = text.parse::<toml::Table>().ok()?;
+    let Ok(text) = std::fs::read_to_string(package_manifest) else {
+        return Vec::new();
+    };
+    let Ok(value) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
     let workspace_deps = workspace_dependency_table(package_manifest);
+    let mut keys = std::collections::BTreeSet::new();
 
-    if let Some(key) =
-        find_boltffi_dependency_key(value.get("dependencies"), workspace_deps.as_ref())
-    {
-        return Some(key);
-    }
+    collect_boltffi_dependency_keys(
+        value.get("dependencies"),
+        workspace_deps.as_ref(),
+        &mut keys,
+    );
 
-    // `[target.'cfg(...)'.dependencies]` may hold the only (possibly renamed)
-    // facade entry; Cargo still expects that key in `--features key/dart`.
+    // `[target.'cfg(...)'.dependencies]` may hold the only (or differently
+    // renamed) facade entry; enable every alias so each Dart host target
+    // can select the key that is active for its cfg.
     if let Some(targets) = value.get("target").and_then(|v| v.as_table()) {
         for table in targets.values() {
-            if let Some(key) = find_boltffi_dependency_key(
+            collect_boltffi_dependency_keys(
                 table.as_table().and_then(|t| t.get("dependencies")),
                 workspace_deps.as_ref(),
-            ) {
-                return Some(key);
-            }
+                &mut keys,
+            );
         }
     }
 
-    None
+    keys.into_iter().collect()
 }
 
-fn find_boltffi_dependency_key(
+/// First resolved key, for tests that only need a single representative alias.
+#[cfg(test)]
+fn boltffi_dependency_key(package_manifest: impl AsRef<std::path::Path>) -> Option<String> {
+    boltffi_dependency_keys(package_manifest).into_iter().next()
+}
+
+fn collect_boltffi_dependency_keys(
     deps: Option<&toml::Value>,
     workspace_deps: Option<&toml::map::Map<String, toml::Value>>,
-) -> Option<String> {
-    let deps = deps?.as_table()?;
+    keys: &mut std::collections::BTreeSet<String>,
+) {
+    let Some(deps) = deps.and_then(|v| v.as_table()) else {
+        return;
+    };
     for (key, dep) in deps {
         if dependency_is_boltffi(key, dep, workspace_deps) {
-            return Some(key.clone());
+            keys.insert(key.clone());
         }
     }
-    None
 }
 
 fn dependency_is_boltffi(
@@ -286,8 +309,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        BindingExpansion, BuildSelection, boltffi_dependency_key, dart_build_options,
-        dart_expansion,
+        BindingExpansion, BuildSelection, boltffi_dependency_key, boltffi_dependency_keys,
+        dart_build_options, dart_expansion,
     };
     use crate::config::Config;
 
@@ -366,6 +389,30 @@ mod tests {
         let key = boltffi_dependency_key(&manifest);
         std::fs::remove_dir_all(&dir).expect("cleanup");
         assert_eq!(key.as_deref(), Some("ffi"));
+    }
+
+    #[test]
+    fn boltffi_dependency_keys_collects_every_target_specific_alias() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("boltffi-dep-keys-multi-{unique_suffix}"));
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let manifest = dir.join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [target.'cfg(unix)'.dependencies]\n\
+             unix_ffi = { package = \"boltffi\", version = \"0.30.0\" }\n\n\
+             [target.'cfg(windows)'.dependencies]\n\
+             windows_ffi = { package = \"boltffi\", version = \"0.30.0\" }\n",
+        )
+        .expect("write Cargo.toml");
+
+        let keys = boltffi_dependency_keys(&manifest);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+        assert_eq!(keys, vec!["unix_ffi".to_owned(), "windows_ffi".to_owned()]);
     }
 
     /// `pack dart` must build the cdylib as a binding expansion, not a plain

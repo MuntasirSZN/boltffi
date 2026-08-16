@@ -7,10 +7,49 @@
 //! The `u64` handle is a pointer to a generated `Hooks` struct whose first
 //! field is [`HooksHeader`].
 
+use std::cell::Cell;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
+
 thread_local! {
     static THREAD_KEY: u8 = const { 0 };
+    /// Sync-export depth on *this* thread. Foreign waiters only panic when
+    /// some other thread holds a non-zero depth (the blocked isolate).
+    static LOCAL_SYNC_FFI_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Process-wide count of in-flight synchronous Dart→Rust FFI entries.
+static SYNC_FFI_DEPTH: AtomicUsize = AtomicUsize::new(0);
+
+/// Marks the duration of a sync BoltFFI export entered from the Dart isolate.
+pub struct SyncFfiScope;
+
+impl SyncFfiScope {
+    #[inline]
+    pub fn enter() -> Self {
+        LOCAL_SYNC_FFI_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        SYNC_FFI_DEPTH.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for SyncFfiScope {
+    fn drop(&mut self) {
+        LOCAL_SYNC_FFI_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        SYNC_FFI_DEPTH.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[inline]
+fn foreign_wait_blocked_by_sync_ffi() -> bool {
+    let global = SYNC_FFI_DEPTH.load(Ordering::Relaxed);
+    if global == 0 {
+        return false;
+    }
+    // The isolate thread that entered the export is still inside it; a
+    // worker on this thread is not that isolate (local depth is 0).
+    LOCAL_SYNC_FFI_DEPTH.with(|depth| depth.get() == 0)
 }
 
 fn current_thread_key() -> usize {
@@ -53,6 +92,16 @@ impl Gate {
     }
 
     pub fn wait(&self) -> CallStatus {
+        // Isolate blocked in a sync export cannot drain NativeCallable.listener
+        // posts, so a foreign wait would hang forever.
+        if foreign_wait_blocked_by_sync_ffi() {
+            panic!(
+                "Dart isolate is blocked inside a synchronous BoltFFI call; \
+                 a worker-thread callback cannot complete until that call returns. \
+                 Avoid join/blocking on foreign-thread callbacks from sync exports \
+                 (use an async export, or do the wait after returning to Dart)."
+            );
+        }
         let mut guard = self.outcome.lock().unwrap();
         loop {
             match &*guard {
@@ -221,6 +270,10 @@ pub unsafe fn header_from_handle<'a>(handle: u64) -> Option<&'a HooksHeader> {
 mod tests {
     use super::*;
 
+    /// Serializes tests that touch `Gate::wait` or `SyncFfiScope` so a
+    /// held sync-export depth cannot race with unrelated waiters.
+    static WAIT_TESTS: Mutex<()> = Mutex::new(());
+
     #[test]
     fn owner_thread_matches_constructor() {
         let header = HooksHeader::new();
@@ -233,6 +286,7 @@ mod tests {
 
     #[test]
     fn gate_round_trip() {
+        let _lock = WAIT_TESTS.lock().unwrap();
         let header = HooksHeader::new();
         let (tx, rx) = std::sync::mpsc::channel();
         let waiter = std::thread::spawn(move || {
@@ -246,7 +300,34 @@ mod tests {
     }
 
     #[test]
+    fn wait_panics_while_sync_ffi_active_on_another_thread() {
+        let _lock = WAIT_TESTS.lock().unwrap();
+        let _scope = SyncFfiScope::enter();
+        let header = Arc::new(HooksHeader::new());
+        // Worker (local depth 0) waits while this thread holds the sync export.
+        let err = {
+            let header = Arc::clone(&header);
+            std::thread::spawn(move || {
+                let gate = header.create_gate().unwrap();
+                let _ = gate.wait();
+            })
+            .join()
+            .expect_err("worker must panic instead of deadlocking")
+        };
+        let message = err
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| err.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("");
+        assert!(
+            message.contains("blocked inside a synchronous BoltFFI call"),
+            "unexpected panic payload: {message}"
+        );
+    }
+
+    #[test]
     fn destroy_cancels_waiters() {
+        let _lock = WAIT_TESTS.lock().unwrap();
         let header = Arc::new(HooksHeader::new());
         let (tx, rx) = std::sync::mpsc::channel();
         let waiter = {
@@ -268,6 +349,7 @@ mod tests {
 
     #[test]
     fn cancelled_out_slot_stays_alive() {
+        let _lock = WAIT_TESTS.lock().unwrap();
         let header = Arc::new(HooksHeader::new());
         let (tx, rx) = std::sync::mpsc::channel();
         let waiter = {

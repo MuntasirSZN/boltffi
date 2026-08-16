@@ -23,12 +23,23 @@ pub struct DartShimMethod {
     pub return_type: TokenStream,
 }
 
-pub fn dart_shim_prefix(trait_name: &str) -> String {
-    format!("BoltFFIDartShim_{trait_name}")
+/// Builds the no_mangle prefix from the C register symbol
+/// (`boltffi_register_callback_<path>`), so two traits with the same leaf
+/// name in different modules/crates do not collide at link time.
+pub fn dart_shim_prefix(register_symbol: &str) -> String {
+    const REGISTER_PREFIX: &str = "boltffi_register_callback_";
+    let path = register_symbol
+        .strip_prefix(REGISTER_PREFIX)
+        .unwrap_or(register_symbol);
+    format!("BoltFFIDartShim_{path}")
 }
 
-pub fn render(trait_name: &Ident, methods: &[DartShimMethod]) -> TokenStream {
-    let prefix = dart_shim_prefix(&trait_name.to_string());
+pub fn render(
+    register_symbol: &str,
+    trait_name: &Ident,
+    methods: &[DartShimMethod],
+) -> TokenStream {
+    let prefix = dart_shim_prefix(register_symbol);
     let register_ident = format_ident!("{prefix}_register");
     let release_ident = format_ident!("{prefix}_release");
     let free_ident = format_ident!("{prefix}_free");

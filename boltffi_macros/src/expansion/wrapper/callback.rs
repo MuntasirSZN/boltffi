@@ -177,7 +177,11 @@ impl<'expansion, 'lowered> NativeProtocol<'expansion, 'lowered> {
             .filter(|(_, abi)| !matches!(abi.callable.execution(), ExecutionDecl::Asynchronous(_)))
             .map(|(method, abi)| abi.dart_shim_method(method.binding.target()))
             .collect::<Result<Vec<_>, _>>()?;
-        let dart_shim_tokens = super::dart_shim::render(&names.trait_ident, &dart_shim_methods);
+        let dart_shim_tokens = super::dart_shim::render(
+            protocol.register().name().as_str(),
+            &names.trait_ident,
+            &dart_shim_methods,
+        );
         let cfg = quote! { #[cfg(not(target_arch = "wasm32"))] };
         let local_protocol_tokens = local_names
             .map(|local_names| {

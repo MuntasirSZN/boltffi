@@ -429,24 +429,24 @@ mod tests {
             source.contains("if (c > 127)"),
             "ASCII writeString fast path must stay in the prelude"
         );
-        assert!(source.contains("BoltFFIDartShim_Transformer_register"));
+        assert!(source.contains("BoltFFIDartShim_demo_api_transformer_register"));
         assert!(
             source.contains("_l$out.value = _m$transform("),
             "scalar listener write-back must use Pointer.value"
         );
         assert!(
-            source.contains("BoltFFIDartShim_Transformer_transform"),
+            source.contains("BoltFFIDartShim_demo_api_transformer_transform"),
             "sync methods stay on the dual-path shim"
         );
         assert!(
-            !source.contains("BoltFFIDartShim_Transformer_load"),
+            !source.contains("BoltFFIDartShim_demo_api_transformer_load"),
             "async methods must not be shimmed (wait-on-isolate deadlocks)"
         );
         assert!(output.diagnostics().is_empty());
     }
 
     #[test]
-    fn dart_shim_symbols_keep_rust_trait_spelling() {
+    fn dart_shim_symbols_use_callback_register_path() {
         let bindings = bindings(
             r#"
             #[export]
@@ -468,10 +468,12 @@ mod tests {
             source.contains("abstract interface class HttpClient"),
             "Dart type name still UpperCamel-of-parts"
         );
+        // Prefixed from `boltffi_register_callback_<path>`, not the trait leaf.
         assert!(
-            source.contains("BoltFFIDartShim_HTTPClient_register"),
-            "shim symbols must match rustc export spelling"
+            source.contains("BoltFFIDartShim_demo_api_http_client_register"),
+            "shim symbols must include the full callback identity"
         );
+        assert!(!source.contains("BoltFFIDartShim_HTTPClient_register"));
         assert!(!source.contains("BoltFFIDartShim_HttpClient_register"));
         assert!(output.diagnostics().is_empty());
     }
