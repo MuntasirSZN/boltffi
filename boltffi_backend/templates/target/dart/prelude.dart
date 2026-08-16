@@ -1330,20 +1330,12 @@ final class _$$BoltFFIAsync {
       }
       return $$async.Future<R>.error(const $$BoltCancelledException());
     }
-    // Single poll with the shared listener only. A first "probe" poll that
-    // parks `_noopNative` and a second poll that replaces it races with
-    // wake in ContinuationScheduler::store_continuation (Stored branch) and
-    // can leave the real callback unregistered — hang. Ready futures still
-    // complete synchronously via the poll return + _onPoll (idempotent if
-    // the listener also fires Ready).
     final completer = $$async.Completer<R>();
     final id = _nextId++;
     late final _$$BoltAsyncWait wait;
     void onTokenCancel() {
       if (wait.cancelled) return;
       wait.cancelled = true;
-      // Keep the shared poll listener alive; rust wakes it with Ready
-      // after cancel, and `_onPoll` completes the Dart future then.
       cancelFuture(handle);
     }
     wait = _$$BoltAsyncWait(

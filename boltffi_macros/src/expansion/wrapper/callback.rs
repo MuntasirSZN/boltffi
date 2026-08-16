@@ -987,10 +987,6 @@ where
         let setup = parameters.foreign_setup;
         let arguments = parameters.foreign_arguments;
         if matches!(self.callable.execution(), ExecutionDecl::Asynchronous(_)) {
-            // Host async callbacks are posted via NativeCallable.listener, so
-            // this FFI entry returns before Dart runs. Keep wire buffers in
-            // scope across the ForeignCall await so their pointers stay live
-            // until the host completes the callback.
             let call = quote! {
                 ((*self.vtable).#slot)(
                     self.handle,
@@ -1433,9 +1429,6 @@ impl<'expansion, 'lowered, S: CallbackMethodSurface> MethodParameter<'expansion,
             ParameterPassing::RefMut => unreachable!(),
         };
         match S::callback_encoded_parameter(shape)? {
-            // Keep the FfiBuf binding (Send) in scope for async methods that
-            // post into Dart via NativeCallable.listener; re-derive ptr/len at
-            // the call site so raw pointers are not held across await.
             CallbackEncodedParameter::Slice => Ok(ForeignMethodParameterTokens::new(
                 quote! { *const u8 },
                 vec![quote! {

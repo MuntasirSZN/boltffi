@@ -45,8 +45,6 @@ pub(crate) fn build_dart_targets(
     builder.build_targets(&config.dart_targets())
 }
 
-/// Cargo requires `depname/feature` using the dependency key from the
-/// consumer manifest (`ffi/dart` when renamed), not always `boltffi/dart`.
 fn boltffi_dependency_key(package_manifest: impl AsRef<std::path::Path>) -> Option<String> {
     let package_manifest = package_manifest.as_ref();
     let text = std::fs::read_to_string(package_manifest).ok()?;
@@ -73,8 +71,6 @@ fn dependency_is_boltffi(
             if let Some(package) = table.get("package").and_then(|v| v.as_str()) {
                 return package == "boltffi";
             }
-            // `ffi = { workspace = true }` inherits name/package from
-            // `[workspace.dependencies]`.
             if table
                 .get("workspace")
                 .and_then(|v| v.as_bool())
@@ -92,7 +88,6 @@ fn dependency_is_boltffi(
     }
 }
 
-/// Walk parents for a `Cargo.toml` that defines `[workspace]`.
 fn workspace_dependency_table(
     package_manifest: &std::path::Path,
 ) -> Option<toml::map::Map<String, toml::Value>> {
@@ -107,7 +102,6 @@ fn workspace_dependency_table(
                         {
                             return Some(deps.clone());
                         }
-                        // Workspace root without dependency table still ends the walk.
                         return None;
                     }
                 }
@@ -117,8 +111,6 @@ fn workspace_dependency_table(
     }
 }
 
-/// Append `--cfg boltffi_dart` through the channel Cargo will honor.
-/// When `CARGO_ENCODED_RUSTFLAGS` is set, plain `RUSTFLAGS` is ignored.
 fn push_dart_cfg_env(extra_env: &mut Vec<(String, String)>) {
     const DART_FLAGS: &[&str] = &["--cfg", "boltffi_dart", "--check-cfg=cfg(boltffi_dart)"];
     const SEP: char = '\u{1f}';

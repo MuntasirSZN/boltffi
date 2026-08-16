@@ -63,8 +63,6 @@ private final class BoltFFIFutureState<T>: @unchecked Sendable {
 
 private final class BoltFFIAsyncPollDriver: @unchecked Sendable {
     let futureHandle: RustFutureHandle?
-    // rust_future_poll returns Ready/MaybeReady as Int8 (and may also invoke the
-    // continuation). Match the C ABI so Clang-imported symbols type-check.
     let poll: (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Int8
     let ready: () -> Void
     let canPoll: () -> Bool
@@ -82,10 +80,6 @@ private final class BoltFFIAsyncPollDriver: @unchecked Sendable {
     }
 
     func start() {
-        // Ownership of `self` is transferred to the continuation via
-        // passRetained; the callback takeRetainedValue()s it. Do not also
-        // drive handle() from the Int8 return — Ready invokes the callback
-        // synchronously and that would use-after-free.
         _ = poll(
             futureHandle,
             UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque())),

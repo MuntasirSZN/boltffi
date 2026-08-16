@@ -821,11 +821,6 @@ fn render_async_entry(
         format!("final implementation = _k$handles.get({handle});"),
         missing_implementation,
     ];
-    // Materialize every argument into Dart-owned values *before* the first
-    // await. Entry setup may build WireDecoder views over temporary native
-    // buffers that Rust frees as soon as this FFI entry returns; reading
-    // them after `await` (or racing that free) corrupts payloads and can
-    // surface as CallStatus::Error on the infallible completion path.
     statements.extend(
         parameters
             .iter()
