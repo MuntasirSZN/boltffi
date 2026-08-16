@@ -75,12 +75,10 @@ fn dependency_is_boltffi(
                 .get("workspace")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
+                && let Some(workspace_deps) = workspace_deps
+                && let Some(workspace_dep) = workspace_deps.get(key)
             {
-                if let Some(workspace_deps) = workspace_deps {
-                    if let Some(workspace_dep) = workspace_deps.get(key) {
-                        return dependency_is_boltffi(key, workspace_dep, None);
-                    }
-                }
+                return dependency_is_boltffi(key, workspace_dep, None);
             }
             key == "boltffi"
         }
@@ -94,18 +92,15 @@ fn workspace_dependency_table(
     let mut dir = package_manifest.parent()?;
     loop {
         let candidate = dir.join("Cargo.toml");
-        if candidate.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&candidate) {
-                if let Ok(value) = text.parse::<toml::Table>() {
-                    if let Some(workspace) = value.get("workspace").and_then(|v| v.as_table()) {
-                        if let Some(deps) = workspace.get("dependencies").and_then(|v| v.as_table())
-                        {
-                            return Some(deps.clone());
-                        }
-                        return None;
-                    }
-                }
+        if candidate.is_file()
+            && let Ok(text) = std::fs::read_to_string(&candidate)
+            && let Ok(value) = text.parse::<toml::Table>()
+            && let Some(workspace) = value.get("workspace").and_then(|v| v.as_table())
+        {
+            if let Some(deps) = workspace.get("dependencies").and_then(|v| v.as_table()) {
+                return Some(deps.clone());
             }
+            return None;
         }
         dir = dir.parent()?;
     }
