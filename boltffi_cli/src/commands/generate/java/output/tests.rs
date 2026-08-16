@@ -5,10 +5,8 @@ use std::os::unix::fs::symlink;
 
 use boltffi_backend::{FilePath, GeneratedFile, GeneratedOutput};
 
-#[cfg(unix)]
-use super::LOCK;
 use super::{
-    LIVE, MANIFEST, Output, PREPARE, TOMBSTONE,
+    LIVE, LOCK, MANIFEST, Output, PREPARE, TOMBSTONE,
     journal::Journal,
     ownership::Manifest,
     path::{Directory, ManagedPath},

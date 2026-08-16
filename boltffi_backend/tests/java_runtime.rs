@@ -1339,7 +1339,6 @@ impl RuntimeFixture {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     }
 
-    #[cfg(unix)]
     fn is_extraction_root_name(name: &str) -> bool {
         name.strip_prefix("boltffi-native-")
             .is_some_and(|suffix| !suffix.is_empty())
