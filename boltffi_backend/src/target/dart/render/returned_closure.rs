@@ -134,7 +134,10 @@ impl ReturnedClosure {
             .flat_map(|parameter| parameter.cleanup().iter().cloned())
             .collect::<Vec<_>>();
 
-        if cleanup.is_empty() {
+        let mut finally = returns.finally.clone();
+        finally.extend(cleanup.iter().cloned());
+
+        if finally.is_empty() {
             body.push(match &returns.call_result {
                 Some(result) => format!("final {result} = {invocation};"),
                 None => format!("{invocation};"),
@@ -144,7 +147,7 @@ impl ReturnedClosure {
                 body.push(format!("return {expression};"));
             }
         } else {
-            // `after_call` can throw; pooled argument storage still releases.
+            // `after_call` can throw; pooled arg/return storage still releases.
             let mut inner = vec![match &returns.call_result {
                 Some(result) => format!("final {result} = {invocation};"),
                 None => format!("{invocation};"),
@@ -161,7 +164,7 @@ impl ReturnedClosure {
                     body.push(format!(
                         "try {{\n{}\n}} finally {{\n{}\n}}",
                         indent(&inner.join("\n"), 2),
-                        indent(&cleanup.join("\n"), 2),
+                        indent(&finally.join("\n"), 2),
                     ));
                     body.push("return _l$callResult;".to_owned());
                 }
@@ -169,7 +172,7 @@ impl ReturnedClosure {
                     body.push(format!(
                         "try {{\n{}\n}} finally {{\n{}\n}}",
                         indent(&inner.join("\n"), 2),
-                        indent(&cleanup.join("\n"), 2),
+                        indent(&finally.join("\n"), 2),
                     ));
                 }
             }

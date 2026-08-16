@@ -49,11 +49,37 @@ fn boltffi_dependency_key(package_manifest: impl AsRef<std::path::Path>) -> Opti
     let package_manifest = package_manifest.as_ref();
     let text = std::fs::read_to_string(package_manifest).ok()?;
     let value = text.parse::<toml::Table>().ok()?;
-    let deps = value.get("dependencies")?.as_table()?;
     let workspace_deps = workspace_dependency_table(package_manifest);
 
+    if let Some(key) =
+        find_boltffi_dependency_key(value.get("dependencies"), workspace_deps.as_ref())
+    {
+        return Some(key);
+    }
+
+    // `[target.'cfg(...)'.dependencies]` may hold the only (possibly renamed)
+    // facade entry; Cargo still expects that key in `--features key/dart`.
+    if let Some(targets) = value.get("target").and_then(|v| v.as_table()) {
+        for table in targets.values() {
+            if let Some(key) = find_boltffi_dependency_key(
+                table.as_table().and_then(|t| t.get("dependencies")),
+                workspace_deps.as_ref(),
+            ) {
+                return Some(key);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_boltffi_dependency_key(
+    deps: Option<&toml::Value>,
+    workspace_deps: Option<&toml::map::Map<String, toml::Value>>,
+) -> Option<String> {
+    let deps = deps?.as_table()?;
     for (key, dep) in deps {
-        if dependency_is_boltffi(key, dep, workspace_deps.as_ref()) {
+        if dependency_is_boltffi(key, dep, workspace_deps) {
             return Some(key.clone());
         }
     }
@@ -318,6 +344,28 @@ mod tests {
         let key = boltffi_dependency_key(&manifest);
         std::fs::remove_dir_all(&dir).expect("cleanup");
         assert_eq!(key.as_deref(), Some("my_ffi"));
+    }
+
+    #[test]
+    fn boltffi_dependency_key_resolves_target_specific_package_rename() {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("boltffi-dep-key-target-{unique_suffix}"));
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let manifest = dir.join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [target.'cfg(unix)'.dependencies]\n\
+             ffi = { package = \"boltffi\", version = \"0.30.0\" }\n",
+        )
+        .expect("write Cargo.toml");
+
+        let key = boltffi_dependency_key(&manifest);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+        assert_eq!(key.as_deref(), Some("ffi"));
     }
 
     /// `pack dart` must build the cdylib as a binding expansion, not a plain

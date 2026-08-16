@@ -86,6 +86,9 @@ pub struct DartReturn {
     pub arguments: Vec<String>,
     pub call_result: Option<String>,
     pub after_call: Vec<String>,
+    /// Always run after the native call, including when `after_call` throws
+    /// (e.g. pooled success-out slots must return to `_$$BoltStoragePool`).
+    pub finally: Vec<String>,
     pub expression: Option<String>,
 }
 
@@ -999,6 +1002,7 @@ pub fn render_return(
             arguments: Vec::new(),
             call_result: None,
             after_call: Vec::new(),
+            finally: Vec::new(),
             expression: None,
         },
         ReturnPlan::DirectViaReturnSlot { ty } => direct_return(ty, None, context)?,
@@ -1035,6 +1039,7 @@ pub fn render_return(
                 arguments: returned.arguments,
                 call_result: None,
                 after_call: returned.after_call,
+                finally: Vec::new(),
                 expression: Some(returned.expression),
             }
         }
@@ -1274,6 +1279,7 @@ fn scalar_option_return(
             decoded_type.as_str(),
             bridge.support().buffer_free()?.name(),
         )],
+        finally: Vec::new(),
         expression: Some(expression),
     })
 }
@@ -1321,6 +1327,7 @@ fn direct_vector_return(
         arguments: Vec::new(),
         call_result: Some("_l$result".to_owned()),
         after_call,
+        finally: Vec::new(),
         expression: Some("_l$decoded".to_owned()),
     })
 }
@@ -1337,6 +1344,7 @@ fn out_return(
             arguments: Vec::new(),
             call_result: Some("_l$result".to_owned()),
             after_call: Vec::new(),
+            finally: Vec::new(),
             expression: Some(expression),
         }),
         Some(out) => {
@@ -1351,10 +1359,10 @@ fn out_return(
                 before_call: vec![pooled],
                 arguments: vec![ptr.clone()],
                 call_result: None,
-                after_call: vec![
-                    format!("final _l$result = {};", out.read(&ptr)?),
-                    "_$$BoltStoragePool.releaseStorage(_l$resultOut);".to_owned(),
-                ],
+                after_call: vec![format!("final _l$result = {};", out.read(&ptr)?)],
+                // Error checks are prepended to `after_call` and may throw;
+                // keep the pooled out-slot release off that path.
+                finally: vec!["_$$BoltStoragePool.releaseStorage(_l$resultOut);".to_owned()],
                 expression: Some(expression),
             })
         }
@@ -1375,7 +1383,13 @@ fn render_sync_call(
     arguments.extend(returns.arguments.iter().cloned());
     let invocation = format!("_f${}({})", function.name(), arguments.join(", "));
 
-    if writeback.is_empty() && cleanup.is_empty() {
+    // `after_call` can throw (status/error checks); arg cleanup and pooled
+    // return-slot release still have to run. Mut writeback stays in `try` so
+    // a failed status does not overwrite the caller's list.
+    let mut finally = returns.finally.clone();
+    finally.extend(cleanup.iter().cloned());
+
+    if writeback.is_empty() && finally.is_empty() {
         statements.push(match &returns.call_result {
             Some(result) => format!("final {result} = {invocation};"),
             None => format!("{invocation};"),
@@ -1387,8 +1401,6 @@ fn render_sync_call(
         return statements.join("\n");
     }
 
-    // `after_call` can throw; pool release still has to run. Mut writeback
-    // stays in `try` so a failed status does not overwrite the caller's list.
     let mut inner = vec![match &returns.call_result {
         Some(result) => format!("final {result} = {invocation};"),
         None => format!("{invocation};"),
@@ -1403,26 +1415,25 @@ fn render_sync_call(
                 returns.public_type.as_str()
             ));
             inner.push(format!("_l$callResult = {expression};"));
-            if cleanup.is_empty() {
+            if finally.is_empty() {
                 statements.extend(inner);
-                statements.push("return _l$callResult;".to_owned());
             } else {
                 statements.push(format!(
                     "try {{\n{}\n}} finally {{\n{}\n}}",
                     indent(&inner.join("\n"), 2),
-                    indent(&cleanup.join("\n"), 2),
+                    indent(&finally.join("\n"), 2),
                 ));
-                statements.push("return _l$callResult;".to_owned());
             }
+            statements.push("return _l$callResult;".to_owned());
         }
         None => {
-            if cleanup.is_empty() {
+            if finally.is_empty() {
                 statements.extend(inner);
             } else {
                 statements.push(format!(
                     "try {{\n{}\n}} finally {{\n{}\n}}",
                     indent(&inner.join("\n"), 2),
-                    indent(&cleanup.join("\n"), 2),
+                    indent(&finally.join("\n"), 2),
                 ));
             }
         }
@@ -1472,13 +1483,43 @@ fn render_async_call(
             completion_arguments.join(", ")
         );
         let mut statements = returns.before_call.clone();
-        statements.push(match &returns.call_result {
-            Some(result) => format!("final {result} = {invocation};"),
-            None => format!("{invocation};"),
-        });
-        statements.extend(returns.after_call.iter().cloned());
-        if let Some(expression) = &returns.expression {
-            statements.push(format!("return {expression};"));
+        if returns.finally.is_empty() {
+            statements.push(match &returns.call_result {
+                Some(result) => format!("final {result} = {invocation};"),
+                None => format!("{invocation};"),
+            });
+            statements.extend(returns.after_call.iter().cloned());
+            if let Some(expression) = &returns.expression {
+                statements.push(format!("return {expression};"));
+            }
+        } else {
+            let mut inner = vec![match &returns.call_result {
+                Some(result) => format!("final {result} = {invocation};"),
+                None => format!("{invocation};"),
+            }];
+            inner.extend(returns.after_call.iter().cloned());
+            match &returns.expression {
+                Some(expression) => {
+                    statements.push(format!(
+                        "late final {} _l$callResult;",
+                        returns.public_type.as_str()
+                    ));
+                    inner.push(format!("_l$callResult = {expression};"));
+                    statements.push(format!(
+                        "try {{\n{}\n}} finally {{\n{}\n}}",
+                        indent(&inner.join("\n"), 2),
+                        indent(&returns.finally.join("\n"), 2),
+                    ));
+                    statements.push("return _l$callResult;".to_owned());
+                }
+                None => {
+                    statements.push(format!(
+                        "try {{\n{}\n}} finally {{\n{}\n}}",
+                        indent(&inner.join("\n"), 2),
+                        indent(&returns.finally.join("\n"), 2),
+                    ));
+                }
+            }
         }
         statements.join("\n")
     };
