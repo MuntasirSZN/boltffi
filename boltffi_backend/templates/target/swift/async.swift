@@ -82,13 +82,15 @@ private final class BoltFFIAsyncPollDriver: @unchecked Sendable {
     }
 
     func start() {
-        let result = poll(
+        // Ownership of `self` is transferred to the continuation via
+        // passRetained; the callback takeRetainedValue()s it. Do not also
+        // drive handle() from the Int8 return — Ready invokes the callback
+        // synchronously and that would use-after-free.
+        _ = poll(
             futureHandle,
             UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque())),
             boltffiAsyncPollCallback
         )
-        // Ready also fires the continuation; handle is idempotent via finish().
-        handle(result)
     }
 
     func handle(_ result: Int8) {
