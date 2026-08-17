@@ -5,6 +5,13 @@ import 'package:demo/demo.dart';
 void main() {
   tearDownAll(shutdownBoltffi);
   test('records with defaults', () {
+    expect(
+      requestTimeoutSeconds(RequestConfig()),
+      1.5,
+      reason:
+          "case:records.default_values.custom_type.should_apply_default",
+    );
+
     final fromOwnedName = ServiceConfig.fromOwnedName('owned');
     expect(
       fromOwnedName.name,
