@@ -1,14 +1,12 @@
 use askama::Template;
-use boltffi_binding::{
-    ConstantDecl, ConstantOwner, ConstantValueDecl, DefaultValue, EnumDecl, EnumId, Native, TypeRef,
-};
+use boltffi_binding::{ConstantDecl, ConstantOwner, ConstantValueDecl, EnumId, Native};
 
 use crate::{
     bridge::c::CBridgeContract,
     core::{Emitted, RenderContext, Result},
 };
 
-use super::super::{default_value, name_style::Name, type_name};
+use super::super::{default_value::DefaultExpression, name_style::Name, type_name};
 use super::{Documentation, Function, function::Placement};
 use crate::target::dart::syntax::{Literal, TypeFragment};
 
@@ -38,28 +36,12 @@ impl Constant {
         let name = Name::new(declaration.name()).lower_camel()?;
         let source = match declaration.value() {
             ConstantValueDecl::Inline { ty, value, .. } => {
-                let rendered_ty = type_name::type_ref(ty, context)?;
-                let value = match (ty, value) {
-                    (
-                        TypeRef::Enum(id),
-                        DefaultValue::EnumVariant {
-                            enum_name,
-                            variant_name,
-                        },
-                    ) if matches!(context.enumeration(*id), Some(EnumDecl::Data(_))) => {
-                        Literal::new(format!(
-                            "{}${}()",
-                            Name::new(enum_name).upper_camel()?,
-                            Name::new(variant_name).upper_camel()?
-                        ))
-                    }
-                    _ => default_value::literal(value)?,
-                };
-                let ty = rendered_ty;
+                let rendered_type = type_name::type_ref(ty, context)?;
+                let value = DefaultExpression::render(ty, value, context)?.into_constant()?;
                 InlineConstantTemplate {
                     documentation: Documentation::new(declaration.meta().doc(), 0),
                     static_keyword: if associated { "static " } else { "" },
-                    ty: &ty,
+                    ty: &rendered_type,
                     name: &name,
                     value: &value,
                 }
