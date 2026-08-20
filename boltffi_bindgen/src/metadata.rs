@@ -362,6 +362,29 @@ impl MetadataTarget {
     }
 }
 
+/// Cargo's target directory for a manifest, from `cargo metadata`. `None` when
+/// cargo cannot be run or its output does not parse — every caller treats that
+/// as "use the default".
+fn cargo_target_directory(manifest_path: &Path) -> Option<PathBuf> {
+    #[derive(Deserialize)]
+    struct TargetDirectory {
+        target_directory: PathBuf,
+    }
+
+    let output = Command::new(CargoProgram::from_env().into_os_string())
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice::<TargetDirectory>(&output.stdout)
+        .ok()
+        .map(|metadata| metadata.target_directory)
+}
+
 #[derive(Clone, Debug)]
 struct CargoBuild<'build> {
     build: &'build BindingMetadataBuild,
@@ -395,6 +418,28 @@ impl<'build> CargoBuild<'build> {
             .and_then(CargoOutput::from_output)
     }
 
+    /// Target directory for the metadata build: `<target>/boltffi-metadata`.
+    ///
+    /// Cargo records `cargo rustc -- --cfg …` and tracked env in a unit's
+    /// fingerprint but not in its hash, so this build and an ordinary
+    /// `cargo build` of the same crate and features write the *same* artifact
+    /// slot and dirty each other — alternating them recompiles the crate every
+    /// time. A directory of its own keeps both caches warm.
+    ///
+    /// `None` leaves cargo's default in place: a caller that chose a target
+    /// directory itself keeps it, and a failure to resolve one is not worth
+    /// failing the build over.
+    fn metadata_target_dir(&self) -> Option<PathBuf> {
+        if self
+            .cargo_args
+            .iter()
+            .any(|arg| arg.starts_with("--target-dir"))
+        {
+            return None;
+        }
+        Some(cargo_target_directory(&self.build.manifest_path)?.join("boltffi-metadata"))
+    }
+
     fn command(self) -> Command {
         let surface = self.build.surface.unwrap_or_else(|| {
             BindingMetadataSurface::from_target_triple(self.build.target.as_deref())
@@ -419,6 +464,9 @@ impl<'build> CargoBuild<'build> {
             command.arg("--target").arg(target);
         }
         command.args(self.cargo_args.iter());
+        if let Some(target_dir) = self.metadata_target_dir() {
+            command.arg("--target-dir").arg(target_dir);
+        }
         command.env(BINDING_METADATA_BUILD_ENV, "1");
         command.env(BINDING_METADATA_SOURCE_ENV, self.source_root.path());
         command.env(BINDING_METADATA_SURFACE_ENV, surface.as_str());
