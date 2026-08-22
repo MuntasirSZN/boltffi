@@ -103,8 +103,15 @@ impl BindingMetadataBuild {
         )?;
         let source_root = SourceRoot::resolve(&metadata, &manifest)?;
         let features = metadata.active_features(&manifest, cargo_args)?;
-        let output =
-            CargoBuild::new(self, &manifest, &source_root, cargo_args, features).output()?;
+        let output = CargoBuild::new(
+            self,
+            &manifest,
+            &source_root,
+            cargo_args,
+            features,
+            metadata.target_directory(),
+        )
+        .output()?;
         let artifacts = output.artifacts(&manifest)?;
         BindingMetadataReader::new(artifacts.into_paths())
             .read_required()
@@ -252,6 +259,11 @@ impl SourceRoot {
 #[derive(Clone, Debug, Deserialize)]
 struct CargoMetadata {
     packages: Vec<MetadataPackage>,
+    /// Cargo's resolved target directory. Trustworthy because `load` runs cargo
+    /// with the caller's environment and toolchain, so `CARGO_TARGET_DIR` and
+    /// any config override are already applied.
+    #[serde(default)]
+    target_directory: PathBuf,
 }
 
 impl CargoMetadata {
@@ -285,6 +297,15 @@ impl CargoMetadata {
                 source,
             }
         })
+    }
+
+    /// `None` when cargo reported no target directory, which leaves cargo's own
+    /// default in place rather than guessing one.
+    fn target_directory(&self) -> Option<&Path> {
+        match self.target_directory.as_os_str().is_empty() {
+            true => None,
+            false => Some(&self.target_directory),
+        }
     }
 
     fn package(
@@ -362,29 +383,6 @@ impl MetadataTarget {
     }
 }
 
-/// Cargo's target directory for a manifest, from `cargo metadata`. `None` when
-/// cargo cannot be run or its output does not parse — every caller treats that
-/// as "use the default".
-fn cargo_target_directory(manifest_path: &Path) -> Option<PathBuf> {
-    #[derive(Deserialize)]
-    struct TargetDirectory {
-        target_directory: PathBuf,
-    }
-
-    let output = Command::new(CargoProgram::from_env().into_os_string())
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .arg("--manifest-path")
-        .arg(manifest_path)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    serde_json::from_slice::<TargetDirectory>(&output.stdout)
-        .ok()
-        .map(|metadata| metadata.target_directory)
-}
-
 #[derive(Clone, Debug)]
 struct CargoBuild<'build> {
     build: &'build BindingMetadataBuild,
@@ -392,6 +390,7 @@ struct CargoBuild<'build> {
     source_root: &'build SourceRoot,
     cargo_args: &'build MetadataCargoArgs,
     features: MetadataFeatures,
+    target_directory: Option<&'build Path>,
 }
 
 impl<'build> CargoBuild<'build> {
@@ -401,6 +400,7 @@ impl<'build> CargoBuild<'build> {
         source_root: &'build SourceRoot,
         cargo_args: &'build MetadataCargoArgs,
         features: MetadataFeatures,
+        target_directory: Option<&'build Path>,
     ) -> Self {
         Self {
             build,
@@ -408,6 +408,7 @@ impl<'build> CargoBuild<'build> {
             source_root,
             cargo_args,
             features,
+            target_directory,
         }
     }
 
@@ -437,7 +438,7 @@ impl<'build> CargoBuild<'build> {
         {
             return None;
         }
-        Some(cargo_target_directory(&self.build.manifest_path)?.join("boltffi-metadata"))
+        Some(self.target_directory?.join("boltffi-metadata"))
     }
 
     fn command(self) -> Command {
@@ -861,6 +862,7 @@ mod tests {
             MetadataFeatures {
                 names: BTreeSet::from(["ffi".to_string()]),
             },
+            Some(Path::new("/workspace/target")),
         )
         .command();
         let arguments = command
@@ -905,6 +907,7 @@ mod tests {
             MetadataFeatures {
                 names: BTreeSet::new(),
             },
+            Some(Path::new("/workspace/target")),
         )
         .command();
         let arguments = command
