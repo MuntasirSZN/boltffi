@@ -23,32 +23,41 @@ fn materialize_tokens(item: TokenStream) -> syn::Result<TokenStream> {
 }
 
 fn struct_repr(mut item: ItemStruct) -> syn::Result<TokenStream> {
-    reject_packed_repr(&item.attrs)?;
+    reject_layout_changing_packing(&item)?;
     if lacks_repr(&item.attrs) {
         item.attrs.insert(0, syn::parse_quote!(#[repr(C)]));
     }
     Ok(quote!(#item))
 }
 
-/// Packed records cross wire-encoded, but the wire encoder takes
-/// references to fields, which is an error (E0793) on packed structs.
-fn reject_packed_repr(attrs: &[Attribute]) -> syn::Result<()> {
-    for attribute in attrs {
-        if !attribute.path().is_ident("repr") {
-            continue;
+/// Packing that changes the layout sends a record down the wire encoder,
+/// which takes references to fields: an error (E0793) on packed structs.
+fn reject_layout_changing_packing(item: &ItemStruct) -> syn::Result<()> {
+    let Some(packed) = item.attrs.iter().find(|attribute| {
+        attribute.path().is_ident("repr")
+            && boltffi_scan::scan_repr(std::slice::from_ref(attribute))
+                .items
+                .iter()
+                .any(|item| matches!(item, ReprItem::Packed(_)))
+    }) else {
+        return Ok(());
+    };
+    let field_primitives = item.fields.iter().map(|field| match &field.ty {
+        syn::Type::Path(type_path) if type_path.qself.is_none() => {
+            boltffi_scan::primitive_path(&type_path.path)
         }
-        if boltffi_scan::scan_repr(std::slice::from_ref(attribute))
-            .items
-            .iter()
-            .any(|item| matches!(item, ReprItem::Packed(_)))
-        {
-            return Err(syn::Error::new_spanned(
-                attribute,
-                "#[data] does not support repr(packed); remove the packed modifier",
-            ));
-        }
+        _ => None,
+    });
+    if boltffi_binding::direct_record_fields(
+        &boltffi_scan::scan_repr(&item.attrs),
+        field_primitives,
+    ) {
+        return Ok(());
     }
-    Ok(())
+    Err(syn::Error::new_spanned(
+        packed,
+        "#[data] supports repr(packed) only when packing leaves the repr(C) layout unchanged; remove the packed modifier",
+    ))
 }
 
 fn enum_repr(mut item: ItemEnum) -> TokenStream {
@@ -131,24 +140,42 @@ mod tests {
     }
 
     #[test]
-    fn packed_repr_struct_is_rejected() {
+    fn layout_changing_packed_struct_is_rejected() {
         let error = materialize_tokens(quote! {
             #[repr(C, packed)]
             pub struct Packet { pub tag: u8, pub count: u32 }
         })
-        .expect_err("packed must be rejected");
+        .expect_err("packing that moves count must be rejected");
 
         assert!(error.to_string().contains("repr(packed)"));
     }
 
     #[test]
-    fn packed_with_alignment_repr_struct_is_rejected() {
+    fn layout_changing_packed_alignment_across_attributes_is_rejected() {
         materialize_tokens(quote! {
             #[repr(C)]
             #[repr(packed(2))]
             pub struct Packet { pub tag: u8, pub count: u32 }
         })
-        .expect_err("packed(N) must be rejected");
+        .expect_err("packed(2) below the u32 alignment must be rejected");
+    }
+
+    #[test]
+    fn packed_struct_with_non_primitive_field_is_rejected() {
+        materialize_tokens(quote! {
+            #[repr(C, packed)]
+            pub struct Packet { pub tag: u8, pub name: String }
+        })
+        .expect_err("packing over a non-primitive field must be rejected");
+    }
+
+    #[test]
+    fn packing_that_changes_nothing_is_accepted() {
+        materialize_tokens(quote! {
+            #[repr(C, packed(4))]
+            pub struct Pair { pub left: u32, pub right: u16 }
+        })
+        .expect("packed(4) over u32 and u16 leaves the layout unchanged");
     }
 
     #[test]
