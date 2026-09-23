@@ -84,7 +84,7 @@ cc -std=c11 main.c $(pkg-config --cflags --libs mylib-static) -o example
 ./example
 ```
 
-That file names the archive explicitly and includes its dependencies. `pkg-config --static --libs mylib` also reports static dependencies, but its `-lmylib` flag alone does not force a compiler to choose the archive when a shared library is present.
+That file selects the static library and includes its dependencies. `pkg-config --static --libs mylib` also reports static dependencies, but its `-lmylib` flag alone does not force a compiler to choose the archive when a shared library is present.
 
 These shell examples assume the package path has no spaces. CMake and Meson handle paths with spaces. MSVC consumers can use the CMake package above.
 
@@ -92,14 +92,14 @@ These shell examples assume the package path has no spaces. CMake and Meson hand
 
 With `PKG_CONFIG_PATH` set as above, use the generated pkg-config file:
 
-```meson
+```text
 project('example', 'c', default_options: ['c_std=c11'])
 
 mylib = dependency('mylib', method: 'pkg-config')
 executable('example', 'main.c', dependencies: mylib)
 ```
 
-Set `static: true` on `dependency(...)` to select the archive and its dependencies.
+Use `dependency('mylib-static', method: 'pkg-config')` for static linking.
 
 ### Shipping the application
 

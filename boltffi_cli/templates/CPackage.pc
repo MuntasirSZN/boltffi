@@ -1,5 +1,5 @@
 prefix=${pcfiledir}/../..
-libdir=${prefix}/lib
+libdir=${prefix}/{{ library_directory }}
 includedir=${prefix}/include
 
 Name: {{ name }}

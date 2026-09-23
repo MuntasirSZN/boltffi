@@ -17,10 +17,12 @@ endif()
 if(NOT TARGET {{ name }}::{{ name }}_static)
     add_library({{ name }}::{{ name }}_static STATIC IMPORTED)
     set_target_properties({{ name }}::{{ name }}_static PROPERTIES
-        IMPORTED_LOCATION "${_{{ name }}_prefix}/lib/{{ static_library }}"
+        IMPORTED_LOCATION "${_{{ name }}_prefix}/lib/static/{{ static_library }}"
         INTERFACE_INCLUDE_DIRECTORIES "${_{{ name }}_prefix}/include")
     set_property(TARGET {{ name }}::{{ name }}_static PROPERTY
         INTERFACE_LINK_LIBRARIES {{ static_dependencies }})
+    set_property(TARGET {{ name }}::{{ name }}_static PROPERTY
+        INTERFACE_LINK_OPTIONS {{ static_link_options }})
 endif()
 
 unset(_{{ name }}_prefix)

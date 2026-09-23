@@ -172,14 +172,15 @@ pub(crate) fn pack_c(config: &Config, options: PackCOptions, reporter: &Reporter
     let output_dir = config.c_output();
     let include_dir = output_dir.join("include");
     let lib_dir = output_dir.join("lib");
-    std::fs::create_dir_all(&include_dir).map_err(|source| CliError::CreateDirectoryFailed {
-        path: include_dir.clone(),
-        source,
-    })?;
-    std::fs::create_dir_all(&lib_dir).map_err(|source| CliError::CreateDirectoryFailed {
-        path: lib_dir.clone(),
-        source,
-    })?;
+    let static_lib_dir = lib_dir.join("static");
+    [&include_dir, &static_lib_dir]
+        .into_iter()
+        .try_for_each(|directory| {
+            std::fs::create_dir_all(directory).map_err(|source| CliError::CreateDirectoryFailed {
+                path: directory.to_path_buf(),
+                source,
+            })
+        })?;
 
     let library_name = config.library_name().to_string();
 
@@ -194,8 +195,23 @@ pub(crate) fn pack_c(config: &Config, options: PackCOptions, reporter: &Reporter
 
     copy_file(
         profile_dir.join(platform.static_library_filename(&artifact_name)),
-        lib_dir.join(platform.static_library_filename(&artifact_name)),
+        static_lib_dir.join(platform.static_library_filename(&artifact_name)),
     )?;
+
+    let previous_archive = lib_dir.join(platform.static_library_filename(&artifact_name));
+    match std::fs::remove_file(&previous_archive) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CliError::CommandFailed {
+                command: format!(
+                    "remove old C package archive {}: {error}",
+                    previous_archive.display()
+                ),
+                status: None,
+            });
+        }
+    }
 
     if let Some(filename) = platform.import_library_filename(&artifact_name) {
         copy_file(profile_dir.join(&filename), lib_dir.join(filename))?;

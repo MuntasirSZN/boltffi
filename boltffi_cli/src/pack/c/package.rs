@@ -27,6 +27,7 @@ struct CMakePackage<'a> {
     import_library: Option<String>,
     no_soname: bool,
     static_dependencies: String,
+    static_link_options: String,
 }
 
 #[derive(Template)]
@@ -42,6 +43,7 @@ struct PkgConfigPackage<'a> {
     name: &'a str,
     description: &'a str,
     version: &'a str,
+    library_directory: &'a str,
     libraries: String,
     private_libraries: &'a str,
 }
@@ -96,8 +98,22 @@ impl CPackage {
     }
 
     pub fn write_metadata(&self, output: &Path, native_link: &NativeLinkMetadata) -> Result<()> {
-        let static_dependencies =
-            Self::cmake_static_dependencies(&native_link.native_static_libraries)?;
+        let (link_options, link_libraries): (Vec<_>, Vec<_>) = native_link
+            .native_static_libraries
+            .iter()
+            .map(String::as_str)
+            .partition(|library| {
+                matches!(
+                    self.platform,
+                    NativeHostPlatform::WindowsX86_64 | NativeHostPlatform::WindowsAarch64
+                ) && library.starts_with('/')
+            });
+        let static_dependencies = Self::cmake_static_dependencies(&link_libraries)?;
+        let static_link_options = link_options
+            .into_iter()
+            .map(Self::cmake_quote)
+            .collect::<Vec<_>>()
+            .join(" ");
         let native_libraries = native_link.native_static_libraries.join(" ");
         let cmake = CMakePackage {
             name: &self.name,
@@ -110,23 +126,28 @@ impl CPackage {
                 NativeHostPlatform::LinuxX86_64 | NativeHostPlatform::LinuxAarch64
             ),
             static_dependencies,
+            static_link_options,
         };
         let cmake_version = CMakePackageVersion {
             version: Self::cmake_quote(&self.version),
             pointer_size: std::mem::size_of::<usize>(),
         };
+        let static_link_flags = format!("-L${{libdir}}/static {native_libraries}");
         let shared = PkgConfigPackage {
             name: &self.name,
             description: &self.description,
             version: &self.version,
-            libraries: match &cmake.import_library {
-                Some(filename) => format!("${{libdir}}/{filename}"),
-                None => format!("-L${{libdir}} -l{}", self.artifact_name),
+            library_directory: "lib",
+            libraries: if cmake.import_library.is_some() {
+                format!("-L${{libdir}} -l{}.dll", self.artifact_name)
+            } else {
+                format!("-L${{libdir}} -l{}", self.artifact_name)
             },
-            private_libraries: &native_libraries,
+            private_libraries: &static_link_flags,
         };
         let static_package = PkgConfigPackage {
-            libraries: format!("${{libdir}}/{} {native_libraries}", cmake.static_library),
+            library_directory: "lib/static",
+            libraries: format!("-L${{libdir}} -l{} {native_libraries}", self.artifact_name),
             private_libraries: "",
             ..shared
         };
@@ -209,11 +230,11 @@ impl CPackage {
         })
     }
 
-    fn cmake_static_dependencies(libraries: &[String]) -> Result<String> {
+    fn cmake_static_dependencies(libraries: &[&str]) -> Result<String> {
         let mut libraries = libraries.iter();
         let mut dependencies = Vec::new();
         while let Some(library) = libraries.next() {
-            let dependency = if library == "-framework" {
+            let dependency = if *library == "-framework" {
                 let framework = libraries.next().ok_or_else(|| CliError::CommandFailed {
                     command: "native static link metadata has -framework without a framework name"
                         .to_owned(),
@@ -221,7 +242,7 @@ impl CPackage {
                 })?;
                 format!("-framework {framework}")
             } else {
-                library.clone()
+                (*library).to_owned()
             };
             dependencies.push(Self::cmake_quote(&dependency));
         }
@@ -262,6 +283,7 @@ mod tests {
                     native_static_libraries: vec![
                         "ws2_32.lib".to_owned(),
                         "userenv.lib".to_owned(),
+                        "/defaultlib:msvcrt".to_owned(),
                     ],
                     native_link_search_paths: vec!["native=/source/target/debug/build".to_owned()],
                 },
@@ -277,6 +299,7 @@ mod tests {
         assert!(cmake.contains("add_library(public-api::public-api SHARED IMPORTED)"));
         assert!(cmake.contains("/lib/native_api.dll\""));
         assert!(cmake.contains("IMPORTED_IMPLIB"));
+        assert!(cmake.contains("INTERFACE_LINK_OPTIONS \"/defaultlib:msvcrt\""));
         assert!(cmake.contains("set(public-api_VERSION \"0.1.0\")"));
         assert!(!cmake.contains("/source/"));
 
@@ -286,6 +309,8 @@ mod tests {
         assert!(pkg_config.contains("ws2_32.lib userenv.lib"));
         assert!(pkg_config.contains("prefix=${pcfiledir}/../.."));
         assert!(pkg_config.contains("Version: 0.1.0"));
+        assert!(pkg_config.contains("libdir=${prefix}/lib/static"));
+        assert!(pkg_config.contains("Libs: -L${libdir} -lnative_api "));
         assert!(!pkg_config.contains("/source/"));
     }
 
@@ -321,8 +346,7 @@ mod tests {
             "-framework",
             "CoreFoundation",
             "-lc",
-        ]
-        .map(str::to_owned);
+        ];
         assert_eq!(
             CPackage::cmake_static_dependencies(&libraries).expect("link dependencies"),
             "\"-framework Security\" \"-lc\" \"-framework CoreFoundation\" \"-lc\""
@@ -331,6 +355,6 @@ mod tests {
 
     #[test]
     fn framework_without_a_name_is_rejected() {
-        assert!(CPackage::cmake_static_dependencies(&["-framework".to_owned()]).is_err());
+        assert!(CPackage::cmake_static_dependencies(&["-framework"]).is_err());
     }
 }

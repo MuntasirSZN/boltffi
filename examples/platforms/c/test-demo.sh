@@ -16,6 +16,7 @@ build_dir="$script_dir/build"
 
 package_dir="$build_dir/relocated package"
 mkdir -p "$build_dir"
+rm -f "$build_dir/CMakeCache.txt"
 rm -rf "$package_dir"
 mv "$script_dir/generated" "$package_dir"
 trap 'cp -R "$package_dir" "$script_dir/generated"' EXIT

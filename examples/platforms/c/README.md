@@ -41,7 +41,7 @@ target_link_libraries(your_app PRIVATE demo::demo)
 
 Pass `-DCMAKE_PREFIX_PATH=/path/to/generated` when configuring your project. Use `demo::demo_static` for static linking; it includes the system libraries reported by Rust. The demo's CMake project shows how to copy the DLL beside a Windows executable.
 
-Make and Meson consumers can add `generated/lib/pkgconfig` to `PKG_CONFIG_PATH`. The `demo` module describes normal linking; `demo-static` names the archive explicitly. [meson.build](meson.build) shows Meson's `static: true` option with `dependency('demo')`.
+Make and Meson consumers can add `generated/lib/pkgconfig` to `PKG_CONFIG_PATH`. The `demo` module describes normal linking; `demo-static` selects the archive under `lib/static/`. [meson.build](meson.build) shows both dependencies.
 
 The [linking guide](https://boltffi.dev/docs/c#link-a-c-program) covers each build system and runtime library paths. A consuming project needs only the generated package, not this demo's build files.
 

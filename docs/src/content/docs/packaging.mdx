@@ -870,7 +870,9 @@ With the package name and Rust library target both named `mylib`, and output dir
 dist/c/
 ├── include/mylib.h
 └── lib/
-    ├── native libraries
+    ├── shared library and Windows import library
+    ├── static/
+    │   └── static library
     ├── cmake/mylib/
     │   ├── mylibConfig.cmake
     │   └── mylibConfigVersion.cmake
@@ -883,10 +885,10 @@ Ship `include/` and `lib/` together from the same build. The CMake and pkg-confi
 
 | Host | Shared library | Static library | Import library for the shared library |
 | --- | --- | --- | --- |
-| Linux | `libmylib.so` | `libmylib.a` | Not needed |
-| macOS | `libmylib.dylib` | `libmylib.a` | Not needed |
-| Windows, MSVC | `mylib.dll` | `mylib.lib` | `mylib.dll.lib` |
-| Windows, GNU | `mylib.dll` | `libmylib.a` | `libmylib.dll.a` |
+| Linux | `libmylib.so` | `static/libmylib.a` | Not needed |
+| macOS | `libmylib.dylib` | `static/libmylib.a` | Not needed |
+| Windows, MSVC | `mylib.dll` | `static/mylib.lib` | `mylib.dll.lib` |
+| Windows, GNU | `mylib.dll` | `static/libmylib.a` | `libmylib.dll.a` |
 
 `pack c` builds for the machine running the command. Cross-compilation through `--target` or Cargo's `build.target` is rejected. Native C demo jobs cover Linux, macOS, and Windows; that does not imply every architecture or compiler combination has been tested. CMake and pkg-config metadata are generated automatically; Meson can consume the pkg-config file.
 
