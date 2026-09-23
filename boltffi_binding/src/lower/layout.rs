@@ -48,6 +48,13 @@ pub fn compute(record: &SourceRecord) -> Result<RecordLayout, LowerError> {
     ))
 }
 
+/// Alignment of a portable field set under the narrowest and the widest
+/// supported native ABI profile.
+pub(crate) struct PortableAlignment {
+    pub(crate) least: u64,
+    pub(crate) greatest: u64,
+}
+
 /// Reports whether fields of these types get the same bytes on every
 /// supported native ABI: the profile-agreement half of the record
 /// classification rule.
@@ -58,10 +65,15 @@ pub fn compute(record: &SourceRecord) -> Result<RecordLayout, LowerError> {
 /// field offset. Their container alignment may differ: the IR retains the
 /// larger alignment so generated allocators always over-align rather than
 /// under-align storage.
-pub(crate) fn portable_direct_fields(field_types: &[DirectFieldType]) -> bool {
+pub(crate) fn portable_alignment(field_types: &[DirectFieldType]) -> Option<PortableAlignment> {
     let natural = profile(field_types, WideScalarAlignment::EightBytes);
     let four_byte = profile(field_types, WideScalarAlignment::FourBytes);
-    natural.size == four_byte.size && natural.offsets == four_byte.offsets
+    (natural.size == four_byte.size && natural.offsets == four_byte.offsets).then_some(
+        PortableAlignment {
+            least: four_byte.alignment,
+            greatest: natural.alignment,
+        },
+    )
 }
 
 struct LayoutProfile {
