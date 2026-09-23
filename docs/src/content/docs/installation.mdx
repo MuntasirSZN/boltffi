@@ -62,7 +62,6 @@ Add BoltFFI to your library crate:
 
 ```bash
 cargo add boltffi
-cargo add --build boltffi
 ```
 
 Then configure your library crate:
@@ -82,16 +81,6 @@ C packaging requires both `staticlib` and `cdylib`. Include `cdylib` for a stand
 ```toml
 [lib]
 crate-type = ["staticlib", "cdylib"]
-```
-
-## Create build.rs
-
-Create a `build.rs` file in your project root:
-
-```rust
-fn main() {
-    boltffi::build::generate();
-}
 ```
 
 ## Verify installation

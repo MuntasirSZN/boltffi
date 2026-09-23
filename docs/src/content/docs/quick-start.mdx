@@ -1,6 +1,6 @@
 ---
 title: "Quick Start"
-description: "Build your first BoltFFI project quickly with Rust setup, Cargo configuration, build scripts, and generated bindings for target platforms."
+description: "Build your first BoltFFI project quickly with Rust setup, Cargo configuration and generated bindings for target platforms."
 ---
 
 # Quick Start
@@ -30,18 +30,9 @@ Install BoltFFI:
 
 ```bash
 cargo add boltffi
-cargo add --build boltffi
 ```
 
-## 3. Create build.rs
-
-```rust
-fn main() {
-    boltffi::build::generate();
-}
-```
-
-## 4. Write your Rust code
+## 3. Write your Rust code
 
 Replace `src/lib.rs`:
 
@@ -71,7 +62,7 @@ pub fn distance(a: Point, b: Point) -> f64 {
 }
 ```
 
-## 5. Build and generate bindings
+## 4. Build and generate bindings
 
 ```bash
 # Initialize config
@@ -90,7 +81,7 @@ boltffi pack ios
 boltffi pack csharp
 ```
 
-## 6. Use from Swift
+## 5. Use from Swift
 
 ```swift
 let sum = add(a: 2, b: 3)
@@ -104,7 +95,7 @@ let p2 = Point(x: 3, y: 4)
 print("Distance: \(distance(a: p1, b: p2))")  // "Distance: 5.0"
 ```
 
-## 7. Use from C#
+## 6. Use from C#
 
 ```csharp
 int sum = MyLib.Add(2, 3);
@@ -118,7 +109,7 @@ Point p2 = new Point(3.0, 4.0);
 Console.WriteLine(MyLib.Distance(p1, p2));
 ```
 
-## 8. Use from C
+## 7. Use from C
 
 Add `[targets.c]` with `enabled = true` to `boltffi.toml`, then run `boltffi pack c --experimental --deny-skipped`.
 
