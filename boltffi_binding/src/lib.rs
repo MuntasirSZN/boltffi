@@ -48,11 +48,12 @@
 //!   the serialized metadata embedded in the user's compiled
 //!   artifact and reads it through the [`ir`] types.
 //! - [`direct_record_fields`] is the record classification rule on its
-//!   own: effective `repr(C)`, at least one field, every field an
-//!   admissible fixed-width primitive, and byte layout agreement across
-//!   the supported native ABI alignment profiles. It is the single
-//!   statement of the rule `is_direct` applies during lowering, exported
-//!   so a lane that cannot run the full pass still classifies a record
+//!   own: at least one field, every field an admissible fixed-width
+//!   primitive, byte layout agreement across the supported native ABI
+//!   alignment profiles, and a repr that keeps the natural `repr(C)`
+//!   layout. It is the single statement of the rule `is_direct` applies
+//!   during lowering, exported so a lane that cannot run the full pass,
+//!   such as the `#[data]` packing check, still classifies a record
 //!   identically to the compiled library.
 //!
 //! # What this crate does not do
