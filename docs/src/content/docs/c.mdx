@@ -293,7 +293,7 @@ Callback method signatures still use bridge types. Primitive-only callbacks work
 
 ## C++ callers
 
-The header includes `extern "C"` guards and can be included from C++. The generated header is tested in C++03 mode and newer with GCC and Clang. The C examples on this page use C11 syntax; compound literals and designated initializers may need to be rewritten for the chosen C++ version.
+The header includes `extern "C"` guards and can be included from C++. The compatibility test compiles a generated header in C++03 mode with the host C++ compiler. The C examples on this page use C11 syntax; compound literals and designated initializers may need to be rewritten for the chosen C++ version.
 
 The API still follows C ownership rules. C++ callers can wrap owning values in local RAII types, but BoltFFI does not generate C++ classes or destructors.
 
