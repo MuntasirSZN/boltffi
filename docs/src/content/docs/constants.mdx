@@ -7,7 +7,7 @@ import CodeComparison from "../../components/CodeComparisonWrapper.astro";
 
 # Constants
 
-C examples use the package name `demo` and include `demo.h`. C is experimental; see the [C guide](/docs/c) for setup and ownership rules.
+C examples use the package name `demo` and include `demo.h`. See [C memory management](/docs/c#memory-management) for borrowed inputs and returned owners.
 
 BoltFFI exports two kinds of constants:
 
@@ -62,7 +62,7 @@ version = api_version`}
 const char *service = DEMO_SERVICE_NAME;`}
 />
 
-The Rust name is converted to the naming convention of each target. `API_VERSION` becomes `apiVersion` in Swift, Kotlin, and TypeScript, `API_VERSION` in Java, `ApiVersion` in C#, and `api_version` in Python.
+The Rust name is converted to the naming convention of each target. `API_VERSION` becomes `apiVersion` in Swift, Kotlin, and TypeScript, `API_VERSION` in Java, `ApiVersion` in C#, and `api_version` in Python. In a C package named `demo`, it becomes `DEMO_API_VERSION`.
 
 ## Associated constants
 
@@ -342,7 +342,7 @@ mode = default_mode`}
 DemoMode mode = DEMO_DEFAULT_MODE;`}
 />
 
-Values such as `Color { ... }` are constructed in Rust and delivered through a generated accessor. The generated API still exposes an ordinary immutable value.
+Values such as `Color { ... }` are constructed in Rust and delivered through a generated accessor. The generated API still exposes an ordinary immutable value. C emits simple constants as package-prefixed macros. Constants that require Rust evaluation use accessor functions; owning values returned by those accessors need cleanup just like function results.
 
 ## Supported values
 

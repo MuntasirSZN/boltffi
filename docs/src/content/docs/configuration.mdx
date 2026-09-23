@@ -554,12 +554,11 @@ enabled = true
 output = "dist/c"
 ```
 
-`boltffi generate c --experimental` writes the intermediate header at
-`{output}/boltffi.h`. `boltffi pack c --experimental` stages the public header
-at `{output}/include/<library>.h` and native libraries under `{output}/lib`.
-C is disabled by default; its default output directory is `dist/c`. The package name supplies prefixes such as `MylibPoint` and `mylib_distance`.
+C is disabled by default; its default output directory is `dist/c`. To include it in `generate all` or `pack all`, keep `enabled = true` and either pass `--experimental` or set `experimental = ["c"]` at the top of `boltffi.toml`, before any section. Saving the experimental opt-in does not enable `targets.c` by itself.
 
-Pass `--deny-skipped` to make unsupported exports fail generation or packaging. To enable C in `generate all` or `pack all`, keep `enabled = true` and either pass `--experimental` or set the top-level `experimental = ["c"]` array. C packaging is host-only; it rejects Cargo target overrides. See [C](/docs/c) for linking and ownership rules.
+The [package name](#package-identity) supplies the C prefix. With `[package] name = "demo"`, a Rust `Point` becomes `DemoPoint`, `add` becomes `demo_add`, and `ANSWER` becomes `DEMO_ANSWER`. Methods include the type name, such as `demo_counter_get`. Names beginning with `boltffi_`, `Ffi`, or `___` belong to the underlying bridge; application code normally uses the package-prefixed API.
+
+See [C packaging](/docs/packaging#c-experimental) for generation commands, output files, and host restrictions.
 
 <h2 id="c-sharp-configuration">C# Configuration</h2>
 

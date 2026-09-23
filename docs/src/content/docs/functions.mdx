@@ -8,7 +8,7 @@ import TypeTable from "../../components/TypeTableWrapper.astro";
 
 # Functions
 
-C examples use the package name `demo` and include `demo.h`. C is experimental; see the [C guide](/docs/c) for setup and ownership rules.
+C examples use the package name `demo` and include `demo.h`. See [C memory management](/docs/c#memory-management) for borrowed inputs and returned owners.
 
 This page covers free functions - standalone functions that aren't attached to a struct or class. For methods on objects, see [Classes](/docs/classes). For standalone values, see [Constants](/docs/constants).
 
@@ -468,7 +468,7 @@ demo_logger_free(&logger);`}
 
 ### Callback traits
 
-Functions can accept callback traits. A callback trait is a Rust trait marked with `#[export]` that the target language implements. Unlike closures (single anonymous function), callback traits can have multiple methods and carry state. C supports synchronous callback traits with the [limitations described in the C guide](/docs/c#callbacks); inline closures are not generated for C.
+Functions can accept callback traits. A callback trait is a Rust trait marked with `#[export]` that the target language implements. Unlike closures (single anonymous function), callback traits can have multiple methods and carry state. C supports synchronous callback traits with the [C vtable contract](/docs/callbacks#c-vtables); inline closures are not generated for C.
 
 See [Callbacks](/docs/callbacks) for more.
 
@@ -947,7 +947,7 @@ BoltFFI has no built-in executor. You choose your Rust async runtime (Tokio, asy
 
 ## Closures
 
-C does not generate inline closure parameters yet. Synchronous callback traits have a [C vtable API](/docs/c#callbacks).
+C does not generate inline closure parameters yet. Synchronous callback traits have a [C vtable API](/docs/callbacks#c-vtables).
 
 Functions can accept closures as parameters. The closure is called synchronously within the Rust function.
 

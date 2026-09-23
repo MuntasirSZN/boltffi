@@ -8,7 +8,7 @@ import TypeTable from "../../components/TypeTableWrapper.astro";
 
 # Classes
 
-C examples use the package name `demo` and include `demo.h`. Printing examples also include `<stdio.h>` and, for `PRIu64`, `<inttypes.h>`. C is experimental; see the [C guide](/docs/c) for setup and ownership rules.
+C examples use the package name `demo` and include `demo.h`. Printing examples also include `<stdio.h>` and, for `PRIu64`, `<inttypes.h>`. See [C memory management](/docs/c#memory-management) for borrowed inputs and returned owners.
 
 BoltFFI has two ways to expose a struct: as data or as a class.
 
@@ -350,7 +350,7 @@ demo_config_free(&config);`}
 
 ### Fallible constructors
 
-Constructors can return `Result<Self, E>`. The error type must be marked with `#[error]`. The constructor becomes throwing in the target language.
+Constructors can return `Result<Self, E>`. A custom error type must be marked with `#[error]`. The managed targets expose a throwing constructor. C returns a typed result: check `ok` before using `data.value`, and release the result when finished. Its cleanup function also releases the returned class handle; do not free the handle separately.
 
 <CodeComparison
   title=""
@@ -1139,4 +1139,6 @@ The difference matters in tight loops. For most applications, 5 microseconds per
 
 The Rust struct lives in Rust's heap. The target language holds a reference to it. In targets with automatic lifetime management, releasing the last foreign reference drops the Rust object. C uses explicit cleanup.
 
-C callers release a class with its generated `<package>_<class>_free` function. A C struct assignment does not create another reference. In every target, keeping a class handle alive also keeps its Rust object alive.
+C callers release a class with its generated `<package>_<class>_free` function. The handle's fields are private implementation details; pass its address to generated methods. A C struct assignment does not retain the Rust object, so keep one owner. A borrowed class parameter does not take ownership; a consuming parameter takes a mutable pointer and clears the handle after the call. The Rust class's threading restrictions also apply to C callers.
+
+In every target, keeping a class handle alive also keeps its Rust object alive.

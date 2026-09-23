@@ -21,7 +21,7 @@ npm run build
 
 Pages live in `src/content/docs`. `CodeComparisonWrapper.astro` displays Rust beside the generated-language examples. It supports Swift, Kotlin, Java, C#, TypeScript, Python, and C. `TypeTableWrapper.astro` displays the corresponding type mappings.
 
-Keep code examples consistent with generated bindings. C examples must show cleanup for returned owners and distinguish input views from owning values. Do not add a C example for an API the target cannot generate; explain the limitation and link to the C guide instead.
+Keep code examples consistent with generated bindings. C examples must show cleanup for returned owners and distinguish input views from owning values. Do not add a C example for an API the target cannot generate; explain the limitation on the relevant topic page. Keep C type mappings and API examples beside the other languages. The C page covers linking and memory management; build commands belong in Packaging and settings belong in Configuration.
 
 When adding a page, register it in `src/lib/documentation/index.ts` and the sidebar components. The build checks that every page appears in both Markdown indexes. The Markdown renderer in `src/lib/documentation/markdown.ts` must preserve every supported language when the comparison components change.
 

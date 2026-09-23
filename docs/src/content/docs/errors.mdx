@@ -1,6 +1,6 @@
 ---
 title: "Errors"
-description: "Map Rust Result<T, E> into native error handling in Swift, Kotlin, Java, C#, TypeScript, and Python with BoltFFI using string errors and structured error types."
+description: "Map Rust Result<T, E> into native error handling in Swift, Kotlin, Java, C#, TypeScript, Python, and C with BoltFFI using string errors and structured error types."
 ---
 
 import CodeComparison from "../../components/CodeComparisonWrapper.astro";
@@ -8,11 +8,13 @@ import TypeTable from "../../components/TypeTableWrapper.astro";
 
 # Errors
 
-C examples use the package name `demo` and include `demo.h`. C is experimental; see the [C guide](/docs/c) for setup and ownership rules.
+C examples use the package name `demo` and include `demo.h`. See [C memory management](/docs/c#memory-management) for borrowed inputs and returned owners.
 
 Rust represents fallible operations with `Result<T, E>`. Target languages have different conventions: Swift uses `throws`, Kotlin, Java, and C# use exceptions, and TypeScript uses try/catch. BoltFFI converts `Result` return types into the native error handling mechanism of each platform. When a function returns `Err`, it becomes a thrown error or exception in those targets. C returns a struct with an `ok` flag and a union holding the value or error; callers check the flag and free the result.
 
 ## Supported Error Types
+
+In C, read `data.value` when `ok` is true and `data.error` when it is false. `Result<(), E>` has no success value to read. The result owns whichever union member is active, including nested allocations or a returned class handle. Call the result's generated cleanup function once; do not free the active member separately and then free the result.
 
 The error type in `Result<T, E>` can be:
 
@@ -26,6 +28,7 @@ The `#[error]` attribute marks types as error types. Generated bindings expose t
 - Kotlin: error types extend `Exception`
 - Java: error enums and classes include a nested `Exception` type that extends `RuntimeException`
 - C#: generated methods throw `BoltException` for string errors or typed `*Exception` wrappers that expose the original error value
+- C: the typed result contains the error record, enum, or string in `data.error`
 
 ## String Errors
 
@@ -36,6 +39,7 @@ String errors use generic wrapper types:
 - Java: `RuntimeException`
 - C#: `BoltException`
 - TypeScript: `FfiException`
+- C: `DemoString` in the active result union for a package named `demo`
 
 Custom error types are thrown directly or wrapped as the native target requires.
 
@@ -118,7 +122,7 @@ demo_parse_int_result_free(&parsed);`}
 
 ## Struct Errors
 
-For structured error information, define a struct with `#[error]`. The struct becomes a throwable error type in both languages.
+For structured error information, define a struct with `#[error]`. The managed targets expose it through their error or exception types. C puts the error record in the result's `data.error` field.
 
 <CodeComparison
   title=""
@@ -440,7 +444,7 @@ demo_login_result_free(&login);`}
 
 ### Enums with Payloads
 
-When enum variants carry associated data, the error becomes a sealed type hierarchy.
+When enum variants carry associated data, the managed targets expose a sealed type hierarchy or tagged union. C uses the enum's `tag` and `data` union inside the result's `data.error` field.
 
 <CodeComparison
   title=""

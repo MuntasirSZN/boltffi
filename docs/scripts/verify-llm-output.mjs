@@ -69,7 +69,11 @@ const typeMarkdown = pages.find(({ id }) => id === 'types')?.markdown ?? '';
 assert.match(typeMarkdown, /\| C\s*\|/, 'the Markdown type tables lost their C column');
 assert.match(typeMarkdown, /DemoStringView \/ DemoString/, 'C ownership types are missing');
 const cMarkdown = pages.find(({ id }) => id === 'c')?.markdown ?? '';
-assert.match(cMarkdown, /demo_safe_divide_result_free/, 'the C guide lost its result cleanup example');
-assert.doesNotMatch(cMarkdown, /FfiString error/, 'the C guide exposes the wrong string error type');
+assert.match(cMarkdown, /demo_string_free/, 'the C page lost its cleanup example');
+assert.match(cMarkdown, /## Memory management/, 'the C page lost its ownership rules');
+const errorMarkdown = pages.find(({ id }) => id === 'errors')?.markdown ?? '';
+assert.match(errorMarkdown, /demo_parse_int_result_free/, 'the Errors page lost C result cleanup');
+const callbackMarkdown = pages.find(({ id }) => id === 'callbacks')?.markdown ?? '';
+assert.match(callbackMarkdown, /demo_value_callback_create/, 'the Callbacks page lost the C vtable example');
 
 console.log(`verified ${pages.length} LLM-ready documentation pages`);

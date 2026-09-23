@@ -847,17 +847,43 @@ If you omit `--python` and do not configure `[targets.python.wheel].interpreters
 
 ## C (experimental)
 
-Enable `[targets.c]` in `boltffi.toml`, then build the header and native libraries for the current host:
+Enable the [C target](/docs/configuration#c-configuration), then build the header and native libraries for the current host:
 
 ```bash
 boltffi pack c --experimental --release --deny-skipped
 ```
 
-The output contains `include/<library>.h` and native libraries under `lib/`. The Rust library must declare both `cdylib` and `staticlib` crate types. C callers need a C11 compiler; the header can also be included from C++.
+The Rust library must declare both `cdylib` and `staticlib` crate types:
 
-Linux gets `.so` and `.a` files; macOS gets `.dylib` and `.a`; Windows with MSVC gets `.dll`, `.dll.lib` for dynamic linking, and `.lib` for static linking. Windows GNU builds use `.dll`, `.dll.a`, and `.a`. The C demo is tested on Linux, macOS, and Windows.
+```toml
+[lib]
+crate-type = ["cdylib", "staticlib"]
+```
 
-`pack c` rejects cross-compilation settings, including Cargo's `--target` and `build.target`. `--deny-skipped` fails the build if C cannot represent an exported declaration. See the [C guide](/docs/c) for compiler commands, runtime library paths, ownership, callbacks, and current limitations.
+`--deny-skipped` makes the command fail if an exported declaration cannot be generated for C. Without it, generation reports skipped declarations and continues with the supported ones. Check that report when sharing a Rust API with other targets.
+
+### Output structure
+
+With the package name `mylib` and output directory `dist/c`, the package contains `include/mylib.h` and native libraries under `lib/`. Ship the header and libraries from the same build. No separate C runtime package is needed.
+
+| Host | Shared library | Static library | Import library for the shared library |
+| --- | --- | --- | --- |
+| Linux | `libmylib.so` | `libmylib.a` | Not needed |
+| macOS | `libmylib.dylib` | `libmylib.a` | Not needed |
+| Windows, MSVC | `mylib.dll` | `mylib.lib` | `mylib.dll.lib` |
+| Windows, GNU | `mylib.dll` | `libmylib.a` | `libmylib.dll.a` |
+
+`pack c` builds for the machine running the command. Cross-compilation through `--target` or Cargo's `build.target` is rejected. Native C demo jobs cover Linux, macOS, and Windows; that does not imply every architecture or compiler combination has been tested. No CMake, Meson, or pkg-config package is generated.
+
+Compile consumers as C11 or later, or include the header from C++. See [linking a C program](/docs/c#link-a-c-program) for compiler commands and runtime library paths. The [C demo](https://github.com/boltffi/boltffi/tree/main/examples/platforms/c) includes a CMake build and executable tests.
+
+### Header-only generation
+
+```bash
+boltffi generate c --experimental --deny-skipped
+```
+
+This writes `dist/c/boltffi.h` without packaging native libraries. `pack c` copies the public header to `dist/c/include/mylib.h` and builds the matching libraries.
 
 ## Build Profiles
 

@@ -8,7 +8,7 @@ import TypeTable from "../../components/TypeTableWrapper.astro";
 
 # Types
 
-C examples use the package name `demo` and include `demo.h`. C is experimental; see the [C guide](/docs/c) for setup and ownership rules.
+C examples use the package name `demo` and include `demo.h`. See [C memory management](/docs/c#memory-management) for borrowed inputs and returned owners.
 
 When you design a Rust API for BoltFFI, you need to know what happens to your types on the other side. This page shows the mapping for each target language.
 
@@ -676,7 +676,7 @@ pub trait Logger {
 }
 ```
 
-C supports synchronous callback traits with the [limitations described in the C guide](/docs/c#callbacks); inline closures are not generated for C.
+C supports synchronous callback traits with the [C vtable contract](/docs/callbacks#c-vtables); inline closures are not generated for C.
 
 See [Callbacks](/docs/callbacks) for closures, callback traits, and async callbacks.
 

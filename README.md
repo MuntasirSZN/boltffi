@@ -119,7 +119,7 @@ int main(void) {
 }
 ```
 
-See the [C guide](https://boltffi.dev/docs/c) for compiler commands and ownership rules, or run the [C demo](examples/platforms/c).
+See [C linking and memory management](https://boltffi.dev/docs/c) for compiler commands and ownership rules, or run the [C demo](examples/platforms/c).
 
 The generated bindings use each language's idioms. Swift gets async/await. Kotlin gets coroutines. Java gets CompletableFuture and functional interfaces. C# gets Tasks and async enumerables. TypeScript gets Promises. Errors become native exceptions in the managed targets. C uses typed results and explicit cleanup functions.
 
@@ -132,7 +132,7 @@ The generated bindings use each language's idioms. Swift gets async/await. Kotli
 | Java     | Full support |
 | C#       | Full support |
 | WASM/TypeScript | Full support |
-| C        | [Experimental, synchronous APIs](https://boltffi.dev/docs/c) |
+| C        | [Experimental, synchronous APIs](https://boltffi.dev/docs/experimental#c) |
 | Python   | Full support |
 | C++      | Planned      |
 | Ruby     | Planned      |

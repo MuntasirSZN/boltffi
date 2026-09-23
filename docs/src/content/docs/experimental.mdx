@@ -13,7 +13,7 @@ Java, C#, and Python bindings are generally available and no longer require expe
 |---------|-----|--------|
 | Dart target | `dart` | In progress |
 | Kotlin Multiplatform target | `kotlin_multiplatform` | Initial JVM/Android actuals |
-| C target | `c` | Synchronous APIs; see [limits](/docs/c#current-limitations) |
+| C target | `c` | Synchronous APIs; see [limits](#c) |
 | TS async streams | `typescript.async_streams` | Functional |
 
 ## Enabling
@@ -53,7 +53,16 @@ This is an initial target slice. Kotlin/Native `cinterop` actuals for iOS/macOS 
 
 Set `targets.c.enabled = true`, then run `boltffi pack c --experimental` to build a header and native libraries for the current host. `boltffi generate c --experimental` writes only the header.
 
-C supports synchronous functions and methods, classes, records, enums with or without payloads, collections, custom types, constants, and typed results. Callback traits have typed handles, but their vtable methods still use bridge types. Async functions, streams, and inline closures are not generated. See [C](/docs/c) for examples and the full list of limits. Add `--deny-skipped` when every exported declaration must have a C binding.
+C supports synchronous functions and methods, classes, records, enums with or without payloads, collections, custom types, constants, and typed results. Add `--deny-skipped` when every exported declaration must have a C binding.
+
+- Async functions, async methods and constructors, streams, and async callback traits are not generated for C.
+- Inline `Fn`, `FnMut`, and `FnOnce` parameters do not have generated C wrappers.
+- Callback payload conversion is incomplete; see [C vtables](/docs/callbacks#c-vtables).
+- Interned-string transport is not implemented for C.
+- Allocation and return-value conversion failures do not have a separate C error channel. Some paths return an empty or zeroed value. The `ok` field on a Rust `Result` reports the Rust result, not all possible allocation failures.
+- [C packaging](/docs/packaging#c-experimental) is host-only and does not generate CMake, Meson, or pkg-config packages.
+
+These limits do not exclude records with strings, data enums, options, nested collections, maps, or custom types from synchronous functions. The generated header and skipped-declaration report describe the API available for a particular library.
 
 ### TypeScript Async Streams
 

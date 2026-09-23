@@ -2,7 +2,7 @@
 
 This directory calls the shared Rust demo library through its generated C API. Start with [example.c](example.c): it passes a string and a record, uses a class, checks a result, and frees the returned owners.
 
-The C target is experimental. It supports synchronous functions and methods, records, enums with payloads, collections, custom types, and constants. See the [C guide](https://boltffi.dev/docs/c) for ownership, callbacks, and current limitations.
+The C target is experimental. It supports synchronous functions and methods, records, enums with payloads, collections, custom types, and constants. See [memory management](https://boltffi.dev/docs/c#memory-management), [callbacks](https://boltffi.dev/docs/callbacks#c-vtables), and the [current limitations](https://boltffi.dev/docs/experimental#c).
 
 ## Run
 

@@ -10,7 +10,7 @@ import TypeTable from "../../components/TypeTableWrapper.astro";
 
 BoltFFI is a tool that generates foreign-language bindings from Rust libraries. It fits the practice of consolidating business logic in a single Rust library while targeting multiple platforms, making it simpler to develop and maintain a cross-platform codebase. `boltffi pack` builds native artifacts and arranges the platform package, including an XCFramework for Apple, jniLibs for Android, a JNI-backed JAR for Java, a NuGet package for .NET, an npm package for WASM/TypeScript, Python wheels, and an experimental C header with shared and static libraries. The generated wrappers handle type conversion, memory management, and error propagation across the language boundary.
 
-The generated bindings are native code that uses each language's idioms. Swift bindings use structured concurrency with async/await. Kotlin bindings use coroutines. Java bindings use CompletableFuture and functional interfaces. C# bindings use `Task`, `IDisposable`, and `IAsyncEnumerable`. TypeScript bindings use Promises and integrate with WASM. Python bindings use typed package modules, asyncio, and wheels that import like normal Python packages. C uses structs, typed results, borrowed input views, and explicit cleanup functions. Errors become native exceptions in the managed languages; C callers check the returned result. See the [C guide](/docs/c) for ownership and supported APIs.
+The generated bindings are native code that uses each language's idioms. Swift bindings use structured concurrency with async/await. Kotlin bindings use coroutines. Java bindings use CompletableFuture and functional interfaces. C# bindings use `Task`, `IDisposable`, and `IAsyncEnumerable`. TypeScript bindings use Promises and integrate with WASM. Python bindings use typed package modules, asyncio, and wheels that import like normal Python packages. C uses structs, typed results, borrowed input views, and explicit cleanup functions. Errors become native exceptions in the managed languages; C callers check the returned result. See [memory management](/docs/c#memory-management) for C ownership rules.
 
 BoltFFI uses a zero-copy approach where possible. Primitives and structs containing only primitives pass across the boundary without serialization. Complex types like strings and collections use a wire format.
 
@@ -146,7 +146,7 @@ BoltFFI has full support for Swift, Kotlin, Java, C#, TypeScript (WASM), and Pyt
 | Java | Supported |
 | C# | Supported |
 | TypeScript (WASM) | Supported |
-| [C](/docs/c) | Experimental; synchronous APIs |
+| C | [Experimental; synchronous APIs](/docs/experimental#c) |
 | Python | Supported |
 | C++ | Planned |
 | Ruby | Planned |
@@ -168,6 +168,6 @@ If you want a language added or considered, [open an issue](https://github.com/b
 - Async streams
 - Rust errors as exceptions
 
-C currently supports the synchronous APIs described above, with limits on callbacks. Async and stream examples apply to the other targets. See [C limitations](/docs/c#current-limitations).
+C currently supports the synchronous APIs described above, with limits on callbacks. Async and stream examples apply to the other targets. See [C limitations](/docs/experimental#c).
 
 See [Types](/docs/types) for the full mapping, or [Getting Started](/docs/getting-started) to set up a project.

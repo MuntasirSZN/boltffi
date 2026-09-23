@@ -8,7 +8,7 @@ import TypeTable from "../../components/TypeTableWrapper.astro";
 
 # Records
 
-C examples use the package name `demo` and include `demo.h`. C is experimental; see the [C guide](/docs/c) for setup and ownership rules.
+C examples use the package name `demo` and include `demo.h`. See [C memory management](/docs/c#memory-management) for borrowed inputs and returned owners.
 
 Records are value types: structs and enums marked with `#[data]`. When a record crosses the boundary, it gets copied. The target language receives its own copy of the data.
 
@@ -481,7 +481,7 @@ demo_string_free(&summary);`}
 
 ### Optional fields
 
-`Option<T>` in Rust becomes a nullable type in the target language. `None` becomes `null` or `nil` on the other side.
+`Option<T>` becomes nullable in the managed languages. In C, an optional field has `has_value` and `value`; read `value` only when `has_value` is true.
 
 <CodeComparison
   title=""
@@ -1217,6 +1217,8 @@ DemoPoint moved = demo_point_add(&point, offset);`}
 ### Mutating methods
 
 Functions that take `&mut self` modify the value in place. In Swift this generates a `mutating` method that reassigns `self`. In Kotlin, Java, C#, and TypeScript the method returns a new copy with the updated values. The same value-copy cost from instance methods applies here since the record is copied both in and out.
+
+C methods take a pointer and update the record or enum in place. If it has owned fields, pass an owning value returned by the generated API. The method replaces old fields and releases their allocations. Do not fill those fields with string literals or borrowed pointers before passing the value to a mutable method.
 
 <CodeComparison
   title=""

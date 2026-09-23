@@ -1,45 +1,13 @@
 ---
 title: "C"
-description: "Call Rust from C: build and link a library, pass records and collections, handle errors and callbacks, and free returned values."
+description: "Link a C or C++ program to a generated Rust library and manage borrowed inputs, returned allocations, and cleanup."
 ---
 
 # C
 
-BoltFFI generates a C header and native libraries from the same Rust exports used by Swift, Kotlin, Java, and the other targets. C callers get structs, functions, and explicit cleanup functions. No separate C runtime package is needed.
+C callers include a generated header, link the native library, and release returned values explicitly. This page covers linking and memory management. Build the library with [Packaging](/docs/packaging#c-experimental) and choose its name and output directory in [Configuration](/docs/configuration#c-configuration).
 
-The C target is experimental. Synchronous functions, classes, records, enums, collections, custom types, and constants are supported. Async functions and streams are not available yet. [Current limitations](#current-limitations) covers the remaining gaps.
-
-## Build a library
-
-Start with the Rust library in [Getting Started](/docs/getting-started). The library must build both shared and static artifacts:
-
-```toml
-[lib]
-crate-type = ["cdylib", "staticlib"]
-```
-
-Enable C in `boltffi.toml`:
-
-```toml
-[package]
-name = "mylib"
-
-[targets.c]
-enabled = true
-output = "dist/c"
-```
-
-Build the library and generate its header:
-
-```sh
-boltffi pack c --experimental --release --deny-skipped
-```
-
-`--deny-skipped` makes the command fail if an exported declaration cannot be generated for C. Without it, generation reports skipped declarations and continues with the supported ones. Check that report when sharing a Rust API with other targets.
-
-`boltffi generate c --experimental` writes just `dist/c/boltffi.h`. `pack c` also builds the libraries and copies the public header to `dist/c/include/mylib.h`. Ship the header and libraries from the same build.
-
-To save the experimental opt-in, put `experimental = ["c"]` at the top of `boltffi.toml`, before any section. C remains disabled unless `targets.c.enabled` is also `true`.
+Select C in the examples on each API's documentation page. C is experimental; its remaining gaps are listed under [Experimental features](/docs/experimental#c).
 
 ## Link a C program
 
@@ -75,46 +43,17 @@ copy dist\c\lib\mylib.dll .
 example.exe
 ```
 
-The package contains these native artifacts:
+For static linking, pass the static library explicitly and link the system libraries required by that Rust library and toolchain. On Windows, `mylib.lib` is the static library; `mylib.dll.lib` links to the DLL. See [Packaging](/docs/packaging#c-experimental) for the artifacts produced on each host.
 
-| Host | Shared library | Static library | Import library for the shared library |
-| --- | --- | --- | --- |
-| Linux | `libmylib.so` | `libmylib.a` | Not needed |
-| macOS | `libmylib.dylib` | `libmylib.a` | Not needed |
-| Windows, MSVC | `mylib.dll` | `mylib.lib` | `mylib.dll.lib` |
-| Windows, GNU | `mylib.dll` | `libmylib.a` | `libmylib.dll.a` |
+## Memory management
 
-For static linking, pass the static library explicitly and link the system libraries required by that Rust library and toolchain. On Windows, `mylib.lib` is the static library; `mylib.dll.lib` links to the DLL.
+Input views borrow memory. Returned values own their allocations. Constructing a view does not copy the data. Its backing memory must remain valid until the call returns. A nonzero length requires a valid pointer to that many elements. A zero-length byte buffer or sequence may have a null pointer.
 
-`pack c` builds for the machine running the command. Cross-compilation through `--target` or Cargo's `build.target` is rejected. Native C demo jobs cover Linux, macOS, and Windows; that does not imply every architecture or compiler combination has been tested.
-
-## Names and examples
-
-The package name supplies the C prefix. With `[package] name = "demo"`, a Rust `Point` becomes `DemoPoint`, `add` becomes `demo_add`, and `ANSWER` becomes `DEMO_ANSWER`. Methods include the type name, such as `demo_counter_get`.
-
-The examples below use the repository's [demo library](https://github.com/boltffi/boltffi/tree/main/examples/demo) and its generated `demo.h`. They include `demo.h` and `<stdio.h>`, and show calls inside a C function unless a complete program is given. The [C demo](https://github.com/boltffi/boltffi/tree/main/examples/platforms/c) includes a CMake build and executable tests for these APIs.
-
-Names beginning with `boltffi_`, `Ffi`, or `___` belong to the underlying bridge. Application code normally uses the package-prefixed API.
-
-## Passing and owning values
-
-Input views borrow memory. Returned values own their allocations. This distinction is part of the generated type name:
-
-| Value | Input | Return | Cleanup for the return |
-| --- | --- | --- | --- |
-| String | `DemoStringView` | `DemoString` | `demo_string_free` |
-| Bytes | `DemoBytesView` | `DemoBytes` | `demo_bytes_free` |
-| Integer collection | `DemoI32Slice` | `DemoI32Sequence` | `demo_i32_sequence_free` |
-| Record with strings | `DemoPersonView` | `DemoPerson` | `demo_person_free` |
-| Collection of those records | `DemoPersonSlice` | `DemoPersonSequence` | `demo_person_sequence_free` |
-
-A view contains pointers and lengths; constructing one does not copy the data. Its backing memory must remain valid until the call returns. A nonzero length requires a valid pointer to that many elements. String lengths count UTF-8 bytes.
+String lengths count UTF-8 bytes. Input strings do not need a trailing NUL. Returned strings have a trailing NUL, but `len` excludes it and remains the correct length when the text contains embedded NUL bytes. Byte buffers have no terminator.
 
 Free each returned owner once with its generated cleanup function. Cleanup also frees nested strings and collections. Assigning an owning struct to another C variable only copies its pointers; it does not create a second owner. Freeing one copy invalidates the other.
 
-### Strings and bytes
-
-A string argument does not need a trailing NUL. Returned strings have a trailing NUL, but `len` excludes it and remains the correct length when the text contains embedded NUL bytes.
+For example, the [demo library](https://github.com/boltffi/boltffi/tree/main/examples/demo) returns an owning string from `echo_string`. Include `demo.h` and `<stdio.h>` to use this example:
 
 ```c
 DemoString message = demo_echo_string(demo_string_view("Hello", 5));
@@ -122,188 +61,12 @@ fwrite(message.ptr, 1, message.len, stdout);
 demo_string_free(&message);
 ```
 
-Byte buffers use the same pointer-and-length convention, without a terminator. A zero-length byte buffer or sequence may have a null pointer.
-
 The public API's strings and collections are C allocations. Do not pass them to `boltffi_free_string` or `boltffi_free_buf`; those functions release raw Rust bridge allocations. Use the package-prefixed cleanup function shown by the generated header.
 
-### Records and enums
-
-Records containing only plain values can be initialized and copied as C structs:
-
-```c
-DemoPoint point = {3.0, 4.0};
-double distance = demo_point_distance(&point);
-demo_point_scale(&point, 2.0);
-printf("%g, %g\n", distance, point.x);
-```
-
-Records with owned fields have an input view and an owning return type. The following call copies the person's name into the returned record:
-
-```c
-DemoPersonView input = {demo_string_view("Ali", 3), 32};
-DemoPerson person = demo_echo_person(input);
-fwrite(person.name.ptr, 1, person.name.len, stdout);
-demo_person_free(&person);
-```
-
-Fieldless enums use named constants such as `DEMO_PRIORITY_HIGH`. Enums with payloads use a `tag` and a union named `data`. Read only the member selected by the tag:
-
-```c
-DemoShape shape = demo_shape_square(3.0);
-if (shape.tag == DEMO_SHAPE_RECTANGLE) {
-    printf("%g x %g\n", shape.data.rectangle.width, shape.data.rectangle.height);
-}
-demo_shape_free(&shape);
-```
-
-For a mutable record or enum with owned fields, pass the owning value to the generated method. It replaces the old fields and releases their allocations. Do not fill such a value with string literals or borrowed pointers before passing it to a mutable method:
-
-```c
-DemoMutableRecord record = demo_mutable_record_new(demo_string_view("Before", 6));
-demo_mutable_record_rename(&record, demo_string_view("After", 5));
-demo_mutable_record_free(&record);
-```
-
-### Collections, options, and maps
-
-Slices borrow contiguous elements; returned sequences own them. Keep the input array alive during the call and release the returned sequence afterward:
-
-```c
-int32_t input[] = {1, 2, 3};
-DemoI32Slice values = {input, 3};
-DemoI32Sequence output = demo_echo_vec_i32(values);
-printf("%zu values\n", (size_t)output.len);
-demo_i32_sequence_free(&output);
-```
-
-Options use `has_value` and `value`. Only read `value` when `has_value` is true. The generated cleanup function handles an absent value too:
-
-```c
-DemoOptionString name = demo_find_name(1);
-if (name.has_value) {
-    fwrite(name.value.ptr, 1, name.value.len, stdout);
-}
-demo_option_string_free(&name);
-```
-
-Nested collections follow the same rules. Maps are arrays of entries with `key` and `value` fields, plus `ptr` and `len` on the map itself. A returned `HashMap<String, i32>` is a `DemoMapStringToI32`; `demo_map_string_to_i32_free` frees its keys and entry array. Hash map iteration order is unspecified. Tuples use fields named `field_0`, `field_1`, and so on.
-
-### Results and errors
-
-C has no exceptions. A fallible function returns a struct with `ok` and a `data` union. Read `data.value` on success or `data.error` on failure, then call the result's cleanup function:
-
-```c
-DemoSafeDivideResult result = demo_safe_divide(12, 0);
-if (result.ok) {
-    printf("%d\n", result.data.value);
-} else {
-    fwrite(result.data.error.ptr, 1, result.data.error.len, stderr);
-}
-demo_safe_divide_result_free(&result);
-```
-
-Here the Rust error is `String`, so `data.error` is `DemoString`. Errors can also be records or enums, including enums with payloads. `Result<(), E>` has no success value to read; check `ok` and read the error only on failure.
-
-The result owns whichever union member is active. Its cleanup function releases that member, including a returned class handle. Do not free the member separately and then free the result.
-
-### Classes
-
-A class value holds a handle to an object in Rust. Its fields are private implementation details. Pass its address to methods and release it when finished:
-
-```c
-DemoCounter counter = demo_counter_new(0);
-demo_counter_increment(&counter);
-printf("%d\n", demo_counter_get(&counter));
-demo_counter_free(&counter);
-```
-
-A fallible constructor follows the same result rules as a free function:
-
-```c
-DemoInventoryTryNewResult inventory = demo_inventory_try_new(4);
-if (inventory.ok) {
-    printf("capacity: %u\n", demo_inventory_capacity(&inventory.data.value));
-} else {
-    fwrite(inventory.data.error.ptr, 1, inventory.data.error.len, stderr);
-}
-demo_inventory_try_new_result_free(&inventory);
-```
-
-Copying a handle struct does not retain the Rust object. Keep one owner. A borrowed class parameter does not take ownership; a consuming parameter takes a mutable pointer and clears the handle after the call. Threading restrictions on the Rust class also apply to C callers.
-
-### Constants and custom types
-
-Simple constants are package-prefixed macros. Values that require Rust evaluation are accessor functions; owning results from those accessors need cleanup just like function results:
-
-```c
-uint32_t answer = DEMO_ANSWER;
-DemoString label = demo_alias();
-printf("%u: ", answer);
-fwrite(label.ptr, 1, label.len, stdout);
-demo_string_free(&label);
-```
-
-Custom types use their declared representation. A string-backed `Email` has `DemoEmailView` for input, `DemoEmail` for output, and `demo_email_free` for cleanup. Custom types also work inside records and collections.
-
-The built-in types have these C representations:
-
-| Rust | C |
-| --- | --- |
-| `Duration` | `DemoDuration` with `uint64_t seconds` and `uint32_t nanoseconds` |
-| `SystemTime` | `DemoSystemTime` with `int64_t seconds` and `uint32_t nanoseconds` |
-| `Uuid` | `DemoUuid` with `uint8_t bytes[16]` |
-| `Url` | `DemoStringView` for input, `DemoString` for output |
-
-Time values use whole seconds and a nanosecond part. `SystemTime` seconds are relative to the Unix epoch; a negative second plus a positive fractional part represents a time before the epoch. Actual clock resolution depends on the Rust target.
-
-## Callbacks
-
-Synchronous callback traits expose a vtable and a typed handle. Supply every vtable slot, including `clone` and `free`, and a nonzero identity that identifies the callback state. Keep the vtable alive for as long as Rust may use it.
-
-This callback uses its identity as an integer offset, so it owns no allocated state:
-
-```c
-static uint64_t offset_clone(uint64_t identity) {
-    return identity;
-}
-
-static void offset_free(uint64_t identity) {
-    (void)identity;
-}
-
-static int32_t offset_value(uint64_t identity, int32_t value) {
-    return value + (int32_t)identity;
-}
-
-static const DemoValueCallback offset_vtable = {
-    .free = offset_free,
-    .clone = offset_clone,
-    .on_value = offset_value
-};
-
-static int32_t call_with_offset(void) {
-    DemoValueCallbackHandle callback = demo_value_callback_create(&offset_vtable, 42);
-    return demo_invoke_value_callback(&callback, 1);
-}
-```
-
-`demo_invoke_value_callback` takes ownership and clears the C handle. Rust releases it through the vtable when finished. To keep another reference, call `demo_value_callback_clone` before passing it; release any unconsumed handle with `demo_value_callback_free`. For heap-allocated callback state, the vtable's `clone` and `free` implementations must retain and release that state, including across threads if the Rust API uses it there.
-
-Callback method signatures still use bridge types. Primitive-only callbacks work directly as above; callbacks with strings, records, or results can require manual bridge conversion. They do not yet have the same automatic C conversions as ordinary exported functions. See the [callback tests](https://github.com/boltffi/boltffi/blob/main/examples/platforms/c/tests/callbacks.c) for handle ownership examples.
+An owning record, collection, or result releases the values it contains. Do not free a nested value separately and then free its owner. See [Errors](/docs/errors#supported-error-types) for result ownership, [Classes](/docs/classes#memory-management) for Rust object handles, and [Callbacks](/docs/callbacks#c-vtables) for callback lifetimes.
 
 ## C++ callers
 
-The header includes `extern "C"` guards and can be included from C++. The compatibility test compiles a generated header in C++03 mode with the host C++ compiler. The C examples on this page use C11 syntax; compound literals and designated initializers may need to be rewritten for the chosen C++ version.
+The header includes `extern "C"` guards and can be included from C++. The compatibility test compiles a generated header in C++03 mode with the host C++ compiler. The documentation's C examples use C11 syntax; compound literals and designated initializers may need to be rewritten for the chosen C++ version.
 
 The API still follows C ownership rules. C++ callers can wrap owning values in local RAII types, but BoltFFI does not generate C++ classes or destructors.
-
-## Current limitations
-
-- Async functions, async methods and constructors, streams, and async callback traits are not generated for C.
-- Inline `Fn`, `FnMut`, and `FnOnce` parameters do not have generated C wrappers.
-- Callback payload conversion is incomplete, as described above.
-- Interned-string transport is not implemented for C.
-- Allocation and return-value conversion failures do not have a separate C error channel. Some paths return an empty or zeroed value. The `ok` field on a Rust `Result` reports the Rust result, not all possible allocation failures.
-- Packaging is host-only. There is no CMake, Meson, or pkg-config package generated alongside the header and libraries.
-
-These limits do not exclude records with strings, data enums, options, nested collections, maps, or custom types from synchronous functions. The generated header and skipped-declaration report describe the API available for a particular library.

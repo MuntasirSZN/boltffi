@@ -33,7 +33,7 @@ const TypeTable = ({ title, mappings }: TypeTableProps) => {
     if (activeLang === "Kotlin") return mapping.kotlin;
     if (activeLang === "Java") return mapping.java || mapping.kotlin;
     if (activeLang === "C#") return mapping.csharp || mapping.java || mapping.kotlin;
-    if (activeLang === "C") return mapping.c ?? "See C guide";
+    if (activeLang === "C") return mapping.c ?? "Not available";
     return mapping.typescript || mapping.kotlin;
   };
 

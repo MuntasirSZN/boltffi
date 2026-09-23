@@ -176,11 +176,9 @@ const sections: Section[] = [
   {
     id: "c", label: "C (Experimental)", icon: FlaskConical,
     children: [
-      { id: "build-a-library", label: "Build" },
-      { id: "link-a-c-program", label: "Link" },
-      { id: "passing-and-owning-values", label: "Ownership" },
-      { id: "callbacks", label: "Callbacks" },
-      { id: "current-limitations", label: "Limitations" },
+      { id: "link-a-c-program", label: "Linking" },
+      { id: "memory-management", label: "Memory Management" },
+      { id: "c-callers", label: "C++ Callers" },
     ],
   },
   { 
