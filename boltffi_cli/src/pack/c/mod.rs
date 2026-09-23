@@ -1,21 +1,4 @@
-//! C package assembler.
-//!
-//! The C package is intentionally the simplest in the repository: the
-//! ergonomic header, a shared library, and a static archive. It is build-system
-//! agnostic so downstream users can easily integrate those artifacts into their
-//! own build system.
-//!
-//! ```text
-//! dist/c/
-//! ├── include/<library>.h
-//! └── lib/
-//!     ├── lib<library>.{so,dylib,dll}
-//!     └── lib<library>.a
-//! ```
-//!
-//! A consumer links with `-I dist/c/include -L dist/c/lib -l<library>` and
-//! chooses dynamic or static linking by picking `lib<library>.so` or
-//! `lib<library>.a`.
+mod package;
 
 use std::path::PathBuf;
 
@@ -33,10 +16,13 @@ use crate::{
         pack::PackCOptions,
     },
     config::Config,
-    pack::{PackError, print_cargo_line, resolve_build_cargo_args},
+    pack::{print_cargo_line, resolve_build_cargo_args},
     reporter::Reporter,
     target::NativeHostPlatform,
 };
+
+use self::package::CPackage;
+use crate::build::native_link::NativeLinkMetadata;
 
 fn ensure_c_pack_cargo_args_supported(cargo: &Cargo) -> Result<()> {
     if let Some(target) = cargo.target_selector() {
@@ -101,10 +87,7 @@ pub(crate) fn pack_c(config: &Config, options: PackCOptions, reporter: &Reporter
     let binding_expansion = BindingExpansion::resolve(config, &build_cargo_args)?;
     ensure_c_library_outputs(&binding_expansion)?;
 
-    // Generating the header runs a metadata rustc invocation. Build the final
-    // artifacts afterwards so that metadata compilation cannot overwrite the
-    // binding-expansion cdylib/staticlib selected for this package.
-    if options.execution.regenerate {
+    if options.execution.regenerate && !options.execution.no_build {
         let step = reporter.step("Generating C bindings");
         run_generate_with_output(
             config,
@@ -123,12 +106,48 @@ pub(crate) fn pack_c(config: &Config, options: PackCOptions, reporter: &Reporter
         command: "pack c is unsupported on this host platform".to_owned(),
         status: None,
     })?;
+    let package = CPackage::new(config, binding_expansion.selected_library(), platform)?;
     let artifact_name = binding_expansion.artifact_name().to_owned();
     let profile_dir = binding_expansion
         .target_directory()
         .join(build_profile.output_directory_name());
 
-    if !options.execution.no_build {
+    let link_metadata_path = profile_dir.join(format!("{artifact_name}.boltffi-link.json"));
+    let native_link = if options.execution.no_build {
+        let metadata = NativeLinkMetadata::read(&link_metadata_path).map_err(|error| {
+            CliError::CommandFailed {
+                command: format!("{error}; run pack c without --no-build first"),
+                status: None,
+            }
+        })?;
+        let metadata_time = std::fs::metadata(&link_metadata_path)
+            .and_then(|metadata| metadata.modified())
+            .map_err(|source| CliError::ReadFailed {
+                path: link_metadata_path.clone(),
+                source,
+            })?;
+        [
+            platform.static_library_filename(&artifact_name),
+            platform.shared_library_filename(&artifact_name),
+        ]
+        .iter()
+        .try_for_each(|filename| {
+            let path = profile_dir.join(filename);
+            let modified = std::fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .map_err(|source| CliError::ReadFailed { path, source })?;
+            if modified > metadata_time {
+                return Err(CliError::CommandFailed {
+                    command:
+                        "native libraries changed since C packaging; run pack c without --no-build"
+                            .to_owned(),
+                    status: None,
+                });
+            }
+            Ok(())
+        })?;
+        metadata
+    } else {
         let step = reporter.step("Building Rust shared and static libraries");
         let on_output: Option<OutputCallback> = step
             .is_verbose()
@@ -142,16 +161,13 @@ pub(crate) fn pack_c(config: &Config, options: PackCOptions, reporter: &Reporter
                 extra_env: Vec::new(),
             },
         );
-        if !builder.build_host()? {
-            return Err(PackError::BuildFailed {
-                targets: vec![platform.canonical_name().to_owned()],
-            }
-            .into());
-        }
+        let native_link = builder.build_host_with_native_link_metadata()?;
+        native_link.write(&link_metadata_path)?;
         step.finish_success();
-    }
+        native_link
+    };
 
-    let step = reporter.step("Packaging header and libraries");
+    let step = reporter.step("Packaging header, libraries, and build metadata");
 
     let output_dir = config.c_output();
     let include_dir = output_dir.join("include");
@@ -167,32 +183,26 @@ pub(crate) fn pack_c(config: &Config, options: PackCOptions, reporter: &Reporter
 
     let library_name = config.library_name().to_string();
 
-    // Header.
     let header_source = output_dir.join("boltffi.h");
     let header_dest = include_dir.join(format!("{library_name}.h"));
     copy_file(header_source, header_dest)?;
 
-    // Shared library.
     copy_file(
         profile_dir.join(platform.shared_library_filename(&artifact_name)),
-        lib_dir.join(platform.shared_library_filename(&library_name)),
+        lib_dir.join(platform.shared_library_filename(&artifact_name)),
     )?;
 
-    // Static archive.
     copy_file(
         profile_dir.join(platform.static_library_filename(&artifact_name)),
-        lib_dir.join(platform.static_library_filename(&library_name)),
+        lib_dir.join(platform.static_library_filename(&artifact_name)),
     )?;
 
-    if let (Some(source_name), Some(destination_name)) = (
-        platform.import_library_filename(&artifact_name),
-        platform.import_library_filename(&library_name),
-    ) {
-        copy_file(
-            profile_dir.join(source_name),
-            lib_dir.join(destination_name),
-        )?;
+    if let Some(filename) = platform.import_library_filename(&artifact_name) {
+        copy_file(profile_dir.join(&filename), lib_dir.join(filename))?;
     }
+
+    package.relocate_shared_library(&output_dir)?;
+    package.write_metadata(&output_dir, &native_link)?;
 
     step.finish_success();
     reporter.finish();

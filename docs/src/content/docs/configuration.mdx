@@ -558,6 +558,8 @@ C is disabled by default; its default output directory is `dist/c`. To include i
 
 The [package name](#package-identity) supplies the C prefix. With `[package] name = "demo"`, a Rust `Point` becomes `DemoPoint`, `add` becomes `demo_add`, and `ANSWER` becomes `DEMO_ANSWER`. Methods include the type name, such as `demo_counter_get`. Names beginning with `boltffi_`, `Ffi`, or `___` belong to the underlying bridge; application code normally uses the package-prefixed API.
 
+The header, CMake package, and pkg-config files use `package.crate_name`, falling back to `package.name`. Native binaries keep the selected Cargo library target's name. Package metadata uses `package.version` when set, otherwise the selected Cargo package's version.
+
 See [C packaging](/docs/packaging#c-experimental) for generation commands, output files, and host restrictions.
 
 <h2 id="c-sharp-configuration">C# Configuration</h2>

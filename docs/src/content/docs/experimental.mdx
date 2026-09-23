@@ -60,7 +60,7 @@ C supports synchronous functions and methods, classes, records, enums with or wi
 - Callback payload conversion is incomplete; see [C vtables](/docs/callbacks#c-vtables).
 - Interned-string transport is not implemented for C.
 - Allocation and return-value conversion failures do not have a separate C error channel. Some paths return an empty or zeroed value. The `ok` field on a Rust `Result` reports the Rust result, not all possible allocation failures.
-- [C packaging](/docs/packaging#c-experimental) is host-only and does not generate CMake, Meson, or pkg-config packages.
+- [C packaging](/docs/packaging#c-experimental) is host-only. Cross-compilation through Cargo target selection is not supported.
 
 These limits do not exclude records with strings, data enums, options, nested collections, maps, or custom types from synchronous functions. The generated header and skipped-declaration report describe the API available for a particular library.
 

@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: {{ name }}
+Description: {{ description }}
+Version: {{ version }}
+Cflags: -I${includedir}
+Libs: {{ libraries }}
+Libs.private: {{ private_libraries }}

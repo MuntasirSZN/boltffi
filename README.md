@@ -119,7 +119,7 @@ int main(void) {
 }
 ```
 
-See [C linking and memory management](https://boltffi.dev/docs/c) for compiler commands and ownership rules, or run the [C demo](examples/platforms/c).
+The C package includes CMake targets and pkg-config files for shared and static linking. See [C linking and memory management](https://boltffi.dev/docs/c) for CMake, Make, Meson, and ownership rules, or run the [C demo](examples/platforms/c).
 
 The generated bindings use each language's idioms. Swift gets async/await. Kotlin gets coroutines. Java gets CompletableFuture and functional interfaces. C# gets Tasks and async enumerables. TypeScript gets Promises. Errors become native exceptions in the managed targets. C uses typed results and explicit cleanup functions.
 

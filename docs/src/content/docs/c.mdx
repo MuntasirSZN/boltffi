@@ -25,25 +25,89 @@ int main(void) {
 }
 ```
 
-Compile as C11 or later. On Linux and macOS, this links the shared library and records its location for this local example:
+Compile as C11 or later. `pack c` includes CMake and pkg-config files that describe the header, libraries, and static link dependencies.
+
+### CMake
+
+Create a `CMakeLists.txt` next to `main.c`:
+
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(example LANGUAGES C)
+
+find_package(mylib CONFIG REQUIRED)
+
+add_executable(example main.c)
+set_target_properties(example PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+target_link_libraries(example PRIVATE mylib::mylib)
+
+if(WIN32)
+    add_custom_command(TARGET example POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:mylib::mylib>" "$<TARGET_FILE_DIR:example>")
+endif()
+```
+
+Point CMake at the package directory:
 
 ```sh
-cc -std=c11 main.c -I dist/c/include -L dist/c/lib -lmylib \
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/dist/c"
+cmake --build build --config Release
+```
+
+`mylib::mylib` links the shared library. On Windows, the post-build command puts the DLL beside the executable. CMake records the package's library directory in the build's runtime search path on Linux and macOS.
+
+If you add a version to `find_package`, it must match the packaged version exactly. The generated package does not claim ABI compatibility with other versions.
+
+For static linking, use `mylib::mylib_static` and remove the DLL-copy step. Its link dependencies come from the Rust build; the C project does not need to list them itself. Static linking includes the Rust library in the executable. System libraries may still be linked dynamically.
+
+### Make and compiler commands
+
+Add the package to pkg-config's search path:
+
+```sh
+export PKG_CONFIG_PATH="$PWD/dist/c/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+```
+
+On Linux or macOS, compile and run a shared-library consumer:
+
+```sh
+cc -std=c11 main.c $(pkg-config --cflags --libs mylib) \
   -Wl,-rpath,"$PWD/dist/c/lib" -o example
 ./example
 ```
 
-For distribution, install the shared library where the application can load it and set the runtime search path for that layout. The absolute path above is only for running the local build.
+For a static consumer, select the `mylib-static` package:
 
-On Windows, run this from an MSVC developer command prompt:
-
-```bat
-cl /std:c11 /I dist\c\include main.c dist\c\lib\mylib.dll.lib /Fe:example.exe
-copy dist\c\lib\mylib.dll .
-example.exe
+```sh
+cc -std=c11 main.c $(pkg-config --cflags --libs mylib-static) -o example
+./example
 ```
 
-For static linking, pass the static library explicitly and link the system libraries required by that Rust library and toolchain. On Windows, `mylib.lib` is the static library; `mylib.dll.lib` links to the DLL. See [Packaging](/docs/packaging#c-experimental) for the artifacts produced on each host.
+That file names the archive explicitly and includes its dependencies. `pkg-config --static --libs mylib` also reports static dependencies, but its `-lmylib` flag alone does not force a compiler to choose the archive when a shared library is present.
+
+These shell examples assume the package path has no spaces. CMake and Meson handle paths with spaces. MSVC consumers can use the CMake package above.
+
+### Meson
+
+With `PKG_CONFIG_PATH` set as above, use the generated pkg-config file:
+
+```meson
+project('example', 'c', default_options: ['c_std=c11'])
+
+mylib = dependency('mylib', method: 'pkg-config')
+executable('example', 'main.c', dependencies: mylib)
+```
+
+Set `static: true` on `dependency(...)` to select the archive and its dependencies.
+
+### Shipping the application
+
+The package can be moved as a directory: its CMake and pkg-config files locate the headers and libraries relative to themselves. Keep `include/` and `lib/` together.
+
+A shared-library application still needs the library at runtime. Put the DLL beside the executable on Windows. On Linux and macOS, install the library in a location the application can load and set its runtime search path for that layout. The compiler command above uses an absolute path for a local build.
+
+If the Rust crate depends on external native libraries, those dependencies must also be available to the consumer's linker and runtime loader. BoltFFI does not bundle third-party shared libraries.
 
 ## Memory management
 

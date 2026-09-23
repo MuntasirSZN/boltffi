@@ -864,7 +864,22 @@ crate-type = ["cdylib", "staticlib"]
 
 ### Output structure
 
-With the package name `mylib` and output directory `dist/c`, the package contains `include/mylib.h` and native libraries under `lib/`. Ship the header and libraries from the same build. No separate C runtime package is needed.
+With the package name and Rust library target both named `mylib`, and output directory `dist/c`, the package contains:
+
+```text
+dist/c/
+├── include/mylib.h
+└── lib/
+    ├── native libraries
+    ├── cmake/mylib/
+    │   ├── mylibConfig.cmake
+    │   └── mylibConfigVersion.cmake
+    └── pkgconfig/
+        ├── mylib.pc
+        └── mylib-static.pc
+```
+
+Ship `include/` and `lib/` together from the same build. The CMake and pkg-config files use paths relative to the package, so the directory can be moved. No separate C runtime package is needed.
 
 | Host | Shared library | Static library | Import library for the shared library |
 | --- | --- | --- | --- |
@@ -873,9 +888,13 @@ With the package name `mylib` and output directory `dist/c`, the package contain
 | Windows, MSVC | `mylib.dll` | `mylib.lib` | `mylib.dll.lib` |
 | Windows, GNU | `mylib.dll` | `libmylib.a` | `libmylib.dll.a` |
 
-`pack c` builds for the machine running the command. Cross-compilation through `--target` or Cargo's `build.target` is rejected. Native C demo jobs cover Linux, macOS, and Windows; that does not imply every architecture or compiler combination has been tested. No CMake, Meson, or pkg-config package is generated.
+`pack c` builds for the machine running the command. Cross-compilation through `--target` or Cargo's `build.target` is rejected. Native C demo jobs cover Linux, macOS, and Windows; that does not imply every architecture or compiler combination has been tested. CMake and pkg-config metadata are generated automatically; Meson can consume the pkg-config file.
 
-Compile consumers as C11 or later, or include the header from C++. See [linking a C program](/docs/c#link-a-c-program) for compiler commands and runtime library paths. The [C demo](https://github.com/boltffi/boltffi/tree/main/examples/platforms/c) includes a CMake build and executable tests.
+See [C configuration](/docs/configuration#c-configuration) for package names and versions. Native binaries keep the selected Cargo library target's name; the metadata points to those filenames, including the Windows import library.
+
+Static link dependencies are collected from the same Rust build as the archive. `--no-build` reuses the header, libraries, and cached link metadata from a previous `pack c` run. Run without `--no-build` after changing the Rust build or if no cached metadata exists.
+
+Compile consumers as C11 or later, or include the header from C++. See [linking a C program](/docs/c#link-a-c-program) for CMake, Make, Meson, and runtime library paths. The [C demo](https://github.com/boltffi/boltffi/tree/main/examples/platforms/c) includes a CMake build and executable tests.
 
 ### Header-only generation
 

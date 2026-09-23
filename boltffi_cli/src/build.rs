@@ -1,11 +1,12 @@
 mod expansion;
+pub mod native_link;
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use crate::cli::Result;
+use crate::cli::{CliError, Result};
 use crate::config::Config;
 use crate::target::{Platform, RustTarget};
 use crate::toolchain::{AndroidToolchain, AndroidToolchainError};
@@ -186,12 +187,31 @@ impl<'a> Builder<'a> {
         self.build_targets(targets)
     }
 
-    pub fn build_host(&self) -> Result<bool> {
+    pub fn build_host_with_native_link_metadata(&self) -> Result<native_link::NativeLinkMetadata> {
+        if !matches!(self.options.selection, BuildSelection::Expanded(_)) {
+            return Err(CliError::CommandFailed {
+                command: "native link metadata requires a selected binding expansion".to_owned(),
+                status: None,
+            });
+        }
         let mut command = self.host_command()?;
-        Ok(run_command_streaming(
-            &mut command,
-            self.options.on_output.as_ref(),
-        ))
+        command.arg("--print=native-static-libs");
+        let output = command.output().map_err(|source| CliError::CommandFailed {
+            command: format!("cargo rustc --print=native-static-libs: {source}"),
+            status: None,
+        })?;
+        if let Some(on_output) = self.options.on_output.as_ref() {
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .for_each(on_output);
+        }
+        if !output.status.success() {
+            return Err(CliError::CommandFailed {
+                command: format!("cargo rustc: {}", String::from_utf8_lossy(&output.stderr)),
+                status: output.status.code(),
+            });
+        }
+        native_link::NativeLinkMetadata::from_output(&output)
     }
 
     pub fn build_wasm_with_triple(&self, triple: &str) -> Result<Vec<BuildResult>> {
@@ -218,6 +238,7 @@ impl<'a> Builder<'a> {
         self.apply_cargo_build_prefix(&mut command, &command_args);
         self.apply_common_build_args(&mut command);
         command.args(&command_args.command_args);
+        command.arg("--message-format=json-render-diagnostics");
         self.apply_expansion(&mut command)?;
         command.env_remove("IPHONEOS_DEPLOYMENT_TARGET");
         command.envs(

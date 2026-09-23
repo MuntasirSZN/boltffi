@@ -368,7 +368,7 @@ pub(crate) enum PackTargetArg {
     },
     #[command(
         about = "Build + package C artifacts (experimental)",
-        long_about = "Build + package C artifacts.\n\nOutputs:\n  - Header: {targets.c.output}/include/<library>.h\n  - Host library: {targets.c.output}/lib/"
+        long_about = "Build + package C artifacts.\n\nOutputs:\n  - Header: {targets.c.output}/include/<library>.h\n  - Host libraries: {targets.c.output}/lib/\n  - CMake package: {targets.c.output}/lib/cmake/<library>/\n  - pkg-config files: {targets.c.output}/lib/pkgconfig/"
     )]
     C {
         #[arg(long)]
