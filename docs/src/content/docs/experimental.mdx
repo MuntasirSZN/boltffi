@@ -13,7 +13,7 @@ Java, C#, and Python bindings are generally available and no longer require expe
 |---------|-----|--------|
 | Dart target | `dart` | In progress |
 | Kotlin Multiplatform target | `kotlin_multiplatform` | Initial JVM/Android actuals |
-| C target | `c` | Experimental (sync surface) |
+| C target | `c` | Synchronous APIs; see [limits](/docs/c#current-limitations) |
 | TS async streams | `typescript.async_streams` | Functional |
 
 ## Enabling
@@ -51,10 +51,9 @@ This is an initial target slice. Kotlin/Native `cinterop` actuals for iOS/macOS 
 
 **Key:** `c`
 
-Enabled behind the experimental flag. `boltffi generate c --experimental`
-emits a sync-only C header (functions, records, enums, constants, classes,
-sync callbacks, error helpers). Async functions, streams, and async callback
-completions are reported as unsupported rather than half-rendered.
+Set `targets.c.enabled = true`, then run `boltffi pack c --experimental` to build a header and native libraries for the current host. `boltffi generate c --experimental` writes only the header.
+
+C supports synchronous functions and methods, classes, records, enums with or without payloads, collections, custom types, constants, and typed results. Callback traits have typed handles, but their vtable methods still use bridge types. Async functions, streams, and inline closures are not generated. See [C](/docs/c) for examples and the full list of limits. Add `--deny-skipped` when every exported declaration must have a C binding.
 
 ### TypeScript Async Streams
 

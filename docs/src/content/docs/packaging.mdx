@@ -9,7 +9,7 @@ Packaging takes your Rust library and produces artifacts ready for each packaged
 
 `pack` is for targets where BoltFFI owns the platform package layout, such as an Apple
 XCFramework/SwiftPM package, Android jniLibs, Java JNI output, a C# NuGet package, a WASM npm
-package, or a Python wheel. `generate` writes only the source bindings for a single language and is
+package, a Python wheel, or a C header with native libraries. `generate` writes only the source bindings for a single language and is
 useful when you want to integrate them into an existing project layout yourself.
 
 ## Overview
@@ -20,7 +20,7 @@ The packaging process has three stages:
 2. **Generate** - Create Swift/Kotlin/Java/C#/TypeScript/Python bindings and C headers from your exported API
 3. **Package** - Bundle everything into platform-specific formats
 
-For Apple, this produces an xcframework and SwiftPM package. For Android, this produces jniLibs and Kotlin sources. For Java (JVM), this produces a JNI shared library and Java sources. For C#, this produces a NuGet package containing the bindings and native runtime assets. For WASM, this produces an npm package with TypeScript bindings. For Python, this produces a generated source package plus one or more wheels for the current host.
+For Apple, this produces an xcframework and SwiftPM package. For Android, this produces jniLibs and Kotlin sources. For Java (JVM), this produces a JNI shared library and Java sources. For C#, this produces a NuGet package containing the bindings and native runtime assets. For WASM, this produces an npm package with TypeScript bindings. For Python, this produces a generated source package plus one or more wheels for the current host. For C, it produces a header, shared library, and static library for the current host.
 
 ## Getting Started
 
@@ -847,18 +847,17 @@ If you omit `--python` and do not configure `[targets.python.wheel].interpreters
 
 ## C (experimental)
 
-C packaging emits build-system-neutral artifacts for the current host rather
-than a project for a particular build tool:
+Enable `[targets.c]` in `boltffi.toml`, then build the header and native libraries for the current host:
 
 ```bash
-boltffi pack c --experimental
+boltffi pack c --experimental --release --deny-skipped
 ```
 
-The output contains `include/<library>.h`, a shared library, and a static
-archive under `lib/`. Add those paths to your own compiler or build-system
-configuration. The public header requires C11; cross-target, Windows, and C++
-consumer support are not yet validated. See [C](/docs/c) for the supported
-surface, ownership rules, and shared versus static linking guidance.
+The output contains `include/<library>.h` and native libraries under `lib/`. The Rust library must declare both `cdylib` and `staticlib` crate types. C callers need a C11 compiler; the header can also be included from C++.
+
+Linux gets `.so` and `.a` files; macOS gets `.dylib` and `.a`; Windows with MSVC gets `.dll`, `.dll.lib` for dynamic linking, and `.lib` for static linking. Windows GNU builds use `.dll`, `.dll.a`, and `.a`. The C demo is tested on Linux, macOS, and Windows.
+
+`pack c` rejects cross-compilation settings, including Cargo's `--target` and `build.target`. `--deny-skipped` fails the build if C cannot represent an exported declaration. See the [C guide](/docs/c) for compiler commands, runtime library paths, ownership, callbacks, and current limitations.
 
 ## Build Profiles
 

@@ -8,6 +8,8 @@ import TypeTable from "../../components/TypeTableWrapper.astro";
 
 # Callbacks & Traits
 
+C supports synchronous callback traits through a vtable and a typed handle. Its callback method signatures still use bridge types; see the [complete C example and ownership rules](/docs/c#callbacks). Inline closures and async callback traits are not generated for C.
+
 Target language code can flow into Rust through closures and traits. Pass a closure and the target language provides a lambda. Define a trait and the target language implements it as a protocol or interface. Both enable patterns like event handling, progress reporting, data providers, and transformation functions. BoltFFI generates the appropriate bindings for each form, handling the FFI boundary so implementations on either side can call each other safely.
 
 ## Closures

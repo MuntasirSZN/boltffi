@@ -58,4 +58,18 @@ assert.match(
   /Constants can use the same types as exported function results/,
 );
 
+const cExamplePages = ['overview', 'types', 'records', 'classes', 'functions', 'errors', 'constants'];
+cExamplePages.forEach((id) => {
+  const page = pages.find((candidate) => candidate.id === id);
+  assert.match(page?.markdown ?? '', /```c\n/, `${id}.md lost its C examples`);
+  assert.match(page?.html ?? '', />C<\/button>/, `${id} has no C language button`);
+});
+
+const typeMarkdown = pages.find(({ id }) => id === 'types')?.markdown ?? '';
+assert.match(typeMarkdown, /\| C\s*\|/, 'the Markdown type tables lost their C column');
+assert.match(typeMarkdown, /DemoStringView \/ DemoString/, 'C ownership types are missing');
+const cMarkdown = pages.find(({ id }) => id === 'c')?.markdown ?? '';
+assert.match(cMarkdown, /demo_safe_divide_result_free/, 'the C guide lost its result cleanup example');
+assert.doesNotMatch(cMarkdown, /FfiString error/, 'the C guide exposes the wrong string error type');
+
 console.log(`verified ${pages.length} LLM-ready documentation pages`);

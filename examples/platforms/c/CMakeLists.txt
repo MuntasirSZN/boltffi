@@ -41,13 +41,22 @@ add_executable(c_demo
 set_target_properties(c_demo PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
 target_link_libraries(c_demo PRIVATE demo)
 
+add_executable(c_example example.c)
+set_target_properties(c_example PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+target_link_libraries(c_example PRIVATE demo)
+
 if(WIN32)
     add_custom_command(TARGET c_demo POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "$<TARGET_FILE:demo>" "$<TARGET_FILE_DIR:c_demo>")
+    add_custom_command(TARGET c_example POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:demo>" "$<TARGET_FILE_DIR:c_example>")
 else()
     target_link_libraries(c_demo PRIVATE m)
+    target_link_libraries(c_example PRIVATE m)
 endif()
 
 enable_testing()
 add_test(NAME c_demo COMMAND c_demo)
+add_test(NAME c_example COMMAND c_example)

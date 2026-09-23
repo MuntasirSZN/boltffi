@@ -167,12 +167,22 @@ const sections: Section[] = [
       { id: "apple-packaging", label: "Apple" },
       { id: "android-packaging", label: "Android" },
       { id: "java-packaging", label: "Java" },
+      { id: "c-experimental", label: "C" },
       { id: "c-sharp-generation", label: "C#" },
       { id: "wasm-packaging", label: "WASM" },
       { id: "python-packaging", label: "Python" },
     ]
   },
-  { id: "c", label: "C (Experimental)", icon: FlaskConical },
+  {
+    id: "c", label: "C (Experimental)", icon: FlaskConical,
+    children: [
+      { id: "build-a-library", label: "Build" },
+      { id: "link-a-c-program", label: "Link" },
+      { id: "passing-and-owning-values", label: "Ownership" },
+      { id: "callbacks", label: "Callbacks" },
+      { id: "current-limitations", label: "Limitations" },
+    ],
+  },
   { 
     id: "configuration", 
     label: "Configuration", 
