@@ -61,7 +61,7 @@ impl Class {
         let streams = package
             .streams_for_class(declaration.id())
             .into_iter()
-            .map(|stream| ClassStream::from_declaration(stream, &class_name, package))
+            .map(|stream| ClassStream::from_declaration(stream, declaration, &class_name, package))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             documentation: Documentation::new(declaration.meta().doc()),

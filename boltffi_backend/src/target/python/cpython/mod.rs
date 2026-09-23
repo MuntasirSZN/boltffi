@@ -1528,23 +1528,84 @@ mod tests {
         assert!(extension.contains("int32_t *items = NULL;"));
         assert!(extension.contains("boltffi_python_box_i32(items[item_index])"));
         assert!(extension.contains(
-            "{\"subscribe_values\", (PyCFunction)boltffi_python_stream_wrapper_boltffi_stream_demo_event_bus_subscribe_values_subscribe, METH_FASTCALL, NULL}"
+            "{\"event_bus_subscribe_values\", (PyCFunction)boltffi_python_stream_wrapper_boltffi_stream_demo_event_bus_subscribe_values_subscribe, METH_FASTCALL, NULL}"
         ));
         assert!(
             init.contains("def subscribe_values(self) -> \"EventBusSubscribeValuesSubscription\":")
         );
         assert!(init.contains(
-            "return EventBusSubscribeValuesSubscription._from_handle(_native.subscribe_values(self._handle))"
+            "return EventBusSubscribeValuesSubscription._from_handle(_native.event_bus_subscribe_values(self._handle))"
         ));
         assert!(init.contains("class EventBusSubscribeValuesSubscription:"));
         assert!(init.contains("def pop_batch(self, max_count: int = 16) -> list[int]:"));
         assert!(init.contains(
-            "return _native.subscribe_values_pop_batch(self._require_handle(), max_count)"
+            "return _native.event_bus_subscribe_values_pop_batch(self._require_handle(), max_count)"
         ));
         assert!(stub.contains(
             "def subscribe_values(self) -> \"EventBusSubscribeValuesSubscription\": ..."
         ));
         assert!(stub.contains("def pop_batch(self, max_count: int = 16) -> list[int]: ..."));
+    }
+
+    #[test]
+    fn python_target_keeps_same_named_streams_of_two_classes_apart() {
+        let output = target()
+            .render(&bindings(
+                r#"
+                use std::sync::Arc;
+                use boltffi::EventSubscription;
+
+                pub struct Ints;
+                pub struct Floats;
+
+                #[export(single_threaded)]
+                impl Ints {
+                    pub fn new() -> Self {
+                        Self
+                    }
+
+                    #[ffi_stream(item = i32)]
+                    pub fn items(&self) -> Arc<EventSubscription<i32>> {
+                        todo!()
+                    }
+                }
+
+                #[export(single_threaded)]
+                impl Floats {
+                    pub fn new() -> Self {
+                        Self
+                    }
+
+                    #[ffi_stream(item = f64)]
+                    pub fn items(&self) -> Arc<EventSubscription<f64>> {
+                        todo!()
+                    }
+                }
+                "#,
+            ))
+            .expect("Python target should render same-named streams on two classes");
+        let extension = extension(&output);
+        let init = file(&output, "demo/__init__.py");
+
+        // the accessors carry the owner, so neither registration shadows the other
+        assert!(extension.contains("{\"ints_items\", (PyCFunction)"));
+        assert!(extension.contains("{\"floats_items\", (PyCFunction)"));
+        assert!(!extension.contains("{\"items\", (PyCFunction)"));
+        assert!(init.contains(
+            "return IntsItemsSubscription._from_handle(_native.ints_items(self._handle))"
+        ));
+        assert!(init.contains(
+            "return FloatsItemsSubscription._from_handle(_native.floats_items(self._handle))"
+        ));
+        // …and each subscription pops through its own item decoder
+        assert!(
+            init.contains("return _native.ints_items_pop_batch(self._require_handle(), max_count)")
+        );
+        assert!(
+            init.contains(
+                "return _native.floats_items_pop_batch(self._require_handle(), max_count)"
+            )
+        );
     }
 
     #[test]
