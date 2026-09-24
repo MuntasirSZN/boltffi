@@ -129,6 +129,39 @@ struct NativeFunctionTemplate<'function> {
 }
 
 #[derive(Template)]
+#[template(path = "target/csharp/owned_call.cs", escape = "none")]
+struct OwnedCallTemplate<'call> {
+    arguments: &'call [OwnedArgument],
+    invocation: &'call Expression,
+    asynchronous: bool,
+}
+
+enum OwnedArgument {
+    Class {
+        parameter: Identifier,
+        class: TypeFragment,
+        local: Identifier,
+        presence: HandlePresence,
+    },
+    Closure {
+        parameter: Identifier,
+        local: Identifier,
+    },
+}
+
+impl OwnedArgument {
+    fn local(&self) -> &Identifier {
+        match self {
+            Self::Class { local, .. } | Self::Closure { local, .. } => local,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "target/csharp/owned_closure.cs", escape = "none")]
+struct OwnedClosureTemplate;
+
+#[derive(Template)]
 #[template(path = "target/csharp/status.cs", escape = "none")]
 struct StatusTemplate;
 
@@ -478,6 +511,7 @@ impl Function {
         let mut encoded_writeback = None;
         let mut parameter_writebacks = Vec::new();
         let mut setup = Vec::new();
+        let mut owned_arguments = Vec::new();
         let mut requires_wire_runtime = false;
         let mut requires_callback_runtime = false;
         let mut requires_copy_buffer = false;
@@ -685,7 +719,7 @@ impl Function {
                     target,
                     carrier,
                     presence,
-                    ..
+                    receive,
                 }) => {
                     let ParameterGroup::Value(index) = group else {
                         return broken_contract("handle parameter does not use one C value slot");
@@ -696,16 +730,35 @@ impl Function {
                         return broken_contract("handle parameter does not match the C bridge");
                     }
                     let (public_type, argument) = match target {
-                        HandleTarget::Class(class) => (
-                            type_name::class(*class, context)?,
-                            match presence {
-                                HandlePresence::Required => format!("{name}.Handle"),
-                                HandlePresence::Nullable => {
-                                    format!("{name}?.Handle ?? 0")
+                        HandleTarget::Class(class) => {
+                            let public_type = type_name::class(*class, context)?;
+                            let argument = match receive {
+                                Receive::ByValue => {
+                                    let local = Identifier::parse(format!(
+                                        "__boltffiOwnedHandle{}",
+                                        owned_arguments.len()
+                                    ))?;
+                                    let argument = Expression::member(
+                                        local.clone(),
+                                        Identifier::parse("Handle")?,
+                                    );
+                                    owned_arguments.push(OwnedArgument::Class {
+                                        parameter: name.clone(),
+                                        class: public_type.clone(),
+                                        local,
+                                        presence: *presence,
+                                    });
+                                    argument.to_string()
                                 }
-                                _ => return unsupported("unknown handle presence"),
-                            },
-                        ),
+                                Receive::ByRef | Receive::ByMutRef => match presence {
+                                    HandlePresence::Required => format!("{name}.Handle"),
+                                    HandlePresence::Nullable => format!("{name}?.Handle ?? 0"),
+                                    _ => return unsupported("unknown handle presence"),
+                                },
+                                _ => return unsupported("unknown class handle receive mode"),
+                            };
+                            (public_type, argument)
+                        }
                         HandleTarget::Callback(callback) => {
                             requires_callback_runtime = true;
                             let ty = type_name::callback(*callback, context)?;
@@ -908,7 +961,7 @@ impl Function {
                     parameters.push(closure.parameter);
                     native_parameters.extend(closure.native_parameters);
                     invocation_arguments.extend(closure.invocation_arguments);
-                    setup.push(closure.setup);
+                    owned_arguments.push(closure.ownership);
                     requires_wire_runtime |= closure.requires_wire_runtime;
                     requires_copy_buffer |= closure.requires_copy_buffer;
                     closure_helpers.push(closure.helper);
@@ -1281,10 +1334,24 @@ impl Function {
             invocation_arguments.append(&mut completion_invocation_arguments);
         }
 
-        let invocation = Expression::call(
+        let mut invocation = Expression::call(
             Expression::member(Identifier::parse("NativeMethods")?, native_name.clone()),
             ArgumentList::new(invocation_arguments),
         );
+        if !owned_arguments.is_empty() {
+            let transfer = OwnedCallTemplate {
+                arguments: &owned_arguments,
+                invocation: &invocation,
+                asynchronous: async_symbols.is_some(),
+            }
+            .render()?;
+            if async_symbols.is_some() {
+                invocation = Expression::new(transfer);
+            } else {
+                setup.push(Statement::new(transfer));
+                invocation = Expression::identifier(Identifier::parse("__boltffiCallResult")?);
+            }
+        }
         let receiver = callable.receiver().is_some();
         let extension_owner = match (&call_site, receiver) {
             (CallSite::Enumeration { owner, .. }, true) => Some(direct_type(owner, context)?),
@@ -1415,6 +1482,10 @@ impl Function {
                 id: helper.id.clone(),
                 text: helper.source.to_string().into(),
             });
+        }
+        if !self.closure_helpers.is_empty() {
+            emitted =
+                emitted.with_aux(AuxChunk::ForwardDecl(OwnedClosureTemplate.render()?.into()));
         }
         let emitted = match self.checks_status || self.asynchronous.is_some() {
             true => emitted.with_aux(AuxChunk::ForwardDecl(StatusTemplate.render()?.into())),

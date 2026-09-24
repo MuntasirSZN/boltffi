@@ -14,6 +14,12 @@ pub struct Statement(String);
 pub struct ArgumentList(Vec<Expression>);
 
 impl Expression {
+    pub fn from_template(template: &impl askama::Template) -> crate::core::Result<Self> {
+        let mut expression = template.render()?;
+        expression.truncate(expression.trim_end().len());
+        Ok(Self(expression))
+    }
+
     pub fn identifier(identifier: Identifier) -> Self {
         Self(identifier.to_string())
     }
